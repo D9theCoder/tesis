@@ -8,7 +8,4 @@ wheels/
 
 # Virtual environments
 .venv
-
-# etc
-AGENTS.md
-summary.md
+.worktrees/
