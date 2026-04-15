@@ -28,7 +28,7 @@ class ExploitationState(TypedDict):
     # Target context
     target_url:           str
     security_level:       str            # "low" | "medium" | "high"
-    llm_provider:         str            # "claude" | "gpt4o" | "gemini" | "llama"
+    llm_provider:         str            # "gemini"
 
     # Discovered attack surface (populated by recon)
     endpoints:            list[dict]     # {url, method, params, csrf_token, module_name}

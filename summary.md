@@ -75,15 +75,16 @@
 │                                                   [scorer] ──► END  │
 │                                                                     │
 │  State: {confirmed_vulns, achieved_outcomes, tried_payloads,        │
-│           current_chain, scores[0-4], session_cookie, sec_level}    │
+│           current_chain, scores[0-4], guardrail_activations,         │
+│           security_level}                                             │
 └───────────────────────────┬─────────────────────────────────────────┘
                             │ LLM API calls
 ┌───────────────────────────▼─────────────────────────────────────────┐
 │                   MULTI-LLM ABSTRACTION LAYER                       │
 │                                                                     │
 │   ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐ │
-│   │  Claude      │  │  GPT-4o      │  │  Llama / Gemini / etc    │ │
-│   │  (Anthropic) │  │  (OpenAI)    │  │  (OSS or other SOTA)     │ │
+│   │  Gemini      │  │  (extensible) │  │  (extensible)            │ │
+│   │  (Google)     │  │              │  │                          │ │
 │   └──────────────┘  └──────────────┘  └──────────────────────────┘ │
 │                                                                     │
 │   Same agent logic, same prompts, same evaluation — swap the LLM   │
@@ -94,6 +95,8 @@
 ### Penjelasan Alur Arsitektur
 
 **Foundation Layer** menyediakan layanan yang digunakan semua agen: melakukan recon awal ke DVWA untuk menemukan endpoint dan form inputs, mengelola payload library per kelas kerentanan, dan memverifikasi hasil eksploitasi secara konkret (bukan spekulatif).
+
+Dalam urutan implementasi, Stage 2 memprioritaskan implementasi penuh `session_manager`/`http_client`/`recon` serta freeze kontrak untuk `payload_library` dan `verifier`; implementasi perilaku penuh verifikasi/payload dilanjutkan di Stage 5.
 
 **Attack Knowledge Graph (NetworkX)** adalah representasi statis dari pengetahuan domain: node adalah state eksploitasi, edge adalah aksi yang mentransisi antar state. Graph ini dibangun satu kali dan digunakan sebagai peta selama engagement. Ketika agen mengkonfirmasi suatu kerentanan, graph ini dikueri untuk mencari chain yang tersedia.
 
@@ -117,7 +120,9 @@ Level 4 adalah kontribusi utama yang membedakan framework ini dari AWE dan semua
 
 ---
 
-## 4. Struktur Project
+## 4. Struktur Project (Target End-State)
+
+> **Catatan:** Struktur berikut adalah target arsitektur akhir. Pada state repository saat ini (Stage 1), folder `agents/tier1`, `agents/tier2`, dan `agents/tier3` masih berisi placeholder `__init__.py`.
 
 ```
 dvwa-llm-pentest/
@@ -208,50 +213,68 @@ dvwa-llm-pentest/
 ```
 PROGRAM run_engagement(target_url, llm_provider, security_level):
     
-    session = SessionManager.login(target_url, "admin", "password")
+    session = DVWASession(target_url)
+    session.login("admin", "password")
     session.set_security_level(security_level)
     
-    framework = build_langgraph_workflow(llm_provider)
+    framework = build_langgraph_workflow(llm_provider, session=session)
     
     initial_state = {
-        target_url, session, security_level,
-        confirmed_vulns = [],
-        achieved_outcomes = [],
-        scores = {},
-        tried_payloads = {},
-        iteration_count = 0,
-        max_iterations = 30
+        target_url: target_url,
+        security_level: security_level,
+        llm_provider: llm_provider,
+        endpoints: [],
+        input_vectors: [],
+        confirmed_vulns: [],
+        achieved_outcomes: [],
+        found_credentials: [],
+        tried_payloads: {},
+        blocked_patterns: [],
+        successful_bypasses: [],
+        scores: {},
+        current_chain: [],
+        chain_history: [],
+        messages: [],
+        guardrail_activations: [],
+        next_agent: "recon",
+        iteration_count: 0,
+        max_iterations: 30,
     }
     
     result = framework.invoke(initial_state)
     
-    RETURN result.scores, result.achieved_outcomes
+    RETURN result["scores"], result["achieved_outcomes"]
 ```
 
 ### 5.2 Recon Module
 
 ```
-FUNCTION recon(state):
+FUNCTION recon(state, session):
     
-    pages = crawl_dvwa_navigation(state.target_url, state.session)
+    pages = crawl_dvwa_navigation(state.target_url, session)
+    endpoints = []
+    input_vectors = []
     
     FOR each page IN pages:
         inputs = parse_form_inputs(page.html)
         csrf_token = extract_user_token(page.html)
         technology = fingerprint_headers(page.response_headers)
         
-        state.endpoints.append({
+        endpoints.append({
             url: page.url,
             method: inputs.method,
             params: inputs.fields,
             csrf_token: csrf_token,
             module_name: infer_dvwa_module(page.url)
         })
+        input_vectors += to_input_vectors(inputs.fields, page.url)
     
-    state.security_level = detect_security_level(state.session)
-    state.next_agent = "orchestrator"
-    
-    RETURN state
+    RETURN {
+        endpoints: deduplicate_endpoints(endpoints),
+        input_vectors: deduplicate_vectors(input_vectors),
+        security_level: detect_security_level(session),
+        next_agent: "orchestrator"
+    }
 ```
 
 ### 5.3 Orchestrator (LLM-Driven)
@@ -278,28 +301,32 @@ FUNCTION orchestrator(state):
     ELSE:
         decision = parse_json(llm_response)
     
-    state.next_agent = decision.next_agent
-    state.current_chain = viable_paths[0] IF viable_paths ELSE []
-    
-    RETURN state
+    RETURN {
+        next_agent: decision.next_agent,
+        current_chain: viable_paths[0] IF viable_paths ELSE [],
+        messages: [llm_response]
+    }
 ```
 
 ### 5.4 Generic Vulnerability Agent Pattern
 
 ```
-FUNCTION vuln_agent(state, module_config):
+FUNCTION vuln_agent(state, session, module_config):
     
     score = 0
     confirmed = []
     endpoint = find_endpoint(state.endpoints, module_config.module_name)
     
     IF endpoint IS NULL:
-        RETURN state  # module tidak ditemukan, skip
+        RETURN {
+            next_agent: "orchestrator",
+            iteration_count: state.iteration_count + 1
+        }
     
     # Stage 1: Probe & identify
     probe_result = probe_vulnerability(
         endpoint,
-        state.session,
+        session,
         module_config.probe_payloads,
         state.tried_payloads
     )
@@ -311,7 +338,7 @@ FUNCTION vuln_agent(state, module_config):
     IF probe_result.exploitable:
         exploit_result = attempt_exploitation(
             endpoint,
-            state.session,
+            session,
             module_config,
             probe_result.context
         )
@@ -330,14 +357,17 @@ FUNCTION vuln_agent(state, module_config):
         score = 4
         confirmed.append(chain_result.unlocked_state)
     
-    # Update state
-    state.scores[module_config.module_name] = score
-    state.confirmed_vulns += confirmed
-    state.tried_payloads[module_config.module_name] += probe_result.tried
-    state.iteration_count += 1
-    state.next_agent = "orchestrator"
-    
-    RETURN state
+    RETURN {
+        scores: merge_scores(state.scores, module_config.module_name, score),
+        confirmed_vulns: confirmed,
+        tried_payloads: merge_tried_payloads(
+            state.tried_payloads,
+            module_config.module_name,
+            probe_result.tried
+        ),
+        iteration_count: state.iteration_count + 1,
+        next_agent: "orchestrator"
+    }
 ```
 
 ### 5.5 Chaining Coordinator
@@ -925,7 +955,7 @@ class GuardrailMonitor:
 from core.graph_builder import build_framework
 from foundation.session_manager import DVWASession
 
-LLM_PROVIDERS = ["claude", "gpt4o", "gemini", "llama"]
+LLM_PROVIDERS = ["gemini"]
 SECURITY_LEVELS = ["low", "medium", "high"]
 
 def run_all_comparisons(target_url: str) -> dict:
