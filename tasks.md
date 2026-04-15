@@ -5,10 +5,10 @@ Based on `summary.md` and `AGENTS.md`, this is the recommended build order for t
 | Stage | Time Period | Primary Deliverable |
 |---|---|---|
 | 1. Core state contract | Week 1 | Stable `ExploitationState` + folder boundaries |
-| 2. Foundation layer | Week 2 | Session manager + recon + endpoint/input discovery |
+| 2. Foundation layer | Week 2 | Session manager + recon + endpoint/input discovery + contract freeze (`payload_library`/`verifier`) |
 | 3. Attack Knowledge Graph | Week 3 | NetworkX graph with chain preconditions |
 | 4. Execution runtime | Weeks 4–5 | LangGraph workflow + conditional routing |
-| 5. Vulnerability agents | Weeks 6–7 | Tier 1/2 agents + chain triggers + browser verification |
+| 5. Vulnerability agents | Weeks 6–7 | Tier 1/2 agents + chain triggers + full payload/verifier behavior + browser verification |
 | 6. Evaluation and testing | Week 8 | Scorer (0–4), multi-LLM runner, regression tests |
 
 ## Stage 1 — Core state contract (Week 1)
@@ -28,6 +28,8 @@ class ExploitationState(TypedDict):
     iteration_count: int
     max_iterations: int
 ```
+
+**Catatan:** contoh di atas adalah subset minimal. Kontrak kanonik tetap mengikuti `core/state.py`.
 
 **Why this stage:** All agents and graph nodes depend on one consistent state contract.
 
@@ -54,6 +56,8 @@ csrf = soup.select_one("input[name='user_token']")
 ```
 
 **Why this stage:** Recon data (`endpoints`, `input_vectors`) is required before exploitation logic.
+
+**Scope boundary:** Pada Stage 2, `payload_library` dan `verifier` dibatasi pada stabilisasi interface/kontrak; implementasi perilaku penuh dilakukan di Stage 5.
 
 **Docs:**
 - HTTPX `Client` usage

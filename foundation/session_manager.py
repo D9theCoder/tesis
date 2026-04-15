@@ -28,3 +28,7 @@ class DVWASession:
 
     def post(self, path: str, data: dict | None = None, files: dict | None = None) -> httpx.Response:
         raise NotImplementedError("DVWASession.post will be implemented in Stage 2")
+
+
+# Backward-compatible alias used by earlier docs/plans.
+DVWASessionManager = DVWASession
