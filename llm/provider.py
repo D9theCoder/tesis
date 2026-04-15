@@ -1,5 +1,11 @@
 import os
+from typing import Any
+
 from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage
+
+SAMPLE_QUERY = "What model do you use?"
+SUPPORTED_PROVIDERS = ["gemini"]
 
 # Load environment variables from .env file
 load_dotenv()
@@ -9,28 +15,30 @@ def get_llm(provider_name: str, **kwargs):
     Returns a configured LangChain ChatModel based on the provider string.
     Maps to AGENTS.md providers: "claude", "gpt4o", "gemini", "llama"
     """
-    if provider_name == "gpt4o":
-        from langchain_openai import ChatOpenAI
-        return ChatOpenAI(model="gpt-4o", temperature=0, **kwargs)
         
-    elif provider_name == "gemini":
+    if provider_name == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
-        return ChatGoogleGenerativeAI(model="gemini-1.5-pro", temperature=0, **kwargs)
-        
-    elif provider_name == "claude":
-        from langchain_anthropic import ChatAnthropic
-        return ChatAnthropic(model="claude-3-5-sonnet-20241022", temperature=0, **kwargs)
-        
-    elif provider_name == "llama":
-        from langchain_openai import ChatOpenAI
-        base_url = os.getenv("OPENAI_API_BASE", "http://localhost:11434/v1")
-        # For local models or OpenAI compatible APIs
-        return ChatOpenAI(
-            model="meta-llama/Meta-Llama-3-8B-Instruct", 
-            base_url=base_url,
-            temperature=0, 
-            **kwargs
-        )
-        
+        return ChatGoogleGenerativeAI(model="gemini-3-flash-preview", temperature=1, **kwargs)
     else:
         raise ValueError(f"Unsupported LLM provider: {provider_name}")
+
+
+def _resolve_model_name(llm: Any) -> str:
+    return getattr(llm, "model_name", getattr(llm, "model", "unknown"))
+
+
+def invoke_sample_query(provider_name: str, query: str = SAMPLE_QUERY, **kwargs) -> dict[str, str]:
+    """
+    Sends a hardcoded sample query to the requested provider using LangChain.
+    Returns a normalized response payload for display in the program.
+    """
+    llm = get_llm(provider_name, **kwargs)
+    response = llm.invoke([HumanMessage(content=query)])
+    response_content = response.content if isinstance(response.content, str) else str(response.content)
+
+    return {
+        "provider": provider_name,
+        "model": _resolve_model_name(llm),
+        "query": query,
+        "response": response_content,
+    }
