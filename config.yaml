@@ -1,0 +1,35 @@
+# Framework Configuration
+# Target DVWA instance
+target_url: "http://localhost/dvwa"
+
+# Security levels to test (in order)
+security_levels:
+  - low
+  - medium
+  - high
+
+# Default security level for single-run engagements
+default_security_level: "low"
+
+# Maximum iterations per engagement
+default_max_iterations: 30
+
+# DVWA credentials (default)
+dvwa_username: "admin"
+dvwa_password: "password"
+
+# LLM providers to compare (currently Gemini only)
+llm_providers:
+  - gemini
+
+# Default LLM provider
+default_llm_provider: "gemini"
+
+# HTTP client settings
+http_timeout: 10
+http_follow_redirects: true
+http_verify_ssl: false
+
+# Playwright settings
+playwright_headless: true
+playwright_timeout: 10000

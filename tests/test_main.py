@@ -22,7 +22,7 @@ def test_main_returns_success_payloads(monkeypatch):
 
 def test_main_returns_error_payloads(monkeypatch):
     def fake_invoke_sample_query(provider_name: str):
-        if provider_name == "gpt4o":
+        if provider_name == "gemini":
             raise RuntimeError("provider unavailable")
         return {
             "provider": provider_name,
@@ -35,5 +35,5 @@ def test_main_returns_error_payloads(monkeypatch):
 
     results = main_module.main()
 
-    assert results["gpt4o"]["status"] == "error"
-    assert "provider unavailable" in results["gpt4o"]["error"]
+    assert results["gemini"]["status"] == "error"
+    assert "provider unavailable" in results["gemini"]["error"]

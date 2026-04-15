@@ -82,8 +82,8 @@
 │                   MULTI-LLM ABSTRACTION LAYER                       │
 │                                                                     │
 │   ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐ │
-│   │  Claude      │  │  GPT-4o      │  │  Llama / Gemini / etc    │ │
-│   │  (Anthropic) │  │  (OpenAI)    │  │  (OSS or other SOTA)     │ │
+│   │  Gemini      │  │  (extensible) │  │  (extensible)            │ │
+│   │  (Google)     │  │              │  │                          │ │
 │   └──────────────┘  └──────────────┘  └──────────────────────────┘ │
 │                                                                     │
 │   Same agent logic, same prompts, same evaluation — swap the LLM   │
@@ -925,7 +925,7 @@ class GuardrailMonitor:
 from core.graph_builder import build_framework
 from foundation.session_manager import DVWASession
 
-LLM_PROVIDERS = ["claude", "gpt4o", "gemini", "llama"]
+LLM_PROVIDERS = ["gemini"]
 SECURITY_LEVELS = ["low", "medium", "high"]
 
 def run_all_comparisons(target_url: str) -> dict:
