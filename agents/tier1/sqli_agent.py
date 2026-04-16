@@ -5,8 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 from agents.base_agent import BaseAgent
-from agents.state_utils import make_update, module_endpoint, normalize_security_level
+from agents.state_utils import (
+    already_tried_payloads,
+    append_error_marker,
+    make_update,
+    module_endpoint,
+    normalize_security_level,
+    prepare_agent_session,
+)
 from core.state import ExploitationState
+from foundation.http_client import RequestTimeoutError, TransportError
 from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
 from foundation.verifier import Verifier
@@ -35,7 +43,7 @@ class SQLiAgent(BaseAgent):
         level = normalize_security_level(state.get("security_level"))
         endpoint = module_endpoint(state, self.module_name, "/vulnerabilities/sqli/")
         payload_set = self.payloads.get(self.module_name, level)
-        already_tried = set(state.get("tried_payloads", {}).get(self.module_name, []))
+        already_tried = already_tried_payloads(state, self.module_name)
 
         score = 0
         confirmed: list[str] = []
@@ -58,6 +66,16 @@ class SQLiAgent(BaseAgent):
 
         session = DVWASession(target_url)
         try:
+            ready, prep_notes = prepare_agent_session(session, level, require_login=True)
+            tried_now.extend(prep_notes)
+            if not ready:
+                return make_update(
+                    state=state,
+                    module_name=self.module_name,
+                    score=score,
+                    tried_payloads=tried_now,
+                )
+
             for payload in payloads:
                 if payload in already_tried:
                     continue
@@ -85,9 +103,8 @@ class SQLiAgent(BaseAgent):
                         confirmed.append("credentials_extracted")
                     found_credentials = [{"username": "admin", "password": "password"}]
                     break
-        except Exception:
-            # Keep deterministic state update behavior even if target is unavailable.
-            pass
+        except (TransportError, RequestTimeoutError, RuntimeError, ValueError) as exc:
+            append_error_marker(tried_now, "sqli_runtime_error", exc)
         finally:
             session.close()
 

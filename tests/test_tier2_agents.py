@@ -142,8 +142,8 @@ def test_csrf_agent_direct_vs_chain_path(monkeypatch):
         "iteration_count": 0,
     }
     chained = csrf_module.csrf_agent(state_chain)
-    assert chained["scores"]["csrf"] == 4
-    assert "csrf_confirmed" in chained["confirmed_vulns"]
+    assert chained["scores"]["csrf"] == 2
+    assert "confirmed_vulns" not in chained
 
 
 def test_weak_session_agent_prediction_signal(monkeypatch):
@@ -184,6 +184,45 @@ def test_weak_session_agent_prediction_signal(monkeypatch):
     assert "weak_session_confirmed" in update["confirmed_vulns"]
 
 
+def test_weak_session_agent_requires_hijack_context(monkeypatch):
+    class FakeHTTP:
+        def __init__(self):
+            self.cookies = {}
+
+        def set_cookie(self, _name, _value):
+            return None
+
+    class FakeSession:
+        def __init__(self, _target):
+            self.http = FakeHTTP()
+            self.calls = 0
+
+        def get(self, _endpoint, params=None):
+            self.calls += 1
+            if self.calls <= 3:
+                return FakeResult(text="sample", headers={"Set-Cookie": f"dvwaSession={self.calls}; path=/"})
+            return FakeResult(text="ok", headers={"Set-Cookie": "dvwaSession=4; path=/"})
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(weak_session_module, "DVWASession", FakeSession)
+
+    state = {
+        "target_url": "http://localhost/dvwa",
+        "security_level": "low",
+        "endpoints": [{"module_name": "weak_session", "url": "/vulnerabilities/weak_id/"}],
+        "tried_payloads": {},
+        "scores": {},
+        "iteration_count": 0,
+    }
+    update = weak_session_module.weak_session_agent(state)
+
+    assert update["scores"]["weak_session"] == 1
+    assert "weak_session_confirmed" in update["confirmed_vulns"]
+    assert "session_hijack" not in update["confirmed_vulns"]
+
+
 def test_idor_agent_detects_unauthorized_resource_access(monkeypatch):
     class FakeSession:
         def __init__(self, _target):
@@ -214,3 +253,35 @@ def test_idor_agent_detects_unauthorized_resource_access(monkeypatch):
     assert update["scores"]["idor"] == 3
     assert "idor_confirmed" in update["confirmed_vulns"]
     assert "data_exfiltrated" in update["confirmed_vulns"]
+
+
+def test_idor_agent_does_not_escalate_on_generic_profile_diff(monkeypatch):
+    class FakeSession:
+        def __init__(self, _target):
+            self.calls = 0
+            self.http = SimpleNamespace(cookies={})
+
+        def get(self, _endpoint, params=None):
+            self.calls += 1
+            if self.calls == 1:
+                return FakeResult(text="Profile user_id=1")
+            return FakeResult(text="Profile user_id=2")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(idor_module, "DVWASession", FakeSession)
+
+    state = {
+        "target_url": "http://localhost/dvwa",
+        "security_level": "low",
+        "endpoints": [{"module_name": "idor", "url": "/vulnerabilities/idor/"}],
+        "tried_payloads": {},
+        "scores": {},
+        "iteration_count": 0,
+    }
+    update = idor_module.idor_agent(state)
+
+    assert update["scores"]["idor"] == 1
+    assert "idor_confirmed" in update["confirmed_vulns"]
+    assert "data_exfiltrated" not in update["confirmed_vulns"]

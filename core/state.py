@@ -11,7 +11,8 @@ Field reducer strategy:
   - Annotated[list[AnyMessage], add_messages]: LangGraph's standard message reducer
 """
 
-from typing import TypedDict, Annotated
+from copy import deepcopy
+from typing import Any, TypedDict, Annotated
 from operator import add
 
 from langchain_core.messages import AnyMessage
@@ -57,28 +58,42 @@ class ExploitationState(TypedDict):
     max_iterations: int  # set once at init
 
 
-# Default initial state values for a fresh engagement
-DEFAULT_STATE: dict = {
-    "target_url": "",
-    "security_level": "low",
-    "llm_provider": "gemini",
-    "endpoints": [],
-    "input_vectors": [],
-    "confirmed_vulns": [],
-    "achieved_outcomes": [],
-    "found_credentials": [],
-    "tried_payloads": {},
-    "blocked_patterns": [],
-    "successful_bypasses": [],
-    "scores": {},
-    "current_chain": [],
-    "chain_history": [],
-    "messages": [],
-    "guardrail_activations": [],
-    "next_agent": "recon",
-    "iteration_count": 0,
-    "max_iterations": 30,
-}
+def _default_state_template() -> dict[str, Any]:
+    """Build a fresh default state template.
+
+    Keeping this in a function avoids accidental shared mutable objects between
+    independent runs when callers need a clean initial state.
+    """
+    return {
+        "target_url": "",
+        "security_level": "low",
+        "llm_provider": "gemini",
+        "endpoints": [],
+        "input_vectors": [],
+        "confirmed_vulns": [],
+        "achieved_outcomes": [],
+        "found_credentials": [],
+        "tried_payloads": {},
+        "blocked_patterns": [],
+        "successful_bypasses": [],
+        "scores": {},
+        "current_chain": [],
+        "chain_history": [],
+        "messages": [],
+        "guardrail_activations": [],
+        "next_agent": "recon",
+        "iteration_count": 0,
+        "max_iterations": 30,
+    }
+
+
+# Backward-compatible exported default snapshot.
+DEFAULT_STATE: dict[str, Any] = _default_state_template()
+
+
+def new_default_state() -> dict[str, Any]:
+    """Return a deep-copied default state for a new engagement."""
+    return deepcopy(_default_state_template())
 
 # Module names matching DVWA Coverage Matrix in summary.md
 MODULE_NAMES: list[str] = [

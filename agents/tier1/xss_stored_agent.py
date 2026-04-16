@@ -5,8 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 from agents.base_agent import BaseAgent
-from agents.state_utils import make_update, module_endpoint, normalize_security_level
+from agents.state_utils import (
+    already_tried_payloads,
+    append_error_marker,
+    make_update,
+    module_endpoint,
+    normalize_security_level,
+    prepare_agent_session,
+)
 from core.state import ExploitationState
+from foundation.http_client import RequestTimeoutError, TransportError
 from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
 from foundation.verifier import Verifier
@@ -33,6 +41,7 @@ class XSSStoredAgent(BaseAgent):
         level = normalize_security_level(state.get("security_level"))
         endpoint = module_endpoint(state, self.module_name, "/vulnerabilities/xss_s/")
         payload_set = self.payloads.get(self.module_name, level)
+        already_tried = already_tried_payloads(state, self.module_name)
 
         score = 0
         confirmed: list[str] = []
@@ -47,10 +56,28 @@ class XSSStoredAgent(BaseAgent):
             )
 
         payload = payload_set.probe[0] if payload_set.probe else "<script>alert(1)</script>"
-        tried_now.append(payload)
+        if payload in already_tried:
+            return make_update(
+                state=state,
+                module_name=self.module_name,
+                score=score,
+                tried_payloads=tried_now,
+            )
 
         session = DVWASession(target_url)
         try:
+            ready, prep_notes = prepare_agent_session(session, level, require_login=True)
+            tried_now.extend(prep_notes)
+            if not ready:
+                return make_update(
+                    state=state,
+                    module_name=self.module_name,
+                    score=score,
+                    tried_payloads=tried_now,
+                )
+
+            tried_now.append(payload)
+
             submit_response = session.post(
                 endpoint,
                 data={
@@ -79,8 +106,8 @@ class XSSStoredAgent(BaseAgent):
 
             if score >= 3 and self._csrf_visible(state):
                 score = 4
-        except Exception:
-            pass
+        except (TransportError, RequestTimeoutError, RuntimeError, ValueError) as exc:
+            append_error_marker(tried_now, "xss_stored_runtime_error", exc)
         finally:
             session.close()
 

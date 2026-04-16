@@ -105,3 +105,34 @@ def test_lfi_to_rce_chain_sets_rce_achieved():
     assert update["scores"]["lfi"] == 4
     assert "rce_achieved" in update["confirmed_vulns"]
     assert "rce_achieved" in update["achieved_outcomes"]
+
+
+def test_sqli_to_creds_chain_tries_multiple_passwords_for_same_user(monkeypatch):
+    class FakeSession:
+        def __init__(self, _target):
+            self.http = type("H", (), {"cookies": {}})()
+
+        def login(self, username="admin", password="password"):
+            return username == "admin" and password == "correct"
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(sqli_chain_module, "DVWASession", FakeSession)
+
+    state = {
+        "target_url": "http://localhost/dvwa",
+        "security_level": "low",
+        "confirmed_vulns": ["sqli_confirmed", "credentials_extracted"],
+        "found_credentials": [
+            {"username": "admin", "password": "wrong"},
+            {"username": "admin", "password": "correct"},
+        ],
+        "tried_payloads": {"sqli": ["login:admin"]},
+        "scores": {},
+        "iteration_count": 0,
+    }
+    update = sqli_chain_module.sqli_to_creds_chain(state)
+
+    assert update["scores"]["sqli"] == 4
+    assert "admin_session_obtained" in update["confirmed_vulns"]

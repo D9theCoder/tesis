@@ -15,6 +15,7 @@ from typing import get_type_hints, get_args, Annotated
 from core.state import (
     ExploitationState,
     DEFAULT_STATE,
+    new_default_state,
     MODULE_NAMES,
     KG_NODES,
     SCORE_LABELS,
@@ -205,6 +206,17 @@ class TestDefaultState:
         assert DEFAULT_STATE["endpoints"] == []
         assert DEFAULT_STATE["input_vectors"] == []
 
+    def test_new_default_state_returns_fresh_objects(self):
+        """new_default_state should not share nested mutable objects."""
+        first = new_default_state()
+        second = new_default_state()
+
+        first["confirmed_vulns"].append("sqli_confirmed")
+        first["scores"]["sqli"] = 4
+
+        assert second["confirmed_vulns"] == []
+        assert second["scores"] == {}
+
 
 class TestConstants:
     """Validate the exported constants are correct."""
@@ -308,7 +320,7 @@ class TestLangGraphIntegration:
         graph.add_edge("recon", END)
 
         app = graph.compile()
-        result = app.invoke(DEFAULT_STATE)
+        result = app.invoke(new_default_state())
         assert result["endpoints"] == [{"url": "/test", "method": "GET"}]
         assert result["next_agent"] == "orchestrator"
 
@@ -330,7 +342,7 @@ class TestLangGraphIntegration:
         graph.add_edge("node_b", END)
 
         app = graph.compile()
-        result = app.invoke(DEFAULT_STATE)
+        result = app.invoke(new_default_state())
         # With add reducer, both confirmees should be present
         assert "sqli_confirmed" in result["confirmed_vulns"]
         assert "xss_reflected_confirmed" in result["confirmed_vulns"]
@@ -353,7 +365,7 @@ class TestLangGraphIntegration:
         graph.add_edge("add_ai", END)
 
         app = graph.compile()
-        result = app.invoke(DEFAULT_STATE)
+        result = app.invoke(new_default_state())
         assert len(result["messages"]) == 2
         assert isinstance(result["messages"][0], HumanMessage)
         assert isinstance(result["messages"][1], AIMessage)

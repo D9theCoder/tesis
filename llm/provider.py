@@ -10,15 +10,22 @@ SUPPORTED_PROVIDERS = ["gemini"]
 # Load environment variables from .env file
 load_dotenv()
 
+
 def get_llm(provider_name: str, **kwargs):
     """
     Returns a configured LangChain ChatModel based on the provider string.
     Maps to AGENTS.md providers: "claude", "gpt4o", "gemini", "llama"
     """
-        
-    if provider_name == "gemini":
+    normalized_provider = provider_name.strip().lower()
+
+    if normalized_provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
-        return ChatGoogleGenerativeAI(model="gemini-3-flash-preview", temperature=1, **kwargs)
+        temperature = kwargs.pop("temperature", 0)
+        return ChatGoogleGenerativeAI(
+            model="gemini-3-flash-preview",
+            temperature=temperature,
+            **kwargs,
+        )
     else:
         raise ValueError(f"Unsupported LLM provider: {provider_name}")
 

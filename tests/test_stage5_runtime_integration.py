@@ -1,9 +1,7 @@
-from copy import deepcopy
-
 import agents.orchestrator as orchestrator_module
 from core.chaining_coordinator import route_after_agent
 from core.graph_builder import RUNTIME_AGENT_HANDLERS, build_framework
-from core.state import DEFAULT_STATE
+from core.state import new_default_state
 
 
 def test_graph_builder_uses_real_stage5_handlers():
@@ -48,7 +46,7 @@ def test_runtime_round_trip_recon_to_orchestrator_to_agent(monkeypatch):
     monkeypatch.setattr(orchestrator_module, "get_llm", fail_get_llm)
 
     app = build_framework(llm_provider="gemini")
-    state = deepcopy(DEFAULT_STATE)
+    state = new_default_state()
     state["max_iterations"] = 1
 
     result = app.invoke(state)

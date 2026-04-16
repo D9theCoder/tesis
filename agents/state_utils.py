@@ -3,11 +3,66 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlparse
+
+from foundation.http_client import RequestTimeoutError, TransportError
 
 
 def normalize_security_level(level: str | None) -> str:
     normalized = (level or "low").strip().lower()
     return normalized if normalized in {"low", "medium", "high"} else "low"
+
+
+def already_tried_payloads(state: dict[str, Any], module_name: str) -> set[str]:
+    """Return payloads already attempted for a module as a set."""
+    module_payloads = state.get("tried_payloads", {}).get(module_name, [])
+    return {str(payload) for payload in module_payloads}
+
+
+def append_error_marker(target: list[str], context: str, exc: Exception) -> None:
+    """Append a deterministic error marker for observability in state output."""
+    target.append(f"{context}:{type(exc).__name__}")
+
+
+def prepare_agent_session(
+    session: Any,
+    security_level: str,
+    *,
+    require_login: bool = True,
+) -> tuple[bool, list[str]]:
+    """Prepare a DVWA session for exploit attempts.
+
+    This helper is intentionally tolerant so existing tests with lightweight
+    session fakes still work: if a fake session lacks login or security-level
+    methods, the helper does not fail.
+    """
+    notes: list[str] = []
+
+    login_ok = True
+    if require_login:
+        login_fn = getattr(session, "login", None)
+        if callable(login_fn):
+            try:
+                login_ok = bool(login_fn())
+                if not login_ok:
+                    notes.append("session_login_failed")
+            except (TypeError, ValueError, RuntimeError, OSError, TransportError, RequestTimeoutError) as exc:
+                login_ok = False
+                append_error_marker(notes, "session_login_error", exc)
+
+    set_level_fn = getattr(session, "set_security_level", None)
+    if callable(set_level_fn):
+        try:
+            set_level_fn(security_level)
+        except (TypeError, ValueError) as exc:
+            append_error_marker(notes, "security_level_invalid", exc)
+        except (RuntimeError, OSError, TransportError, RequestTimeoutError) as exc:
+            append_error_marker(notes, "security_level_set_error", exc)
+
+    if require_login and not login_ok:
+        return False, notes
+
+    return True, notes
 
 
 def merge_scores(state: dict[str, Any], module_name: str, new_score: int) -> dict[str, int]:
@@ -31,29 +86,39 @@ def merge_tried_payloads(
 
 
 def module_endpoint(state: dict[str, Any], module_name: str, fallback_path: str) -> str:
-    endpoints = state.get("endpoints", [])
-    for endpoint in endpoints:
-        if endpoint.get("module_name") == module_name:
-            return str(endpoint.get("url") or fallback_path)
-
-    fallback_tokens = {
-        "sqli": "sqli",
-        "sqli_blind": "sqli_blind",
-        "xss_r": "xss_r",
-        "xss_s": "xss_s",
-        "xss_d": "xss_d",
-        "cmdi": "exec",
-        "brute": "brute",
-        "lfi": "fi",
-        "upload": "upload",
-        "csrf": "csrf",
-        "weak_session": "weak_id",
-        "idor": "idor",
+    fallback_path_fragments = {
+        "sqli": "/vulnerabilities/sqli/",
+        "sqli_blind": "/vulnerabilities/sqli_blind/",
+        "xss_r": "/vulnerabilities/xss_r/",
+        "xss_s": "/vulnerabilities/xss_s/",
+        "xss_d": "/vulnerabilities/xss_d/",
+        "cmdi": "/vulnerabilities/exec/",
+        "brute": "/vulnerabilities/brute/",
+        "lfi": "/vulnerabilities/fi/",
+        "upload": "/vulnerabilities/upload/",
+        "csrf": "/vulnerabilities/csrf/",
+        "weak_session": "/vulnerabilities/weak_id/",
+        "idor": "/vulnerabilities/idor/",
     }
-    token = fallback_tokens.get(module_name, module_name)
+
+    endpoints = state.get("endpoints", [])
+    expected_fragment = fallback_path_fragments.get(module_name, "")
+
     for endpoint in endpoints:
-        url = str(endpoint.get("url", "")).lower()
-        if token in url:
+        if endpoint.get("module_name") != module_name:
+            continue
+
+        raw_url = str(endpoint.get("url", ""))
+        parsed_path = urlparse(raw_url).path.lower()
+        if expected_fragment and expected_fragment not in parsed_path:
+            continue
+
+        return str(endpoint.get("url") or fallback_path)
+
+    for endpoint in endpoints:
+        raw_url = str(endpoint.get("url", ""))
+        parsed_path = urlparse(raw_url).path.lower()
+        if expected_fragment and expected_fragment in parsed_path:
             return str(endpoint.get("url") or fallback_path)
 
     return fallback_path

@@ -20,7 +20,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from core.state import ExploitationState, SECURITY_LEVELS
-from foundation.http_client import HTTPClient, TransportError, RequestTimeoutError
+from foundation.http_client import TransportError, RequestTimeoutError
 from foundation.session_manager import DVWASession
 
 logger = logging.getLogger(__name__)
@@ -377,7 +377,7 @@ def recon(state: ExploitationState) -> dict[str, Any]:
         all_endpoints = _deduplicate_endpoints(all_endpoints)
         all_vectors = _deduplicate_vectors(all_vectors)
 
-    except Exception as exc:
+    except (TransportError, RequestTimeoutError, ValueError, RuntimeError) as exc:
         logger.error("recon: unexpected error during crawl: %s", exc)
 
     finally:
@@ -385,8 +385,8 @@ def recon(state: ExploitationState) -> dict[str, Any]:
         if session is not None:
             try:
                 session.close()
-            except Exception:
-                pass
+            except (RuntimeError, OSError) as exc:
+                logger.warning("recon: failed to close session cleanly: %s", exc)
 
     logger.info(
         "recon: discovered %d endpoints and %d input vectors at security level %r",
