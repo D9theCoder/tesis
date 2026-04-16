@@ -6,7 +6,8 @@ and captures response metadata for verification and logging.
 """
 
 import logging
-from dataclasses import dataclass, field
+import os
+from dataclasses import dataclass
 from urllib.parse import urljoin
 
 import httpx
@@ -73,11 +74,20 @@ class HTTPClient:
         timeout_pool: float = 5.0,
         max_connections: int = 20,
         max_keepalive: int = 10,
+        verify_ssl: bool | None = None,
     ) -> None:
+        if verify_ssl is None:
+            verify_ssl = os.getenv("DVWA_VERIFY_SSL", "false").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+
         self.base_url = base_url.rstrip("/") + "/"
         self._client = httpx.Client(
             follow_redirects=True,
-            verify=False,
+            verify=verify_ssl,
             timeout=httpx.Timeout(
                 connect=timeout_connect,
                 read=timeout_read,

@@ -14,7 +14,7 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 
-from foundation.http_client import HTTPClient, TransportError, RequestTimeoutError
+from foundation.http_client import HTTPClient, RequestResult, TransportError, RequestTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +212,7 @@ class DVWASession:
 
     # ── Convenience HTTP methods ─────────────────────────────────
 
-    def get(self, path: str, params: dict | None = None) -> "HTTPClient.RequestResult":
+    def get(self, path: str, params: dict | None = None) -> RequestResult:
         """Send an authenticated GET request (delegates to ``self.http``).
 
         Args:
@@ -232,7 +232,7 @@ class DVWASession:
         path: str,
         data: dict | None = None,
         files: dict | None = None,
-    ) -> "HTTPClient.RequestResult":
+    ) -> RequestResult:
         """Send an authenticated POST request (delegates to ``self.http``).
 
         Args:
