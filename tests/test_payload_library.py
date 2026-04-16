@@ -2,7 +2,7 @@
 
 Validates:
 1. PayloadSet dataclass construction and immutability
-2. PayloadLibrary.get() raises NotImplementedError (Stage 2 contract freeze)
+2. PayloadLibrary.get() returns deterministic payload sets
 3. PayloadLibrary.record_tried() produces correct partial state updates
 4. PayloadLibrary.record_bypass() produces correct partial state updates
 """
@@ -47,25 +47,36 @@ class TestPayloadSet:
 
 
 class TestPayloadLibraryGet:
-    """Validate PayloadLibrary.get() contract freeze."""
+    """Validate PayloadLibrary.get() behavior."""
 
-    def test_get_raises_not_implemented(self):
-        """PayloadLibrary.get() should raise NotImplementedError in Stage 2."""
+    def test_get_known_module_returns_payloads(self):
         lib = PayloadLibrary()
-        with pytest.raises(NotImplementedError, match="Stage 5"):
-            lib.get("sqli", "low")
+        payload_set = lib.get("sqli", "low")
 
-    def test_get_error_message_contains_vuln_class(self):
-        """Error message should include the requested vuln_class."""
-        lib = PayloadLibrary()
-        with pytest.raises(NotImplementedError, match="sqli"):
-            lib.get("sqli", "low")
+        assert payload_set.probe
+        assert payload_set.exploit
+        assert isinstance(payload_set.bypass, dict)
 
-    def test_get_error_message_contains_security_level(self):
-        """Error message should include the requested security_level."""
+    def test_get_unknown_module_returns_empty_payload_set(self):
         lib = PayloadLibrary()
-        with pytest.raises(NotImplementedError, match="medium"):
-            lib.get("xss_r", "medium")
+        payload_set = lib.get("not_a_module", "low")
+
+        assert payload_set.probe == []
+        assert payload_set.exploit == []
+        assert payload_set.bypass == {}
+
+    def test_get_unknown_security_level_falls_back_to_low(self):
+        lib = PayloadLibrary()
+        payload_set = lib.get("sqli", "ultra")
+        assert "low" in payload_set.bypass
+
+    def test_get_returns_defensive_copy(self):
+        lib = PayloadLibrary()
+        payload_a = lib.get("cmdi", "low")
+        payload_b = lib.get("cmdi", "low")
+
+        payload_a.probe.append("tamper")
+        assert "tamper" not in payload_b.probe
 
 
 class TestPayloadLibraryRecordTried:
@@ -135,3 +146,8 @@ class TestPayloadLibraryRecordBypass:
         state = {"successful_bypasses": []}
         PayloadLibrary.record_bypass(state, "technique")
         assert state["successful_bypasses"] == []
+
+    def test_record_bypass_deduplicates_against_state(self):
+        state = {"successful_bypasses": ["double_encode"]}
+        update = PayloadLibrary.record_bypass(state, "double_encode")
+        assert update["successful_bypasses"] == []

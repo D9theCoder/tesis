@@ -2,9 +2,9 @@
 
 Validates:
 1. VerificationResult dataclass construction and to_dict
-2. Verifier.contains_any() raises NotImplementedError (Stage 2)
-3. Verifier.regex_match() raises NotImplementedError (Stage 2)
-4. Verifier.verify_xss_dialog() raises NotImplementedError (Stage 2)
+2. Verifier.contains_any() signal detection
+3. Verifier.regex_match() regex evidence detection
+4. Verifier.verify_xss_dialog() browser-disabled and invalid-url behavior
 """
 
 import pytest
@@ -54,23 +54,41 @@ class TestVerificationResult:
         assert len(vr.evidence) == 1
 
 
-class TestVerifierContractFreeze:
-    """Validate that Verifier methods raise NotImplementedError (Stage 2 contract freeze)."""
+class TestVerifierBehavior:
+    """Validate Stage 5 verifier behavior."""
 
-    def test_contains_any_raises_not_implemented(self):
-        """Verifier.contains_any() should raise NotImplementedError in Stage 2."""
+    def test_contains_any_detects_signals_case_insensitive(self):
         v = Verifier()
-        with pytest.raises(NotImplementedError, match="Stage 5"):
-            v.contains_any("some body", ["signal"])
+        result = v.contains_any("Warning: MySQL syntax error", ["mysql", "oracle"])
+        assert result.ok is True
+        assert "mysql" in [item.lower() for item in result.evidence]
 
-    def test_regex_match_raises_not_implemented(self):
-        """Verifier.regex_match() should raise NotImplementedError in Stage 2."""
+    def test_contains_any_empty_input(self):
         v = Verifier()
-        with pytest.raises(NotImplementedError, match="Stage 5"):
-            v.regex_match("some body", ["pattern"])
+        result = v.contains_any("", ["signal"])
+        assert result.ok is False
 
-    def test_verify_xss_dialog_raises_not_implemented(self):
-        """Verifier.verify_xss_dialog() should raise NotImplementedError in Stage 2."""
+    def test_regex_match_detects_pattern(self):
         v = Verifier()
-        with pytest.raises(NotImplementedError, match="Stage 5"):
-            v.verify_xss_dialog("http://localhost/test", {"PHPSESSID": "abc"})
+        result = v.regex_match("uid=33(www-data)", [r"uid=\d+"])
+        assert result.ok is True
+        assert r"uid=\d+" in result.evidence
+
+    def test_regex_match_records_invalid_pattern(self):
+        v = Verifier()
+        result = v.regex_match("text", ["(", r"uid=\\d+"])
+        assert any(item.startswith("invalid_regex:") for item in result.evidence)
+
+    def test_verify_xss_dialog_disabled_via_env(self, monkeypatch):
+        v = Verifier()
+        monkeypatch.setenv("ENABLE_BROWSER_VERIFIER", "0")
+        result = v.verify_xss_dialog("http://localhost/dvwa/vulnerabilities/xss_r/")
+        assert result.ok is False
+        assert "browser verifier disabled" in result.evidence
+
+    def test_verify_xss_dialog_invalid_url(self, monkeypatch):
+        v = Verifier()
+        monkeypatch.setenv("ENABLE_BROWSER_VERIFIER", "1")
+        result = v.verify_xss_dialog("not-a-url")
+        assert result.ok is False
+        assert "invalid_url" in result.evidence

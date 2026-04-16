@@ -2,7 +2,12 @@ from copy import deepcopy
 
 import agents.orchestrator as orchestrator_module
 
-from core.graph_builder import build_framework, route_from_orchestrator
+from core.graph_builder import (
+    RUNTIME_AGENT_HANDLERS,
+    RUNTIME_AGENT_NODE_NAMES,
+    build_framework,
+    route_from_orchestrator,
+)
 from core.state import DEFAULT_STATE
 
 
@@ -42,3 +47,10 @@ def test_runtime_with_default_budget_remains_bounded(monkeypatch):
 def test_route_from_orchestrator_unknown_agent_defaults_to_scorer():
     state = {"next_agent": "not_a_real_node"}
     assert route_from_orchestrator(state) == "scorer"
+
+
+def test_stage5_runtime_handlers_are_real_callables():
+    assert set(RUNTIME_AGENT_NODE_NAMES) == set(RUNTIME_AGENT_HANDLERS.keys())
+    for name, handler in RUNTIME_AGENT_HANDLERS.items():
+        assert callable(handler), f"Handler for {name} is not callable"
+        assert "placeholder" not in handler.__name__

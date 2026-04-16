@@ -1,12 +1,9 @@
-"""Verification engine — response parser + Playwright XSS verifier.
-
-Contract freeze for Stage 2. Full behavioral implementation deferred to Stage 5.
-The interfaces defined here establish the API boundary so downstream agents
-can be developed against stable types without depending on future verification
-implementation details.
-"""
+"""Verification engine — response parser + Playwright XSS verifier."""
 
 from dataclasses import dataclass, field
+import os
+import re
+from urllib.parse import urlparse
 
 
 @dataclass
@@ -33,68 +30,122 @@ class VerificationResult:
 
 
 class Verifier:
-    """Evidence-oriented verification for exploitation results.
-
-    Stage 2 contract freeze: this class defines the API surface only.
-    Full behavioral implementation (HTTP response parsing, Playwright-based
-    XSS dialog verification, etc.) will be implemented in Stage 5.
-
-    Design constraints:
-    - Return structured evidence, not only booleans.
-    - Keep browser verification optional (feature-flagged) for CI portability.
-    - All methods must be side-effect free except ``verify_xss_dialog``
-      which may launch a headless browser.
-    """
+    """Evidence-oriented verification for exploitation results."""
 
     def contains_any(self, body: str, signals: list[str]) -> VerificationResult:
-        """Check whether *body* contains any of the *signals* strings.
+        """Check whether ``body`` contains any text signal (case-insensitive)."""
+        if not body or not signals:
+            return VerificationResult(ok=False, confidence=0.0, evidence=[])
 
-        Args:
-            body: HTTP response body text.
-            signals: List of strings to search for (case-insensitive).
+        lowered = body.lower()
+        matches: list[str] = []
+        for signal in signals:
+            normalized = str(signal)
+            if normalized.lower() in lowered and normalized not in matches:
+                matches.append(normalized)
 
-        Returns:
-            A ``VerificationResult`` with ``ok=True`` if any signal is found.
-
-        Raises:
-            NotImplementedError: Always, until Stage 5 implementation.
-        """
-        raise NotImplementedError(
-            "Verifier.contains_any() will be implemented in Stage 5."
-        )
+        ok = bool(matches)
+        confidence = min(1.0, 0.5 + 0.15 * len(matches)) if ok else 0.0
+        return VerificationResult(ok=ok, confidence=confidence, evidence=matches)
 
     def regex_match(self, body: str, patterns: list[str]) -> VerificationResult:
-        """Check whether *body* matches any of the *patterns* regex strings.
+        """Check whether ``body`` matches any regex pattern."""
+        if not body or not patterns:
+            return VerificationResult(ok=False, confidence=0.0, evidence=[])
 
-        Args:
-            body: HTTP response body text.
-            patterns: List of regex pattern strings.
+        evidence: list[str] = []
+        for pattern in patterns:
+            try:
+                if re.search(pattern, body, flags=re.IGNORECASE | re.MULTILINE):
+                    evidence.append(pattern)
+            except re.error:
+                evidence.append(f"invalid_regex:{pattern}")
 
-        Returns:
-            A ``VerificationResult`` with ``ok=True`` if any pattern matches.
-
-        Raises:
-            NotImplementedError: Always, until Stage 5 implementation.
-        """
-        raise NotImplementedError(
-            "Verifier.regex_match() will be implemented in Stage 5."
-        )
+        matched = [item for item in evidence if not item.startswith("invalid_regex:")]
+        ok = bool(matched)
+        confidence = min(1.0, 0.6 + 0.1 * len(matched)) if ok else 0.0
+        return VerificationResult(ok=ok, confidence=confidence, evidence=evidence)
 
     def verify_xss_dialog(
         self, url: str, cookies: dict[str, str] | None = None
     ) -> VerificationResult:
-        """Open *url* in a headless browser and check for a JS dialog (alert).
+        """Open ``url`` in Chromium and verify whether a JS dialog fires."""
+        disable_flag = os.getenv("ENABLE_BROWSER_VERIFIER", "1").lower()
+        if disable_flag in {"0", "false", "no"}:
+            return VerificationResult(
+                ok=False,
+                confidence=0.0,
+                evidence=["browser verifier disabled"],
+            )
 
-        Args:
-            url: Full URL to navigate to (including payload).
-            cookies: Optional cookie dict to inject before navigation.
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return VerificationResult(
+                ok=False,
+                confidence=0.0,
+                evidence=["invalid_url"],
+            )
 
-        Returns:
-            A ``VerificationResult`` with ``ok=True`` if a dialog event fires.
+        try:
+            from playwright.sync_api import sync_playwright
+        except Exception as exc:  # pragma: no cover - depends on local runtime
+            return VerificationResult(
+                ok=False,
+                confidence=0.0,
+                evidence=[f"playwright_unavailable:{type(exc).__name__}"],
+            )
 
-        Raises:
-            NotImplementedError: Always, until Stage 5 implementation.
-        """
-        raise NotImplementedError(
-            "Verifier.verify_xss_dialog() will be implemented in Stage 5."
-        )
+        dialog_messages: list[str] = []
+        browser = None
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                context = browser.new_context()
+
+                if cookies:
+                    cookie_payload = [
+                        {
+                            "name": name,
+                            "value": value,
+                            "domain": parsed.hostname or "localhost",
+                            "path": "/",
+                        }
+                        for name, value in cookies.items()
+                    ]
+                    context.add_cookies(cookie_payload)
+
+                page = context.new_page()
+
+                def _on_dialog(dialog):
+                    dialog_messages.append(dialog.message or "dialog_fired")
+                    dialog.dismiss()
+
+                page.on("dialog", _on_dialog)
+                page.goto(url, wait_until="networkidle", timeout=10_000)
+
+                context.close()
+
+            if dialog_messages:
+                return VerificationResult(
+                    ok=True,
+                    confidence=1.0,
+                    evidence=dialog_messages,
+                )
+
+            return VerificationResult(
+                ok=False,
+                confidence=0.1,
+                evidence=["no_dialog"],
+            )
+        except Exception as exc:  # pragma: no cover - depends on browser availability
+            return VerificationResult(
+                ok=False,
+                confidence=0.0,
+                evidence=[f"browser_error:{type(exc).__name__}"],
+            )
+        finally:
+            if browser is not None:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
