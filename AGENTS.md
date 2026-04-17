@@ -5,7 +5,7 @@
 ---
 
 ## General Info
-This is a red teaming framework (LLM harness) that uses LLM-driven agents to autonomously discover and exploit vulnerabilities in a target web application (DVWA). The agents operate within a LangGraph execution runtime, which manages state immutability, execution flow, and integration with the Attack Knowledge Graph. Hence. make sure to use `llm-application-dev`, `python-development`, and `secskills` plugins (it is bundled with subagents and skills) if available.
+This is a red teaming framework (LLM harness) that uses LLM-driven agents to autonomously discover and exploit vulnerabilities in a target web application (DVWA). The agents operate within a LangGraph execution runtime, which manages state immutability, execution flow, and integration with the Attack Knowledge Graph. Hence. make sure to use `llm-application-dev`, `python-development`, and `secskills` plugins (it is bundled with subagents and skills). MAKE SURE TO USE THE SKILLS.MD AND SUBAGENT FROM THE PLUGINS FOR EVERY IMPLEMENTATION.
 
 ## Overview
 
@@ -855,6 +855,7 @@ When implementing a new agent, ensure the following:
 - [ ] Has a corresponding conditional edge in `chaining_coordinator.py`
 - [ ] Has a dedicated prompt file in `llm/prompts/`
 - [ ] Is listed in the Coverage Matrix in `summary.md`
+- [ ] Has CLI flag mapping and reproducible run invocation documented
 
 ---
 

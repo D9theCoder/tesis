@@ -150,7 +150,7 @@ class AttackKnowledgeGraph:
 				"source": "credentials_extracted",
 				"target": "admin_session_obtained",
 				"is_chain": True,
-				"preconditions": ["sqli_confirmed", "credentials_extracted"],
+				"preconditions": ["credentials_extracted"],
 				"target_agent": "sqli_to_creds_chain",
 				"priority": 10,
 			},

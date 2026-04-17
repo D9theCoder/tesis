@@ -8,6 +8,12 @@ from __future__ import annotations
 from core.knowledge_graph import AttackKnowledgeGraph
 
 HIGH_IMPACT_OUTCOMES = set(AttackKnowledgeGraph.HIGH_IMPACT_OUTCOMES)
+CHAIN_ATTEMPT_MARKERS: dict[str, str] = {
+	"sqli_to_creds_chain": "chain:sqli_to_creds",
+	"upload_to_rce_chain": "chain:upload_to_rce",
+	"xss_to_csrf_chain": "chain:xss_to_csrf",
+	"lfi_to_rce_chain": "chain:lfi_to_rce",
+}
 
 
 def critical_outcome_achieved(state: dict) -> bool:
@@ -15,6 +21,23 @@ def critical_outcome_achieved(state: dict) -> bool:
 	achieved = set(state.get("achieved_outcomes", []))
 	confirmed = set(state.get("confirmed_vulns", []))
 	return bool((achieved | confirmed) & HIGH_IMPACT_OUTCOMES)
+
+
+def _chain_already_attempted(state: dict, target_agent: str) -> bool:
+	"""Return True when a chain marker is already present in tried_payloads."""
+	marker = CHAIN_ATTEMPT_MARKERS.get(target_agent)
+	if not marker:
+		return False
+
+	tried_payloads = state.get("tried_payloads", {})
+	if not isinstance(tried_payloads, dict):
+		return False
+
+	for payloads in tried_payloads.values():
+		if isinstance(payloads, list) and marker in payloads:
+			return True
+
+	return False
 
 
 def route_after_agent(state: dict) -> str:
@@ -42,7 +65,7 @@ def route_after_agent(state: dict) -> str:
 				continue
 
 			target_agent = edge.get("target_agent")
-			if isinstance(target_agent, str) and target_agent:
+			if isinstance(target_agent, str) and target_agent and not _chain_already_attempted(state, target_agent):
 				return target_agent
 
 	if critical_outcome_achieved(state):

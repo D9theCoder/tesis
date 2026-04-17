@@ -28,6 +28,35 @@ def test_route_after_agent_returns_chain_agent_when_preconditions_met():
     assert route_after_agent(state) == "lfi_to_rce_chain"
 
 
+def test_route_after_agent_skips_chain_already_attempted_marker():
+    state = {
+        "confirmed_vulns": ["sqli_confirmed", "credentials_extracted"],
+        "achieved_outcomes": [],
+        "tried_payloads": {"sqli": ["chain:sqli_to_creds"]},
+        "iteration_count": 2,
+        "max_iterations": 30,
+    }
+
+    assert route_after_agent(state) == "orchestrator"
+
+
+def test_route_after_agent_can_route_other_chain_when_one_marked_attempted():
+    state = {
+        "confirmed_vulns": [
+            "sqli_confirmed",
+            "credentials_extracted",
+            "lfi_confirmed",
+            "log_access_confirmed",
+        ],
+        "achieved_outcomes": [],
+        "tried_payloads": {"sqli": ["chain:sqli_to_creds"]},
+        "iteration_count": 2,
+        "max_iterations": 30,
+    }
+
+    assert route_after_agent(state) == "lfi_to_rce_chain"
+
+
 def test_route_after_agent_prefers_chain_before_critical_short_circuit():
     state = {
         "confirmed_vulns": [

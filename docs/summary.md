@@ -118,6 +118,11 @@ Dalam urutan implementasi, Stage 2 memprioritaskan implementasi penuh `session_m
 
 Level 4 adalah kontribusi utama yang membedakan framework ini dari AWE dan semua framework yang ada saat ini.
 
+Mulai Stage 7, rubrik ini dapat direproduksi langsung dari artifact JSON menggunakan CLI:
+
+- `python -m tesis report <artifact.json> --show-scores`
+- `python -m tesis report <matrix.json> --show-scores --show-chains`
+
 ---
 
 ## 4. Struktur Project (Target End-State)
@@ -132,6 +137,11 @@ dvwa-llm-pentest/
 ├── requirements.txt
 ├── .env.example                        # API keys template
 ├── config.yaml                         # Target URL, LLM provider, timeouts
+├── tesis/
+│   ├── __main__.py                     # `python -m tesis` entrypoint
+│   ├── cli.py                          # Stage 7 run/info/config/report commands
+│   ├── config_loader.py                # YAML + env + CLI merge and validation
+│   └── report_formatters.py            # Rejection/score/provider comparison tables
 │
 ├── core/
 │   ├── __init__.py

@@ -22,6 +22,9 @@ dev = [
     "pytest>=8.0.0"
 ]
 
+[project.scripts]
+tesis = "tesis.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",

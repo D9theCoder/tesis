@@ -23,7 +23,7 @@ class SQLiToCredsChainAgent(BaseAgent):
 
     def check_prerequisites(self, state: ExploitationState) -> bool:
         confirmed = set(state.get("confirmed_vulns", []))
-        return {"sqli_confirmed", "credentials_extracted"}.issubset(confirmed)
+        return "credentials_extracted" in confirmed
 
     def run(self, state: ExploitationState) -> dict[str, Any]:
         tried_now = ["chain:sqli_to_creds"]
