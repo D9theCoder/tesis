@@ -111,6 +111,24 @@ MODULE_NAMES: list[str] = [
     "idor",
 ]
 
+# Canonical mapping from MODULE_NAMES to their corresponding KG_NODES entry
+# in confirmed_vulns.  This is needed because the naming conventions differ
+# (e.g., "sqli_blind" → "blind_sqli_confirmed", not "sqli_blind_confirmed").
+MODULE_TO_KG_NODE: dict[str, str] = {
+    "sqli": "sqli_confirmed",
+    "sqli_blind": "blind_sqli_confirmed",
+    "xss_r": "xss_reflected_confirmed",
+    "xss_s": "xss_stored_confirmed",
+    "xss_d": "xss_dom_confirmed",
+    "cmdi": "cmd_injection_confirmed",
+    "brute": "brute_force_confirmed",
+    "lfi": "lfi_confirmed",
+    "upload": "file_upload_confirmed",
+    "csrf": "csrf_confirmed",
+    "weak_session": "weak_session_confirmed",
+    "idor": "idor_confirmed",
+}
+
 # Knowledge graph node names used in confirmed_vulns
 KG_NODES: list[str] = [
     "sqli_confirmed",
