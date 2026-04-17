@@ -54,3 +54,19 @@ def test_stage5_runtime_handlers_are_real_callables():
     for name, handler in RUNTIME_AGENT_HANDLERS.items():
         assert callable(handler), f"Handler for {name} is not callable"
         assert "placeholder" not in handler.__name__
+
+
+def test_stage6_real_scorer_node_executes(monkeypatch):
+    def fail_get_llm(*args, **kwargs):
+        raise RuntimeError("offline test")
+
+    monkeypatch.setattr(orchestrator_module, "get_llm", fail_get_llm)
+
+    app = build_framework(llm_provider="gemini")
+    state = deepcopy(DEFAULT_STATE)
+    state["iteration_count"] = state["max_iterations"]
+    state["scores"] = {"sqli": 99}
+
+    result = app.invoke(state)
+    assert result["scores"]["sqli"] == 4
+    assert result["next_agent"] == "END"

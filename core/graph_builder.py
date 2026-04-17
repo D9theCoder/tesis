@@ -22,6 +22,7 @@ from agents.tier3.sqli_to_creds_chain import sqli_to_creds_chain
 from agents.tier3.upload_to_rce_chain import upload_to_rce_chain
 from agents.tier3.xss_to_csrf_chain import xss_to_csrf_chain
 from core.chaining_coordinator import route_after_agent
+from core.scorer import scorer
 from core.state import ExploitationState
 from foundation.recon import recon
 
@@ -66,11 +67,6 @@ RUNTIME_AGENT_HANDLERS = {
 }
 
 
-def _scorer_placeholder(state: ExploitationState) -> dict:
-	"""Temporary scorer node until Stage 6 scorer implementation lands."""
-	return {"next_agent": "END"}
-
-
 def route_from_orchestrator(state: ExploitationState) -> str:
 	"""Map orchestrator decision to a known graph node safely."""
 	next_agent = state.get("next_agent", "scorer")
@@ -88,7 +84,7 @@ def build_framework(llm_provider: str = "gemini"):
 
 	graph.add_node("recon", recon)
 	graph.add_node("orchestrator", orchestrator)
-	graph.add_node("scorer", _scorer_placeholder)
+	graph.add_node("scorer", scorer)
 
 	for name in RUNTIME_AGENT_NODE_NAMES:
 		graph.add_node(name, RUNTIME_AGENT_HANDLERS[name])
