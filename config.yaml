@@ -73,6 +73,19 @@ stop_policy: coverage
 coverage_target: 0.70
 
 # -----------------------------------------------------------------------------
+# Stage 8: Adversarial Prompt Evasion
+# -----------------------------------------------------------------------------
+# Enable the evasion layer to rewrite prompts and bypass LLM guardrails.
+# When disabled (default), the framework sends baseline prompts directly.
+evasion_enabled: True
+
+# Evasion strategy:
+#   - pipeline          => LangGraph subgraph with compliance + validity gates
+#   - prompt_injection  => DeepTeam PromptInjection single-turn attack
+#   - roleplay          => DeepTeam Roleplay single-turn attack
+evasion_strategy: prompt_injection
+
+# -----------------------------------------------------------------------------
 # Matrix mode settings
 # -----------------------------------------------------------------------------
 # Set true to run across providers x levels x repeats.

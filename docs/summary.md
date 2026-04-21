@@ -80,6 +80,13 @@
 └───────────────────────────┬─────────────────────────────────────────┘
                             │ LLM API calls
 ┌───────────────────────────▼─────────────────────────────────────────┐
+│                 ADVERSARIAL EVASION LAYER (Stage 8)                 │
+│   - Single-turn enhancements (PromptInjection, Roleplay)            │
+│   - Multi-turn jailbreaks (Linear, Tree, Crescendo)                 │
+│   - Bypasses model safety filters on internal orchestrator prompts  │
+└───────────────────────────┬─────────────────────────────────────────┘
+                            │ Rewritten / Evasive Prompts
+┌───────────────────────────▼─────────────────────────────────────────┐
 │                   MULTI-LLM ABSTRACTION LAYER                       │
 │                                                                     │
 │   ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐ │

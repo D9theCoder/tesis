@@ -139,3 +139,45 @@ diagnose: true
 
     assert cfg.enriched_reporting is True
     assert cfg.diagnose is True
+
+
+def test_string_false_flags_in_yaml_are_parsed_as_false(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    _write_yaml(
+        config_path,
+        """
+target_url: http://localhost/dvwa
+provider: gemini
+level: low
+matrix: "false"
+enriched_reporting: "false"
+diagnose: "false"
+""",
+    )
+
+    cfg = load_and_resolve_config(config_path=str(config_path), cli_args={})
+
+    assert cfg.matrix is False
+    assert cfg.enriched_reporting is False
+    assert cfg.diagnose is False
+
+
+def test_string_true_flags_in_yaml_are_parsed_as_true(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    _write_yaml(
+        config_path,
+        """
+target_url: http://localhost/dvwa
+provider: gemini
+level: low
+matrix: "true"
+enriched_reporting: "true"
+diagnose: "true"
+""",
+    )
+
+    cfg = load_and_resolve_config(config_path=str(config_path), cli_args={})
+
+    assert cfg.matrix is True
+    assert cfg.enriched_reporting is True
+    assert cfg.diagnose is True

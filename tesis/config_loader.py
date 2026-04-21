@@ -75,6 +75,18 @@ def _parse_bool(raw: str) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return _parse_bool(value)
+    if isinstance(value, (int, float)):
+        return value != 0
+    return bool(value)
+
+
 def _parse_csv(raw: str) -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
@@ -315,14 +327,14 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         iterations=int(merged.get("iterations", merged.get("max_iterations", merged.get("default_max_iterations", 30)))),
         repeats=int(merged.get("repeats", 1)),
         output_dir=str(merged.get("output_dir", "results")).strip(),
-        matrix=bool(merged.get("matrix", False)),
+        matrix=_coerce_bool(merged.get("matrix", False)),
         providers=providers or [provider],
         levels=levels or [level],
         report_format=str(merged.get("report_format", merged.get("format", "both"))).strip().lower(),
-        enriched_reporting=bool(merged.get("enriched_reporting", False)),
+        enriched_reporting=_coerce_bool(merged.get("enriched_reporting", False)),
         stop_policy=str(merged.get("stop_policy", "impact")).strip().lower(),
         coverage_target=float(merged.get("coverage_target", 0.70)),
-        diagnose=bool(merged.get("diagnose", False)),
+        diagnose=_coerce_bool(merged.get("diagnose", False)),
         models=_parse_model_configs(merged.get("models", {})),
     )
 

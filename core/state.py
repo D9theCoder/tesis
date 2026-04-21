@@ -52,6 +52,12 @@ class ExploitationState(TypedDict):
     # ── Guardrail monitoring (accumulate) ──
     guardrail_activations: Annotated[list[dict], add]  # {provider, context, snippet}
 
+    # ── Stage 8: Adversarial Evasion tracking (accumulate / overwrite) ──
+    evasion_attempts: NotRequired[int]  # total evasion attempts made
+    successful_evasions: NotRequired[int]  # evasions that produced a compliant+valid candidate
+    evasion_enabled: NotRequired[bool]  # whether the evasion layer is active
+    evasion_strategy: NotRequired[str]  # "prompt_injection" | "roleplay" | "pipeline"
+
     # ── Rich reporting telemetry (optional, accumulate) ──
     telemetry_events: NotRequired[Annotated[list[dict], add]]
 
@@ -88,6 +94,10 @@ def _default_state_template() -> dict[str, Any]:
         "chain_history": [],
         "messages": [],
         "guardrail_activations": [],
+        "evasion_attempts": 0,
+        "successful_evasions": 0,
+        "evasion_enabled": False,
+        "evasion_strategy": "pipeline",
         "telemetry_events": [],
         "stop_policy": "impact",
         "coverage_target": 0.70,

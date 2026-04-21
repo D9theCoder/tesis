@@ -137,7 +137,7 @@ The central decision-making agent. Reads the current exploitation state, queries
 
 ### Guardrail Handling
 
-The orchestrator is the primary point where LLM refusals are detected and logged. A refusal does not stop execution — the framework falls back to deterministic path selection from NetworkX, then logs the refusal as a guardrail activation event for secondary metric analysis.
+The orchestrator is the primary point where LLM refusals are detected and logged. A refusal does not immediately stop execution — in Stage 8, the framework utilizes an **Adversarial Evasion Layer** to automatically rewrite and enhance the prompt using Prompt Injection or Multi-Turn Jailbreaking strategies, attempting to bypass the model's safety filters. If the evasion layer exhausts its retry budget, the framework logs the refusal as a guardrail activation event for secondary metric analysis and falls back to deterministic path selection from NetworkX.
 
 ### Inputs
 - `state.confirmed_vulns`

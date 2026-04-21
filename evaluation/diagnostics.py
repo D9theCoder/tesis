@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from core.state import MODULE_NAMES
+
+
+logger = logging.getLogger(__name__)
 
 
 def module_coverage_ratio(scores: dict[str, int]) -> float:
@@ -12,7 +17,8 @@ def module_coverage_ratio(scores: dict[str, int]) -> float:
     for name in MODULE_NAMES:
         try:
             score = int(scores.get(name, 0))
-        except Exception:
+        except (TypeError, ValueError) as exc:
+            logger.debug("Non-integer score for module '%s'; defaulting to 0", name, exc_info=exc)
             score = 0
         if score > 0:
             covered += 1

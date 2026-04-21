@@ -7,15 +7,20 @@ with deterministic fallback behavior when the model fails or refuses.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.state import MODULE_NAMES
+from llm.evasion.deepteam_adapters import enhance_with_deepteam
+from llm.evasion.pipeline import build_evasion_graph
 from llm.guardrail_monitor import is_guardrail_refusal, make_guardrail_event
 from llm.prompts.orchestrator_prompt import build_orchestrator_prompt
 from llm.provider import get_llm
+
+logger = logging.getLogger(__name__)
 
 CRITICAL_OUTCOMES = set(AttackKnowledgeGraph.HIGH_IMPACT_OUTCOMES)
 
@@ -96,7 +101,7 @@ def _parse_decision_payload(raw_text: str) -> dict[str, Any] | None:
 	try:
 		parsed = json.loads(raw_text)
 		return parsed if isinstance(parsed, dict) else None
-	except Exception:
+	except json.JSONDecodeError:
 		start = raw_text.find("{")
 		end = raw_text.rfind("}")
 		if start == -1 or end == -1 or end <= start:
@@ -104,7 +109,7 @@ def _parse_decision_payload(raw_text: str) -> dict[str, Any] | None:
 		try:
 			parsed = json.loads(raw_text[start : end + 1])
 			return parsed if isinstance(parsed, dict) else None
-		except Exception:
+		except json.JSONDecodeError:
 			return None
 
 
@@ -117,11 +122,31 @@ def _module_coverage_ratio(scores: dict[str, Any]) -> float:
 		raw_score = scores.get(module_name, 0)
 		try:
 			score = int(raw_score)
-		except Exception:
+		except (TypeError, ValueError):
 			score = 0
 		if score >= 1:
 			covered += 1
 	return covered / len(MODULE_NAMES)
+
+
+def _coerce_bool(value: Any) -> bool:
+	"""Parse bool-like values safely, including string forms.
+
+	Avoids pitfalls like bool("false") == True.
+	"""
+	if isinstance(value, bool):
+		return value
+	if value is None:
+		return False
+	if isinstance(value, str):
+		normalized = value.strip().lower()
+		if normalized in {"1", "true", "yes", "on"}:
+			return True
+		if normalized in {"0", "false", "no", "off", ""}:
+			return False
+	if isinstance(value, (int, float)):
+		return value != 0
+	return bool(value)
 
 
 def _clip_text(text: str, limit: int = 1200) -> str:
@@ -293,7 +318,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 	raw_coverage_target = state.get("coverage_target", 0.70)
 	try:
 		coverage_target = float(raw_coverage_target)
-	except Exception:
+	except (TypeError, ValueError):
 		coverage_target = 0.70
 	coverage_target = min(max(coverage_target, 0.0), 1.0)
 	confirmed_vulns = state.get("confirmed_vulns", [])
@@ -310,9 +335,23 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 		"coverage_target": round(coverage_target, 4),
 	}
 
+	# Stage 8: Adversarial Evasion tracking (read-only here; mutation happens later)
+	evasion_enabled = _coerce_bool(state.get("evasion_enabled", False))
+	evasion_attempts = int(state.get("evasion_attempts", 0))
+	successful_evasions = int(state.get("successful_evasions", 0))
+	_evasion_fields: dict[str, Any] = {}
+	evasion_telemetry_events: list[dict[str, Any]] = []
+	mutated_by_evasion = False
+	if evasion_enabled:
+		_evasion_fields = {
+			"evasion_attempts": evasion_attempts,
+			"successful_evasions": successful_evasions,
+		}
+
 	if iteration_count >= max_iterations:
 		return {
 			"next_agent": "scorer",
+			**_evasion_fields,
 			"telemetry_events": [
 				{
 					**telemetry_base,
@@ -325,6 +364,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 	if stop_policy == "impact" and ((achieved_set | confirmed_set) & CRITICAL_OUTCOMES):
 		return {
 			"next_agent": "scorer",
+			**_evasion_fields,
 			"telemetry_events": [
 				{
 					**telemetry_base,
@@ -337,6 +377,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 	if stop_policy == "coverage" and coverage_ratio >= coverage_target:
 		return {
 			"next_agent": "scorer",
+			**_evasion_fields,
 			"telemetry_events": [
 				{
 					**telemetry_base,
@@ -359,7 +400,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 		achieved_outcomes=achieved_outcomes,
 	)
 
-	prompt = build_orchestrator_prompt(
+	base_prompt = build_orchestrator_prompt(
 		confirmed_vulns=confirmed_vulns,
 		achieved_outcomes=achieved_outcomes,
 		viable_paths=viable_paths,
@@ -370,6 +411,53 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 		coverage_ratio=coverage_ratio,
 		coverage_target=coverage_target,
 	)
+	prompt = base_prompt
+
+	# Stage 8: Adversarial Evasion Layer (mutate prompt if enabled)
+	evasion_strategy = str(state.get("evasion_strategy", "pipeline")).strip().lower()
+
+	if evasion_enabled:
+		evasion_attempts += 1
+		if evasion_strategy in {"prompt_injection", "roleplay"}:
+			enhanced_prompt = enhance_with_deepteam(prompt, strategy=evasion_strategy)
+			mutated_by_evasion = enhanced_prompt != prompt
+			prompt = enhanced_prompt
+		else:
+			try:
+				evasion_graph = build_evasion_graph()
+				evasion_state = {
+					"base_seed": prompt,
+					"retries": 0,
+					"max_retries": 3,
+					"evasion_strategy": evasion_strategy,
+				}
+				result = evasion_graph.invoke(evasion_state)
+				final_prompt = result.get("final_prompt", prompt)
+				mutated_by_evasion = final_prompt != prompt
+				prompt = final_prompt
+			except Exception as exc:
+				logger.warning(
+					"Evasion graph invocation failed; continuing with baseline prompt",
+					exc_info=exc,
+				)
+				evasion_telemetry_events.append(
+					{
+						**telemetry_base,
+						"event": "orchestrator.evasion.error",
+						"status": "error",
+						"payload": {
+							"strategy": evasion_strategy,
+							"error_type": type(exc).__name__,
+						},
+					}
+				)
+
+	# Update evasion fields after potential mutation above
+	if evasion_enabled:
+		_evasion_fields = {
+			"evasion_attempts": evasion_attempts,
+			"successful_evasions": successful_evasions,
+		}
 
 	try:
 		llm = get_llm(state.get("llm_provider", "gemini"))
@@ -394,6 +482,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 				},
 			},
 		]
+		telemetry_events.extend(evasion_telemetry_events)
 
 		if is_guardrail_refusal(text):
 			telemetry_events.append(
@@ -411,6 +500,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 			return {
 				"next_agent": fallback_agent,
 				"current_chain": fallback_chain,
+				**_evasion_fields,
 				"guardrail_activations": [
 					make_guardrail_event(
 						provider=state.get("llm_provider", "gemini"),
@@ -423,6 +513,13 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 					HumanMessage(content=prompt),
 					AIMessage(content=text),
 				],
+			}
+
+		if evasion_enabled and mutated_by_evasion:
+			successful_evasions += 1
+			_evasion_fields = {
+				"evasion_attempts": evasion_attempts,
+				"successful_evasions": successful_evasions,
 			}
 
 		parsed = _parse_decision_payload(text)
@@ -462,6 +559,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 		return {
 			"next_agent": next_agent,
 			"current_chain": selected_chain or (fallback_chain if next_agent == fallback_agent else []),
+			**_evasion_fields,
 			"telemetry_events": telemetry_events,
 			"messages": [
 				HumanMessage(content=prompt),
@@ -469,10 +567,13 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 			],
 		}
 	except Exception as exc:
+		logger.exception("Orchestrator failed; applying deterministic fallback")
 		return {
 			"next_agent": fallback_agent,
 			"current_chain": fallback_chain,
+			**_evasion_fields,
 			"telemetry_events": [
+				*evasion_telemetry_events,
 				{
 					**telemetry_base,
 					"event": "orchestrator.prompt.generated",

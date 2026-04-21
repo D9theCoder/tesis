@@ -246,3 +246,129 @@ def test_orchestrator_guardrail_refusal_with_unicode_apostrophe_logs_activation(
     update = orchestrator(state)
     assert update["next_agent"] == "sqli_agent"
     assert "guardrail_activations" in update
+
+
+def test_orchestrator_does_not_enable_evasion_for_string_false(monkeypatch):
+    class FakeResponse:
+        content = '{"next_agent": "sqli_agent"}'
+
+    class FakeLLM:
+        def invoke(self, messages):
+            return FakeResponse()
+
+    def fail_build_evasion_graph():
+        raise AssertionError("evasion graph should not be built when evasion_enabled is 'false'")
+
+    monkeypatch.setattr(orchestrator_module, "get_llm", lambda *args, **kwargs: FakeLLM())
+    monkeypatch.setattr(orchestrator_module, "build_evasion_graph", fail_build_evasion_graph)
+
+    state = {
+        "confirmed_vulns": [],
+        "achieved_outcomes": [],
+        "iteration_count": 0,
+        "max_iterations": 30,
+        "security_level": "low",
+        "llm_provider": "gemini",
+        "evasion_enabled": "false",
+    }
+
+    update = orchestrator(state)
+    assert update["next_agent"] == "sqli_agent"
+
+
+def test_orchestrator_passes_evasion_strategy_to_pipeline(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        content = '{"next_agent": "sqli_agent"}'
+
+    class FakeLLM:
+        def invoke(self, messages):
+            return FakeResponse()
+
+    class FakeGraph:
+        def invoke(self, payload):
+            captured.update(payload)
+            return {"final_prompt": "mutated prompt"}
+
+    monkeypatch.setattr(orchestrator_module, "get_llm", lambda *args, **kwargs: FakeLLM())
+    monkeypatch.setattr(orchestrator_module, "build_evasion_graph", lambda: FakeGraph())
+
+    state = {
+        "confirmed_vulns": [],
+        "achieved_outcomes": [],
+        "iteration_count": 0,
+        "max_iterations": 30,
+        "security_level": "low",
+        "llm_provider": "gemini",
+        "evasion_enabled": True,
+        "evasion_strategy": "base64",
+    }
+
+    update = orchestrator(state)
+    assert update["next_agent"] == "sqli_agent"
+    assert captured.get("evasion_strategy") == "base64"
+
+
+def test_orchestrator_successful_evasions_not_incremented_on_refusal(monkeypatch):
+    class FakeResponse:
+        content = "I cannot assist with that request."
+
+    class FakeLLM:
+        def invoke(self, messages):
+            return FakeResponse()
+
+    class FakeGraph:
+        def invoke(self, payload):
+            return {"final_prompt": "mutated prompt"}
+
+    monkeypatch.setattr(orchestrator_module, "get_llm", lambda *args, **kwargs: FakeLLM())
+    monkeypatch.setattr(orchestrator_module, "build_evasion_graph", lambda: FakeGraph())
+
+    state = {
+        "confirmed_vulns": [],
+        "achieved_outcomes": [],
+        "iteration_count": 0,
+        "max_iterations": 30,
+        "security_level": "low",
+        "llm_provider": "gemini",
+        "evasion_enabled": True,
+        "evasion_strategy": "base64",
+        "successful_evasions": 0,
+    }
+
+    update = orchestrator(state)
+    assert update["next_agent"] == "sqli_agent"
+    assert update["successful_evasions"] == 0
+
+
+def test_orchestrator_successful_evasions_incremented_on_non_refusal(monkeypatch):
+    class FakeResponse:
+        content = '{"next_agent": "sqli_agent"}'
+
+    class FakeLLM:
+        def invoke(self, messages):
+            return FakeResponse()
+
+    class FakeGraph:
+        def invoke(self, payload):
+            return {"final_prompt": "mutated prompt"}
+
+    monkeypatch.setattr(orchestrator_module, "get_llm", lambda *args, **kwargs: FakeLLM())
+    monkeypatch.setattr(orchestrator_module, "build_evasion_graph", lambda: FakeGraph())
+
+    state = {
+        "confirmed_vulns": [],
+        "achieved_outcomes": [],
+        "iteration_count": 0,
+        "max_iterations": 30,
+        "security_level": "low",
+        "llm_provider": "gemini",
+        "evasion_enabled": True,
+        "evasion_strategy": "base64",
+        "successful_evasions": 0,
+    }
+
+    update = orchestrator(state)
+    assert update["next_agent"] == "sqli_agent"
+    assert update["successful_evasions"] == 1

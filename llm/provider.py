@@ -1,4 +1,5 @@
 import os
+import logging
 from typing import TYPE_CHECKING
 from typing import Any
 
@@ -7,6 +8,7 @@ from langchain_core.messages import HumanMessage
 
 SAMPLE_QUERY = "What model do you use?"
 SUPPORTED_PROVIDERS = ["gemini"]
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -35,6 +37,41 @@ def get_llm(provider_name: str, **kwargs):
         )
     else:
         raise ValueError(f"Unsupported LLM provider: {provider_name}")
+
+
+def get_simulator_llm(simulator_model: str = "gpt-4o-mini", **kwargs):
+    """Return a simulator LLM for the evasion pipeline.
+
+    The simulator model rewrites baseline seeds into adversarial candidates.
+    It defaults to OpenAI's GPT-4o-mini when available, otherwise falls back
+    to the project's default provider (gemini).
+    """
+    normalized = simulator_model.strip().lower()
+
+    if "gpt" in normalized or normalized.startswith("openai"):
+        try:
+            from langchain_openai import ChatOpenAI
+
+            api_key = kwargs.pop("api_key", None) or os.getenv("OPENAI_API_KEY")
+            return ChatOpenAI(
+                model=simulator_model,
+                temperature=kwargs.pop("temperature", 0.7),
+                api_key=api_key,
+                **kwargs,
+            )
+        except ImportError as exc:
+            logger.warning(
+                "OpenAI simulator client unavailable; falling back to gemini simulator",
+                exc_info=exc,
+            )
+
+    # Fallback to gemini (the project's primary provider)
+    return get_llm(
+        "gemini",
+        model_name=kwargs.pop("model_name", "gemini-3-flash-preview"),
+        temperature=kwargs.pop("temperature", 0.7),
+        **kwargs,
+    )
 
 
 def get_llm_from_model_config(config: "ModelConfig", **kwargs):

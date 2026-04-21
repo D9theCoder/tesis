@@ -52,10 +52,15 @@ class TestExploitationStateSchema:
     ]
 
     # Stage 7.1 optional extensions for telemetry/coverage reporting
+    # Stage 8 optional extensions for adversarial evasion
     OPTIONAL_FIELDS = [
         "telemetry_events",
         "stop_policy",
         "coverage_target",
+        "evasion_attempts",
+        "successful_evasions",
+        "evasion_enabled",
+        "evasion_strategy",
     ]
 
     def test_all_fields_present(self):
