@@ -94,6 +94,10 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "PROVIDERS": "providers",
         "LEVELS": "levels",
         "FORMAT": "report_format",
+        "ENRICHED_REPORTING": "enriched_reporting",
+        "STOP_POLICY": "stop_policy",
+        "COVERAGE_TARGET": "coverage_target",
+        "DIAGNOSE": "diagnose",
     }
 
     for key, raw_value in os.environ.items():
@@ -122,10 +126,15 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
                 value = int(raw_value)
             except ValueError as exc:
                 raise ConfigError(f"Invalid integer value for {key}: {raw_value}") from exc
-        elif mapped == "matrix":
+        elif mapped in {"matrix", "enriched_reporting", "diagnose"}:
             value = _parse_bool(raw_value)
         elif mapped in {"providers", "levels"}:
             value = _parse_csv(raw_value)
+        elif mapped == "coverage_target":
+            try:
+                value = float(raw_value)
+            except ValueError as exc:
+                raise ConfigError(f"Invalid float value for {key}: {raw_value}") from exc
 
         overrides[mapped] = value
 
@@ -155,7 +164,13 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         "providers": "providers",
         "levels": "levels",
         "format": "report_format",
+        "enriched_reporting": "enriched_reporting",
+        "stop_policy": "stop_policy",
+        "coverage_target": "coverage_target",
+        "diagnose": "diagnose",
     }
+
+    bool_flags = {"matrix", "enriched_reporting", "diagnose"}
 
     for key, mapped in key_mapping.items():
         if key not in cli_args:
@@ -163,12 +178,11 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         value = cli_args.get(key)
         if value is None:
             continue
+        if key in bool_flags and value is False:
+            continue
         if isinstance(value, list) and not value:
             continue
         overrides[mapped] = value
-
-    if cli_args.get("matrix") is True:
-        overrides["matrix"] = True
 
     return overrides
 
@@ -252,6 +266,10 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
         raise ConfigError("repeats must be > 0")
     if config.report_format not in {"json", "markdown", "both"}:
         raise ConfigError(f"Unsupported output format: {config.report_format}")
+    if config.stop_policy not in {"impact", "coverage"}:
+        raise ConfigError(f"Unsupported stop policy: {config.stop_policy}")
+    if not (0.0 <= config.coverage_target <= 1.0):
+        raise ConfigError("coverage_target must be between 0.0 and 1.0")
 
     if config.matrix:
         if not config.providers:
@@ -301,6 +319,10 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         providers=providers or [provider],
         levels=levels or [level],
         report_format=str(merged.get("report_format", merged.get("format", "both"))).strip().lower(),
+        enriched_reporting=bool(merged.get("enriched_reporting", False)),
+        stop_policy=str(merged.get("stop_policy", "impact")).strip().lower(),
+        coverage_target=float(merged.get("coverage_target", 0.70)),
+        diagnose=bool(merged.get("diagnose", False)),
         models=_parse_model_configs(merged.get("models", {})),
     )
 

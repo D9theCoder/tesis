@@ -22,7 +22,19 @@ def test_run_provider_matrix_skips_unsupported_provider(monkeypatch):
 def test_run_provider_matrix_deterministic_ordering(monkeypatch):
     call_order = []
 
-    def track_engagement(*, target_url, security_level, llm_provider, max_iterations, repeat_index):
+    def track_engagement(
+        *,
+        target_url,
+        security_level,
+        llm_provider,
+        max_iterations,
+        repeat_index,
+        stop_policy="impact",
+        coverage_target=0.70,
+        enriched_reporting=False,
+        diagnose=False,
+        output_dir=None,
+    ):
         call_order.append((llm_provider, security_level, repeat_index))
         return {
             "schema_version": "stage6.v1",

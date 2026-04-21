@@ -28,6 +28,7 @@ from tesis.report_formatters import (
     format_module_scores_table,
     format_provider_comparison_table,
     format_rejection_table,
+    format_rich_report_sections,
     parse_artifact_or_matrix,
 )
 
@@ -102,6 +103,10 @@ def _print_resolved_config(config: Any) -> None:
         "providers": config.providers,
         "levels": config.levels,
         "format": config.report_format,
+        "enriched_reporting": config.enriched_reporting,
+        "stop_policy": config.stop_policy,
+        "coverage_target": config.coverage_target,
+        "diagnose": config.diagnose,
         "models": masked_models,
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
@@ -145,6 +150,11 @@ def handle_run(args: argparse.Namespace) -> int:
                 security_levels=config.levels,
                 repeats=config.repeats,
                 max_iterations=config.iterations,
+                stop_policy=config.stop_policy,
+                coverage_target=config.coverage_target,
+                enriched_reporting=config.enriched_reporting,
+                diagnose=config.diagnose,
+                output_dir=str(output_dir / "runs"),
                 include_aggregate=True,
             )
             if isinstance(result, tuple):
@@ -180,8 +190,20 @@ def handle_run(args: argparse.Namespace) -> int:
             llm_provider=config.provider,
             max_iterations=config.iterations,
             repeat_index=0,
+            stop_policy=config.stop_policy,
+            coverage_target=config.coverage_target,
+            enriched_reporting=config.enriched_reporting,
+            diagnose=config.diagnose,
+            output_dir=str(output_dir / "runs"),
         )
         _write_run_artifacts(output_dir, [artifact])
+
+        if config.enriched_reporting:
+            sidecar_base = output_dir / "runs" / f"{artifact['run_id']}"
+            print(f"Rich sidecar: {sidecar_base}.rich.json")
+            print(f"Events sidecar: {sidecar_base}.events.jsonl")
+            if artifact.get("status") == "error":
+                print(f"Failure artifact: {sidecar_base}.failure.json")
 
         if config.report_format in {"markdown", "both"}:
             summary_payload = {
@@ -301,6 +323,10 @@ def handle_report(args: argparse.Namespace) -> int:
             if len(runs) > 1:
                 sections.append(format_provider_comparison_table(data))
 
+        rich_section = format_rich_report_sections(data)
+        if rich_section and "No rich sidecar data available" not in rich_section:
+            sections.append(rich_section)
+
         rendered = "\n\n".join(section for section in sections if section)
 
         if args.output:
@@ -335,6 +361,18 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--repeats", type=int, help="Repeats per provider/level")
     run_parser.add_argument("--output-dir", dest="output_dir", help="Output directory")
     run_parser.add_argument("--format", choices=["json", "markdown", "both"], help="Output format")
+    run_parser.add_argument("--enriched-reporting", action="store_true", help="Write Stage 7.1 rich sidecar artifacts")
+    run_parser.add_argument(
+        "--stop-policy",
+        choices=["impact", "coverage"],
+        help="Orchestration stop policy",
+    )
+    run_parser.add_argument(
+        "--coverage-target",
+        type=float,
+        help="Coverage target in [0.0, 1.0] when using coverage stop policy",
+    )
+    run_parser.add_argument("--diagnose", action="store_true", help="Attach quality diagnostics in report summary")
     run_parser.add_argument("--dry-run", action="store_true", help="Validate config and exit")
     run_parser.add_argument("--no-summary", action="store_true", help="Suppress stdout run summary")
     run_parser.add_argument("--verbose", action="store_true", help="Enable debug logging")

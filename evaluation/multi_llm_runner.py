@@ -105,6 +105,13 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
         "schema_version": "stage6.v1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "totals": aggregate_runs(artifacts),
+        "diagnostics": {
+            "runs_with_diagnostics": sum(
+                1
+                for artifact in artifacts
+                if isinstance(artifact.get("report", {}).get("summary", {}).get("diagnostics"), dict)
+            ),
+        },
         "by_provider_level": by_provider_level,
         "by_provider": by_provider,
         "runs": artifacts,
@@ -118,6 +125,11 @@ def run_provider_matrix(
     security_levels: list[str] | None = None,
     repeats: int = 1,
     max_iterations: int = 30,
+    stop_policy: str = "impact",
+    coverage_target: float = 0.70,
+    enriched_reporting: bool = False,
+    diagnose: bool = False,
+    output_dir: str | None = None,
     include_aggregate: bool = False,
 ) -> list[dict] | tuple[list[dict], dict[str, Any]]:
     chosen_providers = sorted(providers or list(SUPPORTED_PROVIDERS))
@@ -157,6 +169,11 @@ def run_provider_matrix(
                         llm_provider=provider,
                         max_iterations=max_iterations,
                         repeat_index=repeat_index,
+                        stop_policy=stop_policy,
+                        coverage_target=coverage_target,
+                        enriched_reporting=enriched_reporting,
+                        diagnose=diagnose,
+                        output_dir=output_dir,
                     )
                 )
 

@@ -114,3 +114,15 @@ def test_critical_outcome_achieved_checks_confirmed_and_achieved():
     assert critical_outcome_achieved({"achieved_outcomes": ["rce_achieved"], "confirmed_vulns": []})
     assert critical_outcome_achieved({"achieved_outcomes": [], "confirmed_vulns": ["session_hijack"]})
     assert not critical_outcome_achieved({"achieved_outcomes": [], "confirmed_vulns": ["sqli_confirmed"]})
+
+
+def test_route_after_agent_coverage_policy_does_not_short_circuit_critical_outcome():
+    state = {
+        "confirmed_vulns": ["rce_achieved"],
+        "achieved_outcomes": [],
+        "iteration_count": 2,
+        "max_iterations": 30,
+        "stop_policy": "coverage",
+    }
+
+    assert route_after_agent(state) == "orchestrator"

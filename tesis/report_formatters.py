@@ -14,6 +14,15 @@ def parse_artifact_or_matrix(path: str | Path) -> dict[str, Any]:
         return {"runs": payload}
     if not isinstance(payload, dict):
         raise ValueError("Artifact JSON must be an object or list")
+
+    run_id = payload.get("run_id") if isinstance(payload.get("run_id"), str) else None
+    if run_id:
+        sibling_rich = file_path.with_name(f"{run_id}.rich.json")
+        if sibling_rich.exists():
+            try:
+                payload["rich_sidecar"] = json.loads(sibling_rich.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                pass
     return payload
 
 
@@ -209,3 +218,43 @@ def format_provider_comparison_table(matrix_data: Mapping[str, Any]) -> str:
         rows.append(row)
 
     return _as_table(headers, rows)
+
+
+def format_rich_report_sections(data: Mapping[str, Any]) -> str:
+    """Render Stage 7.1 rich sidecar sections when available."""
+    rich = data.get("rich_sidecar")
+    if not isinstance(rich, Mapping):
+        return "No rich sidecar data available."
+
+    lines: list[str] = ["Rich Trace Summary"]
+    lines.append(f"- schema: {rich.get('schema_version', 'unknown')}")
+    lines.append(f"- events: {rich.get('events_count', 0)}")
+
+    hashes = rich.get("prompt_response_hashes")
+    if isinstance(hashes, list) and hashes:
+        rows: list[list[str]] = []
+        for item in hashes[:10]:
+            if not isinstance(item, Mapping):
+                continue
+            rows.append([
+                str(item.get("event_type", "unknown")),
+                str(item.get("hash", ""))[:24] + "...",
+            ])
+        if rows:
+            lines.append("")
+            lines.append(_as_table(["Event", "Payload Hash"], rows))
+
+    report_summary = data.get("report", {}).get("summary", {})
+    diagnostics = report_summary.get("diagnostics") if isinstance(report_summary, Mapping) else None
+    if isinstance(diagnostics, Mapping):
+        raw_coverage = diagnostics.get("coverage_ratio", 0)
+        try:
+            coverage_value = float(raw_coverage)
+        except (TypeError, ValueError):
+            coverage_value = 0.0
+        lines.append("")
+        lines.append("Diagnostics")
+        lines.append(f"- coverage_ratio: {coverage_value:.3f}")
+        lines.append(f"- flags: {diagnostics.get('flags', [])}")
+
+    return "\n".join(lines)

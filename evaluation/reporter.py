@@ -49,3 +49,21 @@ def write_matrix_reports(output_dir: str | Path, run_id: str, aggregate: dict) -
     json_path = write_json_report(out_dir / f"matrix_{run_id}.json", payload)
     markdown_path = write_markdown_report(out_dir / f"matrix_{run_id}.md", payload)
     return {"json": json_path, "markdown": markdown_path}
+
+
+def write_events_jsonl(path: str | Path, events: list[dict]) -> Path:
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [json.dumps(event, sort_keys=True) for event in events]
+    content = "\n".join(lines)
+    if content:
+        content += "\n"
+    out_path.write_text(content, encoding="utf-8")
+    return out_path
+
+
+def write_rich_report(path: str | Path, payload: dict) -> Path:
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return out_path

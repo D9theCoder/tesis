@@ -29,4 +29,8 @@ class EngagementConfig:
     providers: list[str] = field(default_factory=list)
     levels: list[str] = field(default_factory=list)
     report_format: str = "both"
+    enriched_reporting: bool = False
+    stop_policy: str = "impact"
+    coverage_target: float = 0.70
+    diagnose: bool = False
     models: dict[str, ModelConfig] = field(default_factory=dict)

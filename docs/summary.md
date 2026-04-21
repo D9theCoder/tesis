@@ -123,6 +123,13 @@ Mulai Stage 7, rubrik ini dapat direproduksi langsung dari artifact JSON menggun
 - `python -m tesis report <artifact.json> --show-scores`
 - `python -m tesis report <matrix.json> --show-scores --show-chains`
 
+Planned extension (Stage 7.1) menambahkan artifact sidecar untuk reproduksibilitas forensik:
+
+- Prompt yang dihasilkan orchestrator per iterasi
+- Respons model per iterasi (termasuk refusal/rejection)
+- Jejak traversal AKG (viable path, path terpilih, chain route)
+- Failure artifact terstruktur saat run gagal
+
 ---
 
 ## 4. Struktur Project (Target End-State)

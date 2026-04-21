@@ -21,7 +21,7 @@ from agents.tier3.lfi_to_rce_chain import lfi_to_rce_chain
 from agents.tier3.sqli_to_creds_chain import sqli_to_creds_chain
 from agents.tier3.upload_to_rce_chain import upload_to_rce_chain
 from agents.tier3.xss_to_csrf_chain import xss_to_csrf_chain
-from core.chaining_coordinator import route_after_agent
+from core.chaining_coordinator import chaining_router_node
 from core.scorer import scorer
 from core.state import ExploitationState
 from foundation.recon import recon
@@ -75,6 +75,14 @@ def route_from_orchestrator(state: ExploitationState) -> str:
 	return "scorer"
 
 
+def route_from_chaining_router(state: ExploitationState) -> str:
+	"""Map chaining-router decision to a known graph node safely."""
+	next_agent = state.get("next_agent", "scorer")
+	if next_agent in RUNTIME_AGENT_NODE_NAMES or next_agent in {"orchestrator", "scorer"}:
+		return next_agent
+	return "scorer"
+
+
 def build_framework(llm_provider: str = "gemini"):
 	"""Build and compile the Stage 4 execution graph."""
 	# Keep the argument for API compatibility and future provider-specific wiring.
@@ -84,15 +92,17 @@ def build_framework(llm_provider: str = "gemini"):
 
 	graph.add_node("recon", recon)
 	graph.add_node("orchestrator", orchestrator)
+	graph.add_node("chaining_router", chaining_router_node)
 	graph.add_node("scorer", scorer)
 
 	for name in RUNTIME_AGENT_NODE_NAMES:
 		graph.add_node(name, RUNTIME_AGENT_HANDLERS[name])
-		graph.add_conditional_edges(name, route_after_agent)
+		graph.add_edge(name, "chaining_router")
 
 	graph.add_edge(START, "recon")
 	graph.add_edge("recon", "orchestrator")
 	graph.add_conditional_edges("orchestrator", route_from_orchestrator)
+	graph.add_conditional_edges("chaining_router", route_from_chaining_router)
 	graph.add_edge("scorer", END)
 
 	return graph.compile()

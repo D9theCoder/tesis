@@ -1,0 +1,120 @@
+{
+  "events_count": 60,
+  "prompt_response_hashes": [
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:725cdcc2ab6e7c1ab61aeba99e34fc5f47b15470038452d3d6ab23d9e69ca126"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    },
+    {
+      "event_type": "orchestrator.decision",
+      "hash": "sha256:dfcaaabe939b91edb822cbf025c00205ed7a09f30f0805ce5bfab2d34ba53b6a"
+    }
+  ],
+  "run_id": "gemini-low-0",
+  "schema_version": "stage7.rich.v1",
+  "status": "success"
+}

@@ -28,7 +28,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 class TestExploitationStateSchema:
     """Validate the schema has all required fields from AGENTS.md."""
 
-    # All fields defined in AGENTS.md state schema
+    # Core fields from AGENTS.md state schema
     REQUIRED_FIELDS = [
         "target_url",
         "security_level",
@@ -51,6 +51,13 @@ class TestExploitationStateSchema:
         "max_iterations",
     ]
 
+    # Stage 7.1 optional extensions for telemetry/coverage reporting
+    OPTIONAL_FIELDS = [
+        "telemetry_events",
+        "stop_policy",
+        "coverage_target",
+    ]
+
     def test_all_fields_present(self):
         """All fields from AGENTS.md must be defined in ExploitationState."""
         hints = get_type_hints(ExploitationState, include_extras=True)
@@ -58,9 +65,10 @@ class TestExploitationStateSchema:
             assert field in hints, f"Missing field: {field}"
 
     def test_no_extra_fields(self):
-        """Schema should not have fields beyond what AGENTS.md specifies."""
+        """Schema should only include required fields plus known optional extensions."""
         hints = get_type_hints(ExploitationState, include_extras=True)
-        extra = set(hints.keys()) - set(self.REQUIRED_FIELDS)
+        allowed = set(self.REQUIRED_FIELDS) | set(self.OPTIONAL_FIELDS)
+        extra = set(hints.keys()) - allowed
         assert extra == set(), f"Unexpected fields in schema: {extra}"
 
     def test_instantiation_with_all_fields(self):

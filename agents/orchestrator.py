@@ -12,6 +12,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage
 
 from core.knowledge_graph import AttackKnowledgeGraph
+from core.state import MODULE_NAMES
 from llm.guardrail_monitor import is_guardrail_refusal, make_guardrail_event
 from llm.prompts.orchestrator_prompt import build_orchestrator_prompt
 from llm.provider import get_llm
@@ -88,6 +89,46 @@ def _extract_response_text(raw_content: Any) -> str:
 		if parts:
 			return "\n".join(parts)
 	return str(raw_content)
+
+
+def _parse_decision_payload(raw_text: str) -> dict[str, Any] | None:
+	"""Parse LLM output into a decision object with tolerant JSON extraction."""
+	try:
+		parsed = json.loads(raw_text)
+		return parsed if isinstance(parsed, dict) else None
+	except Exception:
+		start = raw_text.find("{")
+		end = raw_text.rfind("}")
+		if start == -1 or end == -1 or end <= start:
+			return None
+		try:
+			parsed = json.loads(raw_text[start : end + 1])
+			return parsed if isinstance(parsed, dict) else None
+		except Exception:
+			return None
+
+
+def _module_coverage_ratio(scores: dict[str, Any]) -> float:
+	"""Compute module coverage as score>=1 over known modules."""
+	if not MODULE_NAMES:
+		return 0.0
+	covered = 0
+	for module_name in MODULE_NAMES:
+		raw_score = scores.get(module_name, 0)
+		try:
+			score = int(raw_score)
+		except Exception:
+			score = 0
+		if score >= 1:
+			covered += 1
+	return covered / len(MODULE_NAMES)
+
+
+def _clip_text(text: str, limit: int = 1200) -> str:
+	"""Limit stored trace text size to keep sidecars bounded."""
+	if len(text) <= limit:
+		return text
+	return text[:limit] + "...<truncated>"
 
 
 def _find_ready_chain_agent(
@@ -247,16 +288,63 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 	"""LangGraph node: select the next agent based on AKG + LLM strategy."""
 	iteration_count = state.get("iteration_count", 0)
 	max_iterations = state.get("max_iterations", 30)
+	stop_policy_raw = str(state.get("stop_policy", "impact") or "impact").strip().lower()
+	stop_policy = stop_policy_raw if stop_policy_raw in {"impact", "coverage"} else "impact"
+	raw_coverage_target = state.get("coverage_target", 0.70)
+	try:
+		coverage_target = float(raw_coverage_target)
+	except Exception:
+		coverage_target = 0.70
+	coverage_target = min(max(coverage_target, 0.0), 1.0)
 	confirmed_vulns = state.get("confirmed_vulns", [])
 	confirmed_set = set(confirmed_vulns)
 	achieved_outcomes = state.get("achieved_outcomes", [])
 	achieved_set = set(achieved_outcomes)
+	scores = state.get("scores", {}) if isinstance(state.get("scores"), dict) else {}
+	coverage_ratio = _module_coverage_ratio(scores)
+	telemetry_base = {
+		"node": "orchestrator",
+		"iteration": iteration_count,
+		"stop_policy": stop_policy,
+		"coverage_ratio": round(coverage_ratio, 4),
+		"coverage_target": round(coverage_target, 4),
+	}
 
 	if iteration_count >= max_iterations:
-		return {"next_agent": "scorer"}
+		return {
+			"next_agent": "scorer",
+			"telemetry_events": [
+				{
+					**telemetry_base,
+					"event": "orchestrator.stop",
+					"reason": "budget_exhausted",
+				}
+			],
+		}
 
-	if (achieved_set | confirmed_set) & CRITICAL_OUTCOMES:
-		return {"next_agent": "scorer"}
+	if stop_policy == "impact" and ((achieved_set | confirmed_set) & CRITICAL_OUTCOMES):
+		return {
+			"next_agent": "scorer",
+			"telemetry_events": [
+				{
+					**telemetry_base,
+					"event": "orchestrator.stop",
+					"reason": "critical_outcome",
+				}
+			],
+		}
+
+	if stop_policy == "coverage" and coverage_ratio >= coverage_target:
+		return {
+			"next_agent": "scorer",
+			"telemetry_events": [
+				{
+					**telemetry_base,
+					"event": "orchestrator.stop",
+					"reason": "coverage_reached",
+				}
+			],
+		}
 
 	kg = AttackKnowledgeGraph()
 	viable_paths = kg.get_viable_chains(
@@ -278,14 +366,48 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 		security_level=state.get("security_level", "low"),
 		iteration_count=iteration_count,
 		max_iterations=max_iterations,
+		stop_policy=stop_policy,
+		coverage_ratio=coverage_ratio,
+		coverage_target=coverage_target,
 	)
 
 	try:
 		llm = get_llm(state.get("llm_provider", "gemini"))
 		response = llm.invoke([HumanMessage(content=prompt)])
 		text = _extract_response_text(getattr(response, "content", ""))
+		telemetry_events: list[dict[str, Any]] = [
+			{
+				**telemetry_base,
+				"event": "orchestrator.prompt.generated",
+				"status": "ok",
+				"payload": {
+					"provider": state.get("llm_provider", "gemini"),
+					"prompt_text": _clip_text(prompt),
+				},
+			},
+			{
+				**telemetry_base,
+				"event": "orchestrator.llm.response",
+				"status": "ok",
+				"payload": {
+					"response_text": _clip_text(text),
+				},
+			},
+		]
 
 		if is_guardrail_refusal(text):
+			telemetry_events.append(
+				{
+					**telemetry_base,
+					"event": "orchestrator.guardrail.rejection",
+					"status": "fallback",
+					"payload": {
+						"next_agent": fallback_agent,
+						"response_excerpt": _clip_text(text, 300),
+						"reason_code": "guardrail_refusal",
+					},
+				}
+			)
 			return {
 				"next_agent": fallback_agent,
 				"current_chain": fallback_chain,
@@ -296,13 +418,14 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 						response=text,
 					)
 				],
+				"telemetry_events": telemetry_events,
 				"messages": [
 					HumanMessage(content=prompt),
 					AIMessage(content=text),
 				],
 			}
 
-		parsed = json.loads(text)
+		parsed = _parse_decision_payload(text)
 		candidate: Any
 		candidate = parsed.get("next_agent", fallback_agent) if isinstance(parsed, dict) else fallback_agent
 		if not isinstance(candidate, str):
@@ -323,10 +446,23 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 			confirmed=confirmed_set,
 			achieved_outcomes=achieved_set,
 		)
+		telemetry_events.append(
+			{
+				**telemetry_base,
+				"event": "orchestrator.decision",
+				"status": "ok",
+				"payload": {
+					"next_agent": next_agent,
+					"used_fallback": next_agent == fallback_agent,
+					"fallback_agent": fallback_agent,
+				},
+			}
+		)
 
 		return {
 			"next_agent": next_agent,
 			"current_chain": selected_chain or (fallback_chain if next_agent == fallback_agent else []),
+			"telemetry_events": telemetry_events,
 			"messages": [
 				HumanMessage(content=prompt),
 				AIMessage(content=text),
@@ -336,6 +472,36 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 		return {
 			"next_agent": fallback_agent,
 			"current_chain": fallback_chain,
+			"telemetry_events": [
+				{
+					**telemetry_base,
+					"event": "orchestrator.prompt.generated",
+					"status": "ok",
+					"payload": {
+						"provider": state.get("llm_provider", "gemini"),
+						"prompt_text": _clip_text(prompt),
+					},
+				},
+				{
+					**telemetry_base,
+					"event": "orchestrator.llm.response",
+					"status": "error",
+					"payload": {
+						"error_type": type(exc).__name__,
+						"response_text": f"orchestrator_fallback:{type(exc).__name__}",
+					},
+				},
+				{
+					**telemetry_base,
+					"event": "orchestrator.fallback.applied",
+					"status": "fallback",
+					"payload": {
+						"error_type": type(exc).__name__,
+						"next_agent": fallback_agent,
+						"reason_code": "llm_exception",
+					},
+				},
+			],
 			"messages": [
 				HumanMessage(content=prompt),
 				AIMessage(content=f"orchestrator_fallback:{type(exc).__name__}"),

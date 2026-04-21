@@ -117,3 +117,25 @@ models:
     cfg = load_and_resolve_config(config_path=str(config_path), cli_args={})
 
     assert cfg.models["gemini"].api_key == "secret-token-1234"
+
+
+def test_cli_omitted_bool_flags_do_not_override_yaml_true(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    _write_yaml(
+        config_path,
+        """
+target_url: http://localhost/dvwa
+provider: gemini
+level: low
+enriched_reporting: true
+diagnose: true
+""",
+    )
+
+    cfg = load_and_resolve_config(
+        config_path=str(config_path),
+        cli_args={"enriched_reporting": False, "diagnose": False},
+    )
+
+    assert cfg.enriched_reporting is True
+    assert cfg.diagnose is True
