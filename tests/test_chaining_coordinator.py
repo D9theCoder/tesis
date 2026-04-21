@@ -28,6 +28,35 @@ def test_route_after_agent_returns_chain_agent_when_preconditions_met():
     assert route_after_agent(state) == "lfi_to_rce_chain"
 
 
+def test_route_after_agent_skips_chain_already_attempted_marker():
+    state = {
+        "confirmed_vulns": ["sqli_confirmed", "credentials_extracted"],
+        "achieved_outcomes": [],
+        "tried_payloads": {"sqli": ["chain:sqli_to_creds"]},
+        "iteration_count": 2,
+        "max_iterations": 30,
+    }
+
+    assert route_after_agent(state) == "orchestrator"
+
+
+def test_route_after_agent_can_route_other_chain_when_one_marked_attempted():
+    state = {
+        "confirmed_vulns": [
+            "sqli_confirmed",
+            "credentials_extracted",
+            "lfi_confirmed",
+            "log_access_confirmed",
+        ],
+        "achieved_outcomes": [],
+        "tried_payloads": {"sqli": ["chain:sqli_to_creds"]},
+        "iteration_count": 2,
+        "max_iterations": 30,
+    }
+
+    assert route_after_agent(state) == "lfi_to_rce_chain"
+
+
 def test_route_after_agent_prefers_chain_before_critical_short_circuit():
     state = {
         "confirmed_vulns": [
@@ -85,3 +114,15 @@ def test_critical_outcome_achieved_checks_confirmed_and_achieved():
     assert critical_outcome_achieved({"achieved_outcomes": ["rce_achieved"], "confirmed_vulns": []})
     assert critical_outcome_achieved({"achieved_outcomes": [], "confirmed_vulns": ["session_hijack"]})
     assert not critical_outcome_achieved({"achieved_outcomes": [], "confirmed_vulns": ["sqli_confirmed"]})
+
+
+def test_route_after_agent_coverage_policy_does_not_short_circuit_critical_outcome():
+    state = {
+        "confirmed_vulns": ["rce_achieved"],
+        "achieved_outcomes": [],
+        "iteration_count": 2,
+        "max_iterations": 30,
+        "stop_policy": "coverage",
+    }
+
+    assert route_after_agent(state) == "orchestrator"

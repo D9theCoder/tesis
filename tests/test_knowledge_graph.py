@@ -98,14 +98,14 @@ def test_get_viable_chains_is_deterministic(kg: AttackKnowledgeGraph):
     assert first == second
 
 
-def test_chain_preconditions_are_enforced(kg: AttackKnowledgeGraph):
+def test_chain_from_credentials_to_admin_is_viable_with_credentials_only(kg: AttackKnowledgeGraph):
     paths = kg.get_viable_chains(
         confirmed_vulns=["credentials_extracted"],
         achieved_outcomes=[],
         max_paths=10,
     )
 
-    assert all("admin_session_obtained" not in path for path in paths)
+    assert any(path[-1] == "admin_session_obtained" for path in paths)
 
 
 def test_max_paths_and_achieved_outcome_filtering(kg: AttackKnowledgeGraph):

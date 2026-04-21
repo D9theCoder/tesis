@@ -12,7 +12,7 @@ Field reducer strategy:
 """
 
 from copy import deepcopy
-from typing import Any, TypedDict, Annotated
+from typing import Any, TypedDict, Annotated, NotRequired
 from operator import add
 
 from langchain_core.messages import AnyMessage
@@ -52,6 +52,13 @@ class ExploitationState(TypedDict):
     # ── Guardrail monitoring (accumulate) ──
     guardrail_activations: Annotated[list[dict], add]  # {provider, context, snippet}
 
+    # ── Rich reporting telemetry (optional, accumulate) ──
+    telemetry_events: NotRequired[Annotated[list[dict], add]]
+
+    # ── Orchestration policy controls (optional, overwrite) ──
+    stop_policy: NotRequired[str]  # "impact" | "coverage"
+    coverage_target: NotRequired[float]  # 0.0 .. 1.0
+
     # ── Control flow (overwrite) ──
     next_agent: str  # overwritten each step by orchestrator/chaining
     iteration_count: int  # overwritten each step
@@ -81,6 +88,9 @@ def _default_state_template() -> dict[str, Any]:
         "chain_history": [],
         "messages": [],
         "guardrail_activations": [],
+        "telemetry_events": [],
+        "stop_policy": "impact",
+        "coverage_target": 0.70,
         "next_agent": "recon",
         "iteration_count": 0,
         "max_iterations": 30,

@@ -11,6 +11,7 @@ Based on `summary.md` and `AGENTS.md`, this is the recommended build order for t
 | 5. Vulnerability agents | Weeks 6–7 | Tier 1/2 agents + chain triggers + full payload/verifier behavior + browser verification |
 | 6. Evaluation and testing | Week 8 | Scorer (0–4), multi-LLM runner, regression tests |
 | 7. CLI and config interface | Week 9 | Thesis-grade CLI (`python -m tesis run`), config-driven execution, structured output artifacts |
+| 7.1. Rich experiment reporting & diagnostics | Week 10 | Prompt/response trace capture, AKG traversal logs, rejection/success messaging, failure artifacts, and low-coverage diagnostics |
 
 ## Stage 1 — Core state contract (Week 1)
 **Goal:** Lock the shared state schema before writing agents.
@@ -497,6 +498,20 @@ Tasks:
 - [ ] Document model configuration (`python -m tesis config --interactive`) in `README.md` with environment variable setup
 - [ ] Add `config.yaml` section to `README.md` explaining all supported fields under `models:`
 - [ ] Update `summary.md` Section 3 (Rubrik Penilaian) to reference the CLI's `--show-scores` output for reproducibility
+
+## Stage 8 — Rich experiment reporting and diagnostics (Week 10)
+**Goal:** Extend experiment artifacts beyond score summaries so each run is reproducible, diagnosable, and scientifically auditable.
+
+**Scope:** This stage keeps existing Stage 6/7 outputs compatible (`stage6.v1`) while introducing sidecar artifacts for rich traces.
+
+Tasks:
+- [ ] Add structured event telemetry per run (JSONL) capturing prompt generation, model response, AKG traversal decisions, and agent outcomes.
+- [ ] Persist rich sidecar artifact (`*.rich.json`) with prompt/response summaries, traversal summaries, rejection/success message indexes, and diagnostics pointers.
+- [ ] Add failure artifact generation (`*.failure.json`, optional `*.failed.log`) when experiment status is `error`.
+- [ ] Add coverage diagnostics (`module_coverage_ratio`, early-stop indicators, fallback-rate indicators) to explain low-scoring runs.
+- [ ] Add orchestration stop policy controls (`impact` vs `coverage`) so evaluation runs can prioritize breadth.
+- [ ] Add reporting formatter support to render rich sections (trace summary, traversal summary, diagnostics summary).
+- [ ] Add regression tests proving existing `stage6.v1` output remains readable when rich reporting is disabled.
 
 ---
 

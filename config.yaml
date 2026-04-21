@@ -1,35 +1,119 @@
-# Framework Configuration
-# Target DVWA instance
-target_url: "http://localhost/dvwa"
+# =============================================================================
+# TESIS Runtime Configuration
+# =============================================================================
+# This file is consumed by `python -m tesis run` and supports both:
+#   - single run mode (default)
+#   - matrix mode (provider x level x repeats)
+#
+# CLI arguments take precedence over this file.
+# Environment variables (TESIS_*) also override values (before CLI).
+# =============================================================================
 
-# Security levels to test (in order)
+# -----------------------------------------------------------------------------
+# Target & baseline defaults
+# -----------------------------------------------------------------------------
+# Target DVWA base URL.
+target_url: http://172.19.48.1/dvwa
+
+# Legacy-compatible defaults used when `level` / `provider` are not explicitly set.
+default_security_level: low
+default_llm_provider: gemini
+default_max_iterations: 30
+
+# Supported levels/providers (also used by matrix mode defaults).
 security_levels:
   - low
   - medium
   - high
 
-# Default security level for single-run engagements
-default_security_level: "low"
-
-# Maximum iterations per engagement
-default_max_iterations: 30
-
-# DVWA credentials (default)
-dvwa_username: "admin"
-dvwa_password: "password"
-
-# LLM providers to compare (currently Gemini only)
 llm_providers:
   - gemini
 
-# Default LLM provider
-default_llm_provider: "gemini"
+# -----------------------------------------------------------------------------
+# Primary run settings (single run mode)
+# -----------------------------------------------------------------------------
+# Explicit provider/level for non-matrix runs.
+# If omitted, loader falls back to default_* keys above.
+provider: gemini
+level: low
 
-# HTTP client settings
+# Max LangGraph orchestration iterations for a run.
+iterations: 30
+
+# Number of repeated runs per provider/level (mainly relevant for matrix mode).
+repeats: 1
+
+# Output root directory for artifacts.
+# Runs go to:   <output_dir>/runs/
+# Reports go to: <output_dir>/reports/
+output_dir: results
+
+# Report format for generated summaries.
+# Options: json | markdown | both
+report_format: both
+
+# -----------------------------------------------------------------------------
+# Stage 7.1 experiment controls (rich reporting + stopping policy)
+# -----------------------------------------------------------------------------
+# Whether to emit sidecar artifacts:
+#   - <run_id>.events.jsonl
+#   - <run_id>.rich.json
+#   - <run_id>.failure.json (error-only)
+enriched_reporting: true
+
+# Add run diagnostics into report summary (coverage/flags).
+diagnose: true
+
+# Stop policy:
+#   - impact   => stop when high-impact outcome reached
+#   - coverage => continue until coverage_target (or budget exhausted)
+stop_policy: coverage
+
+# Coverage goal (0.0..1.0) used when stop_policy=coverage.
+coverage_target: 0.70
+
+# -----------------------------------------------------------------------------
+# Matrix mode settings
+# -----------------------------------------------------------------------------
+# Set true to run across providers x levels x repeats.
+matrix: false
+
+# Providers and levels to use in matrix mode.
+# If empty, loader falls back to llm_providers/security_levels or single provider/level.
+providers:
+  - gemini
+
+levels:
+  - low
+  - medium
+  - high
+
+# -----------------------------------------------------------------------------
+# Optional HTTP / browser runtime knobs (used by framework components)
+# -----------------------------------------------------------------------------
 http_timeout: 10
 http_follow_redirects: true
 http_verify_ssl: false
 
-# Playwright settings
 playwright_headless: true
 playwright_timeout: 10000
+
+# -----------------------------------------------------------------------------
+# Optional DVWA credentials (if your runtime/session manager uses them)
+# -----------------------------------------------------------------------------
+dvwa_username: admin
+dvwa_password: password
+
+# -----------------------------------------------------------------------------
+# Model configuration per provider
+# -----------------------------------------------------------------------------
+# Tip: you can use environment placeholders like ${GEMINI_API_KEY}.
+# Example:
+#   api_key: ${GEMINI_API_KEY}
+models:
+  gemini:
+    model_name: gemini-3-flash-preview
+    # api_key: ${GEMINI_API_KEY}
+    temperature: 0.0
+    timeout: 60
+    # max_tokens: 2048
