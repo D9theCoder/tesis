@@ -7,6 +7,8 @@ Provides:
 
 from __future__ import annotations
 
+from typing import Any
+
 from evaluation.contracts import ModuleScoreResult, ScoreSummary, ScorerReport
 from evaluation.metrics import (
     chain_exploit_count,
@@ -15,6 +17,13 @@ from evaluation.metrics import (
     score_distribution,
 )
 from core.state import MODULE_NAMES, MODULE_TO_KG_NODE, SCORE_LABELS
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
 
 
 def _parse_chain_candidates(chain_history: list[dict], current_chain: list[str]) -> list[list[str]]:
@@ -79,6 +88,11 @@ def build_score_report(state: dict) -> ScorerReport:
         for module in MODULE_NAMES
     }
 
+    successful_evasions = min(
+        _safe_int(state.get("successful_evasions"), 0),
+        _safe_int(state.get("evasion_attempts"), 0),
+    )
+
     summary = ScoreSummary(
         llm_provider=state.get("llm_provider", "gemini"),
         security_level=state.get("security_level", "low"),
@@ -95,6 +109,9 @@ def build_score_report(state: dict) -> ScorerReport:
             state.get("chain_history", []),
             state.get("current_chain", []),
         ),
+        evasion_attempts=_safe_int(state.get("evasion_attempts"), 0),
+        successful_evasions=successful_evasions,
+        evasion_strategy=str(state.get("evasion_strategy") or "pipeline").strip().lower(),
     )
     return ScorerReport(module_scores=module_scores, summary=summary)
 

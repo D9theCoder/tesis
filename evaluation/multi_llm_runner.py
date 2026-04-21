@@ -22,6 +22,8 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
         provider = str(config.get("provider", "unknown"))
         level = str(config.get("security_level", "unknown"))
         status = str(artifact.get("status", "unknown"))
+        strategy = str(config.get("evasion_strategy", "pipeline"))
+        final_state = artifact.get("final_state", {})
 
         provider_level = by_provider_level.setdefault(provider, {}).setdefault(
             level,
@@ -33,6 +35,10 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
                 "guardrail_activations": 0,
                 "highest_outcomes": [],
                 "iterations": [],
+                "evasion_attempts": 0,
+                "successful_evasions": 0,
+                "evasion_strategy": strategy,
+                "evasion_enabled": bool(config.get("evasion_enabled", False)),
             },
         )
         provider_level["runs"] += 1
@@ -50,6 +56,10 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
                 "highest_outcomes": [],
                 "iterations": [],
                 "score_distribution": {bucket: 0 for bucket in range(5)},
+                "evasion_attempts": 0,
+                "successful_evasions": 0,
+                "evasion_strategy": strategy,
+                "evasion_enabled": bool(config.get("evasion_enabled", False)),
             },
         )
         provider_summary["runs"] += 1
@@ -62,6 +72,7 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
             total_score = sum(int(item.get("score", 0)) for item in module_scores.values())
             chain_exploits = int(report_summary.get("chain_exploits_achieved", 0) or 0)
             guardrails = int(report_summary.get("guardrail_activations", 0) or 0)
+
             highest_outcome = report_summary.get("highest_impact_outcome")
             iterations = int(report_summary.get("total_iterations_used", 0) or 0)
             distribution = report_summary.get("score_distribution", {})
@@ -84,11 +95,24 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
                 if str(bucket).isdigit():
                     provider_summary["score_distribution"][int(bucket)] += int(count)
 
+        evasion_attempts = int(final_state.get("evasion_attempts", 0) or 0)
+        successful_evasions = int(final_state.get("successful_evasions", 0) or 0)
+        provider_level["evasion_attempts"] += evasion_attempts
+        provider_level["successful_evasions"] += successful_evasions
+        provider_summary["evasion_attempts"] += evasion_attempts
+        provider_summary["successful_evasions"] += successful_evasions
+
     for provider_levels in by_provider_level.values():
         for payload in provider_levels.values():
             successful = max(payload["statuses"]["success"], 1)
             payload["avg_score"] = round(payload["total_score"] / successful, 2)
             payload["avg_iterations"] = round(mean(payload["iterations"]), 2) if payload["iterations"] else 0.0
+            attempts = payload["evasion_attempts"]
+            payload["evasion_success_rate"] = (
+                round(payload["successful_evasions"] / attempts * 100, 2)
+                if attempts > 0
+                else None
+            )
 
     for payload in by_provider.values():
         successful = max(payload["statuses"]["success"], 1)
@@ -100,9 +124,15 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
             if total_calls_estimate > 0
             else 0.0
         )
+        attempts = payload["evasion_attempts"]
+        payload["evasion_success_rate"] = (
+            round(payload["successful_evasions"] / attempts * 100, 2)
+            if attempts > 0
+            else None
+        )
 
     return {
-        "schema_version": "stage6.v1",
+        "schema_version": "stage8.v1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "totals": aggregate_runs(artifacts),
         "diagnostics": {
@@ -131,6 +161,8 @@ def run_provider_matrix(
     diagnose: bool = False,
     output_dir: str | None = None,
     include_aggregate: bool = False,
+    evasion_enabled: bool = False,
+    evasion_strategy: str = "pipeline",
 ) -> list[dict] | tuple[list[dict], dict[str, Any]]:
     chosen_providers = sorted(providers or list(SUPPORTED_PROVIDERS))
     chosen_levels = sorted(security_levels or list(SECURITY_LEVELS))
@@ -142,7 +174,7 @@ def run_provider_matrix(
                 for repeat_index in range(repeats):
                     artifacts.append(
                         {
-                            "schema_version": "stage6.v1",
+                            "schema_version": "stage8.v1",
                             "run_id": f"{provider}-{level}-{repeat_index}",
                             "status": "skipped",
                             "config": {
@@ -151,6 +183,8 @@ def run_provider_matrix(
                                 "security_level": level,
                                 "max_iterations": max_iterations,
                                 "repeat_index": repeat_index,
+                                "evasion_enabled": evasion_enabled,
+                                "evasion_strategy": evasion_strategy,
                             },
                             "timing": {},
                             "final_state": {},
@@ -173,6 +207,8 @@ def run_provider_matrix(
                         coverage_target=coverage_target,
                         enriched_reporting=enriched_reporting,
                         diagnose=diagnose,
+                        evasion_enabled=evasion_enabled,
+                        evasion_strategy=evasion_strategy,
                         output_dir=output_dir,
                     )
                 )

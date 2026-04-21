@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,6 +26,20 @@ class ScoreSummary:
     total_iterations_used: int
     longest_chain: str | None
 
+    # Stage 8.1 — Evasion metrics
+    evasion_attempts: int = 0
+    successful_evasions: int = 0
+    evasion_strategy: str = "pipeline"
+
+    def __post_init__(self):
+        if self.evasion_attempts < 0 or self.successful_evasions < 0:
+            raise ValueError("Evasion counts must be non-negative")
+        if self.successful_evasions > self.evasion_attempts:
+            raise ValueError(
+                f"successful_evasions ({self.successful_evasions}) cannot exceed "
+                f"evasion_attempts ({self.evasion_attempts})"
+            )
+
 
 @dataclass(frozen=True, slots=True)
 class ScorerReport:
@@ -34,24 +49,10 @@ class ScorerReport:
     def to_dict(self) -> dict[str, Any]:
         return {
             "module_scores": {
-                module: {
-                    "score": result.score,
-                    "label": result.label,
-                    "chain": result.chain,
-                }
+                module: dataclasses.asdict(result)
                 for module, result in self.module_scores.items()
             },
-            "summary": {
-                "llm_provider": self.summary.llm_provider,
-                "security_level": self.summary.security_level,
-                "total_modules_tested": self.summary.total_modules_tested,
-                "score_distribution": dict(self.summary.score_distribution),
-                "chain_exploits_achieved": self.summary.chain_exploits_achieved,
-                "highest_impact_outcome": self.summary.highest_impact_outcome,
-                "guardrail_activations": self.summary.guardrail_activations,
-                "total_iterations_used": self.summary.total_iterations_used,
-                "longest_chain": self.summary.longest_chain,
-            },
+            "summary": dataclasses.asdict(self.summary),
         }
 
 

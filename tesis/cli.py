@@ -25,6 +25,7 @@ from tesis.config_loader import (
     save_yaml_config,
 )
 from tesis.report_formatters import (
+    format_evasion_table,
     format_module_scores_table,
     format_provider_comparison_table,
     format_rejection_table,
@@ -107,6 +108,8 @@ def _print_resolved_config(config: Any) -> None:
         "stop_policy": config.stop_policy,
         "coverage_target": config.coverage_target,
         "diagnose": config.diagnose,
+        "evasion_enabled": config.evasion_enabled,
+        "evasion_strategy": config.evasion_strategy,
         "models": masked_models,
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
@@ -135,6 +138,12 @@ def handle_run(args: argparse.Namespace) -> int:
         _print_resolved_config(config)
         return EXIT_OK
 
+    if config.evasion_strategy != "pipeline" and not config.evasion_enabled:
+        LOGGER.warning(
+            "--evasion-strategy is set but --evasion-enabled is false; "
+            "strategy will be ignored by the runner"
+        )
+
     if not _preflight_target_reachable(config.target_url):
         print(f"Target unreachable: {config.target_url}")
         return EXIT_TARGET_UNREACHABLE
@@ -154,6 +163,8 @@ def handle_run(args: argparse.Namespace) -> int:
                 coverage_target=config.coverage_target,
                 enriched_reporting=config.enriched_reporting,
                 diagnose=config.diagnose,
+                evasion_enabled=config.evasion_enabled,
+                evasion_strategy=config.evasion_strategy,
                 output_dir=str(output_dir / "runs"),
                 include_aggregate=True,
             )
@@ -194,6 +205,8 @@ def handle_run(args: argparse.Namespace) -> int:
             coverage_target=config.coverage_target,
             enriched_reporting=config.enriched_reporting,
             diagnose=config.diagnose,
+            evasion_enabled=config.evasion_enabled,
+            evasion_strategy=config.evasion_strategy,
             output_dir=str(output_dir / "runs"),
         )
         _write_run_artifacts(output_dir, [artifact])
@@ -303,7 +316,8 @@ def handle_report(args: argparse.Namespace) -> int:
         data = parse_artifact_or_matrix(args.artifact)
         show_rejections = bool(args.show_rejections)
         show_scores = bool(args.show_scores)
-        if not show_rejections and not show_scores:
+        show_evasion = bool(args.show_evasion)
+        if not show_rejections and not show_scores and not show_evasion:
             show_scores = True
 
         sections: list[str] = []
@@ -322,6 +336,9 @@ def handle_report(args: argparse.Namespace) -> int:
             runs = data.get("runs") if isinstance(data.get("runs"), list) else []
             if len(runs) > 1:
                 sections.append(format_provider_comparison_table(data))
+
+        if show_evasion:
+            sections.append(format_evasion_table(data))
 
         rich_section = format_rich_report_sections(data)
         if rich_section and "No rich sidecar data available" not in rich_section:
@@ -373,6 +390,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Coverage target in [0.0, 1.0] when using coverage stop policy",
     )
     run_parser.add_argument("--diagnose", action="store_true", help="Attach quality diagnostics in report summary")
+    run_parser.add_argument("--evasion-enabled", action="store_true", help="Enable adversarial prompt evasion layer")
+    run_parser.add_argument(
+        "--evasion-strategy",
+        choices=["pipeline", "prompt_injection", "roleplay"],
+        help="Evasion strategy when evasion is enabled",
+    )
     run_parser.add_argument("--dry-run", action="store_true", help="Validate config and exit")
     run_parser.add_argument("--no-summary", action="store_true", help="Suppress stdout run summary")
     run_parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
@@ -412,6 +435,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--output", help="Optional output file path")
     report_parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     report_parser.add_argument("--quiet", action="store_true", help="Reduce logging noise")
+    report_parser.add_argument("--show-evasion", action="store_true", help="Render evasion statistics table")
     report_parser.set_defaults(handler=handle_report)
 
     return parser

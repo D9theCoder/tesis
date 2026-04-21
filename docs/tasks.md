@@ -520,3 +520,39 @@ llm_response = target_llm.invoke(safe_evasion_prompt)
 **Docs:**
 - `docs/jailbreak-algorithm.md`
 - DeepTeam adversarial attacks
+- `docs/stage-8-adversarial-prompt-evasion.implementation-plan.md`
+
+## Stage 8.1 — Jailbreak Integration to Main Program (Week 11, days 4–5)
+**Goal:** Wire the existing adversarial evasion layer through the full execution pipeline: CLI flags → config loader → engagement runner → LangGraph initial state → orchestrator → reports.
+
+**What is missing today:**
+- `tesis/cli.py` does not expose `--evasion-enabled` or `--evasion-strategy`.
+- `tesis/model_config.py` / `EngagementConfig` has no evasion fields.
+- `tesis/config_loader.py` ignores `evasion_enabled` / `evasion_strategy` from YAML, env vars, and CLI overrides.
+- `evaluation/runner.py` and `evaluation/multi_llm_runner.py` never pass evasion settings into `init_state`.
+- `core/scorer.py` and `evaluation/contracts.py` do not surface evasion metrics in score reports.
+- `tesis/report_formatters.py` has no evasion statistics table.
+
+**Files to modify:**
+- `tesis/model_config.py` — add `evasion_enabled` and `evasion_strategy` to `EngagementConfig`.
+- `tesis/config_loader.py` — parse evasion settings from YAML / `TESIS_EVASION_ENABLED` / CLI overrides; validate strategy.
+- `tesis/cli.py` — add `--evasion-enabled`, `--evasion-strategy` to `run`; add `--show-evasion` to `report`; wire values to runners.
+- `evaluation/runner.py` — accept `evasion_enabled` / `evasion_strategy`; inject into `init_state`; persist in artifact.
+- `evaluation/multi_llm_runner.py` — propagate evasion settings to every single engagement; aggregate `evasion_attempts` / `successful_evasions` per provider.
+- `evaluation/contracts.py` — extend `ScoreSummary` with `evasion_attempts`, `successful_evasions`, `evasion_strategy`.
+- `core/scorer.py` — read evasion fields from final state and include them in `ScoreSummary`.
+- `tesis/report_formatters.py` — implement `format_evasion_table()`; wire it to `--show-evasion`.
+
+**Files to create:**
+- `tests/test_evasion_integration.py` — config loading, runner state propagation, report formatting.
+
+**Acceptance criteria:**
+- [ ] `python -m tesis run --dry-run --evasion-enabled --evasion-strategy prompt_injection` resolves without error.
+- [ ] `EngagementConfig` carries evasion settings with correct defaults (`False`, `"pipeline"`).
+- [ ] Evasion settings reach `init_state` and flow back into run artifacts.
+- [ ] Matrix aggregate includes per-provider evasion attempt/success counts and `evasion_success_rate`.
+- [ ] `python -m tesis report <artifact> --show-evasion` renders an evasion statistics table.
+- [ ] All existing tests continue to pass.
+
+**Docs:**
+- `docs/stage-8.1-jailbreak-integration.implementation-plan.md`

@@ -1043,6 +1043,41 @@ def run_all_comparisons(target_url: str) -> dict:
 
 ---
 
+## 7.1. Integrasi Adversarial Evasion Layer (Stage 8.1)
+
+Stage 8 membangun **Adversarial Evasion Layer** (`llm/evasion/`) yang menggunakan DeepTeam untuk menulis ulang prompt orkestrator agar lolos dari filter keamanan LLM. Stage 8.1 mengintegrasikan layer ini ke dalam alur eksekusi utama:
+
+```
+CLI flags / config.yaml  →  Config Loader  →  EngagementConfig
+                                    |
+                                    v
+                           Runner (single / matrix)
+                                    |
+                                    v
+                         LangGraph init_state
+                                    |
+                                    v
+                              Orchestrator
+                                    |
+                                    v
+                             Score Reports
+```
+
+**Fitur integrasi:**
+- **CLI**: `--evasion-enabled`, `--evasion-strategy` pada subcommand `run`; `--show-evasion` pada subcommand `report`.
+- **Config**: `evasion_enabled` dan `evasion_strategy` dapat diatur di `config.yaml`, dioverride via environment variable (`TESIS_EVASION_ENABLED`, `TESIS_EVASION_STRATEGY`), atau via CLI flags.
+- **Runner**: `run_single_engagement()` dan `run_provider_matrix()` meneruskan evasion settings ke `init_state` sebelum `app.invoke()`.
+- **Reports**: Setiap run artifact mencatat `evasion_attempts` dan `successful_evasions`. Matrix aggregate menghitung `evasion_success_rate` per provider. Tabel evasion dapat ditampilkan via `tesis report ... --show-evasion`.
+
+**Strategi evasion yang didukung:**
+| Strategi | Deskripsi |
+|---|---|
+| `pipeline` | LangGraph subgraph dengan compliance gate + validity gate + retry loop |
+| `prompt_injection` | DeepTeam `PromptInjection` single-turn attack |
+| `roleplay` | DeepTeam `Roleplay` single-turn attack |
+
+---
+
 ## 8. Perbedaan Utama vs AWE (Justifikasi Novelty)
 
 | Dimensi | AWE | Framework Ini |
@@ -1054,6 +1089,7 @@ def run_all_comparisons(target_url: str) -> dict:
 | Scoring | Binary (flag/no flag) | Graduated 0–4 rubrik |
 | LLM comparison scope | 5 vuln class | Semua modul DVWA |
 | Guardrail measurement | ❌ Tidak ada | ✅ Secondary metric |
+| Adversarial evasion integration | ❌ Tidak ada | ✅ DeepTeam + LangGraph pipeline |
 | CSRF | ❌ Out of scope | ✅ Included |
 | File upload | ❌ Tidak diuji | ✅ + chain ke RCE |
 | Cross-session learning | Claimed, not demonstrated | Measurable via repeated runs |

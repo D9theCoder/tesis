@@ -12,12 +12,14 @@ import yaml
 
 from core.state import SECURITY_LEVELS
 from llm.provider import SUPPORTED_PROVIDERS
-from tesis.model_config import EngagementConfig, ModelConfig
+from tesis.model_config import EngagementConfig, ModelConfig, EVASION_STRATEGIES
 
 
 class ConfigError(ValueError):
     """Raised when config parsing/validation fails."""
 
+
+_VALID_EVASION_STRATEGIES: frozenset[str] = EVASION_STRATEGIES
 
 _ENV_REF_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)}")
 
@@ -110,6 +112,8 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "STOP_POLICY": "stop_policy",
         "COVERAGE_TARGET": "coverage_target",
         "DIAGNOSE": "diagnose",
+        "EVASION_ENABLED": "evasion_enabled",
+        "EVASION_STRATEGY": "evasion_strategy",
     }
 
     for key, raw_value in os.environ.items():
@@ -138,7 +142,7 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
                 value = int(raw_value)
             except ValueError as exc:
                 raise ConfigError(f"Invalid integer value for {key}: {raw_value}") from exc
-        elif mapped in {"matrix", "enriched_reporting", "diagnose"}:
+        elif mapped in {"matrix", "enriched_reporting", "diagnose", "evasion_enabled"}:
             value = _parse_bool(raw_value)
         elif mapped in {"providers", "levels"}:
             value = _parse_csv(raw_value)
@@ -180,9 +184,11 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         "stop_policy": "stop_policy",
         "coverage_target": "coverage_target",
         "diagnose": "diagnose",
+        "evasion_enabled": "evasion_enabled",
+        "evasion_strategy": "evasion_strategy",
     }
 
-    bool_flags = {"matrix", "enriched_reporting", "diagnose"}
+    bool_flags = {"matrix", "enriched_reporting", "diagnose", "evasion_enabled"}
 
     for key, mapped in key_mapping.items():
         if key not in cli_args:
@@ -283,6 +289,12 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
     if not (0.0 <= config.coverage_target <= 1.0):
         raise ConfigError("coverage_target must be between 0.0 and 1.0")
 
+    if config.evasion_enabled and config.evasion_strategy not in _VALID_EVASION_STRATEGIES:
+        raise ConfigError(
+            f"Unsupported evasion strategy: {config.evasion_strategy}. "
+            f"Must be one of: {', '.join(sorted(_VALID_EVASION_STRATEGIES))}"
+        )
+
     if config.matrix:
         if not config.providers:
             raise ConfigError("matrix mode requires at least one provider")
@@ -324,17 +336,19 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         target_url=str(merged.get("target_url", "")).strip(),
         provider=provider,
         level=level,
-        iterations=int(merged.get("iterations", merged.get("max_iterations", merged.get("default_max_iterations", 30)))),
+        iterations=int(merged.get("iterations") or merged.get("max_iterations") or merged.get("default_max_iterations") or 30),
         repeats=int(merged.get("repeats", 1)),
         output_dir=str(merged.get("output_dir", "results")).strip(),
         matrix=_coerce_bool(merged.get("matrix", False)),
         providers=providers or [provider],
         levels=levels or [level],
-        report_format=str(merged.get("report_format", merged.get("format", "both"))).strip().lower(),
+        report_format=str(merged.get("report_format") or merged.get("format") or "both").strip().lower(),
         enriched_reporting=_coerce_bool(merged.get("enriched_reporting", False)),
-        stop_policy=str(merged.get("stop_policy", "impact")).strip().lower(),
-        coverage_target=float(merged.get("coverage_target", 0.70)),
+        stop_policy=str(merged.get("stop_policy") or "impact").strip().lower(),
+        coverage_target=float(merged.get("coverage_target") or 0.70),
         diagnose=_coerce_bool(merged.get("diagnose", False)),
+        evasion_enabled=_coerce_bool(merged.get("evasion_enabled", False)),
+        evasion_strategy=str(merged.get("evasion_strategy") or "pipeline").strip().lower(),
         models=_parse_model_configs(merged.get("models", {})),
     )
 

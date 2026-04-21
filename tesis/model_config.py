@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+EVASION_STRATEGIES: frozenset[str] = frozenset(
+    {"pipeline", "prompt_injection", "roleplay"}
+)
+
 
 @dataclass(slots=True)
 class ModelConfig:
@@ -34,3 +38,10 @@ class EngagementConfig:
     coverage_target: float = 0.70
     diagnose: bool = False
     models: dict[str, ModelConfig] = field(default_factory=dict)
+
+    # Stage 8.1 — Evasion integration
+    evasion_enabled: bool = False
+    evasion_strategy: str = "pipeline"  # see EVASION_STRATEGIES
+
+
+__all__ = ["ModelConfig", "EngagementConfig"]

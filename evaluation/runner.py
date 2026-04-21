@@ -33,6 +33,8 @@ def run_single_engagement(
     enriched_reporting: bool = False,
     diagnose: bool = False,
     output_dir: str | None = None,
+    evasion_enabled: bool = False,
+    evasion_strategy: str = "pipeline",
 ) -> dict:
     run_id = f"{llm_provider}-{security_level}-{repeat_index}"
     started_at = _now_iso()
@@ -51,6 +53,8 @@ def run_single_engagement(
     )
 
     try:
+        evasion_strategy = str(evasion_strategy).strip().lower()
+        evasion_enabled = bool(evasion_enabled)
         app = build_framework(llm_provider=llm_provider)
         init_state = {
             **new_default_state(),
@@ -60,6 +64,8 @@ def run_single_engagement(
             "max_iterations": max_iterations,
             "stop_policy": stop_policy,
             "coverage_target": coverage_target,
+            "evasion_enabled": evasion_enabled,
+            "evasion_strategy": evasion_strategy,
         }
 
         final_state = app.invoke(init_state)
@@ -74,6 +80,10 @@ def run_single_engagement(
             "achieved_outcomes": [],
             "guardrail_activations": [],
             "telemetry_events": [],
+            "evasion_attempts": 0,
+            "successful_evasions": 0,
+            "evasion_enabled": evasion_enabled,
+            "evasion_strategy": evasion_strategy,
         }
         report = build_score_report(final_state).to_dict()
         status = "error"
@@ -144,6 +154,10 @@ def run_single_engagement(
                         "iteration_count": final_state.get("iteration_count", 0),
                         "confirmed_vulns": list(final_state.get("confirmed_vulns", [])),
                         "achieved_outcomes": list(final_state.get("achieved_outcomes", [])),
+                        "evasion_enabled": final_state.get("evasion_enabled", False),
+                        "evasion_attempts": final_state.get("evasion_attempts", 0),
+                        "successful_evasions": final_state.get("successful_evasions", 0),
+                        "evasion_strategy": final_state.get("evasion_strategy", "pipeline"),
                     },
                     recent_events=events[-20:],
                 )
@@ -154,7 +168,7 @@ def run_single_engagement(
                 summary["sidecar_warning"] = f"{type(exc).__name__}: {exc}"
 
     return {
-        "schema_version": "stage6.v1",
+        "schema_version": "stage8.v1",
         "run_id": run_id,
         "status": status,
         "config": {
@@ -163,6 +177,8 @@ def run_single_engagement(
             "security_level": security_level,
             "max_iterations": max_iterations,
             "repeat_index": repeat_index,
+            "evasion_enabled": evasion_enabled,
+            "evasion_strategy": evasion_strategy,
         },
         "timing": {
             "started_at": started_at,
@@ -174,6 +190,9 @@ def run_single_engagement(
             "confirmed_vulns": list(final_state.get("confirmed_vulns", [])),
             "achieved_outcomes": list(final_state.get("achieved_outcomes", [])),
             "guardrail_activations": list(final_state.get("guardrail_activations", [])),
+            "evasion_enabled": final_state.get("evasion_enabled", False),
+            "evasion_attempts": final_state.get("evasion_attempts", 0),
+            "successful_evasions": final_state.get("successful_evasions", 0),
         },
         "report": report,
         "error": error,
