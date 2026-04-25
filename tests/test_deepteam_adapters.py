@@ -19,7 +19,7 @@ def test_enhance_with_deepteam_normalizes_strategy_names(monkeypatch):
     """Strategy names with mixed case/separators should still resolve."""
 
     class FakeAttack:
-        def enhance(self, prompt: str) -> str:
+        def enhance(self, prompt: str, simulator_model=None, **kwargs) -> str:
             return f"enhanced:{prompt}"
 
     monkeypatch.setattr(deepteam_adapters, "_DEEPTEAM_AVAILABLE", True)

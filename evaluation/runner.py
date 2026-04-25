@@ -35,6 +35,9 @@ def run_single_engagement(
     output_dir: str | None = None,
     evasion_enabled: bool = False,
     evasion_strategy: str = "pipeline",
+    simulator_model: str | None = None,
+    simulator_provider: str | None = None,
+    max_concurrency: int | None = None,
 ) -> dict:
     run_id = f"{llm_provider}-{security_level}-{repeat_index}"
     started_at = _now_iso()
@@ -66,6 +69,9 @@ def run_single_engagement(
             "coverage_target": coverage_target,
             "evasion_enabled": evasion_enabled,
             "evasion_strategy": evasion_strategy,
+            "simulator_model": simulator_model,
+            "simulator_provider": simulator_provider,
+            "max_concurrency": max_concurrency,
         }
 
         final_state = app.invoke(init_state)

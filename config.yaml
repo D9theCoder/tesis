@@ -101,15 +101,6 @@ levels:
   - medium
   - high
 
-# -----------------------------------------------------------------------------
-# Optional HTTP / browser runtime knobs (used by framework components)
-# -----------------------------------------------------------------------------
-http_timeout: 10
-http_follow_redirects: true
-http_verify_ssl: false
-
-playwright_headless: true
-playwright_timeout: 10000
 
 # -----------------------------------------------------------------------------
 # Optional DVWA credentials (if your runtime/session manager uses them)
@@ -130,3 +121,20 @@ models:
     temperature: 0.0
     timeout: 60
     # max_tokens: 2048
+
+  # ---------------------------------------------------------------------------
+  # Simulator model for adversarial evasion (DeepTeam + pipeline gates)
+  # ---------------------------------------------------------------------------
+  # This model powers the adversarial prompt enhancement and the compliance /
+  # validity gates.  You can use ANY supported provider here (openai, gemini,
+  # anthropic, etc.).  Set the API key here or via the corresponding env var.
+  # When omitted, the framework falls back to the primary Gemini provider.
+  # ---------------------------------------------------------------------------
+  simulator:
+    provider: gemini
+    model_name: gemini-2.5-flash-lite
+    # api_key: ${GEMINI_API_KEY}
+    temperature: 1
+    timeout: 60
+    # Controls concurrent DeepTeam simulator API calls.
+    max_concurrency: 3

@@ -36,6 +36,9 @@ def test_run_provider_matrix_deterministic_ordering(monkeypatch):
         output_dir=None,
         evasion_enabled=False,
         evasion_strategy="pipeline",
+        simulator_model=None,
+        simulator_provider=None,
+        max_concurrency=None,
     ):
         call_order.append((llm_provider, security_level, repeat_index, evasion_enabled, evasion_strategy))
         return {

@@ -61,6 +61,9 @@ class TestExploitationStateSchema:
         "successful_evasions",
         "evasion_enabled",
         "evasion_strategy",
+        "simulator_model",
+        "simulator_provider",
+        "max_concurrency",
     ]
 
     def test_all_fields_present(self):
@@ -296,7 +299,7 @@ class TestConstants:
 
     def test_llm_providers(self):
         assert "gemini" in LLM_PROVIDERS
-        assert len(LLM_PROVIDERS) == 1
+        assert "openai" in LLM_PROVIDERS
 
 
 class TestLangGraphIntegration:

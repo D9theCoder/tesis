@@ -163,6 +163,9 @@ def run_provider_matrix(
     include_aggregate: bool = False,
     evasion_enabled: bool = False,
     evasion_strategy: str = "pipeline",
+    simulator_model: str | None = None,
+    simulator_provider: str | None = None,
+    max_concurrency: int | None = None,
 ) -> list[dict] | tuple[list[dict], dict[str, Any]]:
     chosen_providers = sorted(providers or list(SUPPORTED_PROVIDERS))
     chosen_levels = sorted(security_levels or list(SECURITY_LEVELS))
@@ -209,6 +212,9 @@ def run_provider_matrix(
                         diagnose=diagnose,
                         evasion_enabled=evasion_enabled,
                         evasion_strategy=evasion_strategy,
+                        simulator_model=simulator_model,
+                        simulator_provider=simulator_provider,
+                        max_concurrency=max_concurrency,
                         output_dir=output_dir,
                     )
                 )

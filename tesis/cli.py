@@ -6,6 +6,7 @@ import argparse
 import getpass
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -144,6 +145,28 @@ def handle_run(args: argparse.Namespace) -> int:
             "strategy will be ignored by the runner"
         )
 
+    # Stage 8 simulator configuration: extract simulator model config for
+    # DeepTeam attack generation and pipeline compliance/validity gates.
+    # Supports any provider (openai, gemini, etc.) via models.simulator or
+    # the legacy models.openai fallback.
+    simulator_cfg = config.models.get("simulator") or config.models.get("openai")
+    simulator_model = simulator_cfg.model_name if simulator_cfg else None
+    simulator_provider = simulator_cfg.provider if simulator_cfg else "openai"
+    max_concurrency = None
+    if simulator_cfg:
+        raw_mc = simulator_cfg.extra.get("max_concurrency")
+        if raw_mc is not None:
+            try:
+                max_concurrency = int(raw_mc)
+            except (ValueError, TypeError):
+                max_concurrency = None
+    if simulator_cfg and simulator_cfg.api_key and not simulator_cfg.api_key.startswith("your_"):
+        if simulator_provider == "openai":
+            os.environ["OPENAI_API_KEY"] = simulator_cfg.api_key
+        elif simulator_provider == "gemini":
+            os.environ["GOOGLE_API_KEY"] = simulator_cfg.api_key
+            os.environ["GEMINI_API_KEY"] = simulator_cfg.api_key
+
     if not _preflight_target_reachable(config.target_url):
         print(f"Target unreachable: {config.target_url}")
         return EXIT_TARGET_UNREACHABLE
@@ -165,6 +188,9 @@ def handle_run(args: argparse.Namespace) -> int:
                 diagnose=config.diagnose,
                 evasion_enabled=config.evasion_enabled,
                 evasion_strategy=config.evasion_strategy,
+                simulator_model=simulator_model,
+                simulator_provider=simulator_provider,
+                max_concurrency=max_concurrency,
                 output_dir=str(output_dir / "runs"),
                 include_aggregate=True,
             )
@@ -207,6 +233,9 @@ def handle_run(args: argparse.Namespace) -> int:
             diagnose=config.diagnose,
             evasion_enabled=config.evasion_enabled,
             evasion_strategy=config.evasion_strategy,
+            simulator_model=simulator_model,
+            simulator_provider=simulator_provider,
+            max_concurrency=max_concurrency,
             output_dir=str(output_dir / "runs"),
         )
         _write_run_artifacts(output_dir, [artifact])

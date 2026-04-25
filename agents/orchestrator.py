@@ -416,10 +416,19 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 	# Stage 8: Adversarial Evasion Layer (mutate prompt if enabled)
 	evasion_strategy = str(state.get("evasion_strategy", "pipeline")).strip().lower()
 
+	simulator_model = state.get("simulator_model")
+	simulator_provider = state.get("simulator_provider")
+	max_concurrency = state.get("max_concurrency")
 	if evasion_enabled:
 		evasion_attempts += 1
 		if evasion_strategy in {"prompt_injection", "roleplay"}:
-			enhanced_prompt = enhance_with_deepteam(prompt, strategy=evasion_strategy)
+			enhanced_prompt = enhance_with_deepteam(
+				prompt,
+				strategy=evasion_strategy,
+				simulator_model=simulator_model,
+				simulator_provider=simulator_provider,
+				max_concurrency=max_concurrency,
+			)
 			mutated_by_evasion = enhanced_prompt != prompt
 			prompt = enhanced_prompt
 		else:
@@ -430,6 +439,9 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 					"retries": 0,
 					"max_retries": 3,
 					"evasion_strategy": evasion_strategy,
+					"simulator_model": simulator_model,
+					"simulator_provider": simulator_provider,
+					"max_concurrency": max_concurrency,
 				}
 				result = evasion_graph.invoke(evasion_state)
 				final_prompt = result.get("final_prompt", prompt)

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
+import threading
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,21 @@ DETERMINISTIC_STRATEGIES: set[str] = {
     "rot13",
     "leetspeak",
 }
+
+_concurrency_lock: threading.Semaphore | None = None
+_concurrency_limit: int | None = None
+
+
+def _get_concurrency_sem(limit: int | None) -> threading.Semaphore | None:
+    """Create or reuse a ``threading.Semaphore`` when *limit* > 0."""
+    global _concurrency_lock, _concurrency_limit
+    if limit is None or limit <= 0:
+        return None
+    if _concurrency_lock is None or _concurrency_limit != limit:
+        _concurrency_lock = threading.Semaphore(limit)
+        _concurrency_limit = limit
+        logger.info("DeepTeam concurrency semaphore initialized with limit=%d", limit)
+    return _concurrency_lock
 
 
 def normalize_strategy(strategy: str) -> str:
@@ -99,7 +116,81 @@ def _get_attack_instance(strategy: str) -> Any | None:
         return None
 
 
-def enhance_with_deepteam(base_prompt: str, strategy: str = "prompt_injection") -> str:
+def _build_deepeval_model(provider: str, model_name: str | None = None) -> Any | None:
+    """Instantiate a native DeepEval LLM for the given provider.
+
+    DeepTeam's ``initialize_model`` falls back to OpenAI when it receives
+    an unrecognized model string.  By constructing the correct native
+    class here (``GeminiModel``, ``GPTModel``, etc.) we bypass that
+    fallback and ensure the configured provider is actually used.
+
+    Returns ``None`` if the provider is unknown or the dependency is missing.
+    """
+    try:
+        from deepeval.models import (
+            DeepEvalBaseLLM,
+            GeminiModel,
+            GPTModel,
+            AnthropicModel,
+            AzureOpenAIModel,
+            OllamaModel,
+            LocalModel,
+            AmazonBedrockModel,
+            LiteLLMModel,
+            KimiModel,
+            GrokModel,
+            DeepSeekModel,
+        )
+    except Exception as exc:
+        logger.warning("deepeval models unavailable; cannot build native model", exc_info=exc)
+        return None
+
+    normalized = provider.strip().lower()
+    kwargs: dict[str, Any] = {}
+    if model_name:
+        kwargs["model"] = model_name
+
+    try:
+        if normalized == "gemini":
+            kwargs.setdefault("api_key", os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
+            return GeminiModel(**kwargs)
+        if normalized == "openai":
+            kwargs.setdefault("api_key", os.getenv("OPENAI_API_KEY"))
+            return GPTModel(**kwargs)
+        if normalized == "anthropic":
+            kwargs.setdefault("api_key", os.getenv("ANTHROPIC_API_KEY"))
+            return AnthropicModel(**kwargs)
+        if normalized == "azure_openai":
+            return AzureOpenAIModel(**kwargs)
+        if normalized == "ollama":
+            return OllamaModel(**kwargs)
+        if normalized == "local":
+            return LocalModel(**kwargs)
+        if normalized in {"bedrock", "aws_bedrock"}:
+            return AmazonBedrockModel(**kwargs)
+        if normalized == "litellm":
+            return LiteLLMModel(**kwargs)
+        if normalized in {"kimi", "moonshot"}:
+            return KimiModel(**kwargs)
+        if normalized == "grok":
+            return GrokModel(**kwargs)
+        if normalized == "deepseek":
+            return DeepSeekModel(**kwargs)
+    except Exception as exc:
+        logger.warning("Failed to instantiate deepeval model for provider '%s'", provider, exc_info=exc)
+        return None
+
+    logger.debug("No native deepeval model mapping for provider '%s'", provider)
+    return None
+
+
+def enhance_with_deepteam(
+    base_prompt: str,
+    strategy: str = "prompt_injection",
+    simulator_model: str | None = None,
+    simulator_provider: str | None = None,
+    max_concurrency: int | None = None,
+) -> str:
     """Enhance a baseline prompt using a DeepTeam attack strategy.
 
     Args:
@@ -108,6 +199,11 @@ def enhance_with_deepteam(base_prompt: str, strategy: str = "prompt_injection") 
             list of supported strategies (e.g. ``"prompt_injection"``,
             ``"roleplay"``, ``"base64"``, ``"leetspeak"``, ``"rot13"``,
             ``"goal_redirection"``, etc.).
+        simulator_model: Optional model name (e.g. ``"gpt-4o-mini"``) or
+            DeepEvalBaseLLM instance to use for LLM-driven attacks.
+        max_concurrency: Optional maximum number of concurrent calls to
+            ``attack.enhance`` across threads.  Only applies to LLM-driven
+            strategies.
 
     Returns:
         The enhanced prompt string, or the original prompt when the strategy
@@ -119,9 +215,33 @@ def enhance_with_deepteam(base_prompt: str, strategy: str = "prompt_injection") 
         return base_prompt
 
     try:
-        # DeepTeam's ``.enhance()`` takes exactly one positional argument:
-        # the base attack string.  It returns the enhanced string.
-        return attack.enhance(base_prompt)
+        # Deterministic strategies (base64, rot13, leetspeak) do not accept
+        # simulator_model; LLM-driven strategies (prompt_injection, roleplay)
+        # accept it as a keyword argument.
+        if normalized_strategy in DETERMINISTIC_STRATEGIES:
+            return attack.enhance(base_prompt)
+
+        # DeepTeam's ``initialize_model`` defaults to OpenAI when given an
+        # unrecognized string.  Pre-instantiate the correct native model so
+        # the configured provider (gemini, openai, etc.) is actually used.
+        model_for_attack = simulator_model
+        if simulator_provider and isinstance(model_for_attack, str):
+            native_model = _build_deepeval_model(simulator_provider, model_for_attack)
+            if native_model is not None:
+                model_for_attack = native_model
+
+        sem = _get_concurrency_sem(max_concurrency)
+        if sem is not None:
+            logger.debug(
+                "Acquiring DeepTeam semaphore (available=%s, limit=%s)",
+                sem._value,
+                max_concurrency,
+            )
+            with sem:
+                logger.debug("DeepTeam semaphore acquired, running enhance")
+                return attack.enhance(base_prompt, simulator_model=model_for_attack)
+            # Note: semaphore is released on context-manager exit
+        return attack.enhance(base_prompt, simulator_model=model_for_attack)
     except Exception as exc:  # pragma: no cover - defensive fallback
         logger.warning("DeepTeam enhance failed for strategy '%s'", normalized_strategy, exc_info=exc)
         return base_prompt

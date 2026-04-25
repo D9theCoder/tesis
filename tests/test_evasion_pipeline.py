@@ -90,7 +90,7 @@ def test_pipeline_returns_enhanced_candidate(monkeypatch):
     """When compliance and validity pass, the enhanced candidate is returned."""
 
     monkeypatch.setattr(
-        pipeline_module, "enhance_with_deepteam", lambda base, strategy: "enhanced candidate"
+        pipeline_module, "enhance_with_deepteam", lambda base, strategy, **kwargs: "enhanced candidate"
     )
     shared_responses = [
         {"non_compliant": False},
@@ -100,7 +100,7 @@ def test_pipeline_returns_enhanced_candidate(monkeypatch):
     monkeypatch.setattr(
         pipeline_module,
         "get_simulator_llm",
-        lambda _: SharedFakeLLM(shared_responses, shared_state),
+        lambda _model, **kwargs: SharedFakeLLM(shared_responses, shared_state),
     )
 
     evasion_graph = build_evasion_graph()
@@ -114,7 +114,7 @@ def test_pipeline_falls_back_after_retries_exhausted(monkeypatch):
     """When all retries fail validation, the original seed is returned."""
 
     monkeypatch.setattr(
-        pipeline_module, "enhance_with_deepteam", lambda base, strategy: "bad candidate"
+        pipeline_module, "enhance_with_deepteam", lambda base, strategy, **kwargs: "bad candidate"
     )
     # Each full retry cycle consumes 2 LLM calls:
     # check_compliance → check_validity
@@ -128,7 +128,7 @@ def test_pipeline_falls_back_after_retries_exhausted(monkeypatch):
     monkeypatch.setattr(
         pipeline_module,
         "get_simulator_llm",
-        lambda _: SharedFakeLLM(shared_responses, shared_state),
+        lambda _model, **kwargs: SharedFakeLLM(shared_responses, shared_state),
     )
 
     evasion_graph = build_evasion_graph()
@@ -141,7 +141,7 @@ def test_pipeline_falls_back_after_retries_exhausted(monkeypatch):
 def test_generate_candidate_increments_retries(monkeypatch):
     """generate_candidate should increment retries by one."""
     monkeypatch.setattr(
-        pipeline_module, "enhance_with_deepteam", lambda base, strategy: f"candidate:{strategy}"
+        pipeline_module, "enhance_with_deepteam", lambda base, strategy, **kwargs: f"candidate:{strategy}"
     )
 
     state = _make_state(retries=2)
@@ -155,7 +155,7 @@ def test_generate_candidate_increments_retries(monkeypatch):
 def test_generate_candidate_uses_custom_strategy(monkeypatch):
     """generate_candidate should respect the evasion_strategy from state."""
     monkeypatch.setattr(
-        pipeline_module, "enhance_with_deepteam", lambda base, strategy: f"candidate:{strategy}"
+        pipeline_module, "enhance_with_deepteam", lambda base, strategy, **kwargs: f"candidate:{strategy}"
     )
 
     state = _make_state(evasion_strategy="base64")
@@ -169,7 +169,7 @@ def test_generate_candidate_normalizes_strategy(monkeypatch):
     """generate_candidate should normalize case/whitespace variants."""
 
     monkeypatch.setattr(
-        pipeline_module, "enhance_with_deepteam", lambda base, strategy: f"candidate:{strategy}"
+        pipeline_module, "enhance_with_deepteam", lambda base, strategy, **kwargs: f"candidate:{strategy}"
     )
 
     state = _make_state(evasion_strategy=" Prompt_Injection ")
@@ -181,7 +181,7 @@ def test_generate_candidate_normalizes_strategy(monkeypatch):
 
 def test_generate_candidate_falls_back_on_exception(monkeypatch):
     """When enhance_with_deepteam raises, fall back to base_seed."""
-    def _boom(base, strategy):
+    def _boom(base, strategy, **kwargs):
         raise RuntimeError("simulated failure")
 
     monkeypatch.setattr(pipeline_module, "enhance_with_deepteam", _boom)
@@ -199,7 +199,7 @@ def test_check_compliance_returns_not_non_compliant(monkeypatch):
 
     state = _make_state(candidate_input="candidate text")
 
-    monkeypatch.setattr(pipeline_module, "get_simulator_llm", lambda _: fake_llm)
+    monkeypatch.setattr(pipeline_module, "get_simulator_llm", lambda *args, **kwargs: fake_llm)
 
     result = check_compliance(state)
     assert result["is_compliant"] is True
@@ -221,7 +221,7 @@ def test_check_validity_returns_valid(monkeypatch):
 
     state = _make_state(candidate_input="candidate text")
 
-    monkeypatch.setattr(pipeline_module, "get_simulator_llm", lambda _: fake_llm)
+    monkeypatch.setattr(pipeline_module, "get_simulator_llm", lambda *args, **kwargs: fake_llm)
 
     result = check_validity(state)
     assert result["is_valid"] is True

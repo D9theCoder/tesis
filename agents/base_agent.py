@@ -82,10 +82,19 @@ class BaseAgent(ABC):
             return prompt
 
         strategy = str(state.get("evasion_strategy", "pipeline")).strip().lower()
+        simulator_model = state.get("simulator_model")
+        simulator_provider = state.get("simulator_provider")
+        max_concurrency = state.get("max_concurrency")
         if strategy in {"prompt_injection", "roleplay"}:
             from llm.evasion.deepteam_adapters import enhance_with_deepteam
 
-            return enhance_with_deepteam(prompt, strategy=strategy)
+            return enhance_with_deepteam(
+                prompt,
+                strategy=strategy,
+                simulator_model=simulator_model,
+                simulator_provider=simulator_provider,
+                max_concurrency=max_concurrency,
+            )
 
         from llm.evasion.pipeline import build_evasion_graph
 
@@ -97,6 +106,9 @@ class BaseAgent(ABC):
                     "retries": 0,
                     "max_retries": 3,
                     "evasion_strategy": strategy,
+                    "simulator_model": simulator_model,
+                    "simulator_provider": simulator_provider,
+                    "max_concurrency": max_concurrency,
                 }
             )
             return result.get("final_prompt", prompt)

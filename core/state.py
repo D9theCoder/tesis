@@ -57,6 +57,9 @@ class ExploitationState(TypedDict):
     successful_evasions: NotRequired[int]  # evasions that produced a compliant+valid candidate
     evasion_enabled: NotRequired[bool]  # whether the evasion layer is active
     evasion_strategy: NotRequired[str]  # "prompt_injection" | "roleplay" | "pipeline"
+    simulator_model: NotRequired[str | None]  # model name for DeepTeam / evasion gates (e.g. "gpt-4o-mini")
+    simulator_provider: NotRequired[str | None]  # provider for simulator LLM ("openai", "gemini", etc.)
+    max_concurrency: NotRequired[int | None]  # max concurrent DeepTeam simulator API calls
 
     # ── Rich reporting telemetry (optional, accumulate) ──
     telemetry_events: NotRequired[Annotated[list[dict], add]]
@@ -98,6 +101,9 @@ def _default_state_template() -> dict[str, Any]:
         "successful_evasions": 0,
         "evasion_enabled": False,
         "evasion_strategy": "pipeline",
+        "simulator_model": None,
+        "simulator_provider": None,
+        "max_concurrency": None,
         "telemetry_events": [],
         "stop_policy": "impact",
         "coverage_target": 0.70,
@@ -185,4 +191,4 @@ SCORE_LABELS: dict[int, str] = {
 SECURITY_LEVELS: list[str] = ["low", "medium", "high"]
 
 # LLM providers
-LLM_PROVIDERS: list[str] = ["gemini"]
+LLM_PROVIDERS: list[str] = ["gemini", "openai"]

@@ -235,11 +235,12 @@ def _default_api_key(provider: str) -> str:
 
 def _parse_model_configs(raw_models: Mapping[str, Any]) -> dict[str, ModelConfig]:
     models: dict[str, ModelConfig] = {}
-    for provider, raw_section in raw_models.items():
+    for model_key, raw_section in raw_models.items():
         if not isinstance(raw_section, Mapping):
             continue
 
         section = dict(raw_section)
+        provider = str(section.pop("provider", model_key))
         model_name = str(section.pop("model_name", _default_model_name(provider)))
         api_key = str(section.pop("api_key", _default_api_key(provider)))
 
@@ -263,7 +264,10 @@ def _parse_model_configs(raw_models: Mapping[str, Any]) -> dict[str, ModelConfig
         for key, value in section.items():
             extra[key] = value
 
-        models[provider] = ModelConfig(
+        # Preserve the original YAML section name (e.g. "simulator") as the
+        # dictionary key so that special entries are not overwritten when
+        # their resolved provider matches another section.
+        models[model_key] = ModelConfig(
             provider=provider,
             api_key=api_key,
             model_name=model_name,
