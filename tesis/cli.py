@@ -193,6 +193,7 @@ def handle_run(args: argparse.Namespace) -> int:
                 max_concurrency=max_concurrency,
                 output_dir=str(output_dir / "runs"),
                 include_aggregate=True,
+                live_display=args.live,
             )
             if isinstance(result, tuple):
                 artifacts, aggregate = result
@@ -237,6 +238,7 @@ def handle_run(args: argparse.Namespace) -> int:
             simulator_provider=simulator_provider,
             max_concurrency=max_concurrency,
             output_dir=str(output_dir / "runs"),
+            live_display=args.live,
         )
         _write_run_artifacts(output_dir, [artifact])
 
@@ -391,6 +393,104 @@ def handle_report(args: argparse.Namespace) -> int:
         return EXIT_RUNTIME_ERROR
 
 
+def handle_validate(args: argparse.Namespace) -> int:
+    try:
+        config = load_and_resolve_config(config_path=args.config, cli_args=vars(args))
+    except ConfigError as exc:
+        print(f"Config error: {exc}")
+        return EXIT_CONFIG_ERROR
+
+    if not _preflight_target_reachable(config.target_url):
+        print(f"Target unreachable: {config.target_url}")
+        return EXIT_TARGET_UNREACHABLE
+
+    # Import here to avoid circular dependencies at module load time
+    from agents.state_utils import new_default_state
+    from core.state import MODULE_NAMES, MODULE_TO_KG_NODE
+    from foundation.session_manager import DVWASession
+
+    target_url = config.target_url
+    level = args.level
+
+    # Map of runtime agent names to their module functions
+    agent_registry = {
+        "sqli_agent": ("agents.tier1.sqli_agent", "sqli_agent"),
+        "sqli_blind_agent": ("agents.tier1.sqli_blind_agent", "sqli_blind_agent"),
+        "xss_reflected_agent": ("agents.tier1.xss_reflected_agent", "xss_reflected_agent"),
+        "xss_stored_agent": ("agents.tier1.xss_stored_agent", "xss_stored_agent"),
+        "xss_dom_agent": ("agents.tier1.xss_dom_agent", "xss_dom_agent"),
+        "cmdi_agent": ("agents.tier1.cmdi_agent", "cmdi_agent"),
+        "brute_agent": ("agents.tier2.brute_agent", "brute_agent"),
+        "lfi_agent": ("agents.tier2.lfi_agent", "lfi_agent"),
+        "upload_agent": ("agents.tier2.upload_agent", "upload_agent"),
+        "csrf_agent": ("agents.tier2.csrf_agent", "csrf_agent"),
+        "weak_session_agent": ("agents.tier2.weak_session_agent", "weak_session_agent"),
+        "idor_agent": ("agents.tier2.idor_agent", "idor_agent"),
+    }
+
+    agents_to_run = []
+    if args.all_agents:
+        agents_to_run = list(agent_registry.keys())
+    elif args.agent:
+        if args.agent not in agent_registry:
+            print(f"Unknown agent: {args.agent}")
+            return EXIT_CONFIG_ERROR
+        agents_to_run = [args.agent]
+    else:
+        print("Must specify --agent or --all-agents")
+        return EXIT_CONFIG_ERROR
+
+    results = []
+    for agent_name in agents_to_run:
+        module_path, func_name = agent_registry[agent_name]
+        module = __import__(module_path, fromlist=[func_name])
+        agent_func = getattr(module, func_name)
+
+        state = {
+            "target_url": target_url,
+            "security_level": level,
+            "endpoints": [],
+            "tried_payloads": {},
+            "scores": {},
+            "iteration_count": 0,
+            "max_iterations": 30,
+            "confirmed_vulns": [],
+            "achieved_outcomes": [],
+            "found_credentials": [],
+        }
+        try:
+            result = agent_func(state)
+            module_name = agent_name.replace("_agent", "")
+            score = result.get("scores", {}).get(module_name, 0)
+            confirmed = result.get("confirmed_vulns", [])
+            issues = []
+            if score == 0:
+                issues.append("No vulnerability signal detected")
+            if not confirmed:
+                issues.append("No confirmed nodes emitted")
+            results.append({
+                "agent": agent_name,
+                "score": score,
+                "confirmed": confirmed,
+                "issues": "; ".join(issues) if issues else "ok",
+            })
+        except Exception as exc:
+            results.append({
+                "agent": agent_name,
+                "score": 0,
+                "confirmed": [],
+                "issues": f"Exception: {type(exc).__name__}: {exc}",
+            })
+
+    # Print table
+    print(f"{'Agent':<20} | {'Score':<5} | {'Confirmed Nodes':<30} | {'Issues'}")
+    print("-" * 80)
+    for r in results:
+        print(f"{r['agent']:<20} | {r['score']:<5} | {', '.join(r['confirmed']) or '-':<30} | {r['issues']}")
+
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tesis", description="Stage 7 CLI for tesis framework")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -429,6 +529,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--no-summary", action="store_true", help="Suppress stdout run summary")
     run_parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     run_parser.add_argument("--quiet", action="store_true", help="Reduce logging noise")
+    run_parser.add_argument("--live", action="store_true", help="Show live progress dashboard during engagement")
     run_parser.set_defaults(handler=handle_run)
 
     info_parser = subparsers.add_parser("info", help="Print framework metadata")
@@ -466,6 +567,15 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--quiet", action="store_true", help="Reduce logging noise")
     report_parser.add_argument("--show-evasion", action="store_true", help="Render evasion statistics table")
     report_parser.set_defaults(handler=handle_report)
+
+    validate_parser = subparsers.add_parser("validate", help="Validate agents against live DVWA target")
+    validate_parser.add_argument("--agent", help="Agent name to validate (e.g. upload_agent)")
+    validate_parser.add_argument("--all-agents", action="store_true", help="Validate all agents")
+    validate_parser.add_argument("--level", choices=SECURITY_LEVELS, default="low", help="Security level")
+    validate_parser.add_argument("--config", default="config.yaml", help="Path to YAML config file")
+    validate_parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
+    validate_parser.add_argument("--quiet", action="store_true", help="Reduce logging noise")
+    validate_parser.set_defaults(handler=handle_validate)
 
     return parser
 

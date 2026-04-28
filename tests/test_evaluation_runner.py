@@ -12,6 +12,15 @@ def test_run_single_engagement_artifact_shape(monkeypatch):
                 "iteration_count": 3,
             }
 
+        def stream(self, state, stream_mode=None):
+            yield {
+                "scores": {"sqli": 4},
+                "confirmed_vulns": ["rce_achieved"],
+                "achieved_outcomes": ["rce_achieved"],
+                "guardrail_activations": [],
+                "iteration_count": 3,
+            }
+
     monkeypatch.setattr("evaluation.runner.build_framework", lambda llm_provider: FakeApp())
 
     artifact = run_single_engagement(

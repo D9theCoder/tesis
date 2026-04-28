@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
@@ -38,11 +39,25 @@ def run_single_engagement(
     simulator_model: str | None = None,
     simulator_provider: str | None = None,
     max_concurrency: int | None = None,
+    live_display: bool = False,
 ) -> dict:
     run_id = f"{llm_provider}-{security_level}-{repeat_index}"
     started_at = _now_iso()
     started_clock = perf_counter()
     telemetry = RunTelemetry(run_id=run_id)
+    reporter = None
+    if live_display:
+        try:
+            from tesis.progress_reporter import EngagementProgressReporter
+            reporter = EngagementProgressReporter(
+                max_iterations=max_iterations,
+                provider=llm_provider,
+                level=security_level,
+            )
+            reporter.start()
+        except Exception as exc:
+            LOGGER = logging.getLogger(__name__)
+            LOGGER.warning("Live display initialization failed: %s", exc)
     telemetry.emit(
         iteration=0,
         node="runner",
@@ -74,9 +89,22 @@ def run_single_engagement(
             "max_concurrency": max_concurrency,
         }
 
-        final_state = app.invoke(init_state)
+        final_state = None
+        seen_events = 0
+        for state_snapshot in app.stream(init_state, stream_mode="values"):
+            final_state = state_snapshot
+            if reporter:
+                events = final_state.get("telemetry_events", [])
+                new_events = events[seen_events:]
+                seen_events = len(events)
+                for event in new_events:
+                    reporter.update(event)
+        if final_state is None:
+            final_state = app.invoke(init_state)
         telemetry.extend_from_state_events(list(final_state.get("telemetry_events", [])))
         report = build_score_report(final_state).to_dict()
+        if reporter:
+            reporter.finalize(report)
         status = "success"
         error = None
     except Exception as exc:
@@ -101,6 +129,9 @@ def run_single_engagement(
             status="error",
             payload={"error_type": type(exc).__name__},
         )
+
+    if reporter:
+        reporter.stop()
 
     ended_at = _now_iso()
     duration_ms = int((perf_counter() - started_clock) * 1000)

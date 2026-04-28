@@ -49,14 +49,25 @@ class SQLiAgent(BaseAgent):
         confirmed: list[str] = []
         found_credentials: list[dict[str, str]] = []
         tried_now: list[str] = []
+        telemetry_events: list[dict[str, Any]] = []
+
+        telemetry_events.append(
+            self._emit_telemetry(state, "sqli_agent.started", {"endpoint": endpoint, "level": level})["telemetry_events"][0]
+        )
 
         if not target_url:
-            return make_update(
-                state=state,
-                module_name=self.module_name,
-                score=score,
-                tried_payloads=tried_now,
+            telemetry_events.append(
+                self._emit_telemetry(state, "sqli_agent.completed", {"score": score, "reason": "no_target_url"})["telemetry_events"][0]
             )
+            return {
+                **make_update(
+                    state=state,
+                    module_name=self.module_name,
+                    score=score,
+                    tried_payloads=tried_now,
+                ),
+                "telemetry_events": telemetry_events,
+            }
 
         payloads = (
             list(payload_set.probe)
@@ -69,12 +80,18 @@ class SQLiAgent(BaseAgent):
             ready, prep_notes = prepare_agent_session(session, level, require_login=True)
             tried_now.extend(prep_notes)
             if not ready:
-                return make_update(
-                    state=state,
-                    module_name=self.module_name,
-                    score=score,
-                    tried_payloads=tried_now,
+                telemetry_events.append(
+                    self._emit_telemetry(state, "sqli_agent.completed", {"score": score, "reason": "session_prep_failed"})["telemetry_events"][0]
                 )
+                return {
+                    **make_update(
+                        state=state,
+                        module_name=self.module_name,
+                        score=score,
+                        tried_payloads=tried_now,
+                    ),
+                    "telemetry_events": telemetry_events,
+                }
 
             for payload in payloads:
                 if payload in already_tried:
@@ -84,17 +101,28 @@ class SQLiAgent(BaseAgent):
                 response = session.get(endpoint, params={"id": payload, "Submit": "Submit"})
                 body = response.text or ""
 
-                if self.verifier.contains_any(body, SQL_ERROR_SIGNALS).ok:
+                error_ok = self.verifier.contains_any(body, SQL_ERROR_SIGNALS).ok
+                data_ok = self.verifier.contains_any(body, SQL_DATA_SIGNALS).ok
+                credential_result = self.verifier.contains_any(body, CREDENTIAL_SIGNALS)
+
+                telemetry_events.append(
+                    self._emit_telemetry(
+                        state, "sqli_agent.probe.result",
+                        {"payload": payload, "error_ok": error_ok, "data_ok": data_ok,
+                         "credential_ok": credential_result.ok, "response_snippet": body[:200]}
+                    )["telemetry_events"][0]
+                )
+
+                if error_ok:
                     score = max(score, 1)
                     if "sqli_confirmed" not in confirmed:
                         confirmed.append("sqli_confirmed")
 
-                if self.verifier.contains_any(body, SQL_DATA_SIGNALS).ok:
+                if data_ok:
                     score = max(score, 3)
                     if "sqli_confirmed" not in confirmed:
                         confirmed.append("sqli_confirmed")
 
-                credential_result = self.verifier.contains_any(body, CREDENTIAL_SIGNALS)
                 if credential_result.ok:
                     score = 4
                     if "sqli_confirmed" not in confirmed:
@@ -108,14 +136,20 @@ class SQLiAgent(BaseAgent):
         finally:
             session.close()
 
-        return make_update(
-            state=state,
-            module_name=self.module_name,
-            score=score,
-            tried_payloads=tried_now,
-            confirmed_vulns=confirmed,
-            found_credentials=found_credentials,
+        telemetry_events.append(
+            self._emit_telemetry(state, "sqli_agent.completed", {"score": score, "confirmed": confirmed})["telemetry_events"][0]
         )
+        return {
+            **make_update(
+                state=state,
+                module_name=self.module_name,
+                score=score,
+                tried_payloads=tried_now,
+                confirmed_vulns=confirmed,
+                found_credentials=found_credentials,
+            ),
+            "telemetry_events": telemetry_events,
+        }
 
 
 _AGENT = SQLiAgent()

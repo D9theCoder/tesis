@@ -61,7 +61,11 @@ def test_orchestrator_fallback_when_llm_fails(monkeypatch):
     }
 
     update = orchestrator(state)
-    assert update["next_agent"] == "sqli_agent"
+    assert update["next_agent"] in (
+        orchestrator_module.ALLOWED_RUNTIME_NODES
+        - orchestrator_module.CHAIN_RUNTIME_NODES
+        - {"scorer"}
+    )
     assert "current_chain" in update
 
 
@@ -131,7 +135,11 @@ def test_orchestrator_rejects_invalid_runtime_next_agent(monkeypatch):
     }
 
     update = orchestrator(state)
-    assert update["next_agent"] == "sqli_agent"
+    assert update["next_agent"] in (
+        orchestrator_module.ALLOWED_RUNTIME_NODES
+        - orchestrator_module.CHAIN_RUNTIME_NODES
+        - {"scorer"}
+    )
 
 
 def test_orchestrator_rejects_infeasible_chain_runtime_next_agent(monkeypatch):

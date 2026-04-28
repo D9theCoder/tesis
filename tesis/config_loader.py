@@ -114,6 +114,7 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "DIAGNOSE": "diagnose",
         "EVASION_ENABLED": "evasion_enabled",
         "EVASION_STRATEGY": "evasion_strategy",
+        "EVASION_ATTEMPTS_MAX": "evasion_attempts_max",
     }
 
     for key, raw_value in os.environ.items():
@@ -186,6 +187,7 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         "diagnose": "diagnose",
         "evasion_enabled": "evasion_enabled",
         "evasion_strategy": "evasion_strategy",
+        "evasion_attempts_max": "evasion_attempts_max",
     }
 
     bool_flags = {"matrix", "enriched_reporting", "diagnose", "evasion_enabled"}
@@ -224,12 +226,16 @@ def validate_level(level: str) -> None:
 def _default_model_name(provider: str) -> str:
     if provider == "gemini":
         return "gemini-3-flash-preview"
+    if provider == "openai":
+        return "gpt-4o-mini"
     return ""
 
 
 def _default_api_key(provider: str) -> str:
     if provider == "gemini":
         return os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
+    if provider == "openai":
+        return os.getenv("OPENAI_API_KEY", "")
     return os.getenv(f"{provider.upper()}_API_KEY", "")
 
 
@@ -243,6 +249,9 @@ def _parse_model_configs(raw_models: Mapping[str, Any]) -> dict[str, ModelConfig
         provider = str(section.pop("provider", model_key))
         model_name = str(section.pop("model_name", _default_model_name(provider)))
         api_key = str(section.pop("api_key", _default_api_key(provider)))
+        base_url = section.pop("base_url", None)
+        if base_url is not None:
+            base_url = str(base_url) if base_url else None
 
         try:
             temperature = float(section.pop("temperature", 0.0))
@@ -274,6 +283,7 @@ def _parse_model_configs(raw_models: Mapping[str, Any]) -> dict[str, ModelConfig
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=timeout,
+            base_url=base_url,
             extra=extra,
         )
 
@@ -298,6 +308,8 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
             f"Unsupported evasion strategy: {config.evasion_strategy}. "
             f"Must be one of: {', '.join(sorted(_VALID_EVASION_STRATEGIES))}"
         )
+    if config.evasion_attempts_max <= 0:
+        raise ConfigError("evasion_attempts_max must be > 0")
 
     if config.matrix:
         if not config.providers:
@@ -353,6 +365,7 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         diagnose=_coerce_bool(merged.get("diagnose", False)),
         evasion_enabled=_coerce_bool(merged.get("evasion_enabled", False)),
         evasion_strategy=str(merged.get("evasion_strategy") or "pipeline").strip().lower(),
+        evasion_attempts_max=int(merged.get("evasion_attempts_max", 3)),
         models=_parse_model_configs(merged.get("models", {})),
     )
 

@@ -41,14 +41,25 @@ class CommandInjectionAgent(BaseAgent):
         confirmed: list[str] = []
         outcomes: list[str] = []
         tried_now: list[str] = []
+        telemetry_events: list[dict[str, Any]] = []
+
+        telemetry_events.append(
+            self._emit_telemetry(state, "cmdi_agent.started", {"endpoint": endpoint, "level": level})["telemetry_events"][0]
+        )
 
         if not target_url:
-            return make_update(
-                state=state,
-                module_name=self.module_name,
-                score=score,
-                tried_payloads=tried_now,
+            telemetry_events.append(
+                self._emit_telemetry(state, "cmdi_agent.completed", {"score": score, "reason": "no_target_url"})["telemetry_events"][0]
             )
+            return {
+                **make_update(
+                    state=state,
+                    module_name=self.module_name,
+                    score=score,
+                    tried_payloads=tried_now,
+                ),
+                "telemetry_events": telemetry_events,
+            }
 
         payloads = (
             list(payload_set.probe)
@@ -61,12 +72,18 @@ class CommandInjectionAgent(BaseAgent):
             ready, prep_notes = prepare_agent_session(session, level, require_login=True)
             tried_now.extend(prep_notes)
             if not ready:
-                return make_update(
-                    state=state,
-                    module_name=self.module_name,
-                    score=score,
-                    tried_payloads=tried_now,
+                telemetry_events.append(
+                    self._emit_telemetry(state, "cmdi_agent.completed", {"score": score, "reason": "session_prep_failed"})["telemetry_events"][0]
                 )
+                return {
+                    **make_update(
+                        state=state,
+                        module_name=self.module_name,
+                        score=score,
+                        tried_payloads=tried_now,
+                    ),
+                    "telemetry_events": telemetry_events,
+                }
 
             baseline_marker = "baseline:127.0.0.1"
             baseline_body = ""
@@ -87,6 +104,13 @@ class CommandInjectionAgent(BaseAgent):
 
                 regex_result = self.verifier.regex_match(body, [r"uid=\d+", r"gid=\d+"])
                 signal_result = self.verifier.contains_any(body, CMD_EXEC_SIGNALS)
+                telemetry_events.append(
+                    self._emit_telemetry(
+                        state, "cmdi_agent.probe.result",
+                        {"payload": payload, "regex_ok": regex_result.ok, "signal_ok": signal_result.ok,
+                         "response_snippet": body[:200]}
+                    )["telemetry_events"][0]
+                )
                 if regex_result.ok or signal_result.ok:
                     score = 4
                     confirmed = ["cmd_injection_confirmed", "rce_achieved"]
@@ -97,14 +121,20 @@ class CommandInjectionAgent(BaseAgent):
         finally:
             session.close()
 
-        return make_update(
-            state=state,
-            module_name=self.module_name,
-            score=score,
-            tried_payloads=tried_now,
-            confirmed_vulns=confirmed,
-            achieved_outcomes=outcomes,
+        telemetry_events.append(
+            self._emit_telemetry(state, "cmdi_agent.completed", {"score": score, "confirmed": confirmed})["telemetry_events"][0]
         )
+        return {
+            **make_update(
+                state=state,
+                module_name=self.module_name,
+                score=score,
+                tried_payloads=tried_now,
+                confirmed_vulns=confirmed,
+                achieved_outcomes=outcomes,
+            ),
+            "telemetry_events": telemetry_events,
+        }
 
 
 _AGENT = CommandInjectionAgent()

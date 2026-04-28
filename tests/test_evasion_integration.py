@@ -72,6 +72,18 @@ class TestEvasionStatePropagation:
                         "evasion_attempts": 2,
                         "successful_evasions": 1,
                     }
+
+                def stream(self, state, stream_mode=None):
+                    captured_states.append(state)
+                    yield {
+                        "iteration_count": 1,
+                        "confirmed_vulns": [],
+                        "achieved_outcomes": [],
+                        "guardrail_activations": [],
+                        "telemetry_events": [],
+                        "evasion_attempts": 2,
+                        "successful_evasions": 1,
+                    }
             return FakeApp()
 
         monkeypatch.setattr("evaluation.runner.build_framework", mock_build_framework)
@@ -105,6 +117,18 @@ class TestEvasionStatePropagation:
                 def invoke(self, state):
                     captured_states.append(state)
                     return {
+                        "iteration_count": 0,
+                        "confirmed_vulns": [],
+                        "achieved_outcomes": [],
+                        "guardrail_activations": [],
+                        "telemetry_events": [],
+                        "evasion_attempts": 0,
+                        "successful_evasions": 0,
+                    }
+
+                def stream(self, state, stream_mode=None):
+                    captured_states.append(state)
+                    yield {
                         "iteration_count": 0,
                         "confirmed_vulns": [],
                         "achieved_outcomes": [],

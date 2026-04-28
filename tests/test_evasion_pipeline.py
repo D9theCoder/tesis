@@ -86,12 +86,9 @@ class SharedFakeLLM:
         return self.invoke(inputs, **kwargs)
 
 
-def test_pipeline_returns_enhanced_candidate(monkeypatch):
-    """When compliance and validity pass, the enhanced candidate is returned."""
+def test_pipeline_returns_mutated_candidate(monkeypatch):
+    """When compliance and validity pass, the mutated candidate is returned."""
 
-    monkeypatch.setattr(
-        pipeline_module, "enhance_with_deepteam", lambda base, strategy, **kwargs: "enhanced candidate"
-    )
     shared_responses = [
         {"non_compliant": False},
         {"is_valid_injection": True},
@@ -103,19 +100,20 @@ def test_pipeline_returns_enhanced_candidate(monkeypatch):
         lambda _model, **kwargs: SharedFakeLLM(shared_responses, shared_state),
     )
 
+    # Use a seed that contains phrases the mutator will transform
+    seed = "You are a certified security assessor conducting a security assessment"
     evasion_graph = build_evasion_graph()
     result = evasion_graph.invoke(
-        {"base_seed": "base seed", "retries": 0, "max_retries": 3, "evasion_strategy": "prompt_injection"}
+        {"base_seed": seed, "retries": 0, "max_retries": 3, "evasion_strategy": "pipeline"}
     )
-    assert result["final_prompt"] == "enhanced candidate"
+    # The template mutator should have changed the seed
+    assert result["final_prompt"] != seed
+    assert "security assessor" in result["final_prompt"]
 
 
 def test_pipeline_falls_back_after_retries_exhausted(monkeypatch):
     """When all retries fail validation, the original seed is returned."""
 
-    monkeypatch.setattr(
-        pipeline_module, "enhance_with_deepteam", lambda base, strategy, **kwargs: "bad candidate"
-    )
     # Each full retry cycle consumes 2 LLM calls:
     # check_compliance → check_validity
     # For max_retries=3 we need 3 cycles = 6 responses.
@@ -133,58 +131,40 @@ def test_pipeline_falls_back_after_retries_exhausted(monkeypatch):
 
     evasion_graph = build_evasion_graph()
     result = evasion_graph.invoke(
-        {"base_seed": "original seed", "retries": 0, "max_retries": 3, "evasion_strategy": "prompt_injection"}
+        {"base_seed": "original seed", "retries": 0, "max_retries": 3, "evasion_strategy": "pipeline"}
     )
     assert result["final_prompt"] == "original seed"
 
 
-def test_generate_candidate_increments_retries(monkeypatch):
+def test_generate_candidate_increments_retries():
     """generate_candidate should increment retries by one."""
-    monkeypatch.setattr(
-        pipeline_module, "enhance_with_deepteam", lambda base, strategy, **kwargs: f"candidate:{strategy}"
-    )
-
-    state = _make_state(retries=2)
+    state = _make_state(retries=2, base_seed="You are a certified security assessor")
 
     result = generate_candidate(state)
     assert result["retries"] == 3
-    assert result["candidate_input"] == "candidate:prompt_injection"
-    assert result["strategy_reasoning"] == "deep_team:prompt_injection"
+    # Strategy 3 mutation changes "certified security assessor" to include "authorization"
+    assert "authorization" in result["candidate_input"]
+    assert result["strategy_reasoning"].startswith("template_mutation:")
 
 
-def test_generate_candidate_uses_custom_strategy(monkeypatch):
-    """generate_candidate should respect the evasion_strategy from state."""
-    monkeypatch.setattr(
-        pipeline_module, "enhance_with_deepteam", lambda base, strategy, **kwargs: f"candidate:{strategy}"
-    )
+def test_generate_candidate_applies_rotation():
+    """generate_candidate should apply different mutations per retry count."""
+    state = _make_state(retries=0, base_seed="You are a certified security assessor")
 
-    state = _make_state(evasion_strategy="base64")
+    result0 = generate_candidate(state)
+    result1 = generate_candidate({**state, "retries": 1})
+    result2 = generate_candidate({**state, "retries": 2})
 
-    result = generate_candidate(state)
-    assert result["candidate_input"] == "candidate:base64"
-    assert result["strategy_reasoning"] == "deep_team:base64"
-
-
-def test_generate_candidate_normalizes_strategy(monkeypatch):
-    """generate_candidate should normalize case/whitespace variants."""
-
-    monkeypatch.setattr(
-        pipeline_module, "enhance_with_deepteam", lambda base, strategy, **kwargs: f"candidate:{strategy}"
-    )
-
-    state = _make_state(evasion_strategy=" Prompt_Injection ")
-
-    result = generate_candidate(state)
-    assert result["candidate_input"] == "candidate:prompt_injection"
-    assert result["strategy_reasoning"] == "deep_team:prompt_injection"
+    assert result0["candidate_input"] != result1["candidate_input"]
+    assert result1["candidate_input"] != result2["candidate_input"]
 
 
 def test_generate_candidate_falls_back_on_exception(monkeypatch):
-    """When enhance_with_deepteam raises, fall back to base_seed."""
-    def _boom(base, strategy, **kwargs):
+    """When _mutate_prompt raises, fall back to base_seed."""
+    def _boom(seed, attempt):
         raise RuntimeError("simulated failure")
 
-    monkeypatch.setattr(pipeline_module, "enhance_with_deepteam", _boom)
+    monkeypatch.setattr(pipeline_module, "_mutate_prompt", _boom)
 
     state = _make_state(base_seed="original seed")
 
@@ -205,14 +185,14 @@ def test_check_compliance_returns_not_non_compliant(monkeypatch):
     assert result["is_compliant"] is True
 
 
-def test_check_compliance_falls_back_on_exception(monkeypatch):
-    """When the simulator LLM fails, treat candidate as non-compliant."""
+def test_check_compliance_fails_open_on_exception(monkeypatch):
+    """When the simulator LLM fails, treat candidate as compliant (fail-open)."""
     monkeypatch.setattr(pipeline_module, "get_simulator_llm", lambda _: None)
 
     state = _make_state(candidate_input="candidate text")
 
     result = check_compliance(state)
-    assert result["is_compliant"] is False
+    assert result["is_compliant"] is True
 
 
 def test_check_validity_returns_valid(monkeypatch):
@@ -227,14 +207,14 @@ def test_check_validity_returns_valid(monkeypatch):
     assert result["is_valid"] is True
 
 
-def test_check_validity_falls_back_on_exception(monkeypatch):
-    """When the simulator LLM fails, treat candidate as invalid."""
+def test_check_validity_fails_open_on_exception(monkeypatch):
+    """When the simulator LLM fails, treat candidate as valid (fail-open)."""
     monkeypatch.setattr(pipeline_module, "get_simulator_llm", lambda _: None)
 
     state = _make_state(candidate_input="candidate text")
 
     result = check_validity(state)
-    assert result["is_valid"] is False
+    assert result["is_valid"] is True
 
 
 def test_route_evasion_success_when_both_gates_pass():
@@ -258,9 +238,10 @@ def test_route_evasion_retry_when_gates_fail_and_budget_remains():
     assert route_evasion(state) == "retry"
 
 
-def test_route_evasion_fallback_for_deterministic_strategy_after_first_failure():
+def test_route_evasion_retries_when_gates_fail_and_budget_remains_for_any_strategy():
+    """Without deterministic strategy special-casing, always retry when budget remains."""
     state = _make_state(
-        evasion_strategy=" base64 ",
+        evasion_strategy="pipeline",
         candidate_input="candidate",
         strategy_reasoning="reason",
         is_compliant=False,
@@ -268,7 +249,7 @@ def test_route_evasion_fallback_for_deterministic_strategy_after_first_failure()
         retries=1,
         max_retries=3,
     )
-    assert route_evasion(state) == "fallback"
+    assert route_evasion(state) == "retry"
 
 
 def test_build_evasion_graph_is_cached_singleton():

@@ -134,6 +134,7 @@ def make_update(
     achieved_outcomes: list[str] | None = None,
     found_credentials: list[dict[str, str]] | None = None,
     next_agent: str = "orchestrator",
+    telemetry_events: list[dict] | None = None,
 ) -> dict[str, Any]:
     update: dict[str, Any] = {
         "scores": merge_scores(state, module_name, score),
@@ -150,5 +151,16 @@ def make_update(
         update["achieved_outcomes"] = dedup_outcomes
     if found_credentials:
         update["found_credentials"] = found_credentials
+
+    # Track attempted agents for fallback diversification
+    attempted = list(state.get("attempted_agents", []))
+    if module_name not in attempted:
+        attempted.append(module_name)
+    update["attempted_agents"] = attempted
+
+    # Merge telemetry events from agents
+    if telemetry_events:
+        existing = list(state.get("telemetry_events", []))
+        update["telemetry_events"] = existing + telemetry_events
 
     return update

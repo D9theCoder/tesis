@@ -2,6 +2,7 @@ import pytest
 import llm.provider as provider_module
 from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from llm.provider import SAMPLE_QUERY, get_llm, invoke_sample_query
 
 
@@ -10,6 +11,21 @@ def test_get_llm_gemini(monkeypatch):
     llm = get_llm("gemini")
     assert isinstance(llm, ChatGoogleGenerativeAI)
     assert llm.model == "gemini-3-flash-preview"
+
+
+def test_get_llm_openai(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    llm = get_llm("openai")
+    assert isinstance(llm, ChatOpenAI)
+    assert llm.model_name == "gpt-4o-mini"
+
+
+def test_get_llm_openai_compatible_base_url(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    llm = get_llm("openai", model_name="meta-llama/llama-3.1-8b-instruct", base_url="https://openrouter.ai/api/v1")
+    assert isinstance(llm, ChatOpenAI)
+    assert llm.model_name == "meta-llama/llama-3.1-8b-instruct"
+    assert llm.openai_api_base == "https://openrouter.ai/api/v1"
 
 
 def test_get_llm_invalid():

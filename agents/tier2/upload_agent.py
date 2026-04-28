@@ -43,23 +43,45 @@ class UploadAgent(BaseAgent):
         confirmed: list[str] = []
         outcomes: list[str] = []
         tried_now: list[str] = []
+        telemetry_events: list[dict[str, Any]] = []
+
+        telemetry_events.append(
+            self._emit_telemetry(
+                state, "upload_agent.started",
+                {"endpoint": module_endpoint(state, self.module_name, "/vulnerabilities/upload/"),
+                 "security_level": normalize_security_level(state.get("security_level")),
+                 "candidate_count": 0}
+            )["telemetry_events"][0]
+        )
 
         if not self.check_prerequisites(state):
-            return make_update(
-                state=state,
-                module_name=self.module_name,
-                score=score,
-                tried_payloads=tried_now,
+            telemetry_events.append(
+                self._emit_telemetry(state, "upload_agent.completed", {"score": score, "reason": "prerequisites_not_met"})["telemetry_events"][0]
             )
+            return {
+                **make_update(
+                    state=state,
+                    module_name=self.module_name,
+                    score=score,
+                    tried_payloads=tried_now,
+                ),
+                "telemetry_events": telemetry_events,
+            }
 
         target_url = state.get("target_url", "")
         if not target_url:
-            return make_update(
-                state=state,
-                module_name=self.module_name,
-                score=score,
-                tried_payloads=tried_now,
+            telemetry_events.append(
+                self._emit_telemetry(state, "upload_agent.completed", {"score": score, "reason": "no_target_url"})["telemetry_events"][0]
             )
+            return {
+                **make_update(
+                    state=state,
+                    module_name=self.module_name,
+                    score=score,
+                    tried_payloads=tried_now,
+                ),
+                "telemetry_events": telemetry_events,
+            }
 
         level = normalize_security_level(state.get("security_level"))
         endpoint = module_endpoint(state, self.module_name, "/vulnerabilities/upload/")
@@ -77,12 +99,18 @@ class UploadAgent(BaseAgent):
             ready, prep_notes = prepare_agent_session(session, level, require_login=True)
             tried_now.extend(prep_notes)
             if not ready:
-                return make_update(
-                    state=state,
-                    module_name=self.module_name,
-                    score=score,
-                    tried_payloads=tried_now,
+                telemetry_events.append(
+                    self._emit_telemetry(state, "upload_agent.completed", {"score": score, "reason": "session_prep_failed", "notes": prep_notes})["telemetry_events"][0]
                 )
+                return {
+                    **make_update(
+                        state=state,
+                        module_name=self.module_name,
+                        score=score,
+                        tried_payloads=tried_now,
+                    ),
+                    "telemetry_events": telemetry_events,
+                }
 
             for filename in candidate_names:
                 if filename in already_tried:
@@ -102,6 +130,13 @@ class UploadAgent(BaseAgent):
                 )
                 body = response.text or ""
 
+                telemetry_events.append(
+                    self._emit_telemetry(
+                        state, "upload_agent.upload.attempt",
+                        {"filename": filename, "response_snippet": body[:200], "status": "attempted"}
+                    )["telemetry_events"][0]
+                )
+
                 if "uploaded" in body.lower():
                     score = max(score, 1)
 
@@ -117,9 +152,24 @@ class UploadAgent(BaseAgent):
                         else f"/hackable/uploads/{filename.replace('%00', '')}"
                     )
 
+                    telemetry_events.append(
+                        self._emit_telemetry(
+                            state, "upload_agent.upload.success",
+                            {"filename": filename, "uploaded_path": uploaded_path}
+                        )["telemetry_events"][0]
+                    )
+
                     verify = session.get(uploaded_path, params={"cmd": "id"})
                     verify_body = verify.text or ""
-                    if self.verifier.regex_match(verify_body, [r"uid=\d+", r"gid=\d+"]).ok:
+                    regex_result = self.verifier.regex_match(verify_body, [r"uid=\d+", r"gid=\d+", r"www-data", r"root"])
+                    telemetry_events.append(
+                        self._emit_telemetry(
+                            state, "upload_agent.execution.verify",
+                            {"uploaded_path": uploaded_path, "verify_snippet": verify_body[:200],
+                             "regex_ok": regex_result.ok}
+                        )["telemetry_events"][0]
+                    )
+                    if regex_result.ok:
                         score = 4
                         confirmed = [*confirmed, "rce_achieved"]
                         outcomes = ["rce_achieved"]
@@ -129,14 +179,20 @@ class UploadAgent(BaseAgent):
         finally:
             session.close()
 
-        return make_update(
-            state=state,
-            module_name=self.module_name,
-            score=score,
-            tried_payloads=tried_now,
-            confirmed_vulns=confirmed,
-            achieved_outcomes=outcomes,
+        telemetry_events.append(
+            self._emit_telemetry(state, "upload_agent.completed", {"score": score, "confirmed": confirmed})["telemetry_events"][0]
         )
+        return {
+            **make_update(
+                state=state,
+                module_name=self.module_name,
+                score=score,
+                tried_payloads=tried_now,
+                confirmed_vulns=confirmed,
+                achieved_outcomes=outcomes,
+            ),
+            "telemetry_events": telemetry_events,
+        }
 
 
 _AGENT = UploadAgent()

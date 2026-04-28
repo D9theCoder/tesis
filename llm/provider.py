@@ -25,22 +25,31 @@ def get_llm(provider_name: str, **kwargs):
         temperature = kwargs.pop("temperature", 0)
         model_name = kwargs.pop("model_name", kwargs.pop("model", "gemini-3-flash-preview"))
         api_key = kwargs.pop("api_key", None) or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        system_prompt = kwargs.pop("system_prompt", None)
+        constructor_kwargs = dict(kwargs)
+        if system_prompt:
+            constructor_kwargs["system_instruction"] = system_prompt
         return ChatGoogleGenerativeAI(
             model=model_name,
             temperature=temperature,
             google_api_key=api_key,
-            **kwargs,
+            **constructor_kwargs,
         )
     elif normalized_provider == "openai":
         from langchain_openai import ChatOpenAI
         temperature = kwargs.pop("temperature", 0)
         model_name = kwargs.pop("model_name", kwargs.pop("model", "gpt-4o-mini"))
-        api_key = kwargs.pop("api_key", None) or os.getenv("OPENAI_API_KEY")
+        api_key = kwargs.pop("api_key", None) or os.getenv("OPENAI_API_KEY") or ""
+        base_url = kwargs.pop("base_url", None)
+        kwargs.pop("system_prompt", None)
+        constructor_kwargs = dict(kwargs)
+        if base_url:
+            constructor_kwargs["base_url"] = base_url
         return ChatOpenAI(
             model=model_name,
             temperature=temperature,
             api_key=api_key,
-            **kwargs,
+            **constructor_kwargs,
         )
     else:
         raise ValueError(f"Unsupported LLM provider: {provider_name}")
@@ -96,6 +105,10 @@ def get_llm_from_model_config(config: "ModelConfig", **kwargs):
         merged_kwargs["request_timeout"] = config.timeout
     if config.max_tokens is not None and "max_output_tokens" not in merged_kwargs:
         merged_kwargs["max_output_tokens"] = config.max_tokens
+    if config.base_url:
+        merged_kwargs.setdefault("base_url", config.base_url)
+    if "system_prompt" in config.extra:
+        merged_kwargs.setdefault("system_prompt", config.extra["system_prompt"])
 
     return get_llm(
         config.provider,

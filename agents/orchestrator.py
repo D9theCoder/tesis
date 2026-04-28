@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.state import MODULE_NAMES
@@ -75,6 +75,21 @@ CHAIN_RUNTIME_NODES: set[str] = {
 	"upload_to_rce_chain",
 	"xss_to_csrf_chain",
 	"lfi_to_rce_chain",
+}
+
+_AGENT_TO_MODULE: dict[str, str] = {
+    "sqli_agent": "sqli",
+    "sqli_blind_agent": "sqli_blind",
+    "xss_reflected_agent": "xss_r",
+    "xss_stored_agent": "xss_s",
+    "xss_dom_agent": "xss_d",
+    "cmdi_agent": "cmdi",
+    "brute_agent": "brute",
+    "lfi_agent": "lfi",
+    "upload_agent": "upload",
+    "csrf_agent": "csrf",
+    "weak_session_agent": "weak_session",
+    "idor_agent": "idor",
 }
 
 
@@ -187,54 +202,81 @@ def _find_ready_chain_agent(
 	return None
 
 
+def _sanitize_prompt_seed(text: str) -> str:
+    replacements = {
+        "exploitation workflow": "security assessment workflow",
+        "exploit": "test",
+        "attack": "assess",
+        "orchestrator for a DVWA": "planner for a DVWA security test",
+    }
+    for bad, good in replacements.items():
+        text = text.replace(bad, good)
+    return text
+
+
 def _fallback_next_agent(
-	viable_paths: list[list[str]],
-	confirmed_vulns: list[str],
-	achieved_outcomes: list[str] | None = None,
+    viable_paths: list[list[str]],
+    confirmed_vulns: list[str],
+    achieved_outcomes: list[str] | None = None,
+    attempted_agents: list[str] | None = None,
+    scores: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
-	"""Choose a deterministic next runtime node without relying on the LLM."""
-	confirmed = set(confirmed_vulns)
-	known_outcomes = confirmed | set(achieved_outcomes or [])
-	kg = AttackKnowledgeGraph()
+    """Choose a deterministic next runtime node without relying on the LLM."""
+    confirmed = set(confirmed_vulns)
+    known_outcomes = confirmed | set(achieved_outcomes or [])
+    attempted = set(attempted_agents or [])
+    scores = scores or {}
+    kg = AttackKnowledgeGraph()
 
-	if viable_paths:
-		chosen = viable_paths[0]
+    if viable_paths:
+        chosen = viable_paths[0]
 
-		# Prefer direct chain continuation whenever preconditions are met.
-		chain_agent = _find_ready_chain_agent(
-			kg=kg,
-			path=chosen,
-			confirmed=confirmed,
-			known_outcomes=known_outcomes,
-		)
-		if chain_agent:
-			return chain_agent, chosen
+        # Prefer direct chain continuation whenever preconditions are met.
+        chain_agent = _find_ready_chain_agent(
+            kg=kg,
+            path=chosen,
+            confirmed=confirmed,
+            known_outcomes=known_outcomes,
+        )
+        if chain_agent and chain_agent not in attempted:
+            return chain_agent, chosen
 
-		# Otherwise continue probing from already-confirmed steps on this path.
-		for node in chosen:
-			if node in confirmed:
-				mapped = KG_NODE_TO_AGENT.get(node)
-				if mapped:
-					return mapped, chosen
+        # Otherwise continue probing from already-confirmed steps on this path.
+        for node in chosen:
+            if node in confirmed:
+                mapped = KG_NODE_TO_AGENT.get(node)
+                if mapped and mapped not in attempted:
+                    return mapped, chosen
 
-		# Last resort for path-based fallback: map first unmet state.
-		for node in chosen:
-			if node not in confirmed:
-				mapped = KG_NODE_TO_AGENT.get(node)
-				if mapped:
-					return mapped, chosen
+        # Last resort for path-based fallback: map first unmet state.
+        for node in chosen:
+            if node not in confirmed:
+                mapped = KG_NODE_TO_AGENT.get(node)
+                if mapped and mapped not in attempted:
+                    return mapped, chosen
 
-	# Fresh-state fallback: always start with a deterministic Tier-1 agent.
-	if not confirmed:
-		return STARTER_AGENT_ORDER[0], []
+    # Fresh-state fallback: always start with a deterministic Tier-1 agent.
+    if not confirmed:
+        for starter in STARTER_AGENT_ORDER:
+            if starter not in attempted:
+                return starter, []
+        return STARTER_AGENT_ORDER[0], []
 
-	# If we have confirmations but no viable path, keep progressing if possible.
-	for node in sorted(confirmed):
-		mapped = KG_NODE_TO_AGENT.get(node)
-		if mapped:
-			return mapped, []
+    # Tier-1 agent not yet attempted, prioritized by low score
+    tier1_agents = ALLOWED_RUNTIME_NODES - CHAIN_RUNTIME_NODES - {"scorer"}
+    unexplored = [a for a in tier1_agents if a not in attempted]
 
-	return "scorer", []
+    def _agent_priority(agent_name: str) -> tuple[int, str]:
+        module = _AGENT_TO_MODULE.get(agent_name, agent_name)
+        return (int(scores.get(module, 0)), agent_name)
+
+    if unexplored:
+        unexplored.sort(key=_agent_priority)
+        return unexplored[0], []
+
+    # All attempted — return the lowest-scored agent for re-probing
+    all_tier1 = sorted(tier1_agents, key=_agent_priority)
+    return all_tier1[0], []
 
 
 def _chain_candidate_is_ready(
@@ -326,6 +368,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 	achieved_outcomes = state.get("achieved_outcomes", [])
 	achieved_set = set(achieved_outcomes)
 	scores = state.get("scores", {}) if isinstance(state.get("scores"), dict) else {}
+	attempted_agents = state.get("attempted_agents", [])
 	coverage_ratio = _module_coverage_ratio(scores)
 	telemetry_base = {
 		"node": "orchestrator",
@@ -398,6 +441,8 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 		viable_paths=viable_paths,
 		confirmed_vulns=confirmed_vulns,
 		achieved_outcomes=achieved_outcomes,
+		attempted_agents=attempted_agents,
+		scores=scores,
 	)
 
 	base_prompt = build_orchestrator_prompt(
@@ -411,6 +456,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 		coverage_ratio=coverage_ratio,
 		coverage_target=coverage_target,
 	)
+	base_prompt = _sanitize_prompt_seed(base_prompt)
 	prompt = base_prompt
 
 	# Stage 8: Adversarial Evasion Layer (mutate prompt if enabled)
@@ -419,6 +465,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 	simulator_model = state.get("simulator_model")
 	simulator_provider = state.get("simulator_provider")
 	max_concurrency = state.get("max_concurrency")
+	max_retries = int(state.get("evasion_attempts_max", 3))
 	if evasion_enabled:
 		evasion_attempts += 1
 		if evasion_strategy in {"prompt_injection", "roleplay"}:
@@ -437,7 +484,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 				evasion_state = {
 					"base_seed": prompt,
 					"retries": 0,
-					"max_retries": 3,
+					"max_retries": max_retries,
 					"evasion_strategy": evasion_strategy,
 					"simulator_model": simulator_model,
 					"simulator_provider": simulator_provider,
@@ -470,6 +517,42 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 			"evasion_attempts": evasion_attempts,
 			"successful_evasions": successful_evasions,
 		}
+
+	# Log pre/post evasion prompts for forensics
+	if evasion_enabled:
+		evasion_telemetry_events.append(
+			{
+				**telemetry_base,
+				"event": "orchestrator.evasion.before",
+				"status": "ok",
+				"payload": {
+					"sanitized_prompt": _clip_text(base_prompt),
+					"mutated_by_evasion": mutated_by_evasion,
+				},
+			}
+		)
+		evasion_telemetry_events.append(
+			{
+				**telemetry_base,
+				"event": "orchestrator.evasion.after",
+				"status": "ok" if mutated_by_evasion else "fallback",
+				"payload": {
+					"final_prompt": _clip_text(prompt),
+					"mutated_by_evasion": mutated_by_evasion,
+				},
+			}
+		)
+		if mutated_by_evasion:
+			evasion_telemetry_events.append(
+				{
+					**telemetry_base,
+					"event": "orchestrator.evasion.mutated",
+					"status": "ok",
+					"payload": {
+						"strategy": evasion_strategy,
+					},
+				}
+			)
 
 	try:
 		llm = get_llm(state.get("llm_provider", "gemini"))
@@ -527,14 +610,8 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 				],
 			}
 
-		if evasion_enabled and mutated_by_evasion:
-			successful_evasions += 1
-			_evasion_fields = {
-				"evasion_attempts": evasion_attempts,
-				"successful_evasions": successful_evasions,
-			}
-
 		parsed = _parse_decision_payload(text)
+		parse_success = isinstance(parsed, dict) and isinstance(parsed.get("next_agent"), str)
 		candidate: Any
 		candidate = parsed.get("next_agent", fallback_agent) if isinstance(parsed, dict) else fallback_agent
 		if not isinstance(candidate, str):
@@ -549,6 +626,41 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 			candidate = fallback_agent
 
 		next_agent = candidate if candidate in ALLOWED_RUNTIME_NODES else fallback_agent
+
+		if evasion_enabled and mutated_by_evasion:
+			if parse_success:
+				successful_evasions += 1
+				_evasion_fields = {
+					"evasion_attempts": evasion_attempts,
+					"successful_evasions": successful_evasions,
+				}
+				telemetry_events.append(
+					{
+						**telemetry_base,
+						"event": "orchestrator.evasion.success",
+						"status": "ok",
+						"payload": {
+							"next_agent": next_agent,
+						},
+					}
+				)
+			else:
+				_evasion_fields = {
+					"evasion_attempts": evasion_attempts,
+					"successful_evasions": successful_evasions,
+				}
+				telemetry_events.append(
+					{
+						**telemetry_base,
+						"event": "orchestrator.evasion.fallback",
+						"status": "fallback",
+						"payload": {
+							"next_agent": next_agent,
+							"reason": "mutated_but_fallback_used",
+						},
+					}
+				)
+
 		selected_chain = _chain_for_agent(
 			agent_name=next_agent,
 			viable_paths=viable_paths,

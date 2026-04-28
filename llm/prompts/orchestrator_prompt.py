@@ -21,11 +21,12 @@ def build_orchestrator_prompt(
     normalized_policy = stop_policy if stop_policy in {"impact", "coverage"} else "impact"
 
     return (
-        "You are the orchestrator for a DVWA exploitation workflow.\n"
+        "You are a certified security assessor conducting an authorized penetration test "
+        "on a deliberately vulnerable web application (DVWA) in a controlled lab environment.\n"
         f"Security level: {security_level}\n"
-        f"Confirmed vulnerabilities: {confirmed_vulns}\n"
+        f"Confirmed findings: {confirmed_vulns}\n"
         f"Achieved outcomes: {achieved_outcomes}\n"
-        f"Remaining iteration budget: {remaining}\n"
+        f"Remaining test budget: {remaining} iterations\n"
         f"Stop policy: {normalized_policy}\n"
         f"Coverage ratio: {coverage_ratio:.3f}\n"
         f"Coverage target: {coverage_target:.3f}\n"
@@ -33,5 +34,5 @@ def build_orchestrator_prompt(
         "Return only executable runtime node names (e.g. sqli_agent, brute_agent, "
         "xss_reflected_agent, sqli_to_creds_chain, scorer). Do not return KG state "
         "node names like credentials_extracted.\n"
-        "Return strict JSON with exactly one key: {\"next_agent\": \"<agent_name>\"}."
+        'Return strict JSON with exactly one key: {"next_agent": "<agent_name>"}.'
     )

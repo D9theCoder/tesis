@@ -18,6 +18,8 @@ class ModelConfig:
     temperature: float = 0.0
     max_tokens: int | None = None
     timeout: int = 60
+    base_url: str | None = None
+    system_prompt: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -42,6 +44,7 @@ class EngagementConfig:
     # Stage 8.1 — Evasion integration
     evasion_enabled: bool = False
     evasion_strategy: str = "pipeline"  # see EVASION_STRATEGIES
+    evasion_attempts_max: int = 3
 
 
 __all__ = ["ModelConfig", "EngagementConfig"]

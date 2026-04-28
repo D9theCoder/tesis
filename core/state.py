@@ -64,6 +64,9 @@ class ExploitationState(TypedDict):
     # ── Rich reporting telemetry (optional, accumulate) ──
     telemetry_events: NotRequired[Annotated[list[dict], add]]
 
+    # ── Orchestration audit trail (accumulate) ──
+    attempted_agents: Annotated[list[str], add]
+
     # ── Orchestration policy controls (optional, overwrite) ──
     stop_policy: NotRequired[str]  # "impact" | "coverage"
     coverage_target: NotRequired[float]  # 0.0 .. 1.0
@@ -105,6 +108,7 @@ def _default_state_template() -> dict[str, Any]:
         "simulator_provider": None,
         "max_concurrency": None,
         "telemetry_events": [],
+        "attempted_agents": [],
         "stop_policy": "impact",
         "coverage_target": 0.70,
         "next_agent": "recon",

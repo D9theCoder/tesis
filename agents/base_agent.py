@@ -65,6 +65,22 @@ class BaseAgent(ABC):
         """
         return True
 
+    def _emit_telemetry(
+        self,
+        state: ExploitationState,
+        event: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "telemetry_events": [{
+                "node": self.module_name,
+                "iteration": state.get("iteration_count", 0),
+                "event": event,
+                "status": payload.get("status", "ok"),
+                "payload": payload,
+            }]
+        }
+
     def enhance_prompt(self, state: ExploitationState, prompt: str) -> str:
         """Enhance a prompt via the Stage 8 evasion layer if enabled.
 
