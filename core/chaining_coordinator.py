@@ -27,6 +27,12 @@ def _derive_surface_confirmed(confirmed: set[str]) -> set[str]:
     surface_confirmed = set()
     for node in confirmed:
         mapped = MODULE_TO_KG_NODE.get(node, node)
+        # Method agents append nodes like "sqli_union_confirmed";
+        # MODULE_TO_KG_NODE maps the base name ("sqli_union"), so fall
+        # back to stripping the _confirmed suffix when needed.
+        if mapped == node and node.endswith("_confirmed"):
+            base = node[: -len("_confirmed")]
+            mapped = MODULE_TO_KG_NODE.get(base, node)
         surface_confirmed.add(mapped)
     return surface_confirmed
 
@@ -43,7 +49,9 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
     achieved = set(state.get("achieved_outcomes", []))
     known = confirmed | achieved
     current_surface = state.get("current_surface", "sqli")
-    attempted = state.get("attempted_agents", [])
+    # Deduplicate attempted_agents because Annotated[list[str], add]
+    # reducer can accumulate duplicates when agents return the full list.
+    attempted = list(dict.fromkeys(state.get("attempted_agents", [])))
     blocked = state.get("blocked_agents", [])
     failure_agents = state.get("failure_agents", [])
     kg = AttackKnowledgeGraph()
@@ -121,6 +129,21 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
             "event": "akg.route.selected",
             "next_agent": "scorer",
             "reason": "critical_outcome",
+        }
+
+    # 3. Exhaustion check: if every method on this surface has been attempted
+    # or blocked, stop instead of looping back to orchestrator forever.
+    all_methods = set(METHODS_BY_SURFACE.get(current_surface, []))
+    attempted_set = set(attempted)
+    blocked_set = set(blocked)
+    if all_methods and all_methods.issubset(attempted_set | blocked_set):
+        return "scorer", {
+            "node": "chaining_router",
+            "iteration": iteration_count,
+            "event": "akg.route.selected",
+            "next_agent": "scorer",
+            "reason": "all_methods_exhausted",
+            "incomplete_reason": "ALL_METHODS_FAILED",
         }
 
     return "orchestrator", {

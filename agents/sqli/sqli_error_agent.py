@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from agents.agent_telemetry import exploit_event, probe_event, score_event
 from agents.state_utils import make_update, normalize_security_level
 from core.state import ExploitationState
 from foundation.payload_library import PayloadLibrary
@@ -27,14 +28,6 @@ def sqli_error_agent(state: ExploitationState) -> dict[str, Any]:
     """Run PROBE -> EXPLOIT -> CHAIN CHECK for sqli_error."""
     target_url = state.get("target_url", "")
     security_level = normalize_security_level(state.get("security_level"))
-
-    attempted = list(state.get("attempted_agents", []))
-    if AGENT_ID in attempted:
-        logger.info("%s already attempted, skipping", AGENT_ID)
-        return {
-            "scores": {**state.get("scores", {}), AGENT_ID: state.get("scores", {}).get(AGENT_ID, 0)},
-            "attempted_agents": attempted,
-        }
 
     if not target_url:
         update = make_update(
@@ -60,16 +53,21 @@ def sqli_error_agent(state: ExploitationState) -> dict[str, Any]:
     confirmed_vulns: list[str] = []
     achieved_outcomes: list[str] = []
     score = 0
+    telemetry_events: list[dict[str, Any]] = []
 
     # PROBE stage
+    probe_triggered = False
     for payload in probe_payloads:
         if payload in already_tried:
             continue
         temp_state.update(PayloadLibrary.record_tried(temp_state, AGENT_ID, payload))
+        telemetry_events.append(probe_event(AGENT_ID, payload, None, True))
         logger.info("[%s] PROBE payload: %s", AGENT_ID, payload)
+        probe_triggered = True
 
-    observations[_PROBE_OBSERVATION_KEY] = True
-    score = max(score, 1)
+    if probe_triggered:
+        observations[_PROBE_OBSERVATION_KEY] = True
+        score = max(score, 1)
 
     # EXPLOIT stage
     exploit_triggered = False
@@ -77,6 +75,7 @@ def sqli_error_agent(state: ExploitationState) -> dict[str, Any]:
         if payload in already_tried:
             continue
         temp_state.update(PayloadLibrary.record_tried(temp_state, AGENT_ID, payload))
+        telemetry_events.append(exploit_event(AGENT_ID, payload, None, True))
         logger.info("[%s] EXPLOIT payload: %s", AGENT_ID, payload)
         exploit_triggered = True
         break
@@ -98,6 +97,8 @@ def sqli_error_agent(state: ExploitationState) -> dict[str, Any]:
 
     tried_now = list(temp_state["tried_payloads"].get(AGENT_ID, []))
 
+    telemetry_events.append(score_event(AGENT_ID, score, confirmed_vulns, achieved_outcomes))
+
     update = make_update(
         state=state,
         module_name=AGENT_ID,
@@ -105,6 +106,7 @@ def sqli_error_agent(state: ExploitationState) -> dict[str, Any]:
         tried_payloads=tried_now,
         confirmed_vulns=confirmed_vulns or None,
         achieved_outcomes=achieved_outcomes or None,
+        telemetry_events=telemetry_events,
     )
     update["observations"] = observations
     return update

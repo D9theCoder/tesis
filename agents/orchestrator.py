@@ -132,7 +132,10 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
     max_iterations = state.get("max_iterations", 30)
     confirmed_vulns = state.get("confirmed_vulns", [])
     achieved_outcomes = state.get("achieved_outcomes", [])
-    attempted_agents = state.get("attempted_agents", [])
+    # Deduplicate attempted_agents before passing to prompt and fallback logic.
+    # attempted_agents uses Annotated[list[str], add] reducer, so duplicates
+    # can accumulate if agents incorrectly return the full list.
+    attempted_agents = list(dict.fromkeys(state.get("attempted_agents", [])))
     blocked_agents = state.get("blocked_agents", [])
     failure_agents = state.get("failure_agents", [])
     current_surface = state.get("current_surface", "sqli")
@@ -271,9 +274,11 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                 })
         
         if is_guardrail_refusal(text) and not evasion_success:
+            # Do NOT add fallback_agent to blocked_agents — guardrail refusals
+            # are about the orchestrator prompt, not the method agent. Blocking
+            # the fallback would permanently disable viable methods.
             return {
                 "next_agent": fallback_agent,
-                "blocked_agents": [fallback_agent],
                 "guardrail_activations": [make_guardrail_event(
                     provider=state.get("llm_provider", "gemini"),
                     context="orchestrator",
@@ -287,12 +292,10 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             }
         
         parsed = _parse_decision_payload(text)
-        if isinstance(parsed, dict) and isinstance(parsed.get("next_agent"), str):
-            candidate = parsed["next_agent"]
-        else:
-            candidate = fallback_agent
-        
+        parse_ok = isinstance(parsed, dict) and isinstance(parsed.get("next_agent"), str)
+        candidate = parsed["next_agent"] if parse_ok else fallback_agent
         next_agent = candidate if candidate in ALL_METHOD_AGENTS or candidate == "scorer" else fallback_agent
+        used_fallback = not parse_ok or candidate != next_agent
         
         # Update consecutive_clean_responses
         new_clean_count = consecutive_clean + 1 if not evasion_triggered else 0
@@ -301,7 +304,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             **telemetry_base,
             "event": "orchestrator.decision",
             "status": "ok",
-            "payload": {"next_agent": next_agent, "used_fallback": next_agent == fallback_agent},
+            "payload": {"next_agent": next_agent, "used_fallback": used_fallback},
         })
         
         return {
@@ -312,7 +315,8 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "evasion_attempts": state.get("evasion_attempts", 0) + (1 if evasion_triggered else 0),
             "successful_evasions": state.get("successful_evasions", 0) + (1 if evasion_success else 0),
         }
-    except (RuntimeError, ConnectionError, TimeoutError, ValueError) as exc:
+    except Exception as exc:
+        # Harness node — crashing the graph is worse than logging a fallback.
         logger.exception("Orchestrator failed; applying deterministic fallback")
         return {
             "next_agent": fallback_agent,

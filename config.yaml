@@ -40,7 +40,7 @@ level: low
 surface: sqli
 
 # Max LangGraph orchestration iterations for a run.
-iterations: 30
+iterations: 10
 
 # Number of repeated runs per provider/level (mainly relevant for matrix mode).
 repeats: 1

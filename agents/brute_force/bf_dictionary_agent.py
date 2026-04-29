@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from agents.agent_telemetry import exploit_event, probe_event, score_event
 from agents.state_utils import make_update, normalize_security_level
 from core.state import ExploitationState
 from foundation.payload_library import PayloadLibrary
@@ -27,14 +28,6 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
     """Run PROBE -> EXPLOIT -> CHAIN CHECK for bf_dictionary."""
     target_url = state.get("target_url", "")
     security_level = normalize_security_level(state.get("security_level"))
-
-    attempted = list(state.get("attempted_agents", []))
-    if AGENT_ID in attempted:
-        logger.info("%s already attempted, skipping", AGENT_ID)
-        return {
-            "scores": {**state.get("scores", {}), AGENT_ID: state.get("scores", {}).get(AGENT_ID, 0)},
-            "attempted_agents": attempted,
-        }
 
     if not target_url:
         update = make_update(
@@ -61,16 +54,21 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
     achieved_outcomes: list[str] = []
     found_credentials: list[dict[str, str]] = []
     score = 0
+    telemetry_events: list[dict[str, Any]] = []
 
     # PROBE stage
+    probe_triggered = False
     for payload in probe_payloads:
         if payload in already_tried:
             continue
         temp_state.update(PayloadLibrary.record_tried(temp_state, AGENT_ID, payload))
+        telemetry_events.append(probe_event(AGENT_ID, payload, None, True))
         logger.info("[%s] PROBE payload: %s", AGENT_ID, payload)
+        probe_triggered = True
 
-    observations[_PROBE_OBSERVATION_KEY] = True
-    score = max(score, 1)
+    if probe_triggered:
+        observations[_PROBE_OBSERVATION_KEY] = True
+        score = max(score, 1)
 
     # EXPLOIT stage
     exploit_triggered = False
@@ -78,11 +76,15 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
         if payload in already_tried:
             continue
         temp_state.update(PayloadLibrary.record_tried(temp_state, AGENT_ID, payload))
+        telemetry_events.append(exploit_event(AGENT_ID, payload, None, True))
         logger.info("[%s] EXPLOIT payload: %s", AGENT_ID, payload)
         exploit_triggered = True
         if ":" in payload:
-            user, password = payload.split(":", 1)
-            found_credentials = [{"username": user.strip(), "password": password.strip()}]
+            parts = payload.split(":")
+            if len(parts) >= 2:
+                user = parts[0].strip()
+                password = parts[1].strip()
+                found_credentials.append({"username": user, "password": password})
         break
 
     if exploit_triggered:
@@ -98,11 +100,11 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
     if score >= 3:
         if _CHAIN_OUTCOME not in achieved_outcomes:
             achieved_outcomes.append(_CHAIN_OUTCOME)
-        if "credentials_extracted" not in achieved_outcomes:
-            achieved_outcomes.append("credentials_extracted")
         score = 4
 
     tried_now = list(temp_state["tried_payloads"].get(AGENT_ID, []))
+
+    telemetry_events.append(score_event(AGENT_ID, score, confirmed_vulns, achieved_outcomes))
 
     update = make_update(
         state=state,
@@ -112,6 +114,7 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
         confirmed_vulns=confirmed_vulns or None,
         achieved_outcomes=achieved_outcomes or None,
         found_credentials=found_credentials or None,
+        telemetry_events=telemetry_events,
     )
     update["observations"] = observations
     return update
