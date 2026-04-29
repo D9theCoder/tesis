@@ -217,7 +217,16 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                 pass  # will check after LLM call
     
     try:
-        llm = get_llm(state.get("llm_provider", "gemini"))
+        provider_name = state.get("llm_provider", "gemini")
+        model_cfg = state.get("model_config", {})
+        if model_cfg:
+            kwargs = {k: v for k, v in model_cfg.items() if k != "provider"}
+            extra = kwargs.pop("extra", {})
+            if isinstance(extra, dict):
+                kwargs.update(extra)
+            llm = get_llm(provider_name, **kwargs)
+        else:
+            llm = get_llm(provider_name)
         response = llm.invoke([HumanMessage(content=prompt)])
         text = _extract_response_text(getattr(response, "content", ""))
         

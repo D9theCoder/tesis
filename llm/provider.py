@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 
 SAMPLE_QUERY = "What model do you use?"
-SUPPORTED_PROVIDERS = ["gemini", "openai", "claude"]
+SUPPORTED_PROVIDERS = ["gemini", "openai", "claude", "openai_compatible"]
 logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
@@ -50,6 +50,26 @@ def get_llm(provider_name: str, **kwargs):
             temperature=temperature,
             api_key=api_key,
             **constructor_kwargs,
+        )
+    elif normalized_provider == "openai_compatible":
+        from langchain_openai import ChatOpenAI
+        temperature = kwargs.pop("temperature", 0)
+        model_name = kwargs.pop("model_name", kwargs.pop("model", ""))
+        api_key = kwargs.pop("api_key", None) or os.getenv("OPENAI_COMPATIBLE_API_KEY") or ""
+        base_url = (kwargs.pop("base_url", None) or os.getenv("OPENAI_COMPATIBLE_BASE_URL") or "").strip()
+        if not base_url:
+            raise ValueError(
+                "openai_compatible provider requires base_url. "
+                "Set it in config.yaml models.openai_compatible.base_url "
+                "or OPENAI_COMPATIBLE_BASE_URL environment variable."
+            )
+        kwargs.pop("system_prompt", None)
+        return ChatOpenAI(
+            model=model_name,
+            temperature=temperature,
+            api_key=api_key,
+            base_url=base_url,
+            **kwargs,
         )
     elif normalized_provider == "claude":
         from langchain_anthropic import ChatAnthropic

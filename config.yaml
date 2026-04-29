@@ -29,13 +29,14 @@ security_levels:
 llm_providers:
   - gemini
   - openai
+  - openai_compatible
 
 # -----------------------------------------------------------------------------
 # Primary run settings (single run mode)
 # -----------------------------------------------------------------------------
 # Explicit provider/level/surface for non-matrix runs.
 # If omitted, loader falls back to default_* keys above.
-provider: gemini
+provider: openai_compatible
 level: low
 surface: sqli
 
@@ -105,6 +106,7 @@ matrix: false
 providers:
   - gemini
   - openai
+  - openai_compatible
 
 levels:
   - low
@@ -149,9 +151,9 @@ models:
   # The api_key field accepts the provider-specific key.
   # ---------------------------------------------------------------------------
   openai_compatible:
-    provider: openai
-    model_name: kimi-k2.6
+    provider: openai_compatible
+    model_name: minimax-m2.5
     base_url: https://opencode.ai/zen/go/v1
-    # api_key: ${OPENROUTER_API_KEY}
+    # api_key: ${OPENAI_COMPATIBLE_API_KEY}
     temperature: 1
     timeout: 60

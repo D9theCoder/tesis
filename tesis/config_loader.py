@@ -236,6 +236,8 @@ def _default_model_name(provider: str) -> str:
         return "gemini-3-flash-preview"
     if provider == "openai":
         return "gpt-4o-mini"
+    if provider == "openai_compatible":
+        return ""
     return ""
 
 
@@ -244,6 +246,8 @@ def _default_api_key(provider: str) -> str:
         return os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     if provider == "openai":
         return os.getenv("OPENAI_API_KEY", "")
+    if provider == "openai_compatible":
+        return os.getenv("OPENAI_COMPATIBLE_API_KEY", "")
     return os.getenv(f"{provider.upper()}_API_KEY", "")
 
 

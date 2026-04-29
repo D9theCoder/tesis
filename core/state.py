@@ -58,6 +58,9 @@ class ExploitationState(TypedDict):
     evasion_attempts: NotRequired[int]
     successful_evasions: NotRequired[int]
 
+    # Model configuration for provider instantiation
+    model_config: NotRequired[dict[str, Any]]
+
     # Telemetry (accumulate)
     telemetry_events: NotRequired[Annotated[list[dict], add]]
 
@@ -102,6 +105,7 @@ def _default_state_template() -> dict[str, Any]:
         "evasion_cooldown_threshold": 5,
         "evasion_attempts": 0,
         "successful_evasions": 0,
+        "model_config": {},
         "telemetry_events": [],
         "attempted_agents": [],
         "blocked_agents": [],
@@ -160,7 +164,7 @@ SCORE_LABELS: dict[int, str] = {
 SECURITY_LEVELS: list[str] = ["low", "medium", "high"]
 
 # LLM providers
-LLM_PROVIDERS: list[str] = ["gemini", "openai", "claude"]
+LLM_PROVIDERS: list[str] = ["gemini", "openai", "claude", "openai_compatible"]
 
 # Backward-compatible module names (deprecated; use ALL_METHOD_AGENTS for new code)
 MODULE_NAMES: list[str] = [

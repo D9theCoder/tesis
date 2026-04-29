@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import getpass
 import json
 import logging
@@ -20,6 +21,7 @@ from evaluation.runner import run_single_engagement
 from llm.provider import SUPPORTED_PROVIDERS
 from tesis.config_loader import (
     ConfigError,
+    _default_model_name,
     load_and_resolve_config,
     load_yaml_config,
     mask_secret,
@@ -88,6 +90,7 @@ def _print_resolved_config(config: Any) -> None:
     masked_models = {
         provider: {
             "model_name": model.model_name,
+            "base_url": model.base_url,
             "temperature": model.temperature,
             "timeout": model.timeout,
             "api_key": mask_secret(model.api_key),
@@ -120,6 +123,31 @@ def _print_resolved_config(config: Any) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def _model_config_to_dict(model_cfg: Any) -> dict[str, Any]:
+    """Convert a ModelConfig dataclass to a plain dict for state injection."""
+    if model_cfg is None:
+        return {}
+    return dataclasses.asdict(model_cfg)
+
+
+def _announce_runtime_config(config: Any) -> None:
+    """Print active provider, model, and endpoint before execution."""
+    if config.matrix:
+        combos = len(config.providers) * len(config.levels) * len(config.surfaces) * config.repeats
+        print(
+            f"Matrix mode: {len(config.providers)} providers × {len(config.levels)} levels × "
+            f"{len(config.surfaces)} surfaces × {config.repeats} repeats = {combos} total runs"
+        )
+        return
+
+    model_cfg = config.models.get(config.provider)
+    model_name = model_cfg.model_name if model_cfg else _default_model_name(config.provider)
+    base_url = model_cfg.base_url if model_cfg else None
+
+    endpoint = base_url or "(default endpoint)"
+    print(f"Active provider: {config.provider} | model: {model_name or '(unset)'} | endpoint: {endpoint}")
+
+
 def _masked_config_payload(config: dict[str, Any]) -> dict[str, Any]:
     masked = json.loads(json.dumps(config))
     models = masked.get("models", {})
@@ -150,6 +178,8 @@ def handle_run(args: argparse.Namespace) -> int:
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    _announce_runtime_config(config)
+
     try:
         if config.matrix:
             result = run_provider_matrix(
@@ -170,6 +200,10 @@ def handle_run(args: argparse.Namespace) -> int:
                 output_dir=str(output_dir / "runs"),
                 include_aggregate=True,
                 live_display=args.live,
+                model_configs={
+                    name: _model_config_to_dict(cfg)
+                    for name, cfg in config.models.items()
+                },
             )
             if isinstance(result, tuple):
                 artifacts, aggregate = result
@@ -215,6 +249,7 @@ def handle_run(args: argparse.Namespace) -> int:
             evasion_cooldown_threshold=config.evasion_cooldown_threshold,
             output_dir=str(output_dir / "runs"),
             live_display=args.live,
+            model_config=_model_config_to_dict(config.models.get(config.provider)),
         )
         _write_run_artifacts(output_dir, [artifact])
 

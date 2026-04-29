@@ -41,6 +41,7 @@ def test_run_provider_matrix_deterministic_ordering(monkeypatch):
         evasion_max_retries=3,
         evasion_cooldown_threshold=5,
         live_display=False,
+        model_config=None,
     ):
         call_order.append((llm_provider, surface, security_level, repeat_index, evasion_enabled, evasion_mode))
         return {

@@ -12,3 +12,6 @@ wheels/
 
 # environment variables
 .env
+
+# results
+results/

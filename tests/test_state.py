@@ -76,6 +76,7 @@ class TestExploitationStateSchema:
         "simulator_provider",
         "max_concurrency",
         "attempted_agents",
+        "model_config",
     ]
 
     def test_all_fields_present(self):

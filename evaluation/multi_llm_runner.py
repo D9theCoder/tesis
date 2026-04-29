@@ -145,6 +145,7 @@ def run_provider_matrix(
     evasion_max_retries: int = 3,
     evasion_cooldown_threshold: int = 5,
     live_display: bool = False,
+    model_configs: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict] | tuple[list[dict], dict[str, Any]]:
     chosen_providers = sorted(providers or list(SUPPORTED_PROVIDERS))
     chosen_levels = sorted(security_levels or list(SECURITY_LEVELS))
@@ -200,6 +201,7 @@ def run_provider_matrix(
                             evasion_cooldown_threshold=evasion_cooldown_threshold,
                             output_dir=output_dir,
                             live_display=live_display,
+                            model_config=(model_configs or {}).get(provider),
                         )
                     )
 

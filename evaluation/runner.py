@@ -40,6 +40,7 @@ def run_single_engagement(
     evasion_max_retries: int = 3,
     evasion_cooldown_threshold: int = 5,
     live_display: bool = False,
+    model_config: dict[str, Any] | None = None,
 ) -> dict:
     run_id = f"{llm_provider}-{surface}-{security_level}-{repeat_index}"
     started_at = _now_iso()
@@ -87,6 +88,7 @@ def run_single_engagement(
             "evasion_mode": evasion_mode,
             "evasion_max_retries": evasion_max_retries,
             "evasion_cooldown_threshold": evasion_cooldown_threshold,
+            "model_config": model_config or {},
         }
 
         final_state = None
