@@ -27,6 +27,7 @@ def run_single_engagement(
     target_url: str,
     security_level: str,
     llm_provider: str,
+    surface: str = "sqli",
     max_iterations: int = 30,
     repeat_index: int = 0,
     stop_policy: str = "impact",
@@ -35,13 +36,12 @@ def run_single_engagement(
     diagnose: bool = False,
     output_dir: str | None = None,
     evasion_enabled: bool = False,
-    evasion_strategy: str = "pipeline",
-    simulator_model: str | None = None,
-    simulator_provider: str | None = None,
-    max_concurrency: int | None = None,
+    evasion_mode: str = "reactive",
+    evasion_max_retries: int = 3,
+    evasion_cooldown_threshold: int = 5,
     live_display: bool = False,
 ) -> dict:
-    run_id = f"{llm_provider}-{security_level}-{repeat_index}"
+    run_id = f"{llm_provider}-{surface}-{security_level}-{repeat_index}"
     started_at = _now_iso()
     started_clock = perf_counter()
     telemetry = RunTelemetry(run_id=run_id)
@@ -67,26 +67,26 @@ def run_single_engagement(
             "target_url": target_url,
             "provider": llm_provider,
             "security_level": security_level,
+            "surface": surface,
         },
     )
 
     try:
-        evasion_strategy = str(evasion_strategy).strip().lower()
         evasion_enabled = bool(evasion_enabled)
-        app = build_framework(llm_provider=llm_provider)
+        app = build_framework(llm_provider=llm_provider, surface=surface)
         init_state = {
             **new_default_state(),
             "target_url": target_url,
             "security_level": security_level,
             "llm_provider": llm_provider,
+            "current_surface": surface,
             "max_iterations": max_iterations,
             "stop_policy": stop_policy,
             "coverage_target": coverage_target,
             "evasion_enabled": evasion_enabled,
-            "evasion_strategy": evasion_strategy,
-            "simulator_model": simulator_model,
-            "simulator_provider": simulator_provider,
-            "max_concurrency": max_concurrency,
+            "evasion_mode": evasion_mode,
+            "evasion_max_retries": evasion_max_retries,
+            "evasion_cooldown_threshold": evasion_cooldown_threshold,
         }
 
         final_state = None
@@ -114,10 +114,10 @@ def run_single_engagement(
             "achieved_outcomes": [],
             "guardrail_activations": [],
             "telemetry_events": [],
-            "evasion_attempts": 0,
-            "successful_evasions": 0,
             "evasion_enabled": evasion_enabled,
-            "evasion_strategy": evasion_strategy,
+            "evasion_mode": evasion_mode,
+            "evasion_max_retries": evasion_max_retries,
+            "evasion_cooldown_threshold": evasion_cooldown_threshold,
         }
         report = build_score_report(final_state).to_dict()
         status = "error"
@@ -192,9 +192,9 @@ def run_single_engagement(
                         "confirmed_vulns": list(final_state.get("confirmed_vulns", [])),
                         "achieved_outcomes": list(final_state.get("achieved_outcomes", [])),
                         "evasion_enabled": final_state.get("evasion_enabled", False),
-                        "evasion_attempts": final_state.get("evasion_attempts", 0),
-                        "successful_evasions": final_state.get("successful_evasions", 0),
-                        "evasion_strategy": final_state.get("evasion_strategy", "pipeline"),
+                        "evasion_mode": final_state.get("evasion_mode", "reactive"),
+                        "evasion_max_retries": final_state.get("evasion_max_retries", 3),
+                        "evasion_cooldown_threshold": final_state.get("evasion_cooldown_threshold", 5),
                     },
                     recent_events=events[-20:],
                 )
@@ -212,10 +212,13 @@ def run_single_engagement(
             "target_url": target_url,
             "provider": llm_provider,
             "security_level": security_level,
+            "surface": surface,
             "max_iterations": max_iterations,
             "repeat_index": repeat_index,
             "evasion_enabled": evasion_enabled,
-            "evasion_strategy": evasion_strategy,
+            "evasion_mode": evasion_mode,
+            "evasion_max_retries": evasion_max_retries,
+            "evasion_cooldown_threshold": evasion_cooldown_threshold,
         },
         "timing": {
             "started_at": started_at,
@@ -228,8 +231,9 @@ def run_single_engagement(
             "achieved_outcomes": list(final_state.get("achieved_outcomes", [])),
             "guardrail_activations": list(final_state.get("guardrail_activations", [])),
             "evasion_enabled": final_state.get("evasion_enabled", False),
-            "evasion_attempts": final_state.get("evasion_attempts", 0),
-            "successful_evasions": final_state.get("successful_evasions", 0),
+            "evasion_mode": final_state.get("evasion_mode", "reactive"),
+            "evasion_max_retries": final_state.get("evasion_max_retries", 3),
+            "evasion_cooldown_threshold": final_state.get("evasion_cooldown_threshold", 5),
         },
         "report": report,
         "error": error,

@@ -1,38 +1,48 @@
-"""Prompt builder for orchestration decisions."""
+"""Prompt builder for orchestration decisions (method selection)."""
 
 from __future__ import annotations
 
 
 def build_orchestrator_prompt(
     *,
+    current_surface: str,
+    viable_methods: list[str],
+    observations: dict[str, bool],
+    attempted_agents: list[str],
+    blocked_agents: list[str],
+    failure_agents: list[str],
+    scores: dict[str, int],
     confirmed_vulns: list[str],
     achieved_outcomes: list[str],
-    viable_paths: list[list[str]],
     security_level: str,
     iteration_count: int,
     max_iterations: int,
-    stop_policy: str,
-    coverage_ratio: float,
-    coverage_target: float,
 ) -> str:
-    """Build a deterministic orchestration prompt for the LLM planner."""
     remaining = max(max_iterations - iteration_count, 0)
-    top_paths = viable_paths[:5]
-    normalized_policy = stop_policy if stop_policy in {"impact", "coverage"} else "impact"
-
+    
     return (
         "You are a certified security assessor conducting an authorized penetration test "
         "on a deliberately vulnerable web application (DVWA) in a controlled lab environment.\n"
+        f"Current surface: {current_surface}\n"
         f"Security level: {security_level}\n"
-        f"Confirmed findings: {confirmed_vulns}\n"
+        f"Observations: {observations}\n"
+        f"Viable methods for this surface: {viable_methods}\n"
+        f"Attempted agents: {attempted_agents}\n"
+        f"Blocked agents: {blocked_agents}\n"
+        f"Failed agents: {failure_agents}\n"
+        f"Current scores: {scores}\n"
+        f"Confirmed vulns: {confirmed_vulns}\n"
         f"Achieved outcomes: {achieved_outcomes}\n"
-        f"Remaining test budget: {remaining} iterations\n"
-        f"Stop policy: {normalized_policy}\n"
-        f"Coverage ratio: {coverage_ratio:.3f}\n"
-        f"Coverage target: {coverage_target:.3f}\n"
-        f"Candidate paths: {top_paths}\n"
-        "Return only executable runtime node names (e.g. sqli_agent, brute_agent, "
-        "xss_reflected_agent, sqli_to_creds_chain, scorer). Do not return KG state "
-        "node names like credentials_extracted.\n"
-        'Return strict JSON with exactly one key: {"next_agent": "<agent_name>"}.'
+        f"Remaining budget: {remaining} iterations\n"
+        "\n"
+        "Your task: Select the NEXT method agent to run from the viable methods list.\n"
+        "Prefer methods that have not been attempted yet.\n"
+        "Consider the security level when selecting (some methods work better at certain levels).\n"
+        "\n"
+        "Available method agents:\n"
+        "- sqli_union, sqli_error, sqli_boolean_blind, sqli_time_blind\n"
+        "- ac_idor, ac_vertical_escalation, ac_force_browse\n"
+        "- bf_dictionary, bf_spray\n"
+        "\n"
+        'Return strict JSON: {"next_agent": "<agent_id>", "reasoning": "...", "expected_outcome": "..."}'
     )

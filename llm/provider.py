@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 
 SAMPLE_QUERY = "What model do you use?"
-SUPPORTED_PROVIDERS = ["gemini", "openai"]
+SUPPORTED_PROVIDERS = ["gemini", "openai", "claude"]
 logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
@@ -50,6 +50,17 @@ def get_llm(provider_name: str, **kwargs):
             temperature=temperature,
             api_key=api_key,
             **constructor_kwargs,
+        )
+    elif normalized_provider == "claude":
+        from langchain_anthropic import ChatAnthropic
+        temperature = kwargs.pop("temperature", 0)
+        model_name = kwargs.pop("model_name", kwargs.pop("model", "claude-3-sonnet-20240229"))
+        api_key = kwargs.pop("api_key", None) or os.getenv("ANTHROPIC_API_KEY") or ""
+        return ChatAnthropic(
+            model=model_name,
+            temperature=temperature,
+            anthropic_api_key=api_key,
+            **kwargs,
         )
     else:
         raise ValueError(f"Unsupported LLM provider: {provider_name}")

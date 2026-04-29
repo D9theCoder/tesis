@@ -21,7 +21,7 @@ def test_run_single_engagement_artifact_shape(monkeypatch):
                 "iteration_count": 3,
             }
 
-    monkeypatch.setattr("evaluation.runner.build_framework", lambda llm_provider: FakeApp())
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda llm_provider, surface="sqli": FakeApp())
 
     artifact = run_single_engagement(
         target_url="http://localhost/dvwa",
@@ -32,12 +32,12 @@ def test_run_single_engagement_artifact_shape(monkeypatch):
     )
 
     assert artifact["status"] == "success"
-    assert artifact["run_id"] == "gemini-low-0"
+    assert artifact["run_id"] == "gemini-sqli-low-0"
     assert "report" in artifact
 
 
 def test_run_single_engagement_error_path(monkeypatch):
-    def fail_framework(llm_provider):
+    def fail_framework(llm_provider, surface="sqli"):
         raise RuntimeError("offline test")
 
     monkeypatch.setattr("evaluation.runner.build_framework", fail_framework)

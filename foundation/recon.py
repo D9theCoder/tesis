@@ -395,11 +395,31 @@ def recon(state: ExploitationState) -> dict[str, Any]:
         requested_level,
     )
 
+    # Derive observations from discovered endpoints
+    observations: dict[str, bool] = {}
+    module_names = {ep.get("module_name", "unknown") for ep in all_endpoints}
+    
+    # SQLi observations
+    observations["error_messages_enabled"] = "sqli" in module_names
+    observations["union_select_possible"] = "sqli" in module_names
+    observations["response_diff_detectable"] = "sqli_blind" in module_names or "sqli" in module_names
+    observations["response_delay_measurable"] = "sqli_blind" in module_names or "sqli" in module_names
+    
+    # Access control observations
+    observations["object_ids_enumerable"] = "idor" in module_names
+    observations["role_based_access_present"] = "authbypass" in str(all_endpoints).lower() or "admin" in str(all_endpoints).lower()
+    observations["force_browse_endpoints_visible"] = len(all_endpoints) > 0
+    
+    # Brute force observations
+    observations["no_rate_limit"] = "brute" in module_names
+    observations["low_priv_session_available"] = True  # assume logged in
+
     return {
         "endpoints": all_endpoints,
         "input_vectors": all_vectors,
         "security_level": requested_level,
         "next_agent": "orchestrator",
+        "observations": observations,
     }
 
 

@@ -16,16 +16,14 @@ def write_json_report(path: str | Path, payload: dict) -> Path:
 
 def build_markdown_summary(aggregate: dict) -> str:
     totals = aggregate.get("totals", {})
-    return "\n".join(
-        [
-            "# Stage 6 Evaluation Summary",
-            "",
-            f"- Total runs: {totals.get('total_runs', 0)}",
-            f"- Successful runs: {totals.get('successful_runs', 0)}",
-            f"- Error runs: {totals.get('error_runs', 0)}",
-            f"- Skipped runs: {totals.get('skipped_runs', 0)}",
-        ]
-    )
+    return "\n".join([
+        "# Evaluation Summary",
+        "",
+        f"- Total runs: {totals.get('total_runs', 0)}",
+        f"- Successful runs: {totals.get('successful_runs', 0)}",
+        f"- Error runs: {totals.get('error_runs', 0)}",
+        f"- Skipped runs: {totals.get('skipped_runs', 0)}",
+    ])
 
 
 def write_markdown_report(path: str | Path, aggregate: dict) -> Path:

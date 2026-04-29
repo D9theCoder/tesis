@@ -1,122 +1,141 @@
-"""Chaining Coordinator — Stage 4 conditional edge routing.
-
-Routes execution after Tier/chain nodes complete by consulting AKG metadata.
-"""
+"""Chaining Coordinator — conditional edge routing for 3-surface architecture."""
 
 from __future__ import annotations
 
 from core.knowledge_graph import AttackKnowledgeGraph
+from core.state import METHODS_BY_SURFACE, MODULE_TO_KG_NODE
 
 HIGH_IMPACT_OUTCOMES = set(AttackKnowledgeGraph.HIGH_IMPACT_OUTCOMES)
-CHAIN_ATTEMPT_MARKERS: dict[str, str] = {
-	"sqli_to_creds_chain": "chain:sqli_to_creds",
-	"upload_to_rce_chain": "chain:upload_to_rce",
-	"xss_to_csrf_chain": "chain:xss_to_csrf",
-	"lfi_to_rce_chain": "chain:lfi_to_rce",
-}
 
 
 def critical_outcome_achieved(state: dict) -> bool:
-	"""Return True when any high-impact outcome is already achieved."""
-	achieved = set(state.get("achieved_outcomes", []))
-	confirmed = set(state.get("confirmed_vulns", []))
-	return bool((achieved | confirmed) & HIGH_IMPACT_OUTCOMES)
+    achieved = set(state.get("achieved_outcomes", []))
+    confirmed = set(state.get("confirmed_vulns", []))
+    return bool((achieved | confirmed) & HIGH_IMPACT_OUTCOMES)
 
 
-def _chain_already_attempted(state: dict, target_agent: str) -> bool:
-	"""Return True when a chain marker is already present in tried_payloads."""
-	marker = CHAIN_ATTEMPT_MARKERS.get(target_agent)
-	if not marker:
-		return False
+def _find_next_unvisited(viable: list[str], attempted: list[str], blocked: list[str]) -> str | None:
+    blocked_set = set(blocked)
+    for method in viable:
+        if method not in attempted and method not in blocked_set:
+            return method
+    return None
 
-	tried_payloads = state.get("tried_payloads", {})
-	if not isinstance(tried_payloads, dict):
-		return False
 
-	for payloads in tried_payloads.values():
-		if isinstance(payloads, list) and marker in payloads:
-			return True
-
-	return False
+def _derive_surface_confirmed(confirmed: set[str]) -> set[str]:
+    """Map method-confirmed nodes to surface-confirmed nodes for chain precondition checks."""
+    surface_confirmed = set()
+    for node in confirmed:
+        mapped = MODULE_TO_KG_NODE.get(node, node)
+        surface_confirmed.add(mapped)
+    return surface_confirmed
 
 
 def route_after_agent(state: dict) -> str:
-	"""Conditional-edge router executed after vulnerability/chain agents."""
-	next_agent, _ = evaluate_chain_route(state)
-	return next_agent
+    next_agent, _ = evaluate_chain_route(state)
+    return next_agent
 
 
 def evaluate_chain_route(state: dict) -> tuple[str, dict]:
-	"""Evaluate next route and return a telemetry event for the decision."""
-	iteration_count = state.get("iteration_count", 0)
-	max_iterations = state.get("max_iterations", 30)
-	stop_policy_raw = str(state.get("stop_policy", "impact") or "impact").strip().lower()
-	stop_policy = stop_policy_raw if stop_policy_raw in {"impact", "coverage"} else "impact"
+    iteration_count = state.get("iteration_count", 0)
+    max_iterations = state.get("max_iterations", 30)
+    confirmed = set(state.get("confirmed_vulns", []))
+    achieved = set(state.get("achieved_outcomes", []))
+    known = confirmed | achieved
+    current_surface = state.get("current_surface", "sqli")
+    attempted = state.get("attempted_agents", [])
+    blocked = state.get("blocked_agents", [])
+    failure_agents = state.get("failure_agents", [])
+    kg = AttackKnowledgeGraph()
 
-	if iteration_count >= max_iterations:
-		next_agent = "scorer"
-		return next_agent, {
-			"node": "chaining_router",
-			"iteration": iteration_count,
-			"event": "akg.route.selected",
-			"next_agent": next_agent,
-			"reason": "budget_exhausted",
-		}
+    if iteration_count >= max_iterations:
+        return "scorer", {
+            "node": "chaining_router",
+            "iteration": iteration_count,
+            "event": "akg.route.selected",
+            "next_agent": "scorer",
+            "reason": "budget_exhausted",
+        }
 
-	confirmed = set(state.get("confirmed_vulns", []))
-	achieved = set(state.get("achieved_outcomes", []))
-	known = confirmed | achieved
-	kg = AttackKnowledgeGraph()
+    # Derive surface-level confirmed nodes for chain precondition checks
+    confirmed_for_chains = confirmed | _derive_surface_confirmed(confirmed)
 
-	for node in sorted(confirmed):
-		for edge in kg.get_next_actions(node):
-			if not edge.get("is_chain"):
-				continue
-			if edge.get("target") in known:
-				continue
+    # 1. Check cross-surface chains from confirmed nodes
+    for vuln in sorted(confirmed_for_chains):
+        for edge in kg.get_next_actions(vuln):
+            if edge.get("is_chain") and all(p in known for p in edge.get("preconditions", [])):
+                target_agent = edge.get("target_agent")
+                if target_agent and target_agent not in attempted and target_agent not in blocked:
+                    return target_agent, {
+                        "node": "chaining_router",
+                        "iteration": iteration_count,
+                        "event": "akg.route.selected",
+                        "next_agent": target_agent,
+                        "reason": "chain_ready",
+                        "source": vuln,
+                        "target": edge.get("target"),
+                    }
 
-			preconditions = set(edge.get("preconditions", []))
-			if not preconditions.issubset(confirmed):
-				continue
+    # 2. Fallback loop: if last agent was blocked or failed, try next unexplored method
+    attempted_set = set(attempted)
+    last_agent = attempted[-1] if attempted else None
+    last_status = None
+    if last_agent in blocked:
+        last_status = "BLOCKED"
+    elif last_agent in failure_agents:
+        last_status = "EXECUTION_FAILURE"
+    if last_status in ("BLOCKED", "EXECUTION_FAILURE"):
+        viable = kg.get_viable_methods(current_surface, state.get("observations", {}))
+        next_method = _find_next_unvisited(viable, attempted, blocked)
+        if next_method:
+            return next_method, {
+                "node": "chaining_router",
+                "iteration": iteration_count,
+                "event": "akg.route.selected",
+                "next_agent": next_method,
+                "reason": "fallback_next_method",
+            }
+        # Second pass: any unattempted method on this surface
+        for method in METHODS_BY_SURFACE.get(current_surface, []):
+            if method not in attempted_set and method not in blocked:
+                return method, {
+                    "node": "chaining_router",
+                    "iteration": iteration_count,
+                    "event": "akg.route.selected",
+                    "next_agent": method,
+                    "reason": "fallback_next_method",
+                }
+        return "scorer", {
+            "node": "chaining_router",
+            "iteration": iteration_count,
+            "event": "akg.route.selected",
+            "next_agent": "scorer",
+            "reason": "all_methods_exhausted",
+            "incomplete_reason": "ALL_METHODS_FAILED",
+        }
 
-			target_agent = edge.get("target_agent")
-			if isinstance(target_agent, str) and target_agent and not _chain_already_attempted(state, target_agent):
-				return target_agent, {
-					"node": "chaining_router",
-					"iteration": iteration_count,
-					"event": "akg.route.selected",
-					"next_agent": target_agent,
-					"reason": "chain_ready",
-					"source": node,
-					"target": edge.get("target"),
-				}
+    if critical_outcome_achieved(state):
+        return "scorer", {
+            "node": "chaining_router",
+            "iteration": iteration_count,
+            "event": "akg.route.selected",
+            "next_agent": "scorer",
+            "reason": "critical_outcome",
+        }
 
-	if stop_policy == "impact" and critical_outcome_achieved(state):
-		next_agent = "scorer"
-		return next_agent, {
-			"node": "chaining_router",
-			"iteration": iteration_count,
-			"event": "akg.route.selected",
-			"next_agent": next_agent,
-			"reason": "critical_outcome",
-			"stop_policy": stop_policy,
-		}
-
-	next_agent = "orchestrator"
-	return next_agent, {
-		"node": "chaining_router",
-		"iteration": iteration_count,
-		"event": "akg.route.selected",
-		"next_agent": next_agent,
-		"reason": "no_chain",
-		"stop_policy": stop_policy,
-	}
+    return "orchestrator", {
+        "node": "chaining_router",
+        "iteration": iteration_count,
+        "event": "akg.route.selected",
+        "next_agent": "orchestrator",
+        "reason": "no_chain",
+    }
 
 
 def chaining_router_node(state: dict) -> dict:
-	"""LangGraph node wrapper that emits routing telemetry and sets next_agent."""
-	next_agent, event = evaluate_chain_route(state)
-	return {
-		"next_agent": next_agent,
-		"telemetry_events": [event],
-	}
+    next_agent, event = evaluate_chain_route(state)
+    updates: dict = {"next_agent": next_agent, "telemetry_events": [event]}
+    if event.get("reason") == "all_methods_exhausted":
+        updates["task_result"] = "INCOMPLETE"
+        updates["incomplete_reason"] = event.get("incomplete_reason", "ALL_METHODS_FAILED")
+    return updates

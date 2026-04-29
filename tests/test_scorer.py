@@ -1,28 +1,28 @@
 from copy import deepcopy
 
 from core.scorer import build_score_report, scorer
-from core.state import MODULE_NAMES, MODULE_TO_KG_NODE, SCORE_LABELS, new_default_state
+from core.state import ALL_METHOD_AGENTS, MODULE_TO_KG_NODE, SCORE_LABELS, new_default_state
 
 
-def test_build_score_report_includes_all_modules_in_canonical_order():
+def test_build_score_report_includes_all_methods_in_canonical_order():
     state = new_default_state()
     report = build_score_report(state)
-    assert list(report.module_scores.keys()) == MODULE_NAMES
+    assert list(report.module_scores.keys()) == ALL_METHOD_AGENTS
 
 
 def test_build_score_report_defaults_missing_scores_to_zero():
     state = new_default_state()
     report = build_score_report(state)
-    assert report.module_scores["sqli"].score == 0
-    assert report.module_scores["sqli"].label == SCORE_LABELS[0]
+    assert report.module_scores["sqli_union"].score == 0
+    assert report.module_scores["sqli_union"].label == SCORE_LABELS[0]
 
 
 def test_scorer_clamps_out_of_range_values():
     state = new_default_state()
-    state["scores"] = {"sqli": 99, "cmdi": -5}
+    state["scores"] = {"sqli_union": 99, "ac_idor": -5}
     update = scorer(state)
-    assert update["scores"]["sqli"] == 4
-    assert update["scores"]["cmdi"] == 0
+    assert update["scores"]["sqli_union"] == 4
+    assert update["scores"]["ac_idor"] == 0
 
 
 def test_scorer_returns_end_routing_without_mutating_input():
@@ -42,46 +42,19 @@ def test_build_score_report_matches_agents_shape_keys():
     assert "total_modules_tested" in payload["summary"]
 
 
-def test_chain_path_derived_for_score_4_modules():
+def test_scorer_returns_method_quality_metrics():
     state = new_default_state()
-    state["scores"] = {"sqli": 4, "cmdi": 4}
-    state["current_chain"] = ["sqli_confirmed", "credentials_extracted", "admin_session_obtained"]
-    report = build_score_report(state)
-    # sqli should have a chain path because its KG node is in current_chain
-    assert report.module_scores["sqli"].chain is not None
-    assert "sqli_confirmed" in report.module_scores["sqli"].chain
-    # cmdi's KG node (cmd_injection_confirmed) is NOT in this chain — must be None
-    assert report.module_scores["cmdi"].chain is None
+    update = scorer(state)
+    assert "method_quality_metrics" in update
+    assert "adaptation_rate" in update["method_quality_metrics"]
 
 
-def test_chain_path_uses_canonical_kg_node_names():
-    """Verify MODULE_TO_KG_NODE mapping is used, not naive f-string."""
+def test_scorer_returns_surface_scores():
     state = new_default_state()
-    state["scores"] = {"sqli_blind": 4, "xss_r": 4, "upload": 4}
-    state["current_chain"] = [
-        "blind_sqli_confirmed", "data_exfiltrated",
-    ]
-    report = build_score_report(state)
-    # sqli_blind maps to blind_sqli_confirmed (not sqli_blind_confirmed)
-    assert report.module_scores["sqli_blind"].chain is not None
-    assert "blind_sqli_confirmed" in report.module_scores["sqli_blind"].chain
-    # xss_r maps to xss_reflected_confirmed (not xss_r_confirmed) — not in chain
-    assert report.module_scores["xss_r"].chain is None
-    # upload maps to file_upload_confirmed (not upload_confirmed) — not in chain
-    assert report.module_scores["upload"].chain is None
-
-
-def test_module_to_kg_node_mapping_covers_all_modules():
-    """Every MODULE_NAME must have a corresponding KG node mapping."""
-    for module in MODULE_NAMES:
-        assert module in MODULE_TO_KG_NODE, f"Missing mapping for module: {module}"
-
-
-def test_chain_path_none_for_non_chain_scores():
-    state = new_default_state()
-    state["scores"] = {"xss_r": 3}
-    report = build_score_report(state)
-    assert report.module_scores["xss_r"].chain is None
+    state["scores"] = {"sqli_union": 3}
+    update = scorer(state)
+    assert "surface_scores" in update
+    assert update["surface_scores"]["sqli"] == 3
 
 
 def test_highest_impact_outcome_prefers_rce_over_admin():

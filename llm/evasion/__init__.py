@@ -1,6 +1,6 @@
-"""Adversarial Prompt Evasion Layer (Stage 8)."""
+"""Adversarial Prompt Evasion Layer (reactive LangGraph-native retry)."""
 
-from llm.evasion.pipeline import build_evasion_graph
-from llm.evasion.deepteam_adapters import enhance_with_deepteam
+# DeepTeam integration removed; evasion is now handled reactively in the orchestrator.
+# This module is reserved for future evasion strategy implementations.
 
-__all__ = ["build_evasion_graph", "enhance_with_deepteam"]
+__all__ = []

@@ -96,7 +96,8 @@ def test_info_subcommand_outputs_schema_modules_providers(capsys):
     assert exit_code == 0
     assert "schema_version" in payload
     assert "providers" in payload
-    assert "modules" in payload
+    assert "surfaces" in payload
+    assert "methods" in payload
 
 
 def test_exit_code_2_for_config_error(monkeypatch):

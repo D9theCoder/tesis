@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-EVASION_STRATEGIES: frozenset[str] = frozenset(
-    {"pipeline", "prompt_injection", "roleplay"}
-)
+EVASION_MODES: frozenset[str] = frozenset({"reactive", "proactive", "disabled"})
+
+# Backward-compatible alias
+EVASION_STRATEGIES = EVASION_MODES
 
 
 @dataclass(slots=True)
@@ -28,12 +29,14 @@ class EngagementConfig:
     target_url: str
     provider: str
     level: str
+    surface: str = "sqli"
     iterations: int = 30
     repeats: int = 1
     output_dir: str = "results"
     matrix: bool = False
     providers: list[str] = field(default_factory=list)
     levels: list[str] = field(default_factory=list)
+    surfaces: list[str] = field(default_factory=list)
     report_format: str = "both"
     enriched_reporting: bool = False
     stop_policy: str = "impact"
@@ -41,9 +44,14 @@ class EngagementConfig:
     diagnose: bool = False
     models: dict[str, ModelConfig] = field(default_factory=dict)
 
-    # Stage 8.1 — Evasion integration
+    # Stage 8.1 — Evasion integration (refactored to mode-based)
     evasion_enabled: bool = False
-    evasion_strategy: str = "pipeline"  # see EVASION_STRATEGIES
+    evasion_mode: str = "reactive"  # see EVASION_MODES
+    evasion_max_retries: int = 3
+    evasion_cooldown_threshold: int = 5
+
+    # Legacy fields preserved for backward compatibility
+    evasion_strategy: str = "reactive"
     evasion_attempts_max: int = 3
 
 

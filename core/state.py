@@ -1,15 +1,4 @@
-"""ExploitationState — shared state schema for all agents and graph nodes.
-
-This is the single most critical contract in the framework. Every agent
-receives this state, performs its work, and returns a partial state update.
-No agent modifies state directly — all updates flow through LangGraph's
-immutable state model via reducers.
-
-Field reducer strategy:
-  - Overwrite (default): singleton values set once or replaced each step
-  - Annotated[list, add]: accumulated across agents — new entries are appended
-  - Annotated[list[AnyMessage], add_messages]: LangGraph's standard message reducer
-"""
+"""ExploitationState — shared state schema for all agents and graph nodes."""
 
 from copy import deepcopy
 from typing import Any, TypedDict, Annotated, NotRequired
@@ -19,76 +8,82 @@ from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 
 
+def _merge_dicts(a: dict, b: dict) -> dict:
+    """Reducer for observations: merge b into a without overwriting existing keys to False."""
+    merged = dict(a)
+    merged.update(b)
+    return merged
+
+
 class ExploitationState(TypedDict):
-    # ── Target context (overwrite — set once) ──
+    # Target context
     target_url: str
     security_level: str  # "low" | "medium" | "high"
-    llm_provider: str  # "gemini"
+    llm_provider: str
+    current_surface: str  # "sqli" | "access_control" | "brute_force"
 
-    # ── Discovered attack surface (overwrite — set by recon) ──
-    endpoints: list[dict]  # {url, method, params, csrf_token, module_name}
-    input_vectors: list[dict]  # {param_name, param_type, endpoint_url}
+    # Discovered attack surface
+    endpoints: list[dict]
+    observations: Annotated[dict[str, bool], _merge_dicts]  # precondition signals
 
-    # ── Exploitation progress (accumulate across agents) ──
-    confirmed_vulns: Annotated[list[str], add]  # knowledge graph nodes confirmed
-    achieved_outcomes: Annotated[list[str], add]  # high-impact outcomes reached
-    found_credentials: Annotated[list[dict], add]  # {username, password} pairs
+    # Exploitation progress (accumulate)
+    confirmed_vulns: Annotated[list[str], add]  # AKG node IDs confirmed
+    achieved_outcomes: Annotated[list[str], add]
+    found_credentials: Annotated[list[dict], add]
 
-    # ── Memory (accumulate across iterations) ──
-    tried_payloads: dict[str, list[str]]  # module → list of tried payloads
+    # Memory (accumulate)
+    tried_payloads: dict[str, list[str]]  # agent_id -> tried payloads
     blocked_patterns: Annotated[list[str], add]
     successful_bypasses: Annotated[list[str], add]
 
-    # ── Scoring (overwrite — max score per module) ──
-    scores: dict[str, int]  # module_name → score 0-4
+    # Scoring (overwrite — max score per agent_id)
+    scores: dict[str, int]  # agent_id -> 0-4
 
-    # ── Chain tracking ──
-    current_chain: list[str]  # active path (overwritten each step)
-    chain_history: Annotated[list[dict], add]  # completed chains (accumulate)
+    # Chain tracking
+    current_chain: list[str]
+    chain_history: Annotated[list[dict], add]
 
-    # ── LLM reasoning trace (accumulate with add_messages) ──
+    # LLM reasoning trace
     messages: Annotated[list[AnyMessage], add_messages]
 
-    # ── Guardrail monitoring (accumulate) ──
-    guardrail_activations: Annotated[list[dict], add]  # {provider, context, snippet}
+    # Guardrail monitoring (accumulate)
+    guardrail_activations: Annotated[list[dict], add]
 
-    # ── Stage 8: Adversarial Evasion tracking (accumulate / overwrite) ──
-    evasion_attempts: NotRequired[int]  # total evasion attempts made
-    successful_evasions: NotRequired[int]  # evasions that produced a compliant+valid candidate
-    evasion_enabled: NotRequired[bool]  # whether the evasion layer is active
-    evasion_strategy: NotRequired[str]  # "prompt_injection" | "roleplay" | "pipeline"
-    simulator_model: NotRequired[str | None]  # model name for DeepTeam / evasion gates (e.g. "gpt-4o-mini")
-    simulator_provider: NotRequired[str | None]  # provider for simulator LLM ("openai", "gemini", etc.)
-    max_concurrency: NotRequired[int | None]  # max concurrent DeepTeam simulator API calls
+    # Evasion tracking (overwrite)
+    consecutive_clean_responses: int  # for evasion cooldown tracker
+    evasion_enabled: NotRequired[bool]
+    evasion_max_retries: NotRequired[int]
+    evasion_mode: NotRequired[str]  # "reactive" | "proactive" | "disabled"
+    evasion_cooldown_threshold: NotRequired[int]
+    evasion_attempts: NotRequired[int]
+    successful_evasions: NotRequired[int]
 
-    # ── Rich reporting telemetry (optional, accumulate) ──
+    # Telemetry (accumulate)
     telemetry_events: NotRequired[Annotated[list[dict], add]]
 
-    # ── Orchestration audit trail (accumulate) ──
+    # Orchestration audit trail (accumulate)
     attempted_agents: Annotated[list[str], add]
+    blocked_agents: Annotated[list[str], add]
+    failure_agents: Annotated[list[str], add]
+    akg_path: list[str]
+    fallback_depth: int
 
-    # ── Orchestration policy controls (optional, overwrite) ──
-    stop_policy: NotRequired[str]  # "impact" | "coverage"
-    coverage_target: NotRequired[float]  # 0.0 .. 1.0
-
-    # ── Control flow (overwrite) ──
-    next_agent: str  # overwritten each step by orchestrator/chaining
-    iteration_count: int  # overwritten each step
-    max_iterations: int  # set once at init
+    # Control flow (overwrite)
+    next_agent: str
+    iteration_count: int
+    max_iterations: int
+    task_result: str | None  # None | "SUCCESS" | "INCOMPLETE"
+    incomplete_reason: str | None  # "CONTENT_POLICY" | "ALL_METHODS_FAILED"
 
 
 def _default_state_template() -> dict[str, Any]:
-    """Build a fresh default state template.
-
-    Keeping this in a function avoids accidental shared mutable objects between
-    independent runs when callers need a clean initial state.
-    """
     return {
         "target_url": "",
         "security_level": "low",
         "llm_provider": "gemini",
+        "current_surface": "sqli",
         "endpoints": [],
-        "input_vectors": [],
+        "observations": {},
         "confirmed_vulns": [],
         "achieved_outcomes": [],
         "found_credentials": [],
@@ -100,32 +95,74 @@ def _default_state_template() -> dict[str, Any]:
         "chain_history": [],
         "messages": [],
         "guardrail_activations": [],
+        "consecutive_clean_responses": 0,
+        "evasion_enabled": False,
+        "evasion_max_retries": 3,
+        "evasion_mode": "reactive",
+        "evasion_cooldown_threshold": 5,
         "evasion_attempts": 0,
         "successful_evasions": 0,
-        "evasion_enabled": False,
-        "evasion_strategy": "pipeline",
-        "simulator_model": None,
-        "simulator_provider": None,
-        "max_concurrency": None,
         "telemetry_events": [],
         "attempted_agents": [],
-        "stop_policy": "impact",
-        "coverage_target": 0.70,
+        "blocked_agents": [],
+        "failure_agents": [],
+        "akg_path": [],
+        "fallback_depth": 0,
         "next_agent": "recon",
         "iteration_count": 0,
         "max_iterations": 30,
+        "task_result": None,
+        "incomplete_reason": None,
     }
 
 
-# Backward-compatible exported default snapshot.
 DEFAULT_STATE: dict[str, Any] = _default_state_template()
 
 
 def new_default_state() -> dict[str, Any]:
-    """Return a deep-copied default state for a new engagement."""
     return deepcopy(_default_state_template())
 
-# Module names matching DVWA Coverage Matrix in summary.md
+
+# Surfaces
+SURFACES: list[str] = ["sqli", "access_control", "brute_force"]
+
+# Method agents by surface
+METHODS_BY_SURFACE: dict[str, list[str]] = {
+    "sqli": ["sqli_union", "sqli_error", "sqli_boolean_blind", "sqli_time_blind"],
+    "access_control": ["ac_idor", "ac_vertical_escalation", "ac_force_browse"],
+    "brute_force": ["bf_dictionary", "bf_spray"],
+}
+
+# All method agent IDs
+ALL_METHOD_AGENTS: list[str] = [
+    "sqli_union", "sqli_error", "sqli_boolean_blind", "sqli_time_blind",
+    "ac_idor", "ac_vertical_escalation", "ac_force_browse",
+    "bf_dictionary", "bf_spray",
+]
+
+# Surface to confirmed node prefix mapping
+SURFACE_TO_KG_NODE: dict[str, str] = {
+    "sqli": "sqli_confirmed",
+    "access_control": "access_control_confirmed",
+    "brute_force": "brute_force_confirmed",
+}
+
+# Scoring rubric (0-4)
+SCORE_LABELS: dict[int, str] = {
+    0: "Not Found",
+    1: "Identified",
+    2: "Partial Exploit",
+    3: "Full Exploit",
+    4: "Chain Exploit",
+}
+
+# Security levels
+SECURITY_LEVELS: list[str] = ["low", "medium", "high"]
+
+# LLM providers
+LLM_PROVIDERS: list[str] = ["gemini", "openai", "claude"]
+
+# Backward-compatible module names (deprecated; use ALL_METHOD_AGENTS for new code)
 MODULE_NAMES: list[str] = [
     "sqli",
     "sqli_blind",
@@ -141,10 +178,8 @@ MODULE_NAMES: list[str] = [
     "idor",
 ]
 
-# Canonical mapping from MODULE_NAMES to their corresponding KG_NODES entry
-# in confirmed_vulns.  This is needed because the naming conventions differ
-# (e.g., "sqli_blind" → "blind_sqli_confirmed", not "sqli_blind_confirmed").
 MODULE_TO_KG_NODE: dict[str, str] = {
+    # Legacy module names
     "sqli": "sqli_confirmed",
     "sqli_blind": "blind_sqli_confirmed",
     "xss_r": "xss_reflected_confirmed",
@@ -157,9 +192,18 @@ MODULE_TO_KG_NODE: dict[str, str] = {
     "csrf": "csrf_confirmed",
     "weak_session": "weak_session_confirmed",
     "idor": "idor_confirmed",
+    # 3-surface deep-method agents
+    "sqli_union": "sqli_confirmed",
+    "sqli_error": "sqli_confirmed",
+    "sqli_boolean_blind": "blind_sqli_confirmed",
+    "sqli_time_blind": "blind_sqli_confirmed",
+    "ac_idor": "access_control_confirmed",
+    "ac_vertical_escalation": "access_control_confirmed",
+    "ac_force_browse": "access_control_confirmed",
+    "bf_dictionary": "brute_force_confirmed",
+    "bf_spray": "brute_force_confirmed",
 }
 
-# Knowledge graph node names used in confirmed_vulns
 KG_NODES: list[str] = [
     "sqli_confirmed",
     "blind_sqli_confirmed",
@@ -181,18 +225,3 @@ KG_NODES: list[str] = [
     "data_exfiltrated",
     "session_hijack",
 ]
-
-# Scoring rubric (0-4)
-SCORE_LABELS: dict[int, str] = {
-    0: "Not Found",
-    1: "Identified",
-    2: "Partial Exploit",
-    3: "Full Exploit",
-    4: "Chain Exploit",
-}
-
-# Security levels
-SECURITY_LEVELS: list[str] = ["low", "medium", "high"]
-
-# LLM providers
-LLM_PROVIDERS: list[str] = ["gemini", "openai"]

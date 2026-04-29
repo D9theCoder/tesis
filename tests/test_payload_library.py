@@ -51,7 +51,7 @@ class TestPayloadLibraryGet:
 
     def test_get_known_module_returns_payloads(self):
         lib = PayloadLibrary()
-        payload_set = lib.get("sqli", "low")
+        payload_set = lib.get("sqli_union", "low")
 
         assert payload_set.probe
         assert payload_set.exploit
@@ -67,13 +67,13 @@ class TestPayloadLibraryGet:
 
     def test_get_unknown_security_level_falls_back_to_low(self):
         lib = PayloadLibrary()
-        payload_set = lib.get("sqli", "ultra")
+        payload_set = lib.get("sqli_union", "ultra")
         assert "low" in payload_set.bypass
 
     def test_get_returns_defensive_copy(self):
         lib = PayloadLibrary()
-        payload_a = lib.get("cmdi", "low")
-        payload_b = lib.get("cmdi", "low")
+        payload_a = lib.get("sqli_error", "low")
+        payload_b = lib.get("sqli_error", "low")
 
         payload_a.probe.append("tamper")
         assert "tamper" not in payload_b.probe
@@ -85,38 +85,38 @@ class TestPayloadLibraryRecordTried:
     def test_record_tried_adds_to_empty_state(self):
         """Should add first tried payload for a module."""
         state = {"tried_payloads": {}}
-        update = PayloadLibrary.record_tried(state, "sqli", "1'")
+        update = PayloadLibrary.record_tried(state, "sqli_union", "1'")
 
         assert "tried_payloads" in update
-        assert "sqli" in update["tried_payloads"]
-        assert "1'" in update["tried_payloads"]["sqli"]
+        assert "sqli_union" in update["tried_payloads"]
+        assert "1'" in update["tried_payloads"]["sqli_union"]
 
     def test_record_tried_appends_to_existing(self):
         """Should append to existing module payloads without mutation."""
-        state = {"tried_payloads": {"sqli": ["1'"]}}
-        update = PayloadLibrary.record_tried(state, "sqli", "1 OR 1=1")
+        state = {"tried_payloads": {"sqli_union": ["1'"]}}
+        update = PayloadLibrary.record_tried(state, "sqli_union", "1 OR 1=1")
 
-        assert "1'" in update["tried_payloads"]["sqli"]
-        assert "1 OR 1=1" in update["tried_payloads"]["sqli"]
+        assert "1'" in update["tried_payloads"]["sqli_union"]
+        assert "1 OR 1=1" in update["tried_payloads"]["sqli_union"]
         # Original state should not be mutated
-        assert len(state["tried_payloads"]["sqli"]) == 1
+        assert len(state["tried_payloads"]["sqli_union"]) == 1
 
     def test_record_tried_deduplicates(self):
         """Should not add duplicate payloads."""
-        state = {"tried_payloads": {"sqli": ["1'"]}}
-        update = PayloadLibrary.record_tried(state, "sqli", "1'")
+        state = {"tried_payloads": {"sqli_union": ["1'"]}}
+        update = PayloadLibrary.record_tried(state, "sqli_union", "1'")
 
-        assert update["tried_payloads"]["sqli"].count("1'") == 1
+        assert update["tried_payloads"]["sqli_union"].count("1'") == 1
 
     def test_record_tried_new_module(self):
         """Should create a new module entry if it doesn't exist."""
-        state = {"tried_payloads": {"sqli": ["1'"]}}
-        update = PayloadLibrary.record_tried(state, "xss_r", "<script>alert(1)</script>")
+        state = {"tried_payloads": {"sqli_union": ["1'"]}}
+        update = PayloadLibrary.record_tried(state, "ac_idor", "<script>alert(1)</script>")
 
-        assert "xss_r" in update["tried_payloads"]
-        assert "<script>alert(1)</script>" in update["tried_payloads"]["xss_r"]
+        assert "ac_idor" in update["tried_payloads"]
+        assert "<script>alert(1)</script>" in update["tried_payloads"]["ac_idor"]
         # Existing module should still be present
-        assert "sqli" in update["tried_payloads"]
+        assert "sqli_union" in update["tried_payloads"]
 
 
 class TestPayloadLibraryRecordBypass:

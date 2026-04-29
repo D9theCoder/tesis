@@ -71,6 +71,7 @@ class Verifier:
         confidence = min(1.0, 0.6 + 0.1 * len(matched)) if ok else 0.0
         return VerificationResult(ok=ok, confidence=confidence, evidence=evidence)
 
+    # NOTE: The following XSS-specific Playwright code is reserved for future use.
     def verify_xss_dialog(
         self, url: str, cookies: dict[str, str] | None = None
     ) -> VerificationResult:
@@ -156,3 +157,8 @@ class Verifier:
                     browser.close()
                 except Exception as exc:
                     logger.debug("Browser close raised while cleaning up verifier resources", exc_info=exc)
+
+
+def verify_method_response(agent_id: str, response_text: str, expected_signal: str) -> bool:
+    """Verify if a method's expected signal is present in the response."""
+    return expected_signal.lower() in response_text.lower()

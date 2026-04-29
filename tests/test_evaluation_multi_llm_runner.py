@@ -11,6 +11,7 @@ def test_run_provider_matrix_skips_unsupported_provider(monkeypatch):
         target_url="http://localhost/dvwa",
         providers=["nonexistent_provider"],
         security_levels=["low"],
+        surfaces=["sqli"],
         repeats=1,
     )
 
@@ -27,6 +28,7 @@ def test_run_provider_matrix_deterministic_ordering(monkeypatch):
         target_url,
         security_level,
         llm_provider,
+        surface,
         max_iterations,
         repeat_index,
         stop_policy="impact",
@@ -35,26 +37,22 @@ def test_run_provider_matrix_deterministic_ordering(monkeypatch):
         diagnose=False,
         output_dir=None,
         evasion_enabled=False,
-        evasion_strategy="pipeline",
-        simulator_model=None,
-        simulator_provider=None,
-        max_concurrency=None,
+        evasion_mode="reactive",
+        evasion_max_retries=3,
+        evasion_cooldown_threshold=5,
         live_display=False,
     ):
-        call_order.append((llm_provider, security_level, repeat_index, evasion_enabled, evasion_strategy))
+        call_order.append((llm_provider, surface, security_level, repeat_index, evasion_enabled, evasion_mode))
         return {
-            "schema_version": "stage6.v1",
-            "run_id": f"{llm_provider}-{security_level}-{repeat_index}",
+            "schema_version": "stage8.v1",
+            "run_id": f"{llm_provider}-{surface}-{security_level}-{repeat_index}",
             "status": "success",
             "config": {},
             "timing": {},
-            "final_state": {
-                "evasion_attempts": 0,
-                "successful_evasions": 0,
-            },
+            "final_state": {},
             "report": {
                 "summary": {
-                    "total_modules_tested": 12,
+                    "total_modules_tested": 9,
                     "score_distribution": {},
                     "chain_exploits_achieved": 0,
                     "guardrail_activations": 0,
@@ -72,33 +70,31 @@ def test_run_provider_matrix_deterministic_ordering(monkeypatch):
         target_url="http://localhost/dvwa",
         providers=["gemini"],
         security_levels=["high", "low", "medium"],
+        surfaces=["sqli"],
         repeats=2,
     )
 
     # Levels must be sorted alphabetically: high, low, medium
-    assert call_order[0] == ("gemini", "high", 0, False, "pipeline")
-    assert call_order[1] == ("gemini", "high", 1, False, "pipeline")
-    assert call_order[2] == ("gemini", "low", 0, False, "pipeline")
-    assert call_order[3] == ("gemini", "low", 1, False, "pipeline")
-    assert call_order[4] == ("gemini", "medium", 0, False, "pipeline")
-    assert call_order[5] == ("gemini", "medium", 1, False, "pipeline")
+    assert call_order[0] == ("gemini", "sqli", "high", 0, False, "reactive")
+    assert call_order[1] == ("gemini", "sqli", "high", 1, False, "reactive")
+    assert call_order[2] == ("gemini", "sqli", "low", 0, False, "reactive")
+    assert call_order[3] == ("gemini", "sqli", "low", 1, False, "reactive")
+    assert call_order[4] == ("gemini", "sqli", "medium", 0, False, "reactive")
+    assert call_order[5] == ("gemini", "sqli", "medium", 1, False, "reactive")
 
 
 def test_run_provider_matrix_include_aggregate(monkeypatch):
     def mock_engagement(**kwargs):
         return {
-            "schema_version": "stage6.v1",
-            "run_id": "gemini-low-0",
+            "schema_version": "stage8.v1",
+            "run_id": "gemini-sqli-low-0",
             "status": "success",
-            "config": {"provider": "gemini", "security_level": "low"},
+            "config": {"provider": "gemini", "security_level": "low", "surface": "sqli"},
             "timing": {},
-            "final_state": {
-                "evasion_attempts": 0,
-                "successful_evasions": 0,
-            },
+            "final_state": {},
             "report": {
                 "summary": {
-                    "total_modules_tested": 12,
+                    "total_modules_tested": 9,
                     "score_distribution": {},
                     "chain_exploits_achieved": 0,
                     "guardrail_activations": 0,
@@ -116,6 +112,7 @@ def test_run_provider_matrix_include_aggregate(monkeypatch):
         target_url="http://localhost/dvwa",
         providers=["gemini"],
         security_levels=["low"],
+        surfaces=["sqli"],
         repeats=1,
         include_aggregate=True,
     )
@@ -123,18 +120,18 @@ def test_run_provider_matrix_include_aggregate(monkeypatch):
     assert isinstance(artifacts, list)
     assert isinstance(aggregate, dict)
     assert "by_provider" in aggregate
-    assert "by_provider_level" in aggregate
+    assert "by_provider_surface_level" in aggregate
     assert "totals" in aggregate
 
 
 def test_run_provider_matrix_evasion_forwarding(monkeypatch):
     captured = []
 
-    def mock_engagement(*, evasion_enabled, evasion_strategy, **kwargs):
-        captured.append((evasion_enabled, evasion_strategy))
+    def mock_engagement(*, evasion_enabled, evasion_mode, **kwargs):
+        captured.append((evasion_enabled, evasion_mode))
         return {
-            "schema_version": "stage6.v1",
-            "run_id": "gemini-low-0",
+            "schema_version": "stage8.v1",
+            "run_id": "gemini-sqli-low-0",
             "status": "success",
             "config": {},
             "timing": {},
@@ -150,10 +147,11 @@ def test_run_provider_matrix_evasion_forwarding(monkeypatch):
         target_url="http://localhost/dvwa",
         providers=["gemini"],
         security_levels=["low"],
+        surfaces=["sqli"],
         repeats=1,
         evasion_enabled=True,
-        evasion_strategy="prompt_injection",
+        evasion_mode="proactive",
     )
 
     assert len(captured) == 1
-    assert captured[0] == (True, "prompt_injection")
+    assert captured[0] == (True, "proactive")

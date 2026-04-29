@@ -10,16 +10,16 @@ from urllib.parse import urlparse
 
 import yaml
 
-from core.state import SECURITY_LEVELS
+from core.state import SECURITY_LEVELS, SURFACES
 from llm.provider import SUPPORTED_PROVIDERS
-from tesis.model_config import EngagementConfig, ModelConfig, EVASION_STRATEGIES
+from tesis.model_config import EngagementConfig, ModelConfig, EVASION_MODES
 
 
 class ConfigError(ValueError):
     """Raised when config parsing/validation fails."""
 
 
-_VALID_EVASION_STRATEGIES: frozenset[str] = EVASION_STRATEGIES
+_VALID_EVASION_MODES: frozenset[str] = EVASION_MODES
 
 _ENV_REF_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)}")
 
@@ -100,6 +100,7 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "PROVIDER": "provider",
         "LEVEL": "level",
         "SECURITY_LEVEL": "level",
+        "SURFACE": "surface",
         "ITERATIONS": "iterations",
         "MAX_ITERATIONS": "iterations",
         "REPEATS": "repeats",
@@ -107,14 +108,17 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "MATRIX": "matrix",
         "PROVIDERS": "providers",
         "LEVELS": "levels",
+        "SURFACES": "surfaces",
         "FORMAT": "report_format",
         "ENRICHED_REPORTING": "enriched_reporting",
         "STOP_POLICY": "stop_policy",
         "COVERAGE_TARGET": "coverage_target",
         "DIAGNOSE": "diagnose",
         "EVASION_ENABLED": "evasion_enabled",
+        "EVASION_MODE": "evasion_mode",
         "EVASION_STRATEGY": "evasion_strategy",
-        "EVASION_ATTEMPTS_MAX": "evasion_attempts_max",
+        "EVASION_MAX_RETRIES": "evasion_max_retries",
+        "EVASION_COOLDOWN_THRESHOLD": "evasion_cooldown_threshold",
     }
 
     for key, raw_value in os.environ.items():
@@ -138,14 +142,14 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
             continue
 
         value: Any = raw_value
-        if mapped in {"iterations", "repeats"}:
+        if mapped in {"iterations", "repeats", "evasion_max_retries", "evasion_cooldown_threshold"}:
             try:
                 value = int(raw_value)
             except ValueError as exc:
                 raise ConfigError(f"Invalid integer value for {key}: {raw_value}") from exc
         elif mapped in {"matrix", "enriched_reporting", "diagnose", "evasion_enabled"}:
             value = _parse_bool(raw_value)
-        elif mapped in {"providers", "levels"}:
+        elif mapped in {"providers", "levels", "surfaces"}:
             value = _parse_csv(raw_value)
         elif mapped == "coverage_target":
             try:
@@ -175,19 +179,23 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         "target_url": "target_url",
         "provider": "provider",
         "level": "level",
+        "surface": "surface",
         "iterations": "iterations",
         "repeats": "repeats",
         "output_dir": "output_dir",
         "providers": "providers",
         "levels": "levels",
+        "surfaces": "surfaces",
         "format": "report_format",
         "enriched_reporting": "enriched_reporting",
         "stop_policy": "stop_policy",
         "coverage_target": "coverage_target",
         "diagnose": "diagnose",
         "evasion_enabled": "evasion_enabled",
+        "evasion_mode": "evasion_mode",
         "evasion_strategy": "evasion_strategy",
-        "evasion_attempts_max": "evasion_attempts_max",
+        "evasion_max_retries": "evasion_max_retries",
+        "evasion_cooldown_threshold": "evasion_cooldown_threshold",
     }
 
     bool_flags = {"matrix", "enriched_reporting", "diagnose", "evasion_enabled"}
@@ -290,6 +298,11 @@ def _parse_model_configs(raw_models: Mapping[str, Any]) -> dict[str, ModelConfig
     return models
 
 
+def _validate_surface(surface: str) -> None:
+    if surface not in SURFACES:
+        raise ConfigError(f"Unsupported surface: {surface}. Must be one of: {', '.join(SURFACES)}")
+
+
 def _validate_engagement_config(config: EngagementConfig) -> None:
     validate_target_url(config.target_url)
     if config.iterations <= 0:
@@ -303,13 +316,18 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
     if not (0.0 <= config.coverage_target <= 1.0):
         raise ConfigError("coverage_target must be between 0.0 and 1.0")
 
-    if config.evasion_enabled and config.evasion_strategy not in _VALID_EVASION_STRATEGIES:
+    _validate_surface(config.surface)
+
+    evasion_mode = str(getattr(config, "evasion_mode", config.evasion_strategy)).strip().lower()
+    if config.evasion_enabled and evasion_mode not in _VALID_EVASION_MODES:
         raise ConfigError(
-            f"Unsupported evasion strategy: {config.evasion_strategy}. "
-            f"Must be one of: {', '.join(sorted(_VALID_EVASION_STRATEGIES))}"
+            f"Unsupported evasion mode: {evasion_mode}. "
+            f"Must be one of: {', '.join(sorted(_VALID_EVASION_MODES))}"
         )
-    if config.evasion_attempts_max <= 0:
-        raise ConfigError("evasion_attempts_max must be > 0")
+    if config.evasion_max_retries <= 0:
+        raise ConfigError("evasion_max_retries must be > 0")
+    if config.evasion_cooldown_threshold <= 0:
+        raise ConfigError("evasion_cooldown_threshold must be > 0")
 
     if config.matrix:
         if not config.providers:
@@ -320,6 +338,8 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
             validate_provider(provider)
         for level in config.levels:
             validate_level(level)
+        for surface in config.surfaces:
+            _validate_surface(surface)
     else:
         validate_provider(config.provider)
         validate_level(config.level)
@@ -344,28 +364,62 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         or merged.get("default_security_level")
         or "low"
     ).strip().lower()
+    surface = str(
+        merged.get("surface")
+        or merged.get("default_surface")
+        or "sqli"
+    ).strip().lower()
 
     providers = [str(p).strip().lower() for p in merged.get("providers", merged.get("llm_providers", []))]
     levels = [str(l).strip().lower() for l in merged.get("levels", merged.get("security_levels", []))]
+    surfaces = [str(s).strip().lower() for s in merged.get("surfaces", [])]
+
+    # Parse nested evasion config block if present
+    evasion_cfg = merged.get("evasion") or {}
+    evasion_enabled = _coerce_bool(merged.get("evasion_enabled", evasion_cfg.get("enabled", False)))
+    evasion_mode = str(
+        merged.get("evasion_mode")
+        or evasion_cfg.get("mode")
+        or merged.get("evasion_strategy")
+        or evasion_cfg.get("strategy")
+        or "reactive"
+    ).strip().lower()
+    evasion_max_retries = int(
+        merged.get("evasion_max_retries")
+        or evasion_cfg.get("max_retries")
+        or merged.get("evasion_attempts_max")
+        or evasion_cfg.get("attempts_max")
+        or 3
+    )
+    evasion_cooldown_threshold = int(
+        merged.get("evasion_cooldown_threshold")
+        or evasion_cfg.get("cooldown_threshold")
+        or 5
+    )
 
     config = EngagementConfig(
         target_url=str(merged.get("target_url", "")).strip(),
         provider=provider,
         level=level,
+        surface=surface,
         iterations=int(merged.get("iterations") or merged.get("max_iterations") or merged.get("default_max_iterations") or 30),
         repeats=int(merged.get("repeats", 1)),
         output_dir=str(merged.get("output_dir", "results")).strip(),
         matrix=_coerce_bool(merged.get("matrix", False)),
         providers=providers or [provider],
         levels=levels or [level],
+        surfaces=surfaces or (["sqli", "access_control", "brute_force"] if _coerce_bool(merged.get("matrix", False)) else [surface]),
         report_format=str(merged.get("report_format") or merged.get("format") or "both").strip().lower(),
         enriched_reporting=_coerce_bool(merged.get("enriched_reporting", False)),
         stop_policy=str(merged.get("stop_policy") or "impact").strip().lower(),
         coverage_target=float(merged.get("coverage_target") or 0.70),
         diagnose=_coerce_bool(merged.get("diagnose", False)),
-        evasion_enabled=_coerce_bool(merged.get("evasion_enabled", False)),
-        evasion_strategy=str(merged.get("evasion_strategy") or "pipeline").strip().lower(),
-        evasion_attempts_max=int(merged.get("evasion_attempts_max", 3)),
+        evasion_enabled=evasion_enabled,
+        evasion_mode=evasion_mode,
+        evasion_max_retries=evasion_max_retries,
+        evasion_cooldown_threshold=evasion_cooldown_threshold,
+        evasion_strategy=str(merged.get("evasion_strategy") or evasion_mode).strip().lower(),
+        evasion_attempts_max=int(merged.get("evasion_attempts_max", evasion_max_retries)),
         models=_parse_model_configs(merged.get("models", {})),
     )
 

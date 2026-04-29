@@ -1,57 +1,43 @@
-"""Tests for BaseAgent Stage 8 evasion helper."""
-
-from __future__ import annotations
+"""Tests for BaseAgent (3-surface deep-method)."""
 
 from typing import Any
 
-from agents.base_agent import BaseAgent
-import llm.evasion.pipeline as pipeline_module
+from agents.base_agent import BaseAgent, _coerce_bool
 
 
 class DummyAgent(BaseAgent):
-    module_name = "dummy"
+    agent_id = "sqli_union"
+    surface = "sqli"
 
     def run(self, state: dict[str, Any]) -> dict[str, Any]:
         return {}
 
 
-def test_enhance_prompt_passes_evasion_strategy_to_pipeline(monkeypatch):
-    captured: dict[str, Any] = {}
+def test_coerce_bool():
+    assert _coerce_bool(True) is True
+    assert _coerce_bool(False) is False
+    assert _coerce_bool("true") is True
+    assert _coerce_bool("false") is False
+    assert _coerce_bool(1) is True
+    assert _coerce_bool(0) is False
+    assert _coerce_bool(None) is False
 
-    class FakeGraph:
-        def invoke(self, payload):
-            captured.update(payload)
-            return {"final_prompt": "enhanced"}
 
-    monkeypatch.setattr(pipeline_module, "build_evasion_graph", lambda: FakeGraph())
-
+def test_enhance_prompt_is_noop():
     agent = DummyAgent()
-    result = agent.enhance_prompt(
-        {
-            "evasion_enabled": True,
-            "evasion_strategy": "base64",
-        },
-        "base prompt",
-    )
-
-    assert result == "enhanced"
-    assert captured["evasion_strategy"] == "base64"
-
-
-def test_enhance_prompt_treats_string_false_as_disabled(monkeypatch):
-    class FakeGraph:
-        def invoke(self, payload):
-            raise AssertionError("evasion graph should not be invoked")
-
-    monkeypatch.setattr(pipeline_module, "build_evasion_graph", lambda: FakeGraph())
-
-    agent = DummyAgent()
-    result = agent.enhance_prompt(
-        {
-            "evasion_enabled": "false",
-            "evasion_strategy": "base64",
-        },
-        "base prompt",
-    )
-
+    result = agent.enhance_prompt({"evasion_enabled": True}, "base prompt")
     assert result == "base prompt"
+
+
+def test_probe_returns_dict():
+    agent = DummyAgent()
+    result = agent.probe({})
+    assert isinstance(result, dict)
+    assert "observations" in result
+
+
+def test_emit_telemetry():
+    agent = DummyAgent()
+    result = agent._emit_telemetry({"iteration_count": 5}, "test", {"status": "ok"})
+    assert "telemetry_events" in result
+    assert result["telemetry_events"][0]["node"] == "sqli_union"

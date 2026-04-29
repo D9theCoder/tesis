@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from core.state import MODULE_NAMES, SECURITY_LEVELS
+from core.state import SURFACES, SECURITY_LEVELS, ALL_METHOD_AGENTS
 from evaluation.multi_llm_runner import run_provider_matrix
 from evaluation.reporter import write_json_report, write_markdown_report
 from evaluation.runner import run_single_engagement
@@ -36,7 +36,7 @@ from tesis.report_formatters import (
 
 
 LOGGER = logging.getLogger("tesis.cli")
-SCHEMA_VERSION = "stage6.v1"
+SCHEMA_VERSION = "stage8.v1"
 
 EXIT_OK = 0
 EXIT_RUNTIME_ERROR = 1
@@ -98,19 +98,23 @@ def _print_resolved_config(config: Any) -> None:
         "target_url": config.target_url,
         "provider": config.provider,
         "level": config.level,
+        "surface": config.surface,
         "iterations": config.iterations,
         "repeats": config.repeats,
         "output_dir": config.output_dir,
         "matrix": config.matrix,
         "providers": config.providers,
         "levels": config.levels,
+        "surfaces": config.surfaces,
         "format": config.report_format,
         "enriched_reporting": config.enriched_reporting,
         "stop_policy": config.stop_policy,
         "coverage_target": config.coverage_target,
         "diagnose": config.diagnose,
         "evasion_enabled": config.evasion_enabled,
-        "evasion_strategy": config.evasion_strategy,
+        "evasion_mode": config.evasion_mode,
+        "evasion_max_retries": config.evasion_max_retries,
+        "evasion_cooldown_threshold": config.evasion_cooldown_threshold,
         "models": masked_models,
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
@@ -139,34 +143,6 @@ def handle_run(args: argparse.Namespace) -> int:
         _print_resolved_config(config)
         return EXIT_OK
 
-    if config.evasion_strategy != "pipeline" and not config.evasion_enabled:
-        LOGGER.warning(
-            "--evasion-strategy is set but --evasion-enabled is false; "
-            "strategy will be ignored by the runner"
-        )
-
-    # Stage 8 simulator configuration: extract simulator model config for
-    # DeepTeam attack generation and pipeline compliance/validity gates.
-    # Supports any provider (openai, gemini, etc.) via models.simulator or
-    # the legacy models.openai fallback.
-    simulator_cfg = config.models.get("simulator") or config.models.get("openai")
-    simulator_model = simulator_cfg.model_name if simulator_cfg else None
-    simulator_provider = simulator_cfg.provider if simulator_cfg else "openai"
-    max_concurrency = None
-    if simulator_cfg:
-        raw_mc = simulator_cfg.extra.get("max_concurrency")
-        if raw_mc is not None:
-            try:
-                max_concurrency = int(raw_mc)
-            except (ValueError, TypeError):
-                max_concurrency = None
-    if simulator_cfg and simulator_cfg.api_key and not simulator_cfg.api_key.startswith("your_"):
-        if simulator_provider == "openai":
-            os.environ["OPENAI_API_KEY"] = simulator_cfg.api_key
-        elif simulator_provider == "gemini":
-            os.environ["GOOGLE_API_KEY"] = simulator_cfg.api_key
-            os.environ["GEMINI_API_KEY"] = simulator_cfg.api_key
-
     if not _preflight_target_reachable(config.target_url):
         print(f"Target unreachable: {config.target_url}")
         return EXIT_TARGET_UNREACHABLE
@@ -180,6 +156,7 @@ def handle_run(args: argparse.Namespace) -> int:
                 target_url=config.target_url,
                 providers=config.providers,
                 security_levels=config.levels,
+                surfaces=config.surfaces,
                 repeats=config.repeats,
                 max_iterations=config.iterations,
                 stop_policy=config.stop_policy,
@@ -187,10 +164,9 @@ def handle_run(args: argparse.Namespace) -> int:
                 enriched_reporting=config.enriched_reporting,
                 diagnose=config.diagnose,
                 evasion_enabled=config.evasion_enabled,
-                evasion_strategy=config.evasion_strategy,
-                simulator_model=simulator_model,
-                simulator_provider=simulator_provider,
-                max_concurrency=max_concurrency,
+                evasion_mode=config.evasion_mode,
+                evasion_max_retries=config.evasion_max_retries,
+                evasion_cooldown_threshold=config.evasion_cooldown_threshold,
                 output_dir=str(output_dir / "runs"),
                 include_aggregate=True,
                 live_display=args.live,
@@ -226,6 +202,7 @@ def handle_run(args: argparse.Namespace) -> int:
             target_url=config.target_url,
             security_level=config.level,
             llm_provider=config.provider,
+            surface=config.surface,
             max_iterations=config.iterations,
             repeat_index=0,
             stop_policy=config.stop_policy,
@@ -233,10 +210,9 @@ def handle_run(args: argparse.Namespace) -> int:
             enriched_reporting=config.enriched_reporting,
             diagnose=config.diagnose,
             evasion_enabled=config.evasion_enabled,
-            evasion_strategy=config.evasion_strategy,
-            simulator_model=simulator_model,
-            simulator_provider=simulator_provider,
-            max_concurrency=max_concurrency,
+            evasion_mode=config.evasion_mode,
+            evasion_max_retries=config.evasion_max_retries,
+            evasion_cooldown_threshold=config.evasion_cooldown_threshold,
             output_dir=str(output_dir / "runs"),
             live_display=args.live,
         )
@@ -273,7 +249,8 @@ def handle_info(args: argparse.Namespace) -> int:
     info = {
         "schema_version": SCHEMA_VERSION,
         "providers": list(SUPPORTED_PROVIDERS),
-        "modules": list(MODULE_NAMES),
+        "surfaces": list(SURFACES),
+        "methods": list(ALL_METHOD_AGENTS),
         "security_levels": list(SECURITY_LEVELS),
     }
     print(json.dumps(info, indent=2, sort_keys=True))
@@ -405,27 +382,22 @@ def handle_validate(args: argparse.Namespace) -> int:
         return EXIT_TARGET_UNREACHABLE
 
     # Import here to avoid circular dependencies at module load time
-    from agents.state_utils import new_default_state
-    from core.state import MODULE_NAMES, MODULE_TO_KG_NODE
-    from foundation.session_manager import DVWASession
+    from core.state import new_default_state
 
     target_url = config.target_url
     level = args.level
 
     # Map of runtime agent names to their module functions
     agent_registry = {
-        "sqli_agent": ("agents.tier1.sqli_agent", "sqli_agent"),
-        "sqli_blind_agent": ("agents.tier1.sqli_blind_agent", "sqli_blind_agent"),
-        "xss_reflected_agent": ("agents.tier1.xss_reflected_agent", "xss_reflected_agent"),
-        "xss_stored_agent": ("agents.tier1.xss_stored_agent", "xss_stored_agent"),
-        "xss_dom_agent": ("agents.tier1.xss_dom_agent", "xss_dom_agent"),
-        "cmdi_agent": ("agents.tier1.cmdi_agent", "cmdi_agent"),
-        "brute_agent": ("agents.tier2.brute_agent", "brute_agent"),
-        "lfi_agent": ("agents.tier2.lfi_agent", "lfi_agent"),
-        "upload_agent": ("agents.tier2.upload_agent", "upload_agent"),
-        "csrf_agent": ("agents.tier2.csrf_agent", "csrf_agent"),
-        "weak_session_agent": ("agents.tier2.weak_session_agent", "weak_session_agent"),
-        "idor_agent": ("agents.tier2.idor_agent", "idor_agent"),
+        "sqli_union_agent": ("agents.sqli.sqli_union_agent", "sqli_union_agent"),
+        "sqli_error_agent": ("agents.sqli.sqli_error_agent", "sqli_error_agent"),
+        "sqli_boolean_blind_agent": ("agents.sqli.sqli_boolean_blind_agent", "sqli_boolean_blind_agent"),
+        "sqli_time_blind_agent": ("agents.sqli.sqli_time_blind_agent", "sqli_time_blind_agent"),
+        "ac_idor_agent": ("agents.access_control.ac_idor_agent", "ac_idor_agent"),
+        "ac_vertical_escalation_agent": ("agents.access_control.ac_vertical_escalation_agent", "ac_vertical_escalation_agent"),
+        "ac_force_browse_agent": ("agents.access_control.ac_force_browse_agent", "ac_force_browse_agent"),
+        "bf_dictionary_agent": ("agents.brute_force.bf_dictionary_agent", "bf_dictionary_agent"),
+        "bf_spray_agent": ("agents.brute_force.bf_spray_agent", "bf_spray_agent"),
     }
 
     agents_to_run = []
@@ -447,16 +419,9 @@ def handle_validate(args: argparse.Namespace) -> int:
         agent_func = getattr(module, func_name)
 
         state = {
+            **new_default_state(),
             "target_url": target_url,
             "security_level": level,
-            "endpoints": [],
-            "tried_payloads": {},
-            "scores": {},
-            "iteration_count": 0,
-            "max_iterations": 30,
-            "confirmed_vulns": [],
-            "achieved_outcomes": [],
-            "found_credentials": [],
         }
         try:
             result = agent_func(state)
@@ -499,11 +464,13 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--config", default="config.yaml", help="Path to YAML config file")
     run_parser.add_argument("--target", dest="target", help="Target URL")
     run_parser.add_argument("--level", choices=SECURITY_LEVELS, help="Security level")
+    run_parser.add_argument("--surface", choices=SURFACES, help="Attack surface to test")
     run_parser.add_argument("--provider", help="LLM provider")
     run_parser.add_argument("--iterations", type=int, help="Max iterations")
     run_parser.add_argument("--matrix", action="store_true", help="Run provider/level matrix")
     run_parser.add_argument("--providers", nargs="+", help="Providers for matrix mode")
     run_parser.add_argument("--levels", nargs="+", help="Security levels for matrix mode")
+    run_parser.add_argument("--surfaces", nargs="+", help="Surfaces for matrix mode")
     run_parser.add_argument("--repeats", type=int, help="Repeats per provider/level")
     run_parser.add_argument("--output-dir", dest="output_dir", help="Output directory")
     run_parser.add_argument("--format", choices=["json", "markdown", "both"], help="Output format")
@@ -521,10 +488,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--diagnose", action="store_true", help="Attach quality diagnostics in report summary")
     run_parser.add_argument("--evasion-enabled", action="store_true", help="Enable adversarial prompt evasion layer")
     run_parser.add_argument(
-        "--evasion-strategy",
-        choices=["pipeline", "prompt_injection", "roleplay"],
-        help="Evasion strategy when evasion is enabled",
+        "--evasion-mode",
+        choices=["reactive", "proactive", "disabled"],
+        help="Evasion mode when evasion is enabled",
     )
+    run_parser.add_argument("--evasion-max-retries", type=int, default=3, help="Max evasion retries per prompt")
+    run_parser.add_argument("--evasion-cooldown-threshold", type=int, default=5, help="Cooldown threshold for reactive evasion")
     run_parser.add_argument("--dry-run", action="store_true", help="Validate config and exit")
     run_parser.add_argument("--no-summary", action="store_true", help="Suppress stdout run summary")
     run_parser.add_argument("--verbose", action="store_true", help="Enable debug logging")

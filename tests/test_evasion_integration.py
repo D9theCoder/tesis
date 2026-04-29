@@ -8,47 +8,47 @@ class TestEvasionConfigLoading:
         config_path.write_text("target_url: http://localhost/dvwa\n")
         config = load_and_resolve_config(config_path=str(config_path), cli_args={})
         assert config.evasion_enabled is False
-        assert config.evasion_strategy == "pipeline"
+        assert config.evasion_mode == "reactive"
 
     def test_evasion_from_yaml(self, tmp_path):
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
             "target_url: http://localhost/dvwa\n"
             "evasion_enabled: true\n"
-            "evasion_strategy: prompt_injection\n"
+            "evasion_mode: proactive\n"
         )
         config = load_and_resolve_config(config_path=str(config_path), cli_args={})
         assert config.evasion_enabled is True
-        assert config.evasion_strategy == "prompt_injection"
+        assert config.evasion_mode == "proactive"
 
     def test_evasion_cli_override(self, tmp_path):
         config_path = tmp_path / "config.yaml"
         config_path.write_text("target_url: http://localhost/dvwa\n")
         config = load_and_resolve_config(
             config_path=str(config_path),
-            cli_args={"evasion_enabled": True, "evasion_strategy": "roleplay"},
+            cli_args={"evasion_enabled": True, "evasion_mode": "disabled"},
         )
         assert config.evasion_enabled is True
-        assert config.evasion_strategy == "roleplay"
+        assert config.evasion_mode == "disabled"
 
-    def test_invalid_evasion_strategy_raises(self, tmp_path):
+    def test_invalid_evasion_mode_raises(self, tmp_path):
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
             "target_url: http://localhost/dvwa\n"
             "evasion_enabled: true\n"
-            "evasion_strategy: invalid_strategy\n"
+            "evasion_mode: invalid_mode\n"
         )
-        with pytest.raises(ConfigError, match="Unsupported evasion strategy"):
+        with pytest.raises(ConfigError, match="Unsupported evasion mode"):
             load_and_resolve_config(config_path=str(config_path), cli_args={})
 
     def test_evasion_env_overrides(self, tmp_path, monkeypatch):
         config_path = tmp_path / "config.yaml"
         config_path.write_text("target_url: http://localhost/dvwa\n")
         monkeypatch.setenv("TESIS_EVASION_ENABLED", "true")
-        monkeypatch.setenv("TESIS_EVASION_STRATEGY", "roleplay")
+        monkeypatch.setenv("TESIS_EVASION_STRATEGY", "proactive")
         config = load_and_resolve_config(config_path=str(config_path), cli_args={})
         assert config.evasion_enabled is True
-        assert config.evasion_strategy == "roleplay"
+        assert config.evasion_mode == "proactive"
 
 
 class TestEvasionStatePropagation:
@@ -59,7 +59,7 @@ class TestEvasionStatePropagation:
         # Mock the LangGraph framework to capture init_state
         captured_states = []
 
-        def mock_build_framework(*, llm_provider):
+        def mock_build_framework(*, llm_provider, surface="sqli"):
             class FakeApp:
                 def invoke(self, state):
                     captured_states.append(state)
@@ -97,22 +97,22 @@ class TestEvasionStatePropagation:
             security_level="low",
             llm_provider="gemini",
             evasion_enabled=True,
-            evasion_strategy="prompt_injection",
+            evasion_mode="reactive",
         )
 
         assert len(captured_states) == 1
         init_state = captured_states[0]
         assert init_state["evasion_enabled"] is True
-        assert init_state["evasion_strategy"] == "prompt_injection"
+        assert init_state["evasion_mode"] == "reactive"
         assert artifact["config"]["evasion_enabled"] is True
-        assert artifact["final_state"]["evasion_attempts"] == 2
+        assert artifact["config"]["evasion_mode"] == "reactive"
 
     def test_runner_evasion_defaults_when_omitted(self, monkeypatch):
         from evaluation.runner import run_single_engagement
 
         captured_states = []
 
-        def mock_build_framework(*, llm_provider):
+        def mock_build_framework(*, llm_provider, surface="sqli"):
             class FakeApp:
                 def invoke(self, state):
                     captured_states.append(state)
@@ -153,7 +153,7 @@ class TestEvasionStatePropagation:
 
         init_state = captured_states[0]
         assert init_state["evasion_enabled"] is False
-        assert init_state["evasion_strategy"] == "pipeline"
+        assert init_state["evasion_mode"] == "reactive"
 
 
 class TestEvasionReportFormatting:
