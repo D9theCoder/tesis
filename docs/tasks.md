@@ -556,3 +556,86 @@ llm_response = target_llm.invoke(safe_evasion_prompt)
 
 **Docs:**
 - `docs/stage-8.1-jailbreak-integration.implementation-plan.md`
+
+---
+
+## Stage 9 — Refactor Agent Layer + Infrastructure Hardening (Week 12)
+**Goal:** Fix the single critical blocker identified in the compliance audit (all 9 method agents are non-functional stubs) and harden core infrastructure gaps.
+
+**Context:** The audit (`docs/audit-codebase-compliance-report.md`) evaluated the codebase against `AGENTS.md` and `docs/summary.md`. The core infrastructure (orchestrator, state, AKG, graph builder, chaining, CLI, evasion) is solid. The **only critical blocker** is that all 9 method agents log payloads locally but never send real HTTP requests to DVWA. Additionally, several infrastructure gaps were identified.
+
+**Stage 9 is split into two parallel workstreams:**
+
+### Stage 9A — Real Method Agent Execution
+**Goal:** Rewrite all 9 method agents with real PROBE → EXPLOIT → CHAIN CHECK pipelines using `DVWASession`.
+
+**Critical violations to fix:**
+- No HTTP requests (zero imports of `httpx`, `DVWASession`, or `http_client`)
+- Fake PROBE stage (`observations[key] = True` set unconditionally)
+- Fake EXPLOIT stage (`exploit_triggered = True` after local iteration; score 3 granted if `security_level == "low"`)
+- Wrong AKG confirmed node IDs (e.g., `sqli_union_confirmed` instead of `sqli_confirmed`)
+- Fake CHAIN CHECK (no AKG query; hardcoded outcome if `score >= 3`)
+- No `BaseAgent` inheritance
+- Fake `found_credentials` (splits payload string on `:` instead of parsing DVWA response)
+
+**Files to modify:**
+- `agents/sqli/sqli_union_agent.py`
+- `agents/sqli/sqli_error_agent.py`
+- `agents/sqli/sqli_boolean_blind_agent.py`
+- `agents/sqli/sqli_time_blind_agent.py`
+- `agents/access_control/ac_idor_agent.py`
+- `agents/access_control/ac_vertical_escalation_agent.py`
+- `agents/access_control/ac_force_browse_agent.py`
+- `agents/brute_force/bf_dictionary_agent.py`
+- `agents/brute_force/bf_spray_agent.py`
+- `agents/state_utils.py` — add method-agent endpoint mappings
+- `foundation/payload_library.py` — refine payloads for DVWA realism
+
+**Files to create:**
+- `tests/test_sqli_union_agent.py`
+- `tests/test_sqli_error_agent.py`
+- `tests/test_sqli_boolean_blind_agent.py`
+- `tests/test_sqli_time_blind_agent.py`
+- `tests/test_ac_idor_agent.py`
+- `tests/test_ac_vertical_escalation_agent.py`
+- `tests/test_ac_force_browse_agent.py`
+- `tests/test_bf_dictionary_agent.py`
+- `tests/test_bf_spray_agent.py`
+
+**Implementation plan:** `docs/stage-9a-real-method-agents.implementation-plan.md`
+
+### Stage 9B — Core Infrastructure Hardening
+**Goal:** Fix AKG intermediate chain nodes, convert `GuardrailMonitor` to a class, remove legacy prompt stubs, align scorer output with spec, and tighten chain precondition checks.
+
+**Files to modify:**
+- `core/knowledge_graph.py` — add `unauthenticated`, `authenticated_session`, `admin_session_obtained` edges
+- `core/chaining_coordinator.py` — check preconditions against `confirmed_vulns` only
+- `core/scorer.py` — return nested `surface_scores` + `summary` per spec
+- `llm/guardrail_monitor.py` — convert to `GuardrailMonitor` class
+- `llm/prompts/__init__.py` — remove legacy stub exports
+- `llm/prompts/sqli_prompt.py` — delete legacy stub
+- `llm/prompts/idor_prompt.py` — delete legacy stub
+- `llm/prompts/brute_prompt.py` — delete legacy stub
+- `llm/prompts/sqli_blind_prompt.py` — delete legacy stub
+
+**Files to create:**
+- `tests/test_guardrail_monitor_class.py`
+- `tests/test_scorer_output_shape.py`
+
+**Implementation plan:** `docs/stage-9b-infrastructure-hardening.implementation-plan.md`
+
+### Stage 9 Acceptance Criteria (combined)
+- [ ] All 9 agents send real HTTP requests via `DVWASession`.
+- [ ] All 9 agents parse HTTP responses for preconditions and exploitation evidence.
+- [ ] All 9 agents append correct surface-level confirmed nodes.
+- [ ] All 9 agents query `AttackKnowledgeGraph.get_next_actions()` during CHAIN CHECK.
+- [ ] AKG contains `unauthenticated`, `authenticated_session`, `admin_session_obtained` with correct edges.
+- [ ] `GuardrailMonitor` class exists with `check()`, `get_rate()`, `summary()`.
+- [ ] Legacy prompt stubs deleted and no longer exported.
+- [ ] `scorer()` returns nested `surface_scores` + `summary` per spec.
+- [ ] Chain preconditions checked against `confirmed_vulns` only.
+- [ ] All new and existing tests pass.
+
+**Suggested branch names:**
+- `feat/stage9a-real-method-agents`
+- `feat/stage9b-infrastructure-hardening`

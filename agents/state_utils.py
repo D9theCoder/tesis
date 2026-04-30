@@ -99,6 +99,15 @@ def module_endpoint(state: dict[str, Any], module_name: str, fallback_path: str)
         "csrf": "/vulnerabilities/csrf/",
         "weak_session": "/vulnerabilities/weak_id/",
         "idor": "/vulnerabilities/idor/",
+        "sqli_union": "/vulnerabilities/sqli/",
+        "sqli_error": "/vulnerabilities/sqli/",
+        "sqli_boolean_blind": "/vulnerabilities/sqli_blind/",
+        "sqli_time_blind": "/vulnerabilities/sqli_blind/",
+        "ac_idor": "/vulnerabilities/authbypass/",
+        "ac_vertical_escalation": "/vulnerabilities/authbypass/",
+        "ac_force_browse": "/vulnerabilities/authbypass/",
+        "bf_dictionary": "/vulnerabilities/brute/",
+        "bf_spray": "/vulnerabilities/brute/",
     }
 
     endpoints = state.get("endpoints", [])

