@@ -134,6 +134,7 @@ def make_update(
     achieved_outcomes: list[str] | None = None,
     found_credentials: list[dict[str, str]] | None = None,
     next_agent: str = "orchestrator",
+    telemetry_events: list[dict] | None = None,
 ) -> dict[str, Any]:
     update: dict[str, Any] = {
         "scores": merge_scores(state, module_name, score),
@@ -142,13 +143,44 @@ def make_update(
         "next_agent": next_agent,
     }
 
+    # confirmed_vulns, achieved_outcomes, and found_credentials all use
+    # Annotated[list, add] reducers. We must filter out items already
+    # present in state to avoid permanent duplication across agent runs.
     if confirmed_vulns:
-        dedup_confirmed = list(dict.fromkeys(confirmed_vulns))
-        update["confirmed_vulns"] = dedup_confirmed
+        existing_confirmed = set(state.get("confirmed_vulns", []))
+        new_confirmed = [c for c in confirmed_vulns if c not in existing_confirmed]
+        if new_confirmed:
+            update["confirmed_vulns"] = new_confirmed
     if achieved_outcomes:
-        dedup_outcomes = list(dict.fromkeys(achieved_outcomes))
-        update["achieved_outcomes"] = dedup_outcomes
+        existing_outcomes = set(state.get("achieved_outcomes", []))
+        new_outcomes = [o for o in achieved_outcomes if o not in existing_outcomes]
+        if new_outcomes:
+            update["achieved_outcomes"] = new_outcomes
     if found_credentials:
-        update["found_credentials"] = found_credentials
+        existing_creds = state.get("found_credentials", [])
+        existing_creds_set = {
+            (c.get("username"), c.get("password"))
+            for c in existing_creds
+            if isinstance(c, dict)
+        }
+        new_creds = [
+            c for c in found_credentials
+            if isinstance(c, dict) and (c.get("username"), c.get("password")) not in existing_creds_set
+        ]
+        if new_creds:
+            update["found_credentials"] = new_creds
+
+    # Track attempted agents for fallback diversification.
+    # attempted_agents uses Annotated[list[str], add] reducer in LangGraph,
+    # so we must return ONLY the new item, not the full accumulated list.
+    attempted = list(state.get("attempted_agents", []))
+    if module_name not in attempted:
+        update["attempted_agents"] = [module_name]
+
+    # Merge telemetry events from agents.
+    # telemetry_events uses Annotated[list[dict], add] reducer,
+    # so we must return ONLY the new events, not existing + new.
+    if telemetry_events:
+        update["telemetry_events"] = list(telemetry_events)
 
     return update

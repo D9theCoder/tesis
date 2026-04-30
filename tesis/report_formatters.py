@@ -15,8 +15,9 @@ def parse_artifact_or_matrix(path: str | Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Artifact JSON must be an object or list")
 
+    import re
     run_id = payload.get("run_id") if isinstance(payload.get("run_id"), str) else None
-    if run_id:
+    if run_id and re.match(r"^[\w\-]+$", run_id):
         sibling_rich = file_path.with_name(f"{run_id}.rich.json")
         if sibling_rich.exists():
             try:
@@ -51,6 +52,31 @@ def _as_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
+def format_evasion_table(data: Mapping[str, Any]) -> str:
+    runs = _extract_runs(data)
+    if not runs:
+        return "No run artifacts found for evasion analysis."
+
+    rows: list[list[str]] = []
+    for run in runs:
+        config = run.get("config", {})
+        final_state = run.get("final_state", {})
+        report_summary = run.get("report", {}).get("summary", {})
+        provider = str(config.get("provider") or report_summary.get("llm_provider") or "unknown")
+        strategy = str(config.get("evasion_strategy") or report_summary.get("evasion_strategy") or "pipeline")
+        _attempts = final_state.get("evasion_attempts")
+        attempts = int(_attempts if _attempts is not None else report_summary.get("evasion_attempts", 0))
+        _successes = final_state.get("successful_evasions")
+        successes = int(_successes if _successes is not None else report_summary.get("successful_evasions", 0))
+        rate = f"{(successes / max(attempts, 1) * 100):.1f}%" if attempts > 0 else "N/A"
+        guardrails = int(report_summary.get("guardrail_activations", 0))
+        prevented = str(max(guardrails - (attempts - successes), 0)) if attempts > 0 else "N/A"
+        rows.append([provider, strategy, str(attempts), str(successes), rate, prevented])
+
+    headers = ["Provider", "Strategy", "Attempts", "Successes", "Success Rate", "Guardrails Prevented"]
+    return _as_table(headers, rows)
+
+
 def format_rejection_table(data: Mapping[str, Any], *, verbose: bool = False) -> str:
     runs = _extract_runs(data)
     if not runs:
@@ -65,14 +91,13 @@ def format_rejection_table(data: Mapping[str, Any], *, verbose: bool = False) ->
         final_state = run.get("final_state", {})
         provider = str(config.get("provider") or report_summary.get("llm_provider") or "unknown")
 
-        estimated_calls = int(report_summary.get("total_iterations_used") or final_state.get("iteration_count") or 0)
+        _calls = report_summary.get("total_iterations_used")
+        estimated_calls = int(_calls if _calls is not None else final_state.get("iteration_count", 0))
         total_calls[provider] = total_calls.get(provider, 0) + estimated_calls
 
         activations = final_state.get("guardrail_activations")
         if not isinstance(activations, list):
             activations = []
-
-        if not activations:
             fallback_count = int(report_summary.get("guardrail_activations", 0) or 0)
             if fallback_count > 0:
                 counts[(provider, "unknown")] = counts.get((provider, "unknown"), 0) + fallback_count
@@ -166,6 +191,15 @@ def format_module_scores_table(
         f"Highest Outcome: {summary.get('highest_impact_outcome', 'N/A')}",
         f"Longest Chain: {summary.get('longest_chain', 'N/A')}",
     ]
+    evasion_attempts = summary.get("evasion_attempts")
+    if evasion_attempts is not None:
+        tail.append(f"Evasion Attempts: {evasion_attempts}")
+    successful_evasions = summary.get("successful_evasions")
+    if successful_evasions is not None:
+        tail.append(f"Successful Evasions: {successful_evasions}")
+    evasion_strategy = summary.get("evasion_strategy")
+    if evasion_strategy is not None:
+        tail.append(f"Evasion Strategy: {evasion_strategy}")
     return _as_table(headers, rows) + "\n" + "\n".join(tail)
 
 
@@ -179,6 +213,12 @@ def format_provider_comparison_table(matrix_data: Mapping[str, Any]) -> str:
             str(run.get("config", {}).get("provider", "unknown"))
             for run in runs
         }
+    )
+
+    any_evasion = any(
+        run.get("config", {}).get("evasion_enabled")
+        or run.get("report", {}).get("summary", {}).get("evasion_attempts")
+        for run in runs
     )
 
     per_provider_scores: dict[str, dict[str, tuple[int, str]]] = {provider: {} for provider in providers}
@@ -204,6 +244,21 @@ def format_provider_comparison_table(matrix_data: Mapping[str, Any]) -> str:
         return "No module score data available for matrix comparison."
 
     headers = ["Module", *providers]
+    if any_evasion:
+        headers.extend([f"{p} Evasion" for p in providers])
+
+    provider_evasion: dict[str, tuple[int, int]] = {}
+    if any_evasion:
+        for provider in providers:
+            evasion_attempts = 0
+            successful_evasions = 0
+            for run in runs:
+                if str(run.get("config", {}).get("provider", "")) == provider:
+                    report_summary = run.get("report", {}).get("summary", {})
+                    evasion_attempts += int(report_summary.get("evasion_attempts", 0) or 0)
+                    successful_evasions += int(report_summary.get("successful_evasions", 0) or 0)
+            provider_evasion[provider] = (evasion_attempts, successful_evasions)
+
     rows: list[list[str]] = []
     for module in sorted(modules):
         row = [module]
@@ -215,6 +270,14 @@ def format_provider_comparison_table(matrix_data: Mapping[str, Any]) -> str:
             score, label = score_payload
             label_short = label.split()[0] if label else "Unknown"
             row.append(f"{score} {label_short}")
+        if any_evasion:
+            for provider in providers:
+                evasion_attempts, successful_evasions = provider_evasion[provider]
+                if evasion_attempts > 0:
+                    rate = f"{(successful_evasions / evasion_attempts * 100):.0f}%"
+                    row.append(f"{successful_evasions}/{evasion_attempts} ({rate})")
+                else:
+                    row.append("-")
         rows.append(row)
 
     return _as_table(headers, rows)

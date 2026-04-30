@@ -1,15 +1,17 @@
 from evaluation.metrics import (
     aggregate_runs,
     highest_impact_outcome,
-    normalize_module_scores,
+    normalize_method_scores,
     score_distribution,
 )
+from core.state import ALL_METHOD_AGENTS
 
 
-def test_normalize_module_scores_has_all_modules():
-    normalized = normalize_module_scores({"sqli": 3})
-    assert "sqli" in normalized
-    assert "cmdi" in normalized
+def test_normalize_method_scores_has_all_methods():
+    normalized = normalize_method_scores({"sqli_union": 3})
+    assert "sqli_union" in normalized
+    for agent in ALL_METHOD_AGENTS:
+        assert agent in normalized
 
 
 def test_score_distribution_has_fixed_buckets():

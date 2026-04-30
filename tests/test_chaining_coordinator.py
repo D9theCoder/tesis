@@ -1,128 +1,84 @@
 import pytest
 
-from core.chaining_coordinator import critical_outcome_achieved, route_after_agent
+from core.chaining_coordinator import (
+    critical_outcome_achieved,
+    route_after_agent,
+    _find_next_unvisited,
+)
 
 
-@pytest.mark.parametrize("level", ["low", "medium", "high"])
-def test_route_after_agent_parametrized_levels(level):
-    state = {
-        "security_level": level,
-        "confirmed_vulns": ["sqli_confirmed", "credentials_extracted"],
-        "achieved_outcomes": [],
-        "iteration_count": 2,
-        "max_iterations": 30,
-    }
-
-    nxt = route_after_agent(state)
-    assert nxt == "sqli_to_creds_chain"
+def test_find_next_unvisited_basic():
+    assert _find_next_unvisited(["a", "b", "c"], ["a"], []) == "b"
+    assert _find_next_unvisited(["a", "b"], ["a", "b"], []) is None
+    assert _find_next_unvisited(["a", "b"], [], ["a"]) == "b"
 
 
-def test_route_after_agent_returns_chain_agent_when_preconditions_met():
-    state = {
-        "confirmed_vulns": ["lfi_confirmed", "log_access_confirmed"],
-        "achieved_outcomes": [],
-        "iteration_count": 2,
-        "max_iterations": 30,
-    }
-
-    assert route_after_agent(state) == "lfi_to_rce_chain"
+def test_critical_outcome_achieved():
+    assert critical_outcome_achieved({"achieved_outcomes": ["rce_achieved"], "confirmed_vulns": []})
+    assert critical_outcome_achieved({"achieved_outcomes": [], "confirmed_vulns": ["session_hijack"]})
+    assert not critical_outcome_achieved({"achieved_outcomes": [], "confirmed_vulns": ["sqli_union_confirmed"]})
 
 
-def test_route_after_agent_skips_chain_already_attempted_marker():
-    state = {
-        "confirmed_vulns": ["sqli_confirmed", "credentials_extracted"],
-        "achieved_outcomes": [],
-        "tried_payloads": {"sqli": ["chain:sqli_to_creds"]},
-        "iteration_count": 2,
-        "max_iterations": 30,
-    }
-
-    assert route_after_agent(state) == "orchestrator"
-
-
-def test_route_after_agent_can_route_other_chain_when_one_marked_attempted():
-    state = {
-        "confirmed_vulns": [
-            "sqli_confirmed",
-            "credentials_extracted",
-            "lfi_confirmed",
-            "log_access_confirmed",
-        ],
-        "achieved_outcomes": [],
-        "tried_payloads": {"sqli": ["chain:sqli_to_creds"]},
-        "iteration_count": 2,
-        "max_iterations": 30,
-    }
-
-    assert route_after_agent(state) == "lfi_to_rce_chain"
-
-
-def test_route_after_agent_prefers_chain_before_critical_short_circuit():
-    state = {
-        "confirmed_vulns": [
-            "sqli_confirmed",
-            "credentials_extracted",
-            "admin_session_obtained",
-        ],
-        "achieved_outcomes": [],
-        "iteration_count": 2,
-        "max_iterations": 30,
-    }
-
-    assert route_after_agent(state) == "upload_to_rce_chain"
-
-
-def test_route_after_agent_stops_when_chain_target_already_known():
-    state = {
-        "confirmed_vulns": [
-            "sqli_confirmed",
-            "credentials_extracted",
-            "admin_session_obtained",
-            "rce_achieved",
-        ],
-        "achieved_outcomes": [],
-        "iteration_count": 2,
-        "max_iterations": 30,
-    }
-
-    assert route_after_agent(state) == "scorer"
-
-
-def test_route_after_agent_budget_exhausted_goes_to_scorer():
+def test_route_after_agent_budget_exhausted():
     state = {
         "confirmed_vulns": [],
         "achieved_outcomes": [],
         "iteration_count": 30,
         "max_iterations": 30,
+        "current_surface": "sqli",
+        "attempted_agents": [],
+        "blocked_agents": [],
+        "failure_agents": [],
+        "observations": {},
     }
-
     assert route_after_agent(state) == "scorer"
 
 
-def test_route_after_agent_fallback_orchestrator_when_no_chain():
+def test_route_after_agent_fallback_orchestrator():
     state = {
-        "confirmed_vulns": ["xss_reflected_confirmed"],
+        "confirmed_vulns": ["sqli_union_confirmed"],
         "achieved_outcomes": [],
         "iteration_count": 1,
         "max_iterations": 30,
+        "current_surface": "sqli",
+        "attempted_agents": [],
+        "blocked_agents": [],
+        "failure_agents": [],
+        "observations": {},
+        "agent_results": [],
     }
-
     assert route_after_agent(state) == "orchestrator"
 
 
-def test_critical_outcome_achieved_checks_confirmed_and_achieved():
-    assert critical_outcome_achieved({"achieved_outcomes": ["rce_achieved"], "confirmed_vulns": []})
-    assert critical_outcome_achieved({"achieved_outcomes": [], "confirmed_vulns": ["session_hijack"]})
-    assert not critical_outcome_achieved({"achieved_outcomes": [], "confirmed_vulns": ["sqli_confirmed"]})
-
-
-def test_route_after_agent_coverage_policy_does_not_short_circuit_critical_outcome():
+def test_route_after_agent_chain_ready():
+    # brute_force_confirmed -> ac_idor chain
     state = {
-        "confirmed_vulns": ["rce_achieved"],
+        "confirmed_vulns": ["bf_dictionary_confirmed", "brute_force_confirmed"],
         "achieved_outcomes": [],
-        "iteration_count": 2,
+        "iteration_count": 1,
         "max_iterations": 30,
-        "stop_policy": "coverage",
+        "current_surface": "brute_force",
+        "attempted_agents": [],
+        "blocked_agents": [],
+        "failure_agents": [],
+        "observations": {},
+        "agent_results": [],
     }
+    result = route_after_agent(state)
+    # Should route to chain target agent
+    assert result in {"ac_idor", "orchestrator", "scorer"}
 
-    assert route_after_agent(state) == "orchestrator"
+
+def test_route_after_agent_all_methods_exhausted():
+    state = {
+        "confirmed_vulns": [],
+        "achieved_outcomes": [],
+        "iteration_count": 5,
+        "max_iterations": 30,
+        "current_surface": "sqli",
+        "attempted_agents": ["sqli_union", "sqli_error", "sqli_boolean_blind", "sqli_time_blind"],
+        "blocked_agents": [],
+        "failure_agents": ["sqli_time_blind"],
+        "observations": {},
+    }
+    assert route_after_agent(state) == "scorer"

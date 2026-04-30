@@ -7,14 +7,26 @@ Provides:
 
 from __future__ import annotations
 
+from typing import Any
+
 from evaluation.contracts import ModuleScoreResult, ScoreSummary, ScorerReport
 from evaluation.metrics import (
     chain_exploit_count,
     highest_impact_outcome,
-    normalize_module_scores,
+    normalize_method_scores,
     score_distribution,
+    method_selection_accuracy,
+    adaptation_rate,
+    mean_attempts_to_success,
 )
-from core.state import MODULE_NAMES, MODULE_TO_KG_NODE, SCORE_LABELS
+from core.state import ALL_METHOD_AGENTS, SURFACES, METHODS_BY_SURFACE, SCORE_LABELS
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
 
 
 def _parse_chain_candidates(chain_history: list[dict], current_chain: list[str]) -> list[list[str]]:
@@ -44,45 +56,25 @@ def _infer_longest_chain(chain_history: list[dict], current_chain: list[str]) ->
     return "→".join(best)
 
 
-def _derive_chain_for_module(module: str, state: dict) -> str | None:
-    """Derive chain path for a score=4 module using canonical KG node mapping.
-
-    Returns None if no chain involves this module's confirmed-vuln node.
-    Does NOT fall back to an unrelated chain (avoids misattribution).
-    """
-    candidates = _parse_chain_candidates(
-        state.get("chain_history", []),
-        state.get("current_chain", []),
-    )
-
-    # Use canonical MODULE_TO_KG_NODE mapping — module names and KG node
-    # names follow different conventions (e.g. "sqli_blind" → "blind_sqli_confirmed").
-    module_kg_node = MODULE_TO_KG_NODE.get(module)
-    if module_kg_node is None:
-        return None
-
-    for chain in candidates:
-        if module_kg_node in chain:
-            return "→".join(chain)
-
-    return None
-
-
 def build_score_report(state: dict) -> ScorerReport:
-    normalized = normalize_module_scores(state.get("scores", {}))
+    normalized = normalize_method_scores(state.get("scores", {}))
     module_scores = {
-        module: ModuleScoreResult(
-            score=normalized[module],
-            label=SCORE_LABELS[normalized[module]],
-            chain=_derive_chain_for_module(module, state) if normalized[module] == 4 else None,
+        agent_id: ModuleScoreResult(
+            score=normalized[agent_id],
+            label=SCORE_LABELS[normalized[agent_id]],
         )
-        for module in MODULE_NAMES
+        for agent_id in ALL_METHOD_AGENTS
     }
+
+    successful_evasions = min(
+        _safe_int(state.get("successful_evasions"), 0),
+        _safe_int(state.get("evasion_attempts"), 0),
+    )
 
     summary = ScoreSummary(
         llm_provider=state.get("llm_provider", "gemini"),
         security_level=state.get("security_level", "low"),
-        total_modules_tested=len(MODULE_NAMES),
+        total_modules_tested=len(ALL_METHOD_AGENTS),
         score_distribution=score_distribution(normalized),
         chain_exploits_achieved=chain_exploit_count(normalized),
         highest_impact_outcome=highest_impact_outcome(
@@ -95,6 +87,9 @@ def build_score_report(state: dict) -> ScorerReport:
             state.get("chain_history", []),
             state.get("current_chain", []),
         ),
+        evasion_attempts=_safe_int(state.get("evasion_attempts"), 0),
+        successful_evasions=successful_evasions,
+        evasion_strategy=str(state.get("evasion_mode") or "reactive").strip().lower(),
     )
     return ScorerReport(module_scores=module_scores, summary=summary)
 
@@ -102,10 +97,29 @@ def build_score_report(state: dict) -> ScorerReport:
 def scorer(state: dict) -> dict:
     report = build_score_report(state)
     normalized_scores = {
-        module: result.score
-        for module, result in report.module_scores.items()
+        agent_id: result.score
+        for agent_id, result in report.module_scores.items()
     }
+    tried_payloads = state.get("tried_payloads", {})
+    attempted = state.get("attempted_agents", [])
+    metrics = {
+        "method_selection_accuracy": round(method_selection_accuracy(normalized_scores, attempted), 4),
+        "adaptation_rate": round(adaptation_rate(normalized_scores), 4),
+        "mean_attempts_to_success": round(mean_attempts_to_success(tried_payloads, normalized_scores), 4),
+    }
+    surface_scores = {
+        surface: max((normalized_scores.get(m, 0) for m in METHODS_BY_SURFACE.get(surface, [])), default=0)
+        for surface in SURFACES
+    }
+    existing_result = state.get("task_result")
+    existing_reason = state.get("incomplete_reason")
+    task_result = existing_result or "SUCCESS"
     return {
         "scores": normalized_scores,
         "next_agent": "END",
+        "task_result": task_result,
+        "incomplete_reason": existing_reason,
+        "method_quality_metrics": metrics,
+        "surface_scores": surface_scores,
+        "akg_path": state.get("akg_path", []),
     }

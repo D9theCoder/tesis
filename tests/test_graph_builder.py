@@ -65,8 +65,8 @@ def test_stage6_real_scorer_node_executes(monkeypatch):
     app = build_framework(llm_provider="gemini")
     state = deepcopy(DEFAULT_STATE)
     state["iteration_count"] = state["max_iterations"]
-    state["scores"] = {"sqli": 99}
+    state["scores"] = {"sqli_union": 99}
 
     result = app.invoke(state)
-    assert result["scores"]["sqli"] == 4
+    assert result["scores"]["sqli_union"] == 4
     assert result["next_agent"] == "END"

@@ -2,11 +2,25 @@ from pathlib import Path
 
 import pytest
 
-from tesis.config_loader import ConfigError, load_and_resolve_config
+from tesis.config_loader import ConfigError, _default_api_key, _default_model_name, load_and_resolve_config
 
 
 def _write_yaml(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
+
+
+def test_default_model_name_openai_compatible():
+    assert _default_model_name("openai_compatible") == ""
+
+
+def test_default_api_key_openai_compatible(monkeypatch):
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "test-compatible-key")
+    assert _default_api_key("openai_compatible") == "test-compatible-key"
+
+
+def test_default_api_key_openai_compatible_fallback_empty(monkeypatch):
+    monkeypatch.delenv("OPENAI_COMPATIBLE_API_KEY", raising=False)
+    assert _default_api_key("openai_compatible") == ""
 
 
 def test_yaml_roundtrip_to_dataclass(tmp_path):
@@ -137,5 +151,47 @@ diagnose: true
         cli_args={"enriched_reporting": False, "diagnose": False},
     )
 
+    assert cfg.enriched_reporting is True
+    assert cfg.diagnose is True
+
+
+def test_string_false_flags_in_yaml_are_parsed_as_false(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    _write_yaml(
+        config_path,
+        """
+target_url: http://localhost/dvwa
+provider: gemini
+level: low
+matrix: "false"
+enriched_reporting: "false"
+diagnose: "false"
+""",
+    )
+
+    cfg = load_and_resolve_config(config_path=str(config_path), cli_args={})
+
+    assert cfg.matrix is False
+    assert cfg.enriched_reporting is False
+    assert cfg.diagnose is False
+
+
+def test_string_true_flags_in_yaml_are_parsed_as_true(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    _write_yaml(
+        config_path,
+        """
+target_url: http://localhost/dvwa
+provider: gemini
+level: low
+matrix: "true"
+enriched_reporting: "true"
+diagnose: "true"
+""",
+    )
+
+    cfg = load_and_resolve_config(config_path=str(config_path), cli_args={})
+
+    assert cfg.matrix is True
     assert cfg.enriched_reporting is True
     assert cfg.diagnose is True

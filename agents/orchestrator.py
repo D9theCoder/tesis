@@ -1,509 +1,339 @@
-"""Orchestrator agent — Stage 4 runtime implementation.
-
-Selects the next runtime node using AKG viable paths and LLM guidance,
-with deterministic fallback behavior when the model fails or refuses.
-"""
+"""Orchestrator agent — method selection over AKG with reactive evasion."""
 
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
 from core.knowledge_graph import AttackKnowledgeGraph
-from core.state import MODULE_NAMES
+from core.state import ALL_METHOD_AGENTS, METHODS_BY_SURFACE
 from llm.guardrail_monitor import is_guardrail_refusal, make_guardrail_event
 from llm.prompts.orchestrator_prompt import build_orchestrator_prompt
 from llm.provider import get_llm
 
+logger = logging.getLogger(__name__)
+
 CRITICAL_OUTCOMES = set(AttackKnowledgeGraph.HIGH_IMPACT_OUTCOMES)
-
-# Mapping from KG state nodes to executable runtime nodes.
-KG_NODE_TO_AGENT: dict[str, str] = {
-	"sqli_confirmed": "sqli_agent",
-	"blind_sqli_confirmed": "sqli_blind_agent",
-	"xss_reflected_confirmed": "xss_reflected_agent",
-	"xss_stored_confirmed": "xss_stored_agent",
-	"xss_dom_confirmed": "xss_dom_agent",
-	"cmd_injection_confirmed": "cmdi_agent",
-	"brute_force_confirmed": "brute_agent",
-	"lfi_confirmed": "lfi_agent",
-	"file_upload_confirmed": "upload_agent",
-	"csrf_confirmed": "csrf_agent",
-	"weak_session_confirmed": "weak_session_agent",
-	"idor_confirmed": "idor_agent",
-	"credentials_extracted": "sqli_to_creds_chain",
-	"admin_session_obtained": "upload_to_rce_chain",
-	"log_access_confirmed": "lfi_to_rce_chain",
-	"user_compromised": "xss_to_csrf_chain",
-}
-
-STARTER_AGENT_ORDER: list[str] = [
-	"sqli_agent",
-	"brute_agent",
-	"xss_reflected_agent",
-]
-
-ALLOWED_RUNTIME_NODES: set[str] = {
-	"sqli_agent",
-	"sqli_blind_agent",
-	"xss_reflected_agent",
-	"xss_stored_agent",
-	"xss_dom_agent",
-	"cmdi_agent",
-	"brute_agent",
-	"lfi_agent",
-	"upload_agent",
-	"csrf_agent",
-	"weak_session_agent",
-	"idor_agent",
-	"sqli_to_creds_chain",
-	"upload_to_rce_chain",
-	"xss_to_csrf_chain",
-	"lfi_to_rce_chain",
-	"scorer",
-}
-
-CHAIN_RUNTIME_NODES: set[str] = {
-	"sqli_to_creds_chain",
-	"upload_to_rce_chain",
-	"xss_to_csrf_chain",
-	"lfi_to_rce_chain",
-}
 
 
 def _extract_response_text(raw_content: Any) -> str:
-	"""Normalize heterogeneous LLM content payloads into plain text."""
-	if isinstance(raw_content, str):
-		return raw_content
-	if isinstance(raw_content, list):
-		parts: list[str] = []
-		for item in raw_content:
-			if isinstance(item, str):
-				parts.append(item)
-			elif isinstance(item, dict):
-				text = item.get("text")
-				if isinstance(text, str):
-					parts.append(text)
-		if parts:
-			return "\n".join(parts)
-	return str(raw_content)
+    if isinstance(raw_content, str):
+        return raw_content
+    if isinstance(raw_content, list):
+        parts: list[str] = []
+        for item in raw_content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        if parts:
+            return "\n".join(parts)
+    return str(raw_content)
 
 
 def _parse_decision_payload(raw_text: str) -> dict[str, Any] | None:
-	"""Parse LLM output into a decision object with tolerant JSON extraction."""
-	try:
-		parsed = json.loads(raw_text)
-		return parsed if isinstance(parsed, dict) else None
-	except Exception:
-		start = raw_text.find("{")
-		end = raw_text.rfind("}")
-		if start == -1 or end == -1 or end <= start:
-			return None
-		try:
-			parsed = json.loads(raw_text[start : end + 1])
-			return parsed if isinstance(parsed, dict) else None
-		except Exception:
-			return None
+    try:
+        parsed = json.loads(raw_text)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        start = raw_text.find("{")
+        end = raw_text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        try:
+            parsed = json.loads(raw_text[start : end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            return None
 
 
-def _module_coverage_ratio(scores: dict[str, Any]) -> float:
-	"""Compute module coverage as score>=1 over known modules."""
-	if not MODULE_NAMES:
-		return 0.0
-	covered = 0
-	for module_name in MODULE_NAMES:
-		raw_score = scores.get(module_name, 0)
-		try:
-			score = int(raw_score)
-		except Exception:
-			score = 0
-		if score >= 1:
-			covered += 1
-	return covered / len(MODULE_NAMES)
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return bool(value)
 
 
 def _clip_text(text: str, limit: int = 1200) -> str:
-	"""Limit stored trace text size to keep sidecars bounded."""
-	if len(text) <= limit:
-		return text
-	return text[:limit] + "...<truncated>"
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "...<truncated>"
 
 
-def _find_ready_chain_agent(
-	*,
-	kg: AttackKnowledgeGraph,
-	path: list[str],
-	confirmed: set[str],
-	known_outcomes: set[str],
-) -> str | None:
-	"""Pick a chain agent when a chain edge on the chosen path is executable."""
-	for source, target in zip(path, path[1:]):
-		if source not in confirmed:
-			continue
-
-		for edge in kg.get_next_actions(source):
-			if edge.get("target") != target:
-				continue
-			if not edge.get("is_chain"):
-				continue
-			if target in known_outcomes:
-				continue
-
-			preconditions = set(edge.get("preconditions", []))
-			if not preconditions.issubset(confirmed):
-				continue
-
-			target_agent = edge.get("target_agent")
-			if isinstance(target_agent, str) and target_agent:
-				return target_agent
-
-	return None
+def _sanitize_prompt_seed(text: str) -> str:
+    replacements = {
+        "exploitation workflow": "security assessment workflow",
+        "exploit": "test",
+        "attack": "assess",
+        "orchestrator for a DVWA": "planner for a DVWA security test",
+    }
+    for bad, good in replacements.items():
+        text = text.replace(bad, good)
+    return text
 
 
 def _fallback_next_agent(
-	viable_paths: list[list[str]],
-	confirmed_vulns: list[str],
-	achieved_outcomes: list[str] | None = None,
-) -> tuple[str, list[str]]:
-	"""Choose a deterministic next runtime node without relying on the LLM."""
-	confirmed = set(confirmed_vulns)
-	known_outcomes = confirmed | set(achieved_outcomes or [])
-	kg = AttackKnowledgeGraph()
-
-	if viable_paths:
-		chosen = viable_paths[0]
-
-		# Prefer direct chain continuation whenever preconditions are met.
-		chain_agent = _find_ready_chain_agent(
-			kg=kg,
-			path=chosen,
-			confirmed=confirmed,
-			known_outcomes=known_outcomes,
-		)
-		if chain_agent:
-			return chain_agent, chosen
-
-		# Otherwise continue probing from already-confirmed steps on this path.
-		for node in chosen:
-			if node in confirmed:
-				mapped = KG_NODE_TO_AGENT.get(node)
-				if mapped:
-					return mapped, chosen
-
-		# Last resort for path-based fallback: map first unmet state.
-		for node in chosen:
-			if node not in confirmed:
-				mapped = KG_NODE_TO_AGENT.get(node)
-				if mapped:
-					return mapped, chosen
-
-	# Fresh-state fallback: always start with a deterministic Tier-1 agent.
-	if not confirmed:
-		return STARTER_AGENT_ORDER[0], []
-
-	# If we have confirmations but no viable path, keep progressing if possible.
-	for node in sorted(confirmed):
-		mapped = KG_NODE_TO_AGENT.get(node)
-		if mapped:
-			return mapped, []
-
-	return "scorer", []
+    state: dict[str, Any],
+) -> str:
+    """Choose a deterministic next method agent without relying on LLM."""
+    current_surface = state.get("current_surface", "sqli")
+    attempted = set(state.get("attempted_agents", []))
+    blocked = set(state.get("blocked_agents", []))
+    failure_agents = set(state.get("failure_agents", []))
+    observations = state.get("observations", {})
+    scores = state.get("scores", {})
+    
+    kg = AttackKnowledgeGraph()
+    viable = kg.get_viable_methods(current_surface, observations)
+    
+    # Prefer unattempted viable methods
+    for method in viable:
+        if method not in attempted and method not in blocked:
+            return method
+    
+    # Try any unattempted method on this surface
+    for method in METHODS_BY_SURFACE.get(current_surface, []):
+        if method not in attempted and method not in blocked:
+            return method
+    
+    # All exhausted
+    return "scorer"
 
 
-def _chain_candidate_is_ready(
-	*,
-	candidate: str,
-	confirmed: set[str],
-	achieved_outcomes: set[str],
-	viable_paths: list[list[str]],
-) -> bool:
-	"""Return True when a proposed chain runtime node is currently executable."""
-	if candidate not in CHAIN_RUNTIME_NODES:
-		return True
-
-	known_outcomes = confirmed | achieved_outcomes
-	kg = AttackKnowledgeGraph()
-
-	for path in viable_paths:
-		ready = _find_ready_chain_agent(
-			kg=kg,
-			path=path,
-			confirmed=confirmed,
-			known_outcomes=known_outcomes,
-		)
-		if ready == candidate:
-			return True
-
-	for node in sorted(confirmed):
-		for edge in kg.get_next_actions(node):
-			if not edge.get("is_chain"):
-				continue
-			if edge.get("target_agent") != candidate:
-				continue
-			if edge.get("target") in known_outcomes:
-				continue
-
-			preconditions = set(edge.get("preconditions", []))
-			if preconditions.issubset(confirmed):
-				return True
-
-	return False
-
-
-def _chain_for_agent(
-	*,
-	agent_name: str,
-	viable_paths: list[list[str]],
-	confirmed: set[str],
-	achieved_outcomes: set[str],
-) -> list[str]:
-	"""Return the most relevant viable path for a selected runtime agent."""
-	if not viable_paths:
-		return []
-
-	kg = AttackKnowledgeGraph()
-	known_outcomes = confirmed | achieved_outcomes
-
-	for path in viable_paths:
-		if agent_name in CHAIN_RUNTIME_NODES:
-			ready = _find_ready_chain_agent(
-				kg=kg,
-				path=path,
-				confirmed=confirmed,
-				known_outcomes=known_outcomes,
-			)
-			if ready == agent_name:
-				return path
-
-		for node in path:
-			if KG_NODE_TO_AGENT.get(node) == agent_name:
-				return path
-
-	return []
+def _run_evasion_pipeline(prompt: str, evasion_max_retries: int) -> tuple[str, bool]:
+    """LangGraph-native retry: paraphrase + validity gate.
+    
+    Returns (enhanced_prompt, success).
+    For now, implement a simple semantic paraphrase by rewording.
+    """
+    # Simple paraphrase: replace trigger words
+    paraphrased = prompt.replace("exploit", "assess").replace("attack", "evaluate")
+    if paraphrased != prompt:
+        return paraphrased, True
+    return prompt, False
 
 
 def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
-	"""LangGraph node: select the next agent based on AKG + LLM strategy."""
-	iteration_count = state.get("iteration_count", 0)
-	max_iterations = state.get("max_iterations", 30)
-	stop_policy_raw = str(state.get("stop_policy", "impact") or "impact").strip().lower()
-	stop_policy = stop_policy_raw if stop_policy_raw in {"impact", "coverage"} else "impact"
-	raw_coverage_target = state.get("coverage_target", 0.70)
-	try:
-		coverage_target = float(raw_coverage_target)
-	except Exception:
-		coverage_target = 0.70
-	coverage_target = min(max(coverage_target, 0.0), 1.0)
-	confirmed_vulns = state.get("confirmed_vulns", [])
-	confirmed_set = set(confirmed_vulns)
-	achieved_outcomes = state.get("achieved_outcomes", [])
-	achieved_set = set(achieved_outcomes)
-	scores = state.get("scores", {}) if isinstance(state.get("scores"), dict) else {}
-	coverage_ratio = _module_coverage_ratio(scores)
-	telemetry_base = {
-		"node": "orchestrator",
-		"iteration": iteration_count,
-		"stop_policy": stop_policy,
-		"coverage_ratio": round(coverage_ratio, 4),
-		"coverage_target": round(coverage_target, 4),
-	}
+    iteration_count = state.get("iteration_count", 0)
+    max_iterations = state.get("max_iterations", 30)
+    confirmed_vulns = state.get("confirmed_vulns", [])
+    achieved_outcomes = state.get("achieved_outcomes", [])
+    # Deduplicate attempted_agents before passing to prompt and fallback logic.
+    # attempted_agents uses Annotated[list[str], add] reducer, so duplicates
+    # can accumulate if agents incorrectly return the full list.
+    attempted_agents = list(dict.fromkeys(state.get("attempted_agents", [])))
+    blocked_agents = state.get("blocked_agents", [])
+    failure_agents = state.get("failure_agents", [])
+    current_surface = state.get("current_surface", "sqli")
+    observations = state.get("observations", {})
+    scores = state.get("scores", {})
+    consecutive_clean = state.get("consecutive_clean_responses", 0)
+    
+    evasion_enabled = _coerce_bool(state.get("evasion_enabled", False))
+    evasion_mode = str(state.get("evasion_mode", "reactive")).strip().lower()
+    evasion_max_retries = int(state.get("evasion_max_retries", 3))
+    evasion_cooldown_threshold = int(state.get("evasion_cooldown_threshold", 5))
+    
+    telemetry_base = {
+        "node": "orchestrator",
+        "iteration": iteration_count,
+    }
+    telemetry_events: list[dict[str, Any]] = []
+    
+    if iteration_count >= max_iterations:
+        return {
+            "next_agent": "scorer",
+            "telemetry_events": [{**telemetry_base, "event": "orchestrator.stop", "reason": "budget_exhausted"}],
+        }
 
-	if iteration_count >= max_iterations:
-		return {
-			"next_agent": "scorer",
-			"telemetry_events": [
-				{
-					**telemetry_base,
-					"event": "orchestrator.stop",
-					"reason": "budget_exhausted",
-				}
-			],
-		}
+    if (set(confirmed_vulns) | set(achieved_outcomes)) & CRITICAL_OUTCOMES:
+        return {
+            "next_agent": "scorer",
+            "telemetry_events": [{**telemetry_base, "event": "orchestrator.stop", "reason": "critical_outcome"}],
+        }
 
-	if stop_policy == "impact" and ((achieved_set | confirmed_set) & CRITICAL_OUTCOMES):
-		return {
-			"next_agent": "scorer",
-			"telemetry_events": [
-				{
-					**telemetry_base,
-					"event": "orchestrator.stop",
-					"reason": "critical_outcome",
-				}
-			],
-		}
-
-	if stop_policy == "coverage" and coverage_ratio >= coverage_target:
-		return {
-			"next_agent": "scorer",
-			"telemetry_events": [
-				{
-					**telemetry_base,
-					"event": "orchestrator.stop",
-					"reason": "coverage_reached",
-				}
-			],
-		}
-
-	kg = AttackKnowledgeGraph()
-	viable_paths = kg.get_viable_chains(
-		confirmed_vulns=confirmed_vulns,
-		achieved_outcomes=achieved_outcomes,
-		max_paths=5,
-	)
-
-	fallback_agent, fallback_chain = _fallback_next_agent(
-		viable_paths=viable_paths,
-		confirmed_vulns=confirmed_vulns,
-		achieved_outcomes=achieved_outcomes,
-	)
-
-	prompt = build_orchestrator_prompt(
-		confirmed_vulns=confirmed_vulns,
-		achieved_outcomes=achieved_outcomes,
-		viable_paths=viable_paths,
-		security_level=state.get("security_level", "low"),
-		iteration_count=iteration_count,
-		max_iterations=max_iterations,
-		stop_policy=stop_policy,
-		coverage_ratio=coverage_ratio,
-		coverage_target=coverage_target,
-	)
-
-	try:
-		llm = get_llm(state.get("llm_provider", "gemini"))
-		response = llm.invoke([HumanMessage(content=prompt)])
-		text = _extract_response_text(getattr(response, "content", ""))
-		telemetry_events: list[dict[str, Any]] = [
-			{
-				**telemetry_base,
-				"event": "orchestrator.prompt.generated",
-				"status": "ok",
-				"payload": {
-					"provider": state.get("llm_provider", "gemini"),
-					"prompt_text": _clip_text(prompt),
-				},
-			},
-			{
-				**telemetry_base,
-				"event": "orchestrator.llm.response",
-				"status": "ok",
-				"payload": {
-					"response_text": _clip_text(text),
-				},
-			},
-		]
-
-		if is_guardrail_refusal(text):
-			telemetry_events.append(
-				{
-					**telemetry_base,
-					"event": "orchestrator.guardrail.rejection",
-					"status": "fallback",
-					"payload": {
-						"next_agent": fallback_agent,
-						"response_excerpt": _clip_text(text, 300),
-						"reason_code": "guardrail_refusal",
-					},
-				}
-			)
-			return {
-				"next_agent": fallback_agent,
-				"current_chain": fallback_chain,
-				"guardrail_activations": [
-					make_guardrail_event(
-						provider=state.get("llm_provider", "gemini"),
-						context="orchestrator",
-						response=text,
-					)
-				],
-				"telemetry_events": telemetry_events,
-				"messages": [
-					HumanMessage(content=prompt),
-					AIMessage(content=text),
-				],
-			}
-
-		parsed = _parse_decision_payload(text)
-		candidate: Any
-		candidate = parsed.get("next_agent", fallback_agent) if isinstance(parsed, dict) else fallback_agent
-		if not isinstance(candidate, str):
-			candidate = fallback_agent
-
-		if not _chain_candidate_is_ready(
-			candidate=candidate,
-			confirmed=confirmed_set,
-			achieved_outcomes=achieved_set,
-			viable_paths=viable_paths,
-		):
-			candidate = fallback_agent
-
-		next_agent = candidate if candidate in ALLOWED_RUNTIME_NODES else fallback_agent
-		selected_chain = _chain_for_agent(
-			agent_name=next_agent,
-			viable_paths=viable_paths,
-			confirmed=confirmed_set,
-			achieved_outcomes=achieved_set,
-		)
-		telemetry_events.append(
-			{
-				**telemetry_base,
-				"event": "orchestrator.decision",
-				"status": "ok",
-				"payload": {
-					"next_agent": next_agent,
-					"used_fallback": next_agent == fallback_agent,
-					"fallback_agent": fallback_agent,
-				},
-			}
-		)
-
-		return {
-			"next_agent": next_agent,
-			"current_chain": selected_chain or (fallback_chain if next_agent == fallback_agent else []),
-			"telemetry_events": telemetry_events,
-			"messages": [
-				HumanMessage(content=prompt),
-				AIMessage(content=text),
-			],
-		}
-	except Exception as exc:
-		return {
-			"next_agent": fallback_agent,
-			"current_chain": fallback_chain,
-			"telemetry_events": [
-				{
-					**telemetry_base,
-					"event": "orchestrator.prompt.generated",
-					"status": "ok",
-					"payload": {
-						"provider": state.get("llm_provider", "gemini"),
-						"prompt_text": _clip_text(prompt),
-					},
-				},
-				{
-					**telemetry_base,
-					"event": "orchestrator.llm.response",
-					"status": "error",
-					"payload": {
-						"error_type": type(exc).__name__,
-						"response_text": f"orchestrator_fallback:{type(exc).__name__}",
-					},
-				},
-				{
-					**telemetry_base,
-					"event": "orchestrator.fallback.applied",
-					"status": "fallback",
-					"payload": {
-						"error_type": type(exc).__name__,
-						"next_agent": fallback_agent,
-						"reason_code": "llm_exception",
-					},
-				},
-			],
-			"messages": [
-				HumanMessage(content=prompt),
-				AIMessage(content=f"orchestrator_fallback:{type(exc).__name__}"),
-			],
-		}
+    kg = AttackKnowledgeGraph()
+    viable_methods = kg.get_viable_methods(current_surface, observations)
+    
+    fallback_agent = _fallback_next_agent(state)
+    
+    base_prompt = build_orchestrator_prompt(
+        current_surface=current_surface,
+        viable_methods=viable_methods,
+        observations=observations,
+        attempted_agents=attempted_agents,
+        blocked_agents=blocked_agents,
+        failure_agents=failure_agents,
+        scores=scores,
+        confirmed_vulns=confirmed_vulns,
+        achieved_outcomes=achieved_outcomes,
+        security_level=state.get("security_level", "low"),
+        iteration_count=iteration_count,
+        max_iterations=max_iterations,
+    )
+    prompt = _sanitize_prompt_seed(base_prompt)
+    
+    # Evasion logic
+    evasion_triggered = False
+    evasion_success = False
+    
+    if evasion_enabled and evasion_mode != "disabled":
+        if evasion_mode == "proactive":
+            # Proactive: always run evasion
+            prompt, evasion_success = _run_evasion_pipeline(prompt, evasion_max_retries)
+            evasion_triggered = True
+            telemetry_events.append({
+                **telemetry_base,
+                "event": "orchestrator.evasion.triggered",
+                "status": "ok" if evasion_success else "failed",
+                "payload": {"mode": "proactive", "reason": "unconditional"},
+            })
+        else:
+            # Reactive mode
+            # 1. Cooldown check: suppress pre-check if enough clean responses
+            if consecutive_clean >= evasion_cooldown_threshold:
+                telemetry_events.append({
+                    **telemetry_base,
+                    "event": "orchestrator.evasion.skipped",
+                    "status": "ok",
+                    "payload": {"reason": "cooldown_active", "consecutive_clean": consecutive_clean},
+                })
+            else:
+                # 2. Short-circuit: run LLM first, then check response
+                pass  # will check after LLM call
+    
+    try:
+        provider_name = state.get("llm_provider", "gemini")
+        model_cfg = state.get("model_config", {})
+        if model_cfg:
+            kwargs = {k: v for k, v in model_cfg.items() if k != "provider"}
+            extra = kwargs.pop("extra", {})
+            if isinstance(extra, dict):
+                kwargs.update(extra)
+            llm = get_llm(provider_name, **kwargs)
+        else:
+            llm = get_llm(provider_name)
+        response = llm.invoke([HumanMessage(content=prompt)])
+        text = _extract_response_text(getattr(response, "content", ""))
+        
+        telemetry_events.append({
+            **telemetry_base,
+            "event": "orchestrator.llm.response",
+            "status": "ok",
+            "payload": {"response_text": _clip_text(text)},
+        })
+        
+        # Reactive evasion check AFTER LLM response
+        if evasion_enabled and evasion_mode == "reactive" and consecutive_clean < evasion_cooldown_threshold:
+            if is_guardrail_refusal(text):
+                evasion_triggered = True
+                telemetry_events.append({
+                    **telemetry_base,
+                    "event": "orchestrator.evasion.triggered",
+                    "status": "ok",
+                    "payload": {"reason": "guardrail_refusal"},
+                })
+                # Run evasion pipeline
+                for retry in range(evasion_max_retries):
+                    new_prompt, success = _run_evasion_pipeline(prompt, evasion_max_retries)
+                    if success:
+                        prompt = new_prompt
+                        # Re-invoke LLM with paraphrased prompt
+                        response = llm.invoke([HumanMessage(content=prompt)])
+                        text = _extract_response_text(getattr(response, "content", ""))
+                        if not is_guardrail_refusal(text):
+                            evasion_success = True
+                            break
+                
+                if evasion_success:
+                    telemetry_events.append({
+                        **telemetry_base,
+                        "event": "orchestrator.evasion.success",
+                        "status": "ok",
+                        "payload": {"retries_used": retry + 1},
+                    })
+                else:
+                    telemetry_events.append({
+                        **telemetry_base,
+                        "event": "orchestrator.evasion.failed",
+                        "status": "fallback",
+                        "payload": {"reason": "max_retries_exhausted"},
+                    })
+            else:
+                # Clean response
+                telemetry_events.append({
+                    **telemetry_base,
+                    "event": "orchestrator.evasion.skipped",
+                    "status": "ok",
+                    "payload": {"reason": "clean_response"},
+                })
+        
+        if is_guardrail_refusal(text) and not evasion_success:
+            # Do NOT add fallback_agent to blocked_agents — guardrail refusals
+            # are about the orchestrator prompt, not the method agent. Blocking
+            # the fallback would permanently disable viable methods.
+            return {
+                "next_agent": fallback_agent,
+                "guardrail_activations": [make_guardrail_event(
+                    provider=state.get("llm_provider", "gemini"),
+                    context="orchestrator",
+                    response=text,
+                )],
+                "telemetry_events": telemetry_events,
+                "messages": [HumanMessage(content=prompt), AIMessage(content=text)],
+                "consecutive_clean_responses": 0,
+                "evasion_attempts": state.get("evasion_attempts", 0) + (1 if evasion_triggered else 0),
+                "successful_evasions": state.get("successful_evasions", 0),
+            }
+        
+        parsed = _parse_decision_payload(text)
+        parse_ok = isinstance(parsed, dict) and isinstance(parsed.get("next_agent"), str)
+        candidate = parsed["next_agent"] if parse_ok else fallback_agent
+        next_agent = candidate if candidate in ALL_METHOD_AGENTS or candidate == "scorer" else fallback_agent
+        used_fallback = not parse_ok or candidate != next_agent
+        
+        # Update consecutive_clean_responses
+        new_clean_count = consecutive_clean + 1 if not evasion_triggered else 0
+        
+        telemetry_events.append({
+            **telemetry_base,
+            "event": "orchestrator.decision",
+            "status": "ok",
+            "payload": {"next_agent": next_agent, "used_fallback": used_fallback},
+        })
+        
+        return {
+            "next_agent": next_agent,
+            "telemetry_events": telemetry_events,
+            "messages": [HumanMessage(content=prompt), AIMessage(content=text)],
+            "consecutive_clean_responses": new_clean_count,
+            "evasion_attempts": state.get("evasion_attempts", 0) + (1 if evasion_triggered else 0),
+            "successful_evasions": state.get("successful_evasions", 0) + (1 if evasion_success else 0),
+        }
+    except Exception as exc:
+        # Harness node — crashing the graph is worse than logging a fallback.
+        logger.exception("Orchestrator failed; applying deterministic fallback")
+        return {
+            "next_agent": fallback_agent,
+            "telemetry_events": [
+                *telemetry_events,
+                {**telemetry_base, "event": "orchestrator.fallback.applied", "status": "fallback", "payload": {"error_type": type(exc).__name__, "next_agent": fallback_agent}},
+            ],
+            "messages": [HumanMessage(content=prompt), AIMessage(content=f"orchestrator_fallback:{type(exc).__name__}")],
+            "evasion_attempts": state.get("evasion_attempts", 0) + (1 if evasion_triggered else 0),
+            "successful_evasions": state.get("successful_evasions", 0) + (1 if evasion_success else 0),
+        }

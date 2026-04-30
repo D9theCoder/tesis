@@ -1,44 +1,25 @@
-import agents.orchestrator as orchestrator_module
 from agents.orchestrator import orchestrator
 
 
-def test_impact_policy_stops_on_critical_outcome():
+def test_orchestrator_budget_exhausted_returns_scorer():
     state = {
-        "confirmed_vulns": ["rce_achieved"],
+        "target_url": "http://localhost/dvwa",
+        "confirmed_vulns": [],
         "achieved_outcomes": [],
-        "iteration_count": 1,
+        "iteration_count": 30,
         "max_iterations": 30,
         "security_level": "low",
         "llm_provider": "gemini",
-        "stop_policy": "impact",
+        "current_surface": "sqli",
+        "observations": {},
+        "attempted_agents": [],
+        "blocked_agents": [],
+        "failure_agents": [],
         "scores": {},
+        "evasion_enabled": False,
+        "evasion_mode": "reactive",
+        "evasion_max_retries": 3,
+        "consecutive_clean_responses": 0,
     }
-
     update = orchestrator(state)
     assert update["next_agent"] == "scorer"
-
-
-def test_coverage_policy_continues_until_target_or_budget(monkeypatch):
-    class FakeResponse:
-        content = '{"next_agent": "sqli_agent"}'
-
-    class FakeLLM:
-        def invoke(self, messages):
-            return FakeResponse()
-
-    monkeypatch.setattr(orchestrator_module, "get_llm", lambda *args, **kwargs: FakeLLM())
-
-    state = {
-        "confirmed_vulns": ["rce_achieved"],
-        "achieved_outcomes": [],
-        "iteration_count": 1,
-        "max_iterations": 30,
-        "security_level": "low",
-        "llm_provider": "gemini",
-        "stop_policy": "coverage",
-        "coverage_target": 0.90,
-        "scores": {"sqli": 1},
-    }
-
-    update = orchestrator(state)
-    assert update["next_agent"] != "scorer"

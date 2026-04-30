@@ -3,28 +3,32 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import getpass
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from core.state import MODULE_NAMES, SECURITY_LEVELS
+from core.state import SURFACES, SECURITY_LEVELS, ALL_METHOD_AGENTS
 from evaluation.multi_llm_runner import run_provider_matrix
 from evaluation.reporter import write_json_report, write_markdown_report
 from evaluation.runner import run_single_engagement
 from llm.provider import SUPPORTED_PROVIDERS
 from tesis.config_loader import (
     ConfigError,
+    _default_model_name,
     load_and_resolve_config,
     load_yaml_config,
     mask_secret,
     save_yaml_config,
 )
 from tesis.report_formatters import (
+    format_evasion_table,
     format_module_scores_table,
     format_provider_comparison_table,
     format_rejection_table,
@@ -34,7 +38,7 @@ from tesis.report_formatters import (
 
 
 LOGGER = logging.getLogger("tesis.cli")
-SCHEMA_VERSION = "stage6.v1"
+SCHEMA_VERSION = "stage8.v1"
 
 EXIT_OK = 0
 EXIT_RUNTIME_ERROR = 1
@@ -86,6 +90,7 @@ def _print_resolved_config(config: Any) -> None:
     masked_models = {
         provider: {
             "model_name": model.model_name,
+            "base_url": model.base_url,
             "temperature": model.temperature,
             "timeout": model.timeout,
             "api_key": mask_secret(model.api_key),
@@ -96,20 +101,51 @@ def _print_resolved_config(config: Any) -> None:
         "target_url": config.target_url,
         "provider": config.provider,
         "level": config.level,
+        "surface": config.surface,
         "iterations": config.iterations,
         "repeats": config.repeats,
         "output_dir": config.output_dir,
         "matrix": config.matrix,
         "providers": config.providers,
         "levels": config.levels,
+        "surfaces": config.surfaces,
         "format": config.report_format,
         "enriched_reporting": config.enriched_reporting,
         "stop_policy": config.stop_policy,
         "coverage_target": config.coverage_target,
         "diagnose": config.diagnose,
+        "evasion_enabled": config.evasion_enabled,
+        "evasion_mode": config.evasion_mode,
+        "evasion_max_retries": config.evasion_max_retries,
+        "evasion_cooldown_threshold": config.evasion_cooldown_threshold,
         "models": masked_models,
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _model_config_to_dict(model_cfg: Any) -> dict[str, Any]:
+    """Convert a ModelConfig dataclass to a plain dict for state injection."""
+    if model_cfg is None:
+        return {}
+    return dataclasses.asdict(model_cfg)
+
+
+def _announce_runtime_config(config: Any) -> None:
+    """Print active provider, model, and endpoint before execution."""
+    if config.matrix:
+        combos = len(config.providers) * len(config.levels) * len(config.surfaces) * config.repeats
+        print(
+            f"Matrix mode: {len(config.providers)} providers × {len(config.levels)} levels × "
+            f"{len(config.surfaces)} surfaces × {config.repeats} repeats = {combos} total runs"
+        )
+        return
+
+    model_cfg = config.models.get(config.provider)
+    model_name = model_cfg.model_name if model_cfg else _default_model_name(config.provider)
+    base_url = model_cfg.base_url if model_cfg else None
+
+    endpoint = base_url or "(default endpoint)"
+    print(f"Active provider: {config.provider} | model: {model_name or '(unset)'} | endpoint: {endpoint}")
 
 
 def _masked_config_payload(config: dict[str, Any]) -> dict[str, Any]:
@@ -142,20 +178,32 @@ def handle_run(args: argparse.Namespace) -> int:
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    _announce_runtime_config(config)
+
     try:
         if config.matrix:
             result = run_provider_matrix(
                 target_url=config.target_url,
                 providers=config.providers,
                 security_levels=config.levels,
+                surfaces=config.surfaces,
                 repeats=config.repeats,
                 max_iterations=config.iterations,
                 stop_policy=config.stop_policy,
                 coverage_target=config.coverage_target,
                 enriched_reporting=config.enriched_reporting,
                 diagnose=config.diagnose,
+                evasion_enabled=config.evasion_enabled,
+                evasion_mode=config.evasion_mode,
+                evasion_max_retries=config.evasion_max_retries,
+                evasion_cooldown_threshold=config.evasion_cooldown_threshold,
                 output_dir=str(output_dir / "runs"),
                 include_aggregate=True,
+                live_display=args.live,
+                model_configs={
+                    name: _model_config_to_dict(cfg)
+                    for name, cfg in config.models.items()
+                },
             )
             if isinstance(result, tuple):
                 artifacts, aggregate = result
@@ -188,13 +236,20 @@ def handle_run(args: argparse.Namespace) -> int:
             target_url=config.target_url,
             security_level=config.level,
             llm_provider=config.provider,
+            surface=config.surface,
             max_iterations=config.iterations,
             repeat_index=0,
             stop_policy=config.stop_policy,
             coverage_target=config.coverage_target,
             enriched_reporting=config.enriched_reporting,
             diagnose=config.diagnose,
+            evasion_enabled=config.evasion_enabled,
+            evasion_mode=config.evasion_mode,
+            evasion_max_retries=config.evasion_max_retries,
+            evasion_cooldown_threshold=config.evasion_cooldown_threshold,
             output_dir=str(output_dir / "runs"),
+            live_display=args.live,
+            model_config=_model_config_to_dict(config.models.get(config.provider)),
         )
         _write_run_artifacts(output_dir, [artifact])
 
@@ -229,7 +284,8 @@ def handle_info(args: argparse.Namespace) -> int:
     info = {
         "schema_version": SCHEMA_VERSION,
         "providers": list(SUPPORTED_PROVIDERS),
-        "modules": list(MODULE_NAMES),
+        "surfaces": list(SURFACES),
+        "methods": list(ALL_METHOD_AGENTS),
         "security_levels": list(SECURITY_LEVELS),
     }
     print(json.dumps(info, indent=2, sort_keys=True))
@@ -303,7 +359,8 @@ def handle_report(args: argparse.Namespace) -> int:
         data = parse_artifact_or_matrix(args.artifact)
         show_rejections = bool(args.show_rejections)
         show_scores = bool(args.show_scores)
-        if not show_rejections and not show_scores:
+        show_evasion = bool(args.show_evasion)
+        if not show_rejections and not show_scores and not show_evasion:
             show_scores = True
 
         sections: list[str] = []
@@ -322,6 +379,9 @@ def handle_report(args: argparse.Namespace) -> int:
             runs = data.get("runs") if isinstance(data.get("runs"), list) else []
             if len(runs) > 1:
                 sections.append(format_provider_comparison_table(data))
+
+        if show_evasion:
+            sections.append(format_evasion_table(data))
 
         rich_section = format_rich_report_sections(data)
         if rich_section and "No rich sidecar data available" not in rich_section:
@@ -345,6 +405,92 @@ def handle_report(args: argparse.Namespace) -> int:
         return EXIT_RUNTIME_ERROR
 
 
+def handle_validate(args: argparse.Namespace) -> int:
+    try:
+        config = load_and_resolve_config(config_path=args.config, cli_args=vars(args))
+    except ConfigError as exc:
+        print(f"Config error: {exc}")
+        return EXIT_CONFIG_ERROR
+
+    if not _preflight_target_reachable(config.target_url):
+        print(f"Target unreachable: {config.target_url}")
+        return EXIT_TARGET_UNREACHABLE
+
+    # Import here to avoid circular dependencies at module load time
+    from core.state import new_default_state
+
+    target_url = config.target_url
+    level = args.level
+
+    # Map of runtime agent names to their module functions
+    agent_registry = {
+        "sqli_union_agent": ("agents.sqli.sqli_union_agent", "sqli_union_agent"),
+        "sqli_error_agent": ("agents.sqli.sqli_error_agent", "sqli_error_agent"),
+        "sqli_boolean_blind_agent": ("agents.sqli.sqli_boolean_blind_agent", "sqli_boolean_blind_agent"),
+        "sqli_time_blind_agent": ("agents.sqli.sqli_time_blind_agent", "sqli_time_blind_agent"),
+        "ac_idor_agent": ("agents.access_control.ac_idor_agent", "ac_idor_agent"),
+        "ac_vertical_escalation_agent": ("agents.access_control.ac_vertical_escalation_agent", "ac_vertical_escalation_agent"),
+        "ac_force_browse_agent": ("agents.access_control.ac_force_browse_agent", "ac_force_browse_agent"),
+        "bf_dictionary_agent": ("agents.brute_force.bf_dictionary_agent", "bf_dictionary_agent"),
+        "bf_spray_agent": ("agents.brute_force.bf_spray_agent", "bf_spray_agent"),
+    }
+
+    agents_to_run = []
+    if args.all_agents:
+        agents_to_run = list(agent_registry.keys())
+    elif args.agent:
+        if args.agent not in agent_registry:
+            print(f"Unknown agent: {args.agent}")
+            return EXIT_CONFIG_ERROR
+        agents_to_run = [args.agent]
+    else:
+        print("Must specify --agent or --all-agents")
+        return EXIT_CONFIG_ERROR
+
+    results = []
+    for agent_name in agents_to_run:
+        module_path, func_name = agent_registry[agent_name]
+        module = __import__(module_path, fromlist=[func_name])
+        agent_func = getattr(module, func_name)
+
+        state = {
+            **new_default_state(),
+            "target_url": target_url,
+            "security_level": level,
+        }
+        try:
+            result = agent_func(state)
+            module_name = agent_name.replace("_agent", "")
+            score = result.get("scores", {}).get(module_name, 0)
+            confirmed = result.get("confirmed_vulns", [])
+            issues = []
+            if score == 0:
+                issues.append("No vulnerability signal detected")
+            if not confirmed:
+                issues.append("No confirmed nodes emitted")
+            results.append({
+                "agent": agent_name,
+                "score": score,
+                "confirmed": confirmed,
+                "issues": "; ".join(issues) if issues else "ok",
+            })
+        except Exception as exc:
+            results.append({
+                "agent": agent_name,
+                "score": 0,
+                "confirmed": [],
+                "issues": f"Exception: {type(exc).__name__}: {exc}",
+            })
+
+    # Print table
+    print(f"{'Agent':<20} | {'Score':<5} | {'Confirmed Nodes':<30} | {'Issues'}")
+    print("-" * 80)
+    for r in results:
+        print(f"{r['agent']:<20} | {r['score']:<5} | {', '.join(r['confirmed']) or '-':<30} | {r['issues']}")
+
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tesis", description="Stage 7 CLI for tesis framework")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -353,11 +499,13 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--config", default="config.yaml", help="Path to YAML config file")
     run_parser.add_argument("--target", dest="target", help="Target URL")
     run_parser.add_argument("--level", choices=SECURITY_LEVELS, help="Security level")
+    run_parser.add_argument("--surface", choices=SURFACES, help="Attack surface to test")
     run_parser.add_argument("--provider", help="LLM provider")
     run_parser.add_argument("--iterations", type=int, help="Max iterations")
     run_parser.add_argument("--matrix", action="store_true", help="Run provider/level matrix")
     run_parser.add_argument("--providers", nargs="+", help="Providers for matrix mode")
     run_parser.add_argument("--levels", nargs="+", help="Security levels for matrix mode")
+    run_parser.add_argument("--surfaces", nargs="+", help="Surfaces for matrix mode")
     run_parser.add_argument("--repeats", type=int, help="Repeats per provider/level")
     run_parser.add_argument("--output-dir", dest="output_dir", help="Output directory")
     run_parser.add_argument("--format", choices=["json", "markdown", "both"], help="Output format")
@@ -373,10 +521,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Coverage target in [0.0, 1.0] when using coverage stop policy",
     )
     run_parser.add_argument("--diagnose", action="store_true", help="Attach quality diagnostics in report summary")
+    run_parser.add_argument("--evasion-enabled", action="store_true", help="Enable adversarial prompt evasion layer")
+    run_parser.add_argument(
+        "--evasion-mode",
+        choices=["reactive", "proactive", "disabled"],
+        help="Evasion mode when evasion is enabled",
+    )
+    run_parser.add_argument("--evasion-max-retries", type=int, default=3, help="Max evasion retries per prompt")
+    run_parser.add_argument("--evasion-cooldown-threshold", type=int, default=5, help="Cooldown threshold for reactive evasion")
     run_parser.add_argument("--dry-run", action="store_true", help="Validate config and exit")
     run_parser.add_argument("--no-summary", action="store_true", help="Suppress stdout run summary")
     run_parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     run_parser.add_argument("--quiet", action="store_true", help="Reduce logging noise")
+    run_parser.add_argument("--live", action="store_true", help="Show live progress dashboard during engagement")
     run_parser.set_defaults(handler=handle_run)
 
     info_parser = subparsers.add_parser("info", help="Print framework metadata")
@@ -412,7 +569,17 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--output", help="Optional output file path")
     report_parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     report_parser.add_argument("--quiet", action="store_true", help="Reduce logging noise")
+    report_parser.add_argument("--show-evasion", action="store_true", help="Render evasion statistics table")
     report_parser.set_defaults(handler=handle_report)
+
+    validate_parser = subparsers.add_parser("validate", help="Validate agents against live DVWA target")
+    validate_parser.add_argument("--agent", help="Agent name to validate (e.g. upload_agent)")
+    validate_parser.add_argument("--all-agents", action="store_true", help="Validate all agents")
+    validate_parser.add_argument("--level", choices=SECURITY_LEVELS, default="low", help="Security level")
+    validate_parser.add_argument("--config", default="config.yaml", help="Path to YAML config file")
+    validate_parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
+    validate_parser.add_argument("--quiet", action="store_true", help="Reduce logging noise")
+    validate_parser.set_defaults(handler=handle_validate)
 
     return parser
 

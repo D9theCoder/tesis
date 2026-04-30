@@ -33,8 +33,9 @@ class TestExploitationStateSchema:
         "target_url",
         "security_level",
         "llm_provider",
+        "current_surface",
         "endpoints",
-        "input_vectors",
+        "observations",
         "confirmed_vulns",
         "achieved_outcomes",
         "found_credentials",
@@ -44,18 +45,38 @@ class TestExploitationStateSchema:
         "scores",
         "current_chain",
         "chain_history",
+        "akg_path",
         "messages",
         "guardrail_activations",
+        "blocked_agents",
+        "failure_agents",
+        "consecutive_clean_responses",
+        "fallback_depth",
         "next_agent",
         "iteration_count",
         "max_iterations",
+        "task_result",
+        "incomplete_reason",
     ]
 
     # Stage 7.1 optional extensions for telemetry/coverage reporting
+    # Stage 8 optional extensions for adversarial evasion
     OPTIONAL_FIELDS = [
         "telemetry_events",
         "stop_policy",
         "coverage_target",
+        "evasion_attempts",
+        "successful_evasions",
+        "evasion_enabled",
+        "evasion_mode",
+        "evasion_max_retries",
+        "evasion_cooldown_threshold",
+        "evasion_strategy",
+        "simulator_model",
+        "simulator_provider",
+        "max_concurrency",
+        "attempted_agents",
+        "model_config",
     ]
 
     def test_all_fields_present(self):
@@ -77,8 +98,9 @@ class TestExploitationStateSchema:
             "target_url": "http://localhost/dvwa",
             "security_level": "low",
             "llm_provider": "gemini",
+            "current_surface": "sqli",
             "endpoints": [{"url": "/dvwa/vulnerabilities/sqli/", "method": "GET"}],
-            "input_vectors": [{"param_name": "id", "param_type": "query", "endpoint_url": "/dvwa/vulnerabilities/sqli/"}],
+            "observations": {"error_messages_enabled": True},
             "confirmed_vulns": ["sqli_confirmed"],
             "achieved_outcomes": ["credentials_extracted"],
             "found_credentials": [{"username": "admin", "password": "password"}],
@@ -88,11 +110,17 @@ class TestExploitationStateSchema:
             "scores": {"sqli": 3},
             "current_chain": ["sqli_confirmed", "credentials_extracted"],
             "chain_history": [{"chain": "sqli→creds", "evidence": "users table dumped"}],
+            "akg_path": [],
             "messages": [HumanMessage(content="test")],
             "guardrail_activations": [],
+            "blocked_agents": [],
+            "failure_agents": [],
+            "consecutive_clean_responses": 0,
             "next_agent": "orchestrator",
             "iteration_count": 5,
             "max_iterations": 30,
+            "task_result": None,
+            "incomplete_reason": None,
         }
         assert state["target_url"] == "http://localhost/dvwa"
         assert state["confirmed_vulns"] == ["sqli_confirmed"]
@@ -208,11 +236,13 @@ class TestDefaultState:
         assert DEFAULT_STATE["scores"] == {}
         assert DEFAULT_STATE["current_chain"] == []
         assert DEFAULT_STATE["chain_history"] == []
+        assert DEFAULT_STATE["akg_path"] == []
         assert DEFAULT_STATE["messages"] == []
         assert DEFAULT_STATE["guardrail_activations"] == []
         assert DEFAULT_STATE["tried_payloads"] == {}
         assert DEFAULT_STATE["endpoints"] == []
-        assert DEFAULT_STATE["input_vectors"] == []
+        assert DEFAULT_STATE["blocked_agents"] == []
+        assert DEFAULT_STATE["failure_agents"] == []
 
     def test_new_default_state_returns_fresh_objects(self):
         """new_default_state should not share nested mutable objects."""
@@ -291,7 +321,7 @@ class TestConstants:
 
     def test_llm_providers(self):
         assert "gemini" in LLM_PROVIDERS
-        assert len(LLM_PROVIDERS) == 1
+        assert "openai" in LLM_PROVIDERS
 
 
 class TestLangGraphIntegration:

@@ -1,9 +1,13 @@
 """Verification engine — response parser + Playwright XSS verifier."""
 
 from dataclasses import dataclass, field
+import logging
 import os
 import re
 from urllib.parse import urlparse
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -58,7 +62,8 @@ class Verifier:
             try:
                 if re.search(pattern, body, flags=re.IGNORECASE | re.MULTILINE):
                     evidence.append(pattern)
-            except re.error:
+            except re.error as exc:
+                logger.debug("Invalid regex pattern encountered during verification: %s", pattern, exc_info=exc)
                 evidence.append(f"invalid_regex:{pattern}")
 
         matched = [item for item in evidence if not item.startswith("invalid_regex:")]
@@ -66,6 +71,7 @@ class Verifier:
         confidence = min(1.0, 0.6 + 0.1 * len(matched)) if ok else 0.0
         return VerificationResult(ok=ok, confidence=confidence, evidence=evidence)
 
+    # NOTE: The following XSS-specific Playwright code is reserved for future use.
     def verify_xss_dialog(
         self, url: str, cookies: dict[str, str] | None = None
     ) -> VerificationResult:
@@ -89,6 +95,7 @@ class Verifier:
         try:
             from playwright.sync_api import sync_playwright
         except Exception as exc:  # pragma: no cover - depends on local runtime
+            logger.debug("Playwright unavailable for XSS dialog verification", exc_info=exc)
             return VerificationResult(
                 ok=False,
                 confidence=0.0,
@@ -138,6 +145,7 @@ class Verifier:
                 evidence=["no_dialog"],
             )
         except Exception as exc:  # pragma: no cover - depends on browser availability
+            logger.warning("Browser verifier failed during XSS dialog check", exc_info=exc)
             return VerificationResult(
                 ok=False,
                 confidence=0.0,
@@ -147,5 +155,10 @@ class Verifier:
             if browser is not None:
                 try:
                     browser.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Browser close raised while cleaning up verifier resources", exc_info=exc)
+
+
+def verify_method_response(agent_id: str, response_text: str, expected_signal: str) -> bool:
+    """Verify if a method's expected signal is present in the response."""
+    return expected_signal.lower() in response_text.lower()

@@ -12,6 +12,7 @@ Based on `summary.md` and `AGENTS.md`, this is the recommended build order for t
 | 6. Evaluation and testing | Week 8 | Scorer (0–4), multi-LLM runner, regression tests |
 | 7. CLI and config interface | Week 9 | Thesis-grade CLI (`python -m tesis run`), config-driven execution, structured output artifacts |
 | 7.1. Rich experiment reporting & diagnostics | Week 10 | Prompt/response trace capture, AKG traversal logs, rejection/success messaging, failure artifacts, and low-coverage diagnostics |
+| 8. Adversarial prompt evasion | Week 11 | Single-turn and multi-turn prompt injection/jailbreak pipelines to prevent AI rejection during execution |
 
 ## Stage 1 — Core state contract (Week 1)
 **Goal:** Lock the shared state schema before writing agents.
@@ -499,27 +500,59 @@ Tasks:
 - [ ] Add `config.yaml` section to `README.md` explaining all supported fields under `models:`
 - [ ] Update `summary.md` Section 3 (Rubrik Penilaian) to reference the CLI's `--show-scores` output for reproducibility
 
-## Stage 8 — Rich experiment reporting and diagnostics (Week 10)
-**Goal:** Extend experiment artifacts beyond score summaries so each run is reproducible, diagnosable, and scientifically auditable.
+## Stage 8 — Adversarial prompt evasion (Week 11)
+**Goal:** Implement prompt injection and multi-turn jailbreak algorithms to rewrite offensive prompts, preventing LLM safety filters from rejecting the framework's own execution tasks.
 
-**Scope:** This stage keeps existing Stage 6/7 outputs compatible (`stage6.v1`) while introducing sidecar artifacts for rich traces.
+**Sample code:**
+```python
+from llm.evasion import PromptInjectionPipeline
 
-Tasks:
-- [ ] Add structured event telemetry per run (JSONL) capturing prompt generation, model response, AKG traversal decisions, and agent outcomes.
-- [ ] Persist rich sidecar artifact (`*.rich.json`) with prompt/response summaries, traversal summaries, rejection/success message indexes, and diagnostics pointers.
-- [ ] Add failure artifact generation (`*.failure.json`, optional `*.failed.log`) when experiment status is `error`.
-- [ ] Add coverage diagnostics (`module_coverage_ratio`, early-stop indicators, fallback-rate indicators) to explain low-scoring runs.
-- [ ] Add orchestration stop policy controls (`impact` vs `coverage`) so evaluation runs can prioritize breadth.
-- [ ] Add reporting formatter support to render rich sections (trace summary, traversal summary, diagnostics summary).
-- [ ] Add regression tests proving existing `stage6.v1` output remains readable when rich reporting is disabled.
+# Wrap the standard prompt in an adversarial enhancement
+pipeline = PromptInjectionPipeline(simulator=simulator_llm, max_retries=3)
+safe_evasion_prompt = pipeline.run(base_seed=unsafe_task_intent)
 
----
+# Submit rewritten payload to target LLM to bypass refusal
+llm_response = target_llm.invoke(safe_evasion_prompt)
+```
 
-## Library Documentation References
-- LangGraph: https://langchain-ai.github.io/langgraph/
-- NetworkX DiGraph: https://networkx.org/documentation/stable/reference/classes/digraph.html
-- NetworkX paths: https://networkx.org/documentation/stable/reference/algorithms/generated/networkx.algorithms.simple_paths.all_simple_paths.html
-- HTTPX clients: https://www.python-httpx.org/advanced/clients/
-- BeautifulSoup4 docs: https://www.crummy.com/software/BeautifulSoup/bs4/doc/
-- Playwright Python: https://playwright.dev/python/docs/intro
-- pytest: https://docs.pytest.org/en/stable/
+**Why this stage:** To maximize evaluation coverage and exploit success rates against heavily-aligned target models by dynamically rewriting internal requests to evade rejection.
+
+**Docs:**
+- `docs/jailbreak-algorithm.md`
+- DeepTeam adversarial attacks
+- `docs/stage-8-adversarial-prompt-evasion.implementation-plan.md`
+
+## Stage 8.1 — Jailbreak Integration to Main Program (Week 11, days 4–5)
+**Goal:** Wire the existing adversarial evasion layer through the full execution pipeline: CLI flags → config loader → engagement runner → LangGraph initial state → orchestrator → reports.
+
+**What is missing today:**
+- `tesis/cli.py` does not expose `--evasion-enabled` or `--evasion-strategy`.
+- `tesis/model_config.py` / `EngagementConfig` has no evasion fields.
+- `tesis/config_loader.py` ignores `evasion_enabled` / `evasion_strategy` from YAML, env vars, and CLI overrides.
+- `evaluation/runner.py` and `evaluation/multi_llm_runner.py` never pass evasion settings into `init_state`.
+- `core/scorer.py` and `evaluation/contracts.py` do not surface evasion metrics in score reports.
+- `tesis/report_formatters.py` has no evasion statistics table.
+
+**Files to modify:**
+- `tesis/model_config.py` — add `evasion_enabled` and `evasion_strategy` to `EngagementConfig`.
+- `tesis/config_loader.py` — parse evasion settings from YAML / `TESIS_EVASION_ENABLED` / CLI overrides; validate strategy.
+- `tesis/cli.py` — add `--evasion-enabled`, `--evasion-strategy` to `run`; add `--show-evasion` to `report`; wire values to runners.
+- `evaluation/runner.py` — accept `evasion_enabled` / `evasion_strategy`; inject into `init_state`; persist in artifact.
+- `evaluation/multi_llm_runner.py` — propagate evasion settings to every single engagement; aggregate `evasion_attempts` / `successful_evasions` per provider.
+- `evaluation/contracts.py` — extend `ScoreSummary` with `evasion_attempts`, `successful_evasions`, `evasion_strategy`.
+- `core/scorer.py` — read evasion fields from final state and include them in `ScoreSummary`.
+- `tesis/report_formatters.py` — implement `format_evasion_table()`; wire it to `--show-evasion`.
+
+**Files to create:**
+- `tests/test_evasion_integration.py` — config loading, runner state propagation, report formatting.
+
+**Acceptance criteria:**
+- [ ] `python -m tesis run --dry-run --evasion-enabled --evasion-strategy prompt_injection` resolves without error.
+- [ ] `EngagementConfig` carries evasion settings with correct defaults (`False`, `"pipeline"`).
+- [ ] Evasion settings reach `init_state` and flow back into run artifacts.
+- [ ] Matrix aggregate includes per-provider evasion attempt/success counts and `evasion_success_rate`.
+- [ ] `python -m tesis report <artifact> --show-evasion` renders an evasion statistics table.
+- [ ] All existing tests continue to pass.
+
+**Docs:**
+- `docs/stage-8.1-jailbreak-integration.implementation-plan.md`

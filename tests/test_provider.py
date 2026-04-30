@@ -2,7 +2,8 @@ import pytest
 import llm.provider as provider_module
 from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from llm.provider import SAMPLE_QUERY, get_llm, invoke_sample_query
+from langchain_openai import ChatOpenAI
+from llm.provider import SAMPLE_QUERY, SUPPORTED_PROVIDERS, get_llm, invoke_sample_query
 
 
 def test_get_llm_gemini(monkeypatch):
@@ -10,6 +11,50 @@ def test_get_llm_gemini(monkeypatch):
     llm = get_llm("gemini")
     assert isinstance(llm, ChatGoogleGenerativeAI)
     assert llm.model == "gemini-3-flash-preview"
+
+
+def test_get_llm_openai(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    llm = get_llm("openai")
+    assert isinstance(llm, ChatOpenAI)
+    assert llm.model_name == "gpt-4o-mini"
+
+
+def test_get_llm_openai_compatible_base_url(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    llm = get_llm("openai", model_name="meta-llama/llama-3.1-8b-instruct", base_url="https://openrouter.ai/api/v1")
+    assert isinstance(llm, ChatOpenAI)
+    assert llm.model_name == "meta-llama/llama-3.1-8b-instruct"
+    assert llm.openai_api_base == "https://openrouter.ai/api/v1"
+
+
+def test_get_llm_openai_compatible_with_base_url(monkeypatch):
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "test-key")
+    llm = get_llm(
+        "openai_compatible",
+        model_name="llama3.2",
+        base_url="http://localhost:11434/v1",
+    )
+    assert isinstance(llm, ChatOpenAI)
+    assert llm.model_name == "llama3.2"
+    assert llm.openai_api_base == "http://localhost:11434/v1"
+
+
+def test_get_llm_openai_compatible_missing_base_url():
+    with pytest.raises(ValueError, match="openai_compatible provider requires base_url"):
+        get_llm("openai_compatible", model_name="llama3.2")
+
+
+def test_get_llm_openai_compatible_base_url_from_env(monkeypatch):
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_BASE_URL", "http://localhost:8080/v1")
+    llm = get_llm("openai_compatible", model_name="llama3.2")
+    assert isinstance(llm, ChatOpenAI)
+    assert llm.openai_api_base == "http://localhost:8080/v1"
+
+
+def test_openai_compatible_in_supported_providers():
+    assert "openai_compatible" in SUPPORTED_PROVIDERS
 
 
 def test_get_llm_invalid():

