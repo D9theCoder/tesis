@@ -202,7 +202,7 @@ MODULE_TO_KG_NODE: dict[str, str] = {
     "sqli_boolean_blind": "blind_sqli_confirmed",
     "sqli_time_blind": "blind_sqli_confirmed",
     "ac_idor": "access_control_confirmed",
-    "ac_vertical_escalation": "access_control_confirmed",
+    "ac_vertical_escalation": "ac_vertical_escalation_confirmed",
     "ac_force_browse": "access_control_confirmed",
     "bf_dictionary": "brute_force_confirmed",
     "bf_spray": "brute_force_confirmed",

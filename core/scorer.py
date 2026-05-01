@@ -102,24 +102,65 @@ def scorer(state: dict) -> dict:
     }
     tried_payloads = state.get("tried_payloads", {})
     attempted = state.get("attempted_agents", [])
+    akg_path = state.get("akg_path", [])
+
     metrics = {
         "method_selection_accuracy": round(method_selection_accuracy(normalized_scores, attempted), 4),
         "adaptation_rate": round(adaptation_rate(normalized_scores), 4),
         "mean_attempts_to_success": round(mean_attempts_to_success(tried_payloads, normalized_scores), 4),
     }
-    surface_scores = {
-        surface: max((normalized_scores.get(m, 0) for m in METHODS_BY_SURFACE.get(surface, [])), default=0)
-        for surface in SURFACES
+
+    # Nested surface_scores per spec
+    surface_scores: dict[str, dict[str, Any]] = {}
+    for surface in SURFACES:
+        methods = METHODS_BY_SURFACE.get(surface, [])
+        surface_attempts = sum(1 for m in methods if m in attempted)
+        best_method = None
+        best_score = 0
+        for m in methods:
+            s = normalized_scores.get(m, 0)
+            if s > best_score:
+                best_score = s
+                best_method = m
+
+        adapted = bool(state.get("failure_agents", [])) and best_score >= 3
+
+        surface_scores[surface] = {
+            "score": best_score,
+            "label": SCORE_LABELS.get(best_score, "Not Found"),
+            "method_selected": best_method,
+            "attempts": surface_attempts,
+            "akg_path": akg_path,
+            "adapted": adapted,
+        }
+
+    summary = {
+        "llm_provider": state.get("llm_provider", "gemini"),
+        "security_level": state.get("security_level", "low"),
+        "total_surfaces_tested": len(SURFACES),
+        "score_distribution": score_distribution(normalized_scores),
+        "method_selection_accuracy": metrics["method_selection_accuracy"],
+        "adaptation_rate": metrics["adaptation_rate"],
+        "mean_attempts_to_success": metrics["mean_attempts_to_success"],
+        "chain_exploits_achieved": chain_exploit_count(normalized_scores),
+        "guardrail_activations": len(state.get("guardrail_activations", [])),
+        "total_iterations_used": int(state.get("iteration_count", 0)),
+        "incomplete_surfaces": [
+            s for s in SURFACES
+            if all(normalized_scores.get(m, 0) == 0 for m in METHODS_BY_SURFACE.get(s, []))
+        ],
+        "incomplete_reasons": state.get("incomplete_reason"),
     }
+
     existing_result = state.get("task_result")
     existing_reason = state.get("incomplete_reason")
     task_result = existing_result or "SUCCESS"
+
     return {
         "scores": normalized_scores,
         "next_agent": "END",
         "task_result": task_result,
         "incomplete_reason": existing_reason,
-        "method_quality_metrics": metrics,
         "surface_scores": surface_scores,
-        "akg_path": state.get("akg_path", []),
+        "summary": summary,
     }

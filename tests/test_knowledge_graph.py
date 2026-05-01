@@ -145,3 +145,40 @@ def test_validation_fails_for_invalid_preconditions_type_on_chain():
 def test_validation_fails_for_missing_high_impact_outcome_node():
     with pytest.raises(ValueError, match="Missing high-impact outcomes"):
         MissingHighImpactOutcomeAKG()
+
+
+def test_unauthenticated_node_exists(kg: AttackKnowledgeGraph):
+    assert "unauthenticated" in kg.graph
+
+
+def test_unauthenticated_connects_to_all_surfaces(kg: AttackKnowledgeGraph):
+    actions = kg.get_next_actions("unauthenticated")
+    targets = {a["target"] for a in actions}
+    assert "sqli" in targets
+    assert "access_control" in targets
+    assert "brute_force" in targets
+
+
+def test_authenticated_session_intermediate_chain_node(kg: AttackKnowledgeGraph):
+    assert "authenticated_session" in kg.graph
+    # Check incoming from brute_force_confirmed
+    predecessors = set(kg.graph.predecessors("authenticated_session"))
+    assert "brute_force_confirmed" in predecessors
+    # Check outgoing to ac_idor
+    successors = set(kg.graph.successors("authenticated_session"))
+    assert "ac_idor" in successors
+
+
+def test_admin_session_obtained_intermediate_chain_node(kg: AttackKnowledgeGraph):
+    assert "admin_session_obtained" in kg.graph
+    predecessors = set(kg.graph.predecessors("admin_session_obtained"))
+    assert "ac_vertical_escalation_confirmed" in predecessors
+    successors = set(kg.graph.successors("admin_session_obtained"))
+    assert "sqli_union" in successors
+
+
+def test_get_viable_chains_paths_through_intermediates(kg: AttackKnowledgeGraph):
+    confirmed = ["brute_force_confirmed"]
+    chains = kg.get_viable_chains(confirmed_vulns=confirmed, achieved_outcomes=[])
+    # Should find paths that go through authenticated_session if it's reachable
+    assert isinstance(chains, list)

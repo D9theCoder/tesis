@@ -47,7 +47,7 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
     max_iterations = state.get("max_iterations", 30)
     confirmed = set(state.get("confirmed_vulns", []))
     achieved = set(state.get("achieved_outcomes", []))
-    known = confirmed | achieved
+    known = confirmed  # chain preconditions must be confirmed_vulns only, not achieved_outcomes
     current_surface = state.get("current_surface", "sqli")
     # Deduplicate attempted_agents because Annotated[list[str], add]
     # reducer can accumulate duplicates when agents return the full list.

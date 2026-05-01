@@ -42,19 +42,21 @@ def test_build_score_report_matches_agents_shape_keys():
     assert "total_modules_tested" in payload["summary"]
 
 
-def test_scorer_returns_method_quality_metrics():
+def test_scorer_returns_summary_instead_of_method_quality_metrics():
     state = new_default_state()
     update = scorer(state)
-    assert "method_quality_metrics" in update
-    assert "adaptation_rate" in update["method_quality_metrics"]
+    assert "summary" in update
+    assert "method_quality_metrics" not in update
+    assert "adaptation_rate" in update["summary"]
 
 
-def test_scorer_returns_surface_scores():
+def test_scorer_returns_nested_surface_scores():
     state = new_default_state()
     state["scores"] = {"sqli_union": 3}
     update = scorer(state)
     assert "surface_scores" in update
-    assert update["surface_scores"]["sqli"] == 3
+    assert isinstance(update["surface_scores"]["sqli"], dict)
+    assert update["surface_scores"]["sqli"]["score"] == 3
 
 
 def test_highest_impact_outcome_prefers_rce_over_admin():

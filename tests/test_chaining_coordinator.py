@@ -82,3 +82,42 @@ def test_route_after_agent_all_methods_exhausted():
         "observations": {},
     }
     assert route_after_agent(state) == "scorer"
+
+
+from core.chaining_coordinator import evaluate_chain_route
+
+
+def test_chain_preconditions_use_confirmed_vulns_only():
+    """Achieved outcomes alone should NOT trigger a chain."""
+    state = {
+        "confirmed_vulns": [],
+        "achieved_outcomes": ["credentials_extracted"],
+        "iteration_count": 1,
+        "max_iterations": 30,
+        "current_surface": "brute_force",
+        "attempted_agents": [],
+        "blocked_agents": [],
+        "failure_agents": [],
+        "observations": {},
+    }
+    next_agent, event = evaluate_chain_route(state)
+    # Should NOT trigger the credentials_extracted -> brute_force_confirmed chain
+    # because confirmed_vulns is empty
+    assert event["reason"] != "chain_ready" or next_agent != "bf_dictionary"
+
+
+def test_achieved_outcomes_alone_cannot_trigger_chain():
+    state = {
+        "confirmed_vulns": [],
+        "achieved_outcomes": ["brute_force_confirmed", "credentials_extracted"],
+        "iteration_count": 1,
+        "max_iterations": 30,
+        "current_surface": "brute_force",
+        "attempted_agents": [],
+        "blocked_agents": [],
+        "failure_agents": [],
+        "observations": {},
+    }
+    next_agent, event = evaluate_chain_route(state)
+    # achieved_outcomes should not satisfy chain preconditions
+    assert event["reason"] != "chain_ready" or next_agent != "ac_idor"

@@ -84,8 +84,12 @@ class AttackKnowledgeGraph:
     def _build_graph(self) -> None:
         # Nodes: surfaces, methods, confirmed methods, outcomes
         nodes = [
+            # Entry node
+            "unauthenticated",
             # Surface nodes
             "sqli", "access_control", "brute_force",
+            # Intermediate chain nodes
+            "authenticated_session",
             # Method nodes
             "sqli_union", "sqli_error", "sqli_boolean_blind", "sqli_time_blind",
             "ac_idor", "ac_vertical_escalation", "ac_force_browse",
@@ -104,6 +108,10 @@ class AttackKnowledgeGraph:
         self.graph.add_nodes_from(sorted(set(nodes)))
 
         transitions: list[RawTransition] = [
+            # Entry -> surface (discovery edges)
+            {"source": "unauthenticated", "target": "sqli", "priority": 100},
+            {"source": "unauthenticated", "target": "access_control", "priority": 100},
+            {"source": "unauthenticated", "target": "brute_force", "priority": 100},
             # Surface -> method (non-chain, discovery edges)
             {"source": "sqli", "target": "sqli_union", "priority": 100},
             {"source": "sqli", "target": "sqli_error", "priority": 100},
@@ -142,9 +150,17 @@ class AttackKnowledgeGraph:
             # Cross-surface chains
             {
                 "source": "brute_force_confirmed",
-                "target": "ac_idor",
+                "target": "authenticated_session",
                 "is_chain": True,
                 "preconditions": ["brute_force_confirmed"],
+                "target_agent": "ac_idor",
+                "priority": 10,
+            },
+            {
+                "source": "authenticated_session",
+                "target": "ac_idor",
+                "is_chain": True,
+                "preconditions": ["authenticated_session"],
                 "target_agent": "ac_idor",
                 "priority": 10,
             },
@@ -166,9 +182,17 @@ class AttackKnowledgeGraph:
             },
             {
                 "source": "ac_vertical_escalation_confirmed",
-                "target": "sqli_union",
+                "target": "admin_session_obtained",
                 "is_chain": True,
                 "preconditions": ["ac_vertical_escalation_confirmed"],
+                "target_agent": "sqli_union",
+                "priority": 10,
+            },
+            {
+                "source": "admin_session_obtained",
+                "target": "sqli_union",
+                "is_chain": True,
+                "preconditions": ["admin_session_obtained"],
                 "target_agent": "sqli_union",
                 "priority": 10,
             },
