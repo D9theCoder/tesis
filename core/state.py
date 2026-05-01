@@ -8,11 +8,19 @@ from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 
 
-def _merge_dicts(a: dict, b: dict) -> dict:
-    """Reducer for observations: merge b into a; never overwrite True with False."""
+def _merge_dicts(a: dict[str, bool], b: dict[str, bool]) -> dict[str, bool]:
+    """Reducer for observations: merge b into a; never overwrite True with False.
+
+    Rules (in order):
+    1. New keys from b are always added (even if False — first observation recorded).
+    2. Existing keys in a that are True are preserved (never downgraded to False).
+    3. Existing keys in a that are False are overwritten with whatever b provides.
+    4. Keys only in a are left untouched.
+    """
     merged = dict(a)
     for key, value in b.items():
-        if key not in merged or not merged[key]:
+        if key not in merged or merged[key] is False:
+            # Only overwrite if key is new or currently False (never downgrade True)
             merged[key] = value
     return merged
 
@@ -242,7 +250,6 @@ KG_NODES: list[str] = [
     # Outcome nodes
     "credentials_extracted",
     "admin_session_obtained",
-    "log_access_confirmed",
     "rce_achieved",
     "user_compromised",
     "data_exfiltrated",

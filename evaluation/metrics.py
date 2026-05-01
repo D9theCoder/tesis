@@ -33,7 +33,6 @@ _IMPACT_SEVERITY_ORDER: tuple[str, ...] = (
     "user_compromised",
     "data_exfiltrated",
     "credentials_extracted",
-    "log_access_confirmed",
     "session_hijack",
 )
 

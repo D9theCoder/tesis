@@ -213,6 +213,7 @@ class AttackKnowledgeGraph:
         self._validate_chain_metadata()
         self._validate_preconditions_known()
         self._validate_high_impact_nodes_exist()
+        self._validate_agent_kg_node_mappings()
 
     def _validate_chain_metadata(self) -> None:
         for source, target, meta in self.graph.edges(data=True):
@@ -237,6 +238,26 @@ class AttackKnowledgeGraph:
         missing = [node for node in self.HIGH_IMPACT_OUTCOMES if node not in self.graph]
         if missing:
             raise ValueError(f"Missing high-impact outcomes in graph: {missing}")
+
+    def _validate_agent_kg_node_mappings(self) -> None:
+        """Validate that every MODULE_TO_KG_NODE value for method agents
+        exists as a node in the AKG graph.
+
+        This prevents the class of bug where an agent maps to a confirmed
+        node that doesn't exist in the graph (e.g., blind_sqli_confirmed
+        before Stage 9C fix), causing silent chain lookup failures.
+        """
+        from core.state import MODULE_TO_KG_NODE, ALL_METHOD_AGENTS
+        graph_nodes = set(self.graph.nodes)
+        for agent in ALL_METHOD_AGENTS:
+            kg_node = MODULE_TO_KG_NODE.get(agent)
+            if kg_node is None:
+                continue  # unknown agents are not validated here
+            if kg_node not in graph_nodes:
+                raise ValueError(
+                    f"MODULE_TO_KG_NODE[{agent!r}] maps to {kg_node!r} "
+                    f"which does not exist in the AKG graph"
+                )
 
     def get_viable_methods(self, surface: str, observations: dict) -> list[str]:
         """Return method nodes for a surface whose preconditions are satisfied."""

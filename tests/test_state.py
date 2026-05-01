@@ -303,7 +303,6 @@ class TestConstants:
             "user_compromised",
             "data_exfiltrated",
             "session_hijack",
-            "log_access_confirmed",
         ]
         for outcome in expected_outcomes:
             assert outcome in KG_NODES, f"Missing KG outcome: {outcome}"

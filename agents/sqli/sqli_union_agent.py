@@ -122,7 +122,10 @@ def sqli_union_agent(state: ExploitationState) -> dict[str, Any]:
     session = DVWASession(target_url)
     try:
         if not session.login():
-            return make_update(state=state, module_name=AGENT_ID, score=0, tried_payloads=[])
+            return make_update(
+                state=state, module_name=AGENT_ID, score=0, tried_payloads=[],
+                failure_agents=[AGENT_ID],
+            )
         session.set_security_level(security_level)
 
         payload_lib = PayloadLibrary()
