@@ -24,7 +24,7 @@ def test_runtime_starts_from_recon(monkeypatch):
     state = deepcopy(DEFAULT_STATE)
     state["max_iterations"] = 1
 
-    result = app.invoke(state)
+    result = app.invoke(state, config={"configurable": {"thread_id": "test"}})
     assert "next_agent" in result
 
 

@@ -125,6 +125,44 @@ def test_run_provider_matrix_include_aggregate(monkeypatch):
     assert "totals" in aggregate
 
 
+def test_run_provider_matrix_zero_success_avg_score_is_zero(monkeypatch):
+    def failed_engagement(**kwargs):
+        return {
+            "schema_version": "stage8.v1",
+            "run_id": "gemini-sqli-low-0",
+            "status": "error",
+            "config": {"provider": "gemini", "surface": "sqli", "security_level": "low"},
+            "timing": {},
+            "final_state": {},
+            "report": {
+                "summary": {
+                    "total_modules_tested": 9,
+                    "score_distribution": {},
+                    "chain_exploits_achieved": 0,
+                    "guardrail_activations": 0,
+                    "total_iterations_used": 0,
+                },
+                "module_scores": {},
+            },
+            "error": "boom",
+        }
+
+    monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", failed_engagement)
+    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["gemini"])
+
+    _, aggregate = run_provider_matrix(
+        target_url="http://localhost/dvwa",
+        providers=["gemini"],
+        security_levels=["low"],
+        surfaces=["sqli"],
+        repeats=1,
+        include_aggregate=True,
+    )
+
+    assert aggregate["by_provider"]["gemini"]["avg_score"] == 0.0
+    assert aggregate["by_provider"]["gemini"]["guardrail_per_iteration"] == 0.0
+
+
 def test_run_provider_matrix_evasion_forwarding(monkeypatch):
     captured = []
 

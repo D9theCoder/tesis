@@ -16,6 +16,7 @@ from core.state import (
     ExploitationState,
     DEFAULT_STATE,
     new_default_state,
+    _merge_tried_payloads,
     MODULE_NAMES,
     KG_NODES,
     SCORE_LABELS,
@@ -40,14 +41,14 @@ class TestExploitationStateSchema:
         "achieved_outcomes",
         "found_credentials",
         "tried_payloads",
-        "blocked_patterns",
-        "successful_bypasses",
         "scores",
         "current_chain",
         "chain_history",
         "akg_path",
         "messages",
         "guardrail_activations",
+        "blocked_patterns",
+        "successful_bypasses",
         "blocked_agents",
         "failure_agents",
         "consecutive_clean_responses",
@@ -105,14 +106,14 @@ class TestExploitationStateSchema:
             "achieved_outcomes": ["credentials_extracted"],
             "found_credentials": [{"username": "admin", "password": "password"}],
             "tried_payloads": {"sqli": ["1'", "1 OR 1=1"]},
-            "blocked_patterns": [],
-            "successful_bypasses": [],
             "scores": {"sqli": 3},
             "current_chain": ["sqli_confirmed", "credentials_extracted"],
             "chain_history": [{"chain": "sqli→creds", "evidence": "users table dumped"}],
             "akg_path": [],
             "messages": [HumanMessage(content="test")],
             "guardrail_activations": [],
+            "blocked_patterns": [],
+            "successful_bypasses": [],
             "blocked_agents": [],
             "failure_agents": [],
             "consecutive_clean_responses": 0,
@@ -152,20 +153,6 @@ class TestReducerBehavior:
         args = get_args(annotated_type)
         assert args[1] is add
 
-    def test_blocked_patterns_uses_add(self):
-        """blocked_patterns should use operator.add reducer."""
-        hints = get_type_hints(ExploitationState, include_extras=True)
-        annotated_type = hints["blocked_patterns"]
-        args = get_args(annotated_type)
-        assert args[1] is add
-
-    def test_successful_bypasses_uses_add(self):
-        """successful_bypasses should use operator.add reducer."""
-        hints = get_type_hints(ExploitationState, include_extras=True)
-        annotated_type = hints["successful_bypasses"]
-        args = get_args(annotated_type)
-        assert args[1] is add
-
     def test_chain_history_uses_add(self):
         """chain_history should use operator.add reducer."""
         hints = get_type_hints(ExploitationState, include_extras=True)
@@ -177,6 +164,20 @@ class TestReducerBehavior:
         """guardrail_activations should use operator.add reducer."""
         hints = get_type_hints(ExploitationState, include_extras=True)
         annotated_type = hints["guardrail_activations"]
+        args = get_args(annotated_type)
+        assert args[1] is add
+
+    def test_blocked_patterns_uses_add(self):
+        """blocked_patterns should use operator.add reducer."""
+        hints = get_type_hints(ExploitationState, include_extras=True)
+        annotated_type = hints["blocked_patterns"]
+        args = get_args(annotated_type)
+        assert args[1] is add
+
+    def test_successful_bypasses_uses_add(self):
+        """successful_bypasses should use operator.add reducer."""
+        hints = get_type_hints(ExploitationState, include_extras=True)
+        annotated_type = hints["successful_bypasses"]
         args = get_args(annotated_type)
         assert args[1] is add
 
@@ -193,20 +194,33 @@ class TestReducerBehavior:
         hints = get_type_hints(ExploitationState, include_extras=True)
         assert hints["target_url"] is str
 
-    def test_scores_is_plain_dict(self):
-        """scores should NOT have an annotated reducer (overwrite default)."""
+    def test_scores_uses_merge_scores(self):
+        """scores should use _merge_scores reducer."""
+        from core.state import _merge_scores
         hints = get_type_hints(ExploitationState, include_extras=True)
-        # scores should be dict[str, int] without annotation
         assert "scores" in hints
-        # It should NOT be an Annotated type
         raw = hints["scores"]
-        assert get_args(raw) == () or not hasattr(raw, "__metadata__"), \
-            "scores should be plain dict, not Annotated"
+        args = get_args(raw)
+        assert len(args) == 2, "scores should be Annotated[type, reducer]"
+        assert args[1] is _merge_scores, "scores reducer should be _merge_scores"
 
-    def test_tried_payloads_is_plain_dict(self):
-        """tried_payloads should NOT have an annotated reducer (overwrite default)."""
+    def test_tried_payloads_uses_merge_tried_payloads(self):
+        """tried_payloads should use _merge_tried_payloads reducer."""
+        from core.state import _merge_tried_payloads
         hints = get_type_hints(ExploitationState, include_extras=True)
         assert "tried_payloads" in hints
+        raw = hints["tried_payloads"]
+        args = get_args(raw)
+        assert len(args) == 2, "tried_payloads should be Annotated[type, reducer]"
+        assert args[1] is _merge_tried_payloads, "tried_payloads reducer should be _merge_tried_payloads"
+
+    def test_akg_path_uses_add(self):
+        """akg_path should use operator.add reducer."""
+        hints = get_type_hints(ExploitationState, include_extras=True)
+        annotated_type = hints["akg_path"]
+        args = get_args(annotated_type)
+        assert len(args) == 2, "akg_path should be Annotated[type, reducer]"
+        assert args[1] is add, "akg_path reducer should be operator.add"
 
 
 class TestDefaultState:
@@ -231,14 +245,14 @@ class TestDefaultState:
         assert DEFAULT_STATE["confirmed_vulns"] == []
         assert DEFAULT_STATE["achieved_outcomes"] == []
         assert DEFAULT_STATE["found_credentials"] == []
-        assert DEFAULT_STATE["blocked_patterns"] == []
-        assert DEFAULT_STATE["successful_bypasses"] == []
         assert DEFAULT_STATE["scores"] == {}
         assert DEFAULT_STATE["current_chain"] == []
         assert DEFAULT_STATE["chain_history"] == []
         assert DEFAULT_STATE["akg_path"] == []
         assert DEFAULT_STATE["messages"] == []
         assert DEFAULT_STATE["guardrail_activations"] == []
+        assert DEFAULT_STATE["blocked_patterns"] == []
+        assert DEFAULT_STATE["successful_bypasses"] == []
         assert DEFAULT_STATE["tried_payloads"] == {}
         assert DEFAULT_STATE["endpoints"] == []
         assert DEFAULT_STATE["blocked_agents"] == []
@@ -299,13 +313,37 @@ class TestConstants:
         expected_outcomes = [
             "credentials_extracted",
             "admin_session_obtained",
-            "rce_achieved",
-            "user_compromised",
             "data_exfiltrated",
-            "session_hijack",
         ]
         for outcome in expected_outcomes:
             assert outcome in KG_NODES, f"Missing KG outcome: {outcome}"
+
+
+class TestMergeTriedPayloadsReducer:
+    """Verify _merge_tried_payloads deduplicates across and within batches."""
+
+    def test_empty_a_returns_b_unchanged(self):
+        result = _merge_tried_payloads({}, {"x": ["a", "b"]})
+        assert result == {"x": ["a", "b"]}
+
+    def test_empty_b_returns_a_unchanged(self):
+        result = _merge_tried_payloads({"x": ["a"]}, {})
+        assert result == {"x": ["a"]}
+
+    def test_deduplicates_within_b(self):
+        result = _merge_tried_payloads({"agent1": ["a"]}, {"agent1": ["c", "c"]})
+        assert result == {"agent1": ["a", "c"]}
+
+    def test_deduplicates_across_a_and_b(self):
+        result = _merge_tried_payloads(
+            {"agent1": ["a", "b"]},
+            {"agent1": ["a", "c"]},
+        )
+        assert result == {"agent1": ["a", "b", "c"]}
+
+    def test_preserves_order_a_then_b(self):
+        result = _merge_tried_payloads({"agent1": ["first"]}, {"agent1": ["second"]})
+        assert result["agent1"] == ["first", "second"]
 
     def test_score_labels(self):
         assert SCORE_LABELS[0] == "Not Found"

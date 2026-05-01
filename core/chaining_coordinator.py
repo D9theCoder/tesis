@@ -1,9 +1,27 @@
-"""Chaining Coordinator — conditional edge routing for 3-surface architecture."""
+"""Chaining Coordinator — conditional edge routing for 3-surface architecture.
+
+Design note: chain preconditions are checked against `confirmed_vulns` ONLY,
+not `achieved_outcomes`. This is intentional: outcomes are terminal rewards,
+not stepping-stones for further chains. `get_viable_chains` (reporting) includes
+`achieved_outcomes` for path-preview completeness, but the runtime router does
+not use them to satisfy chain preconditions.
+"""
 
 from __future__ import annotations
 
+import logging
+
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.state import METHODS_BY_SURFACE, MODULE_TO_KG_NODE
+
+_KG_SINGLETON: AttackKnowledgeGraph | None = None
+
+
+def _get_kg() -> AttackKnowledgeGraph:
+    global _KG_SINGLETON
+    if _KG_SINGLETON is None:
+        _KG_SINGLETON = AttackKnowledgeGraph()
+    return _KG_SINGLETON
 
 HIGH_IMPACT_OUTCOMES = set(AttackKnowledgeGraph.HIGH_IMPACT_OUTCOMES)
 
@@ -54,7 +72,7 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
     attempted = list(dict.fromkeys(state.get("attempted_agents", [])))
     blocked = state.get("blocked_agents", [])
     failure_agents = state.get("failure_agents", [])
-    kg = AttackKnowledgeGraph()
+    kg = _get_kg()
 
     if iteration_count >= max_iterations:
         return "scorer", {
@@ -84,7 +102,17 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
                         "target": edge.get("target"),
                     }
 
-    # 2. Fallback loop: if last agent was blocked or failed, try next unexplored method
+    # 2. Critical outcome check — route to scorer immediately if high-impact outcome achieved
+    if critical_outcome_achieved(state):
+        return "scorer", {
+            "node": "chaining_router",
+            "iteration": iteration_count,
+            "event": "akg.route.selected",
+            "next_agent": "scorer",
+            "reason": "critical_outcome",
+        }
+
+    # 3. Fallback loop: if last agent was blocked or failed, try next unexplored method
     attempted_set = set(attempted)
     last_agent = attempted[-1] if attempted else None
     last_status = None
@@ -106,6 +134,9 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
         # Second pass: any unattempted method on this surface
         for method in METHODS_BY_SURFACE.get(current_surface, []):
             if method not in attempted_set and method not in blocked:
+                logging.getLogger(__name__).warning(
+                    "Fallback second pass dispatching %s without precondition check", method
+                )
                 return method, {
                     "node": "chaining_router",
                     "iteration": iteration_count,
@@ -120,15 +151,6 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
             "next_agent": "scorer",
             "reason": "all_methods_exhausted",
             "incomplete_reason": "ALL_METHODS_FAILED",
-        }
-
-    if critical_outcome_achieved(state):
-        return "scorer", {
-            "node": "chaining_router",
-            "iteration": iteration_count,
-            "event": "akg.route.selected",
-            "next_agent": "scorer",
-            "reason": "critical_outcome",
         }
 
     # 3. Exhaustion check: if every method on this surface has been attempted

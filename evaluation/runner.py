@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 from traceback import format_exc
+from typing import Any
 
 from core.graph_builder import build_framework
 from core.scorer import build_score_report
@@ -110,17 +111,21 @@ def run_single_engagement(
         status = "success"
         error = None
     except Exception as exc:
-        final_state = {
+        final_state = new_default_state()
+        final_state.update({
+            "target_url": target_url,
+            "security_level": security_level,
+            "llm_provider": llm_provider,
+            "current_surface": surface,
+            "max_iterations": max_iterations,
+            "stop_policy": stop_policy,
+            "coverage_target": coverage_target,
             "iteration_count": 0,
-            "confirmed_vulns": [],
-            "achieved_outcomes": [],
-            "guardrail_activations": [],
-            "telemetry_events": [],
             "evasion_enabled": evasion_enabled,
             "evasion_mode": evasion_mode,
             "evasion_max_retries": evasion_max_retries,
             "evasion_cooldown_threshold": evasion_cooldown_threshold,
-        }
+        })
         report = build_score_report(final_state).to_dict()
         status = "error"
         error = f"{type(exc).__name__}: {exc}\n{format_exc()}"

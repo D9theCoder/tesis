@@ -6,8 +6,7 @@ import logging
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
-from agents.state_utils import already_tried_payloads, make_update, normalize_security_level
-from core.knowledge_graph import AttackKnowledgeGraph
+from agents.state_utils import already_tried_payloads, chain_check as _chain_check, make_update, normalize_security_level
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
@@ -72,6 +71,13 @@ def _probe_preconditions(
 def _attempt_exploit(
     session: DVWASession, payloads: list[str], already_tried: set[str]
 ) -> tuple[int, list[str], list[str], list[dict]]:
+    """Confirm unauthorized access to protected pages.
+
+    NOTE: This agent tests whether protected pages (setup.php, phpinfo.php)
+    are accessible without admin authentication. A complete implementation
+    would also verify that the session is authenticated as a low-priv user
+    and that the target page returns 403 for unauthenticated requests.
+    """
     tried: list[str] = []
     events: list[dict] = []
     confirmed: list[str] = []
@@ -96,24 +102,6 @@ def _attempt_exploit(
             events.append(exploit_event(AGENT_ID, path, None, False))
 
     return score, tried, confirmed, events
-
-
-def _chain_check(confirmed_node: str, state: ExploitationState) -> tuple[int, list[str]]:
-    achieved: list[str] = []
-    score = 0
-    kg = AttackKnowledgeGraph()
-    confirmed_set = set(state.get("confirmed_vulns", [])) | {confirmed_node}
-
-    for edge in kg.get_next_actions(confirmed_node):
-        if not edge.get("is_chain"):
-            continue
-        preconditions = edge.get("preconditions", [])
-        if all(p in confirmed_set for p in preconditions):
-            achieved.append(edge["target"])
-            score = 4
-
-    return score, achieved
-
 
 def ac_force_browse_agent(state: ExploitationState) -> dict[str, Any]:
     target_url = state.get("target_url", "")
@@ -149,8 +137,7 @@ def ac_force_browse_agent(state: ExploitationState) -> dict[str, Any]:
         )
         all_tried.extend(tried)
         telemetry_events.extend(probe_events)
-        if probe_obs:
-            observations.update(probe_obs)
+        observations.update(probe_obs)
 
         if not probe_ok:
             update = make_update(

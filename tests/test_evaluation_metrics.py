@@ -33,12 +33,12 @@ def test_highest_impact_outcome_returns_none_when_empty():
     assert highest_impact_outcome([], []) is None
 
 
-def test_highest_impact_outcome_prefers_rce_over_admin():
-    confirmed = ["admin_session_obtained", "rce_achieved"]
+def test_highest_impact_outcome_prefers_admin_over_data_exfiltrated():
+    confirmed = ["data_exfiltrated", "admin_session_obtained"]
     result = highest_impact_outcome(confirmed, [])
-    assert result == "rce_achieved"
+    assert result == "admin_session_obtained"
 
 
 def test_highest_impact_outcome_checks_achieved_too():
-    result = highest_impact_outcome([], ["session_hijack"])
-    assert result == "session_hijack"
+    result = highest_impact_outcome([], ["data_exfiltrated"])
+    assert result == "data_exfiltrated"

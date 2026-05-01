@@ -25,6 +25,25 @@ def _merge_dicts(a: dict[str, bool], b: dict[str, bool]) -> dict[str, bool]:
     return merged
 
 
+def _merge_scores(a: dict[str, int], b: dict[str, int]) -> dict[str, int]:
+    merged = dict(a)
+    for k, v in b.items():
+        merged[k] = max(merged.get(k, 0), v)
+    return merged
+
+
+def _merge_tried_payloads(a: dict[str, list[str]], b: dict[str, list[str]]) -> dict[str, list[str]]:
+    merged = {k: list(v) for k, v in a.items()}
+    for k, payloads in b.items():
+        existing = set(merged.get(k, []))
+        merged.setdefault(k, [])
+        for payload in payloads:
+            if payload not in existing:
+                merged[k].append(payload)
+                existing.add(payload)
+    return merged
+
+
 class ExploitationState(TypedDict):
     # Target context
     target_url: str
@@ -42,12 +61,10 @@ class ExploitationState(TypedDict):
     found_credentials: Annotated[list[dict], add]
 
     # Memory (accumulate)
-    tried_payloads: dict[str, list[str]]  # agent_id -> tried payloads
-    blocked_patterns: Annotated[list[str], add]
-    successful_bypasses: Annotated[list[str], add]
+    tried_payloads: Annotated[dict[str, list[str]], _merge_tried_payloads]  # agent_id -> tried payloads
 
     # Scoring (overwrite — max score per agent_id)
-    scores: dict[str, int]  # agent_id -> 0-4
+    scores: Annotated[dict[str, int], _merge_scores]  # agent_id -> 0-4
 
     # Chain tracking
     current_chain: list[str]
@@ -59,11 +76,16 @@ class ExploitationState(TypedDict):
     # Guardrail monitoring (accumulate)
     guardrail_activations: Annotated[list[dict], add]
 
+    # Evasion state persisted for payload-library bypass tracking
+    blocked_patterns: Annotated[list[str], add]
+    successful_bypasses: Annotated[list[str], add]
+
     # Evasion tracking (overwrite)
     consecutive_clean_responses: int  # for evasion cooldown tracker
     evasion_enabled: NotRequired[bool]
     evasion_max_retries: NotRequired[int]
     evasion_mode: NotRequired[str]  # "reactive" | "proactive" | "disabled"
+    evasion_strategy: NotRequired[str]  # alias for evasion_mode
     evasion_cooldown_threshold: NotRequired[int]
     evasion_attempts: NotRequired[int]
     successful_evasions: NotRequired[int]
@@ -78,7 +100,7 @@ class ExploitationState(TypedDict):
     attempted_agents: Annotated[list[str], add]
     blocked_agents: Annotated[list[str], add]
     failure_agents: Annotated[list[str], add]
-    akg_path: list[str]
+    akg_path: Annotated[list[str], add]
     fallback_depth: int
 
     # Control flow (overwrite)
@@ -101,17 +123,19 @@ def _default_state_template() -> dict[str, Any]:
         "achieved_outcomes": [],
         "found_credentials": [],
         "tried_payloads": {},
-        "blocked_patterns": [],
-        "successful_bypasses": [],
         "scores": {},
         "current_chain": [],
         "chain_history": [],
         "messages": [],
         "guardrail_activations": [],
+        "blocked_patterns": [],
+        "successful_bypasses": [],
         "consecutive_clean_responses": 0,
+        # NotRequired fields — always populated in default template for convenience
         "evasion_enabled": False,
         "evasion_max_retries": 3,
         "evasion_mode": "reactive",
+        "evasion_strategy": "reactive",
         "evasion_cooldown_threshold": 5,
         "evasion_attempts": 0,
         "successful_evasions": 0,
@@ -250,8 +274,5 @@ KG_NODES: list[str] = [
     # Outcome nodes
     "credentials_extracted",
     "admin_session_obtained",
-    "rce_achieved",
-    "user_compromised",
     "data_exfiltrated",
-    "session_hijack",
 ]

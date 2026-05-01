@@ -1,5 +1,7 @@
 from copy import deepcopy
 
+from langgraph.graph import END
+
 from core.scorer import build_score_report, scorer
 from core.state import ALL_METHOD_AGENTS, MODULE_TO_KG_NODE, SCORE_LABELS, new_default_state
 
@@ -29,7 +31,7 @@ def test_scorer_returns_end_routing_without_mutating_input():
     state = new_default_state()
     snapshot = deepcopy(state)
     update = scorer(state)
-    assert update["next_agent"] == "END"
+    assert update["next_agent"] == END
     assert state == snapshot
 
 
@@ -59,8 +61,24 @@ def test_scorer_returns_nested_surface_scores():
     assert update["surface_scores"]["sqli"]["score"] == 3
 
 
-def test_highest_impact_outcome_prefers_rce_over_admin():
+def test_highest_impact_outcome_prefers_admin_over_data_exfiltrated():
     state = new_default_state()
-    state["confirmed_vulns"] = ["admin_session_obtained", "rce_achieved"]
+    state["confirmed_vulns"] = ["admin_session_obtained", "data_exfiltrated"]
     report = build_score_report(state)
-    assert report.summary.highest_impact_outcome == "rce_achieved"
+    assert report.summary.highest_impact_outcome == "admin_session_obtained"
+
+
+def test_build_score_report_stage6_metrics_are_computed():
+    state = new_default_state()
+    state["scores"] = {"sqli_union": 3, "sqli_error": 0, "sqli_boolean_blind": 4}
+    state["attempted_agents"] = ["sqli_union", "sqli_error", "sqli_boolean_blind"]
+    state["tried_payloads"] = {
+        "sqli_union": ["p1", "p2"],
+        "sqli_boolean_blind": ["p3", "p4", "p5"],
+    }
+
+    report = build_score_report(state)
+
+    assert report.summary.method_selection_accuracy > 0.0
+    assert report.summary.adaptation_rate > 0.0
+    assert report.summary.mean_attempts_to_success > 0.0

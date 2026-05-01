@@ -67,26 +67,26 @@ LLM refusal on orchestrator prompt (detected by scanning response for refusal ph
 
 ```
 SURFACE: sqli
-├── sqli_union          preconditions: [visible_error_output]
+├── sqli_union          preconditions: [union_select_possible]
 ├── sqli_error          preconditions: [error_messages_enabled]
 ├── sqli_boolean_blind  preconditions: [response_diff_detectable]
-└── sqli_time_blind     preconditions: [response_delay_measurable, errors_suppressed]
+└── sqli_time_blind     preconditions: [response_delay_measurable]
 
 SURFACE: access_control
-├── ac_idor             preconditions: [object_ids_enumerable_in_url]
-├── ac_vertical_escalation  preconditions: [role_logic_flaw_detectable]
-└── ac_force_browse     preconditions: [unauthenticated_or_low_priv_session]
+├── ac_idor             preconditions: [object_ids_enumerable]
+├── ac_vertical_escalation  preconditions: [role_based_access_present]
+└── ac_force_browse     preconditions: [force_browse_endpoints_visible]
 
 SURFACE: brute_force
-├── bf_dictionary       preconditions: [no_rate_limit_active]
-├── bf_spray            preconditions: [multiple_valid_usernames_available]
+├── bf_dictionary       preconditions: [no_rate_limit]
+├── bf_spray            preconditions: [no_rate_limit]
 └── bf_credential_stuffing  [OUT OF SCOPE — no breach data in DVWA sandbox]
 ```
 
 **Cross-surface chains (still possible with 3 surfaces):**
-- `brute_force_confirmed` → `valid_session` → `ac_idor` (authenticated IDOR)
+- `brute_force_confirmed` → `authenticated_session` → `ac_idor` (authenticated IDOR)
 - `sqli_confirmed` → `credentials_extracted` → `brute_force_confirmed` (credential reuse)
-- `ac_vertical_escalation_confirmed` → `admin_session` → `sqli_confirmed` (privileged SQLi)
+- `ac_vertical_escalation_confirmed` → `admin_session_obtained` → `sqli_confirmed` (privileged SQLi)
 
 **AKG Intellectual Lineage:**
 1. Sheyner et al. 2002 — origin of attack graphs; static + network-level, not web app
@@ -323,7 +323,7 @@ Class wrapping `nx.DiGraph`. Built once in `__init__` via `_build_dvwa_knowledge
 
 **Key node IDs:**
 
-Entry nodes: `unauthenticated`, `authenticated_low`
+Entry nodes: `unauthenticated`
 
 Surface nodes: `sqli`, `access_control`, `brute_force`
 
@@ -334,7 +334,7 @@ Method nodes:
 
 Outcome nodes:
 `sqli_confirmed`, `access_control_confirmed`, `brute_force_confirmed`
-`credentials_extracted`, `admin_session_obtained`, `data_exfiltrated`, `session_hijack`
+`credentials_extracted`, `admin_session_obtained`, `data_exfiltrated`
 
 **Key chain edges (`is_chain=True`):**
 - `brute_force_confirmed` → `authenticated_session` → `ac_idor` (IDOR with valid session)
@@ -548,7 +548,7 @@ class GuardrailMonitor:
 ### Multi-LLM Runner (evaluation/multi_llm_runner.py)
 
 ```python
-LLM_PROVIDERS = ["claude", "gpt4o", "open_model"]   # open_model = DeepSeek or Llama (TBD)
+LLM_PROVIDERS = ["gemini", "openai", "claude", "openai_compatible"]   # e.g., DeepSeek / Llama via OpenAI-compatible API
 SECURITY_LEVELS = ["low", "medium", "high"]
 SURFACES = ["sqli", "access_control", "brute_force"]
 
@@ -738,7 +738,6 @@ class AttackKnowledgeGraph:
     def _build_dvwa_knowledge(self):
         # Entry nodes
         self.G.add_node("unauthenticated", type="entry")
-        self.G.add_node("authenticated", type="entry")
 
         # Surface nodes
         for s in ["sqli", "access_control", "brute_force"]:
@@ -747,7 +746,7 @@ class AttackKnowledgeGraph:
         # SQLi method nodes
         self.G.add_node("sqli_union",
             type="method", surface="sqli",
-            preconditions=["visible_error_output"])
+            preconditions=["union_select_possible"])
         self.G.add_node("sqli_error",
             type="method", surface="sqli",
             preconditions=["error_messages_enabled"])
@@ -764,10 +763,10 @@ class AttackKnowledgeGraph:
             preconditions=["object_ids_enumerable"])
         self.G.add_node("ac_vertical_escalation",
             type="method", surface="access_control",
-            preconditions=["role_logic_flaw_detectable"])
+            preconditions=["role_based_access_present"])
         self.G.add_node("ac_force_browse",
             type="method", surface="access_control",
-            preconditions=["low_priv_session_available"])
+            preconditions=["force_browse_endpoints_visible"])
 
         # Brute Force method nodes
         self.G.add_node("bf_dictionary",
@@ -775,13 +774,16 @@ class AttackKnowledgeGraph:
             preconditions=["no_rate_limit"])
         self.G.add_node("bf_spray",
             type="method", surface="brute_force",
-            preconditions=["multiple_usernames_available"])
+            preconditions=["no_rate_limit"])
 
         # Outcome nodes
         for o in ["sqli_confirmed", "access_control_confirmed", "brute_force_confirmed",
                   "credentials_extracted", "admin_session_obtained",
-                  "data_exfiltrated", "session_hijack"]:
+                  "data_exfiltrated"]:
             self.G.add_node(o, type="outcome")
+
+        # Intermediate chain nodes
+        self.G.add_node("authenticated_session", type="chain")
 
         # Surface → method edges
         sqli_methods = ["sqli_union", "sqli_error", "sqli_boolean_blind", "sqli_time_blind"]
@@ -804,13 +806,22 @@ class AttackKnowledgeGraph:
             self.G.add_edge(m, "brute_force_confirmed")
 
         # Cross-surface chain edges (is_chain=True)
-        self.G.add_edge("brute_force_confirmed", "ac_idor",
-            is_chain=True, preconditions=["authenticated"],
+        self.G.add_edge("brute_force_confirmed", "authenticated_session",
+            is_chain=True, preconditions=["brute_force_confirmed"],
+            agent="ac_idor_agent")
+        self.G.add_edge("authenticated_session", "ac_idor",
+            is_chain=True, preconditions=["authenticated_session"],
             agent="ac_idor_agent")
         self.G.add_edge("sqli_confirmed", "credentials_extracted",
-            is_chain=True, preconditions=[],
+            is_chain=True, preconditions=["sqli_confirmed"],
             agent="bf_dictionary_agent")
-        self.G.add_edge("ac_vertical_escalation_confirmed", "sqli_union",
+        self.G.add_edge("credentials_extracted", "brute_force_confirmed",
+            is_chain=True, preconditions=["credentials_extracted"],
+            agent="bf_dictionary_agent")
+        self.G.add_edge("ac_vertical_escalation_confirmed", "admin_session_obtained",
+            is_chain=True, preconditions=["ac_vertical_escalation_confirmed"],
+            agent="sqli_union_agent")
+        self.G.add_edge("admin_session_obtained", "sqli_union",
             is_chain=True, preconditions=["admin_session_obtained"],
             agent="sqli_union_agent")
 

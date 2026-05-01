@@ -94,16 +94,18 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
     for provider_surfaces in by_provider_surface_level.values():
         for payload in provider_surfaces.values():
             for level_payload in payload.values():
-                successful = max(level_payload["statuses"]["success"], 1)
-                level_payload["avg_score"] = round(level_payload["total_score"] / successful, 2)
+                successes = level_payload["statuses"]["success"]
+                level_payload["avg_score"] = round(level_payload["total_score"] / successes, 2) if successes else 0.0
                 level_payload["avg_iterations"] = round(mean(level_payload["iterations"]), 2) if level_payload["iterations"] else 0.0
 
     for payload in by_provider.values():
-        successful = max(payload["statuses"]["success"], 1)
-        payload["avg_score"] = round(payload["total_score"] / successful, 2)
+        successful = payload["statuses"]["success"]
+        payload["avg_score"] = round(payload["total_score"] / successful, 2) if successful else 0.0
         payload["avg_iterations"] = round(mean(payload["iterations"]), 2) if payload["iterations"] else 0.0
         total_calls_estimate = sum(payload["iterations"]) or 0
-        payload["guardrail_rate"] = (
+        # NOTE: denominator is total iterations used (LangGraph node transitions),
+        # not LLM call count. This remains a coarse proxy until call counts are tracked.
+        payload["guardrail_per_iteration"] = (
             round(payload["guardrail_activations"] / total_calls_estimate * 100, 2)
             if total_calls_estimate > 0
             else 0.0

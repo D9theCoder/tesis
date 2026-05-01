@@ -72,6 +72,19 @@ def test_fallback_returns_scorer_for_exhausted_surface():
     assert agent == "scorer"
 
 
+def test_fallback_exhausts_surface_methods_before_scorer():
+    state = {
+        "current_surface": "sqli",
+        "observations": {},
+        "attempted_agents": ["sqli_union", "sqli_error", "sqli_boolean_blind"],
+        "blocked_agents": [],
+        "failure_agents": [],
+        "scores": {},
+    }
+    agent = _fallback_next_agent(state)
+    assert agent == "sqli_time_blind"
+
+
 def test_fallback_does_not_repeat_blocked_agent():
     state = {
         "current_surface": "sqli",

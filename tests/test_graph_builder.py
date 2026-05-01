@@ -1,6 +1,7 @@
 from copy import deepcopy
 
 import agents.orchestrator as orchestrator_module
+from langgraph.graph import END
 
 from core.graph_builder import (
     RUNTIME_AGENT_HANDLERS,
@@ -26,7 +27,7 @@ def test_runtime_starts_from_recon(monkeypatch):
     state = deepcopy(DEFAULT_STATE)
     state["max_iterations"] = 1
 
-    result = app.invoke(state)
+    result = app.invoke(state, config={"configurable": {"thread_id": "test"}})
     assert "next_agent" in result
 
 
@@ -39,7 +40,7 @@ def test_runtime_with_default_budget_remains_bounded(monkeypatch):
     app = build_framework(llm_provider="gemini")
     state = deepcopy(DEFAULT_STATE)
 
-    result = app.invoke(state)
+    result = app.invoke(state, config={"configurable": {"thread_id": "test"}})
     assert "next_agent" in result
     assert result.get("iteration_count", 0) <= state["max_iterations"]
 
@@ -65,8 +66,8 @@ def test_stage6_real_scorer_node_executes(monkeypatch):
     app = build_framework(llm_provider="gemini")
     state = deepcopy(DEFAULT_STATE)
     state["iteration_count"] = state["max_iterations"]
-    state["scores"] = {"sqli_union": 99}
+    state["scores"] = {"sqli_union": 3}
 
-    result = app.invoke(state)
-    assert result["scores"]["sqli_union"] == 4
-    assert result["next_agent"] == "END"
+    result = app.invoke(state, config={"configurable": {"thread_id": "test"}})
+    assert result["scores"]["sqli_union"] == 3
+    assert result["next_agent"] == END

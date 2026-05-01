@@ -38,6 +38,11 @@ class Verifier:
 
     def contains_any(self, body: str, signals: list[str]) -> VerificationResult:
         """Check whether ``body`` contains any text signal (case-insensitive)."""
+        # Truncate large responses to prevent memory issues
+        max_body_size = 1_048_576  # 1 MB
+        if len(body) > max_body_size:
+            body = body[:max_body_size]
+
         if not body or not signals:
             return VerificationResult(ok=False, confidence=0.0, evidence=[])
 
@@ -49,11 +54,16 @@ class Verifier:
                 matches.append(normalized)
 
         ok = bool(matches)
-        confidence = min(1.0, 0.5 + 0.15 * len(matches)) if ok else 0.0
+        confidence = 1.0 if ok else 0.0
         return VerificationResult(ok=ok, confidence=confidence, evidence=matches)
 
     def regex_match(self, body: str, patterns: list[str]) -> VerificationResult:
         """Check whether ``body`` matches any regex pattern."""
+        # Truncate large responses to prevent memory issues
+        max_body_size = 1_048_576  # 1 MB
+        if len(body) > max_body_size:
+            body = body[:max_body_size]
+
         if not body or not patterns:
             return VerificationResult(ok=False, confidence=0.0, evidence=[])
 
@@ -63,8 +73,9 @@ class Verifier:
                 if re.search(pattern, body, flags=re.IGNORECASE | re.MULTILINE):
                     evidence.append(pattern)
             except re.error as exc:
-                logger.debug("Invalid regex pattern encountered during verification: %s", pattern, exc_info=exc)
-                evidence.append(f"invalid_regex:{pattern}")
+                logger.warning("Invalid regex pattern encountered during verification: %s", pattern, exc_info=exc)
+                # Do NOT include invalid regex in evidence — evidence should only contain matches
+                continue
 
         matched = [item for item in evidence if not item.startswith("invalid_regex:")]
         ok = bool(matched)
@@ -103,34 +114,29 @@ class Verifier:
             )
 
         dialog_messages: list[str] = []
-        browser = None
         try:
             with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(headless=True)
-                context = browser.new_context()
+                with playwright.chromium.launch(headless=True) as browser:
+                    with browser.new_context() as context:
+                        if cookies:
+                            cookie_payload = [
+                                {
+                                    "name": name,
+                                    "value": value,
+                                    "domain": parsed.hostname or "localhost",
+                                    "path": "/",
+                                }
+                                for name, value in cookies.items()
+                            ]
+                            context.add_cookies(cookie_payload)
 
-                if cookies:
-                    cookie_payload = [
-                        {
-                            "name": name,
-                            "value": value,
-                            "domain": parsed.hostname or "localhost",
-                            "path": "/",
-                        }
-                        for name, value in cookies.items()
-                    ]
-                    context.add_cookies(cookie_payload)
+                        with context.new_page() as page:
+                            def _on_dialog(dialog):
+                                dialog_messages.append(dialog.message or "dialog_fired")
+                                dialog.dismiss()
 
-                page = context.new_page()
-
-                def _on_dialog(dialog):
-                    dialog_messages.append(dialog.message or "dialog_fired")
-                    dialog.dismiss()
-
-                page.on("dialog", _on_dialog)
-                page.goto(url, wait_until="networkidle", timeout=10_000)
-
-                context.close()
+                            page.on("dialog", _on_dialog)
+                            page.goto(url, wait_until="networkidle", timeout=10_000)
 
             if dialog_messages:
                 return VerificationResult(
@@ -144,21 +150,19 @@ class Verifier:
                 confidence=0.1,
                 evidence=["no_dialog"],
             )
-        except Exception as exc:  # pragma: no cover - depends on browser availability
+        except Exception as exc:  # pragma: no cover
             logger.warning("Browser verifier failed during XSS dialog check", exc_info=exc)
             return VerificationResult(
                 ok=False,
                 confidence=0.0,
                 evidence=[f"browser_error:{type(exc).__name__}"],
             )
-        finally:
-            if browser is not None:
-                try:
-                    browser.close()
-                except Exception as exc:
-                    logger.debug("Browser close raised while cleaning up verifier resources", exc_info=exc)
 
 
 def verify_method_response(agent_id: str, response_text: str, expected_signal: str) -> bool:
-    """Verify if a method's expected signal is present in the response."""
+    """Verify if a method's expected signal is present in the response.
+
+    .. deprecated::
+        Use ``Verifier.contains_any()`` instead for consistent API.
+    """
     return expected_signal.lower() in response_text.lower()

@@ -6,8 +6,8 @@ def test_run_single_engagement_artifact_shape(monkeypatch):
         def invoke(self, state):
             return {
                 "scores": {"sqli": 4},
-                "confirmed_vulns": ["rce_achieved"],
-                "achieved_outcomes": ["rce_achieved"],
+                "confirmed_vulns": ["admin_session_obtained"],
+                "achieved_outcomes": ["admin_session_obtained"],
                 "guardrail_activations": [],
                 "iteration_count": 3,
             }
@@ -15,8 +15,8 @@ def test_run_single_engagement_artifact_shape(monkeypatch):
         def stream(self, state, stream_mode=None):
             yield {
                 "scores": {"sqli": 4},
-                "confirmed_vulns": ["rce_achieved"],
-                "achieved_outcomes": ["rce_achieved"],
+                "confirmed_vulns": ["admin_session_obtained"],
+                "achieved_outcomes": ["admin_session_obtained"],
                 "guardrail_activations": [],
                 "iteration_count": 3,
             }

@@ -33,7 +33,7 @@ def diagnose_quality(*, scores: dict[str, int], total_iterations_used: int, high
         flags.append("low_module_coverage")
     if total_iterations_used <= 3:
         flags.append("early_termination")
-    if highest_outcome in {"admin_session_obtained", "rce_achieved"} and coverage < 0.4:
+    if highest_outcome in {"admin_session_obtained", "data_exfiltrated"} and coverage < 0.4:
         flags.append("impact_before_coverage")
 
     return {

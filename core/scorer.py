@@ -7,7 +7,10 @@ Provides:
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
+
+from langgraph.graph import END
 
 from evaluation.contracts import ModuleScoreResult, ScoreSummary, ScorerReport
 from evaluation.metrics import (
@@ -30,19 +33,13 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 
 def _parse_chain_candidates(chain_history: list[dict], current_chain: list[str]) -> list[list[str]]:
-    """Extract ordered chain candidates from chain_history and current_chain.
-
-    Handles both list[str] and "→"-separated string formats in chain_history.
-    """
+    """Extract ordered chain candidates from chain_history and current_chain."""
     candidates: list[list[str]] = []
     for item in chain_history:
-        if not isinstance(item, dict):
-            continue
-        chain = item.get("chain")
-        if isinstance(chain, list) and chain:
-            candidates.append(chain)
-        elif isinstance(chain, str) and chain:
-            candidates.append(chain.split("→"))
+        if isinstance(item, dict):
+            chain = item.get("chain")
+            if isinstance(chain, list) and chain:
+                candidates.append(chain)
     if current_chain:
         candidates.append(current_chain)
     return candidates
@@ -58,6 +55,11 @@ def _infer_longest_chain(chain_history: list[dict], current_chain: list[str]) ->
 
 def build_score_report(state: dict) -> ScorerReport:
     normalized = normalize_method_scores(state.get("scores", {}))
+    attempted = state.get("attempted_agents", [])
+    tried_payloads = state.get("tried_payloads", {})
+    method_selection = round(method_selection_accuracy(normalized, attempted), 4)
+    adaptation = round(adaptation_rate(normalized), 4)
+    mean_attempts = round(mean_attempts_to_success(tried_payloads, normalized), 4)
     module_scores = {
         agent_id: ModuleScoreResult(
             score=normalized[agent_id],
@@ -66,6 +68,7 @@ def build_score_report(state: dict) -> ScorerReport:
         for agent_id in ALL_METHOD_AGENTS
     }
 
+    # Defensive clamp (also enforced by ScoreSummary.__post_init__)
     successful_evasions = min(
         _safe_int(state.get("successful_evasions"), 0),
         _safe_int(state.get("evasion_attempts"), 0),
@@ -90,6 +93,9 @@ def build_score_report(state: dict) -> ScorerReport:
         evasion_attempts=_safe_int(state.get("evasion_attempts"), 0),
         successful_evasions=successful_evasions,
         evasion_strategy=str(state.get("evasion_mode") or "reactive").strip().lower(),
+        method_selection_accuracy=method_selection,
+        adaptation_rate=adaptation,
+        mean_attempts_to_success=mean_attempts,
     )
     return ScorerReport(module_scores=module_scores, summary=summary)
 
@@ -100,15 +106,8 @@ def scorer(state: dict) -> dict:
         agent_id: result.score
         for agent_id, result in report.module_scores.items()
     }
-    tried_payloads = state.get("tried_payloads", {})
     attempted = state.get("attempted_agents", [])
     akg_path = state.get("akg_path", [])
-
-    metrics = {
-        "method_selection_accuracy": round(method_selection_accuracy(normalized_scores, attempted), 4),
-        "adaptation_rate": round(adaptation_rate(normalized_scores), 4),
-        "mean_attempts_to_success": round(mean_attempts_to_success(tried_payloads, normalized_scores), 4),
-    }
 
     # Nested surface_scores per spec
     surface_scores: dict[str, dict[str, Any]] = {}
@@ -123,28 +122,21 @@ def scorer(state: dict) -> dict:
                 best_score = s
                 best_method = m
 
-        adapted = bool(state.get("failure_agents", [])) and best_score >= 3
+        surface_failures = [a for a in state.get("failure_agents", []) if a in methods]
+        adapted = bool(surface_failures) and best_score >= 3
 
         surface_scores[surface] = {
             "score": best_score,
             "label": SCORE_LABELS.get(best_score, "Not Found"),
             "method_selected": best_method,
             "attempts": surface_attempts,
-            "akg_path": akg_path,
             "adapted": adapted,
         }
 
     summary = {
-        "llm_provider": state.get("llm_provider", "gemini"),
-        "security_level": state.get("security_level", "low"),
+        **dataclasses.asdict(report.summary),
         "total_surfaces_tested": len(SURFACES),
-        "score_distribution": score_distribution(normalized_scores),
-        "method_selection_accuracy": metrics["method_selection_accuracy"],
-        "adaptation_rate": metrics["adaptation_rate"],
-        "mean_attempts_to_success": metrics["mean_attempts_to_success"],
-        "chain_exploits_achieved": chain_exploit_count(normalized_scores),
-        "guardrail_activations": len(state.get("guardrail_activations", [])),
-        "total_iterations_used": int(state.get("iteration_count", 0)),
+        "akg_path": akg_path,
         "incomplete_surfaces": [
             s for s in SURFACES
             if all(normalized_scores.get(m, 0) == 0 for m in METHODS_BY_SURFACE.get(s, []))
@@ -154,11 +146,19 @@ def scorer(state: dict) -> dict:
 
     existing_result = state.get("task_result")
     existing_reason = state.get("incomplete_reason")
-    task_result = existing_result or "SUCCESS"
+    has_findings = bool(state.get("confirmed_vulns")) or bool(state.get("achieved_outcomes"))
+    if existing_result is not None:
+        task_result = existing_result
+    elif existing_reason:
+        task_result = "INCOMPLETE"
+    elif has_findings:
+        task_result = "SUCCESS"
+    else:
+        task_result = "INCOMPLETE"
 
     return {
         "scores": normalized_scores,
-        "next_agent": "END",
+        "next_agent": END,
         "task_result": task_result,
         "incomplete_reason": existing_reason,
         "surface_scores": surface_scores,

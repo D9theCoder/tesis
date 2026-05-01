@@ -356,13 +356,11 @@ class TestReconNodeIntegration:
 
             # Validate all required output keys
             assert "endpoints" in update
-            assert "input_vectors" in update
             assert "security_level" in update
             assert "next_agent" in update
             assert update["next_agent"] == "orchestrator"
             assert update["security_level"] in SECURITY_LEVELS
             assert isinstance(update["endpoints"], list)
-            assert isinstance(update["input_vectors"], list)
 
     def test_recon_with_empty_target_url(self):
         """recon() should handle empty target_url gracefully."""
@@ -370,7 +368,6 @@ class TestReconNodeIntegration:
         update = recon(state)
 
         assert update["endpoints"] == []
-        assert update["input_vectors"] == []
         assert update["next_agent"] == "orchestrator"
 
     def test_recon_deduplicates_and_sorts_endpoints(self):
@@ -397,8 +394,18 @@ class TestReconNodeIntegration:
             index_result.text = index_html
             sqli_result = MagicMock()
             sqli_result.text = sqli_html
+            setup_result = MagicMock()
+            setup_result.text = "Forbidden"
 
-            mock_session.http.get.side_effect = [index_result, sqli_result]
+            def mock_http_get(path, *args, **kwargs):
+                path_str = str(path)
+                if path_str.endswith("index.php"):
+                    return index_result
+                if "setup.php" in path_str:
+                    return setup_result
+                return sqli_result
+
+            mock_session.http.get.side_effect = mock_http_get
             mock_session.http.base_url = "http://localhost/dvwa/"
 
             MockSession.return_value = mock_session
@@ -411,6 +418,72 @@ class TestReconNodeIntegration:
                 urls = [ep["url"] for ep in update["endpoints"]]
                 # No duplicate URLs
                 assert len(urls) == len(set(urls))
+
+    def test_force_browse_endpoints_visible_from_probe(self):
+        """When setup.php is accessible, the force-browse observation should be true."""
+        with patch("foundation.recon.DVWASession") as MockSession:
+            mock_session = MagicMock()
+            mock_session.login.return_value = True
+            mock_session.detect_security_level.return_value = "low"
+            mock_session.close.return_value = None
+
+            index_result = MagicMock()
+            index_result.text = '<a href="/dvwa/vulnerabilities/sqli/">SQLi</a>'
+            sqli_result = MagicMock()
+            sqli_result.text = '<form action="" method="get"><input name="id"></form>'
+            setup_result = MagicMock()
+            setup_result.status_code = 200
+            setup_result.text = "Database Setup"
+
+            def mock_http_get(path, *args, **kwargs):
+                path_str = str(path)
+                if path_str.endswith("index.php"):
+                    return index_result
+                if "setup.php" in path_str:
+                    return setup_result
+                return sqli_result
+
+            mock_session.http.get.side_effect = mock_http_get
+            mock_session.http.base_url = "http://localhost/dvwa/"
+            MockSession.return_value = mock_session
+
+            state = {"target_url": "http://localhost/dvwa", "security_level": "low"}
+            update = recon(state)
+
+            assert update["observations"].get("force_browse_endpoints_visible") is True
+
+    def test_force_browse_endpoints_visible_false_on_403(self):
+        """When setup.php is forbidden, the force-browse observation should be false."""
+        with patch("foundation.recon.DVWASession") as MockSession:
+            mock_session = MagicMock()
+            mock_session.login.return_value = True
+            mock_session.detect_security_level.return_value = "low"
+            mock_session.close.return_value = None
+
+            index_result = MagicMock()
+            index_result.text = '<a href="/dvwa/vulnerabilities/sqli/">SQLi</a>'
+            sqli_result = MagicMock()
+            sqli_result.text = '<form action="" method="get"><input name="id"></form>'
+            setup_result = MagicMock()
+            setup_result.status_code = 403
+            setup_result.text = "Forbidden"
+
+            def mock_http_get(path, *args, **kwargs):
+                path_str = str(path)
+                if path_str.endswith("index.php"):
+                    return index_result
+                if "setup.php" in path_str:
+                    return setup_result
+                return sqli_result
+
+            mock_session.http.get.side_effect = mock_http_get
+            mock_session.http.base_url = "http://localhost/dvwa/"
+            MockSession.return_value = mock_session
+
+            state = {"target_url": "http://localhost/dvwa", "security_level": "low"}
+            update = recon(state)
+
+            assert update["observations"].get("force_browse_endpoints_visible") is False
 
 
 class TestFormParsingNoDuplicates:

@@ -7,6 +7,20 @@ from urllib.parse import urlparse
 
 from foundation.http_client import RequestTimeoutError, TransportError
 
+# Single source of truth: agent_id → DVWA endpoint path fragment.
+# Keep in sync with ALL_METHOD_AGENTS and foundation/payload_library endpoints.
+_MODULE_ENDPOINT_FRAGMENTS: dict[str, str] = {
+    "sqli_union": "/vulnerabilities/sqli/",
+    "sqli_error": "/vulnerabilities/sqli/",
+    "sqli_boolean_blind": "/vulnerabilities/sqli_blind/",
+    "sqli_time_blind": "/vulnerabilities/sqli_blind/",
+    "ac_idor": "/vulnerabilities/authbypass/",
+    "ac_vertical_escalation": "/vulnerabilities/authbypass/",
+    "ac_force_browse": "/vulnerabilities/authbypass/",
+    "bf_dictionary": "/vulnerabilities/brute/",
+    "bf_spray": "/vulnerabilities/brute/",
+}
+
 
 def normalize_security_level(level: str | None) -> str:
     normalized = (level or "low").strip().lower()
@@ -46,7 +60,7 @@ def prepare_agent_session(
                 login_ok = bool(login_fn())
                 if not login_ok:
                     notes.append("session_login_failed")
-            except (TypeError, ValueError, RuntimeError, OSError, TransportError, RequestTimeoutError) as exc:
+            except (ValueError, RuntimeError, OSError, TransportError, RequestTimeoutError) as exc:
                 login_ok = False
                 append_error_marker(notes, "session_login_error", exc)
 
@@ -54,7 +68,7 @@ def prepare_agent_session(
     if callable(set_level_fn):
         try:
             set_level_fn(security_level)
-        except (TypeError, ValueError) as exc:
+        except ValueError as exc:
             append_error_marker(notes, "security_level_invalid", exc)
         except (RuntimeError, OSError, TransportError, RequestTimeoutError) as exc:
             append_error_marker(notes, "security_level_set_error", exc)
@@ -86,32 +100,8 @@ def merge_tried_payloads(
 
 
 def module_endpoint(state: dict[str, Any], module_name: str, fallback_path: str) -> str:
-    fallback_path_fragments = {
-        "sqli": "/vulnerabilities/sqli/",
-        "sqli_blind": "/vulnerabilities/sqli_blind/",
-        "xss_r": "/vulnerabilities/xss_r/",
-        "xss_s": "/vulnerabilities/xss_s/",
-        "xss_d": "/vulnerabilities/xss_d/",
-        "cmdi": "/vulnerabilities/exec/",
-        "brute": "/vulnerabilities/brute/",
-        "lfi": "/vulnerabilities/fi/",
-        "upload": "/vulnerabilities/upload/",
-        "csrf": "/vulnerabilities/csrf/",
-        "weak_session": "/vulnerabilities/weak_id/",
-        "idor": "/vulnerabilities/idor/",
-        "sqli_union": "/vulnerabilities/sqli/",
-        "sqli_error": "/vulnerabilities/sqli/",
-        "sqli_boolean_blind": "/vulnerabilities/sqli_blind/",
-        "sqli_time_blind": "/vulnerabilities/sqli_blind/",
-        "ac_idor": "/vulnerabilities/authbypass/",
-        "ac_vertical_escalation": "/vulnerabilities/authbypass/",
-        "ac_force_browse": "/vulnerabilities/authbypass/",
-        "bf_dictionary": "/vulnerabilities/brute/",
-        "bf_spray": "/vulnerabilities/brute/",
-    }
-
     endpoints = state.get("endpoints", [])
-    expected_fragment = fallback_path_fragments.get(module_name, "")
+    expected_fragment = _MODULE_ENDPOINT_FRAGMENTS.get(module_name, "")
 
     for endpoint in endpoints:
         if endpoint.get("module_name") != module_name:
@@ -152,6 +142,10 @@ def make_update(
         "iteration_count": state.get("iteration_count", 0) + 1,
         "next_agent": next_agent,
     }
+
+    # Validate score is within rubric bounds
+    if not isinstance(score, int) or not (0 <= score <= 4):
+        raise ValueError(f"score must be an int in range 0-4, got {score!r}")
 
     # confirmed_vulns, achieved_outcomes, and found_credentials all use
     # Annotated[list, add] reducers. We must filter out items already
@@ -202,3 +196,27 @@ def make_update(
             update["failure_agents"] = new_failures
 
     return update
+
+
+def chain_check(confirmed_node: str, state: dict[str, Any]) -> tuple[int, list[str]]:
+    """Query AKG for chain edges from a confirmed node.
+
+    Returns (score, achieved_outcomes) where score is 4 if a chain
+    precondition is satisfied, otherwise 0.
+    """
+    from core.knowledge_graph import AttackKnowledgeGraph
+
+    achieved: list[str] = []
+    score = 0
+    kg = AttackKnowledgeGraph()
+    confirmed_set = set(state.get("confirmed_vulns", [])) | {confirmed_node}
+
+    for edge in kg.get_next_actions(confirmed_node):
+        if not edge.get("is_chain"):
+            continue
+        preconditions = edge.get("preconditions", [])
+        if all(p in confirmed_set for p in preconditions):
+            achieved.append(edge["target"])
+            score = 4
+
+    return score, achieved

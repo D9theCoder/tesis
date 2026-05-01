@@ -33,7 +33,7 @@ def test_orchestrator_critical_outcome_routes_to_scorer():
     state = {
         "target_url": "http://localhost/dvwa",
         "confirmed_vulns": [],
-        "achieved_outcomes": ["rce_achieved"],
+        "achieved_outcomes": ["admin_session_obtained"],
         "iteration_count": 1,
         "max_iterations": 30,
         "security_level": "low",

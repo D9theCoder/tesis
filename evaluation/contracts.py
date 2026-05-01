@@ -31,6 +31,11 @@ class ScoreSummary:
     successful_evasions: int = 0
     evasion_strategy: str = "pipeline"
 
+    # Stage 6 — Method selection & adaptation metrics (computed by scorer)
+    method_selection_accuracy: float = 0.0
+    adaptation_rate: float = 0.0
+    mean_attempts_to_success: float = 0.0
+
     def __post_init__(self):
         if self.evasion_attempts < 0 or self.successful_evasions < 0:
             raise ValueError("Evasion counts must be non-negative")

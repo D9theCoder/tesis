@@ -1,3 +1,4 @@
+import copy
 import os
 import logging
 from typing import TYPE_CHECKING
@@ -10,8 +11,7 @@ SAMPLE_QUERY = "What model do you use?"
 SUPPORTED_PROVIDERS = ["gemini", "openai", "claude", "openai_compatible"]
 logger = logging.getLogger(__name__)
 
-# Load environment variables from .env file
-load_dotenv()
+# NOTE: Callers must load env vars before importing if needed (e.g. via load_dotenv())
 
 if TYPE_CHECKING:
     from tesis.model_config import ModelConfig
@@ -98,29 +98,33 @@ def get_simulator_llm(simulator_model: str = "gpt-4o-mini", provider: str | None
 
     if provider:
         try:
-            return get_llm(provider, model_name=simulator_model, **kwargs)
+            kwargs_copy = copy.deepcopy(kwargs)
+            return get_llm(provider, model_name=simulator_model, **kwargs_copy)
         except Exception as exc:
             logger.warning(
                 "Simulator provider '%s' unavailable; falling back to gemini",
                 provider,
                 exc_info=exc,
             )
-            return get_llm("gemini", model_name="gemini-3-flash-preview", **kwargs)
+            kwargs_copy = copy.deepcopy(kwargs)
+            return get_llm("gemini", model_name="gemini-3-flash-preview", **kwargs_copy)
 
     normalized = simulator_model.strip().lower()
     if "gpt" in normalized or normalized.startswith("openai"):
         try:
-            return get_llm("openai", model_name=simulator_model, **kwargs)
+            kwargs_copy = copy.deepcopy(kwargs)
+            return get_llm("openai", model_name=simulator_model, **kwargs_copy)
         except Exception as exc:
             logger.warning(
                 "OpenAI simulator client unavailable; falling back to gemini simulator",
                 exc_info=exc,
             )
 
+    kwargs_copy = copy.deepcopy(kwargs)
     return get_llm(
         "gemini",
-        model_name=kwargs.pop("model_name", "gemini-3-flash-preview"),
-        **kwargs,
+        model_name=kwargs_copy.pop("model_name", "gemini-3-flash-preview"),
+        **kwargs_copy,
     )
 
 

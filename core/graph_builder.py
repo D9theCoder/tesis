@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from langgraph.graph import END, START, StateGraph
 
 from agents.orchestrator import orchestrator
@@ -48,6 +50,7 @@ def route_from_orchestrator(state: ExploitationState) -> str:
     next_agent = state.get("next_agent", "scorer")
     if next_agent in RUNTIME_AGENT_NODE_NAMES or next_agent == "scorer":
         return next_agent
+    logging.getLogger(__name__).warning("Unknown next_agent %r — falling back to scorer", next_agent)
     return "scorer"
 
 
@@ -58,9 +61,13 @@ def route_from_chaining_router(state: ExploitationState) -> str:
     return "scorer"
 
 
+# NOTE: llm_provider and surface are accepted for API compatibility but currently
+# do not alter graph topology. Future per-surface or per-provider customization
+# may use these parameters.
 def build_framework(llm_provider: str = "gemini", surface: str = "sqli"):
+    # Lazy import to avoid circular dependency: scorer imports from core.state
+    # which is imported by graph_builder.
     from core.scorer import scorer
-    _ = llm_provider
     graph = StateGraph(ExploitationState)
     graph.add_node("recon", recon)
     graph.add_node("orchestrator", orchestrator)
@@ -74,4 +81,5 @@ def build_framework(llm_provider: str = "gemini", surface: str = "sqli"):
     graph.add_conditional_edges("orchestrator", route_from_orchestrator)
     graph.add_conditional_edges("chaining_router", route_from_chaining_router)
     graph.add_edge("scorer", END)
-    return graph.compile()
+    from langgraph.checkpoint.memory import MemorySaver
+    return graph.compile(checkpointer=MemorySaver())

@@ -74,10 +74,21 @@ class TestVerifierBehavior:
         assert result.ok is True
         assert r"uid=\d+" in result.evidence
 
-    def test_regex_match_records_invalid_pattern(self):
+    def test_regex_match_skips_invalid_pattern(self):
         v = Verifier()
         result = v.regex_match("text", ["(", r"uid=\\d+"])
-        assert any(item.startswith("invalid_regex:") for item in result.evidence)
+        # Invalid regex patterns should NOT be included in evidence
+        assert not any(item.startswith("invalid_regex:") for item in result.evidence)
+        assert result.ok is False
+        assert result.evidence == []
+
+    def test_regex_match_valid_pattern_ignores_invalid(self):
+        v = Verifier()
+        result = v.regex_match("uid=33(www-data)", ["(", r"uid=\d+"])
+        # Invalid regex should be skipped, valid regex should still match
+        assert not any(item.startswith("invalid_regex:") for item in result.evidence)
+        assert result.ok is True
+        assert r"uid=\d+" in result.evidence
 
     def test_verify_xss_dialog_disabled_via_env(self, monkeypatch):
         v = Verifier()

@@ -6,8 +6,7 @@ import logging
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
-from agents.state_utils import already_tried_payloads, make_update, normalize_security_level
-from core.knowledge_graph import AttackKnowledgeGraph
+from agents.state_utils import already_tried_payloads, chain_check as _chain_check, make_update, normalize_security_level
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
@@ -19,7 +18,11 @@ AGENT_ID = "sqli_union"
 MODULE_PATH = "/vulnerabilities/sqli/"
 _PROBE_OBSERVATION_KEY = "union_select_possible"
 
-_SIGNALS = ["First name", "Surname", "admin", "password"]
+# Structural signals: page contains result table columns
+_STRUCTURAL_SIGNALS = ["First name", "Surname"]
+# Content signals: extracted credential data present
+_CONTENT_SIGNALS = ["admin", "password", "gordonb", "pablo", "smithy"]
+_SIGNALS = _STRUCTURAL_SIGNALS + _CONTENT_SIGNALS
 
 
 def _probe_preconditions(
@@ -91,25 +94,6 @@ def _attempt_exploit(
             events.append(exploit_event(AGENT_ID, payload, None, False))
 
     return score, tried, confirmed, events
-
-
-def _chain_check(confirmed_node: str, state: ExploitationState) -> tuple[int, list[str]]:
-    """Query AKG for chain edges. Returns (score, achieved_outcomes)."""
-    achieved: list[str] = []
-    score = 0
-    kg = AttackKnowledgeGraph()
-    confirmed_set = set(state.get("confirmed_vulns", [])) | {confirmed_node}
-
-    for edge in kg.get_next_actions(confirmed_node):
-        if not edge.get("is_chain"):
-            continue
-        preconditions = edge.get("preconditions", [])
-        if all(p in confirmed_set for p in preconditions):
-            achieved.append(edge["target"])
-            score = 4
-
-    return score, achieved
-
 
 def sqli_union_agent(state: ExploitationState) -> dict[str, Any]:
     """Run PROBE -> EXPLOIT -> CHAIN CHECK for sqli_union."""

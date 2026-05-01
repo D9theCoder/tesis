@@ -52,19 +52,19 @@
 │                      [Static, Pre-Validated]                        │
 │                                                                     │
 │  SURFACE: sqli                                                      │
-│    ├──► [sqli_union]          precond: visible_error_output         │
+│    ├──► [sqli_union]          precond: union_select_possible        │
 │    ├──► [sqli_error]          precond: error_messages_enabled       │
 │    ├──► [sqli_boolean_blind]  precond: response_diff_detectable     │
 │    └──► [sqli_time_blind]     precond: response_delay_measurable    │
 │                                                                     │
 │  SURFACE: access_control                                            │
 │    ├──► [ac_idor]                precond: object_ids_enumerable     │
-│    ├──► [ac_vertical_escalation] precond: role_logic_flaw_detectable│
-│    └──► [ac_force_browse]        precond: low_priv_session_available│
+│    ├──► [ac_vertical_escalation] precond: role_based_access_present │
+│    └──► [ac_force_browse]        precond: force_browse_endpoints_visible│
 │                                                                     │
 │  SURFACE: brute_force                                               │
 │    ├──► [bf_dictionary]       precond: no_rate_limit                │
-│    └──► [bf_spray]            precond: multiple_usernames_avail.     │
+│    └──► [bf_spray]            precond: no_rate_limit                 │
 │                                                                     │
 │  CROSS-SURFACE CHAINS (is_chain=True):                              │
 │    [brute_force_confirmed] ──► [ac_idor]        (authenticated IDOR)│
@@ -152,17 +152,17 @@ graph TB
         SN2["Surface: access_control"]
         SN3["Surface: brute_force"]
 
-        MN1["sqli_union<br/>pre: visible_error_output"]
+        MN1["sqli_union<br/>pre: union_select_possible"]
         MN2["sqli_error<br/>pre: error_messages_enabled"]
         MN3["sqli_boolean_blind<br/>pre: response_diff_detectable"]
         MN4["sqli_time_blind<br/>pre: response_delay_measurable"]
 
         MN5["ac_idor<br/>pre: object_ids_enumerable"]
-        MN6["ac_vertical_escalation<br/>pre: role_logic_flaw_detectable"]
-        MN7["ac_force_browse<br/>pre: low_priv_session_available"]
+        MN6["ac_vertical_escalation<br/>pre: role_based_access_present"]
+        MN7["ac_force_browse<br/>pre: force_browse_endpoints_visible"]
 
         MN8["bf_dictionary<br/>pre: no_rate_limit"]
-        MN9["bf_spray<br/>pre: multiple_usernames_avail."]
+        MN9["bf_spray<br/>pre: no_rate_limit"]
 
         CN1["[brute_force_confirmed] ──► [ac_idor]"]
         CN2["[sqli_confirmed] ──► [credentials_extracted]<br/>     ──► [brute_force_confirmed]"]
@@ -396,7 +396,7 @@ FUNCTION recon(state, session):
     observations["response_delay_measurable"] = check_timing_baseline(session, endpoints)
     observations["object_ids_enumerable"] = check_predictable_ids(session, endpoints)
     observations["no_rate_limit"] = check_rate_limit_absence(session, endpoints)
-    observations["low_priv_session_available"] = (len(endpoints) > 0)
+    observations["low_priv_session_available"] = session is not None and getattr(session, "is_logged_in", False)
     
     RETURN {
         endpoints: deduplicate_endpoints(endpoints),
@@ -985,15 +985,15 @@ Scope menyempit menjadi **3 surface dengan evaluasi mendalam per metode**, sesua
 
 | Surface DVWA | Method Agent | Precondition (AKG) | Chain Output | Level 4 Viability |
 |---|---|---|---|---|
-| **SQL Injection** | `sqli_union_agent.py` | `visible_error_output` | `sqli_confirmed` | → `credentials_extracted` |
+| **SQL Injection** | `sqli_union_agent.py` | `union_select_possible` | `sqli_confirmed` | → `credentials_extracted` |
 | | `sqli_error_agent.py` | `error_messages_enabled` | `sqli_confirmed` | → `credentials_extracted` |
 | | `sqli_boolean_blind_agent.py` | `response_diff_detectable` | `sqli_confirmed` | → `credentials_extracted` |
 | | `sqli_time_blind_agent.py` | `response_delay_measurable` | `sqli_confirmed` | → `credentials_extracted` |
 | **Access Control** | `ac_idor_agent.py` | `object_ids_enumerable` | `access_control_confirmed` | → `ac_vertical_escalation_confirmed` → `admin_session_obtained` |
-| | `ac_vertical_escalation_agent.py` | `role_logic_flaw_detectable` | `ac_vertical_escalation_confirmed` | → `admin_session_obtained` |
-| | `ac_force_browse_agent.py` | `low_priv_session_available` | `access_control_confirmed` | → — |
+| | `ac_vertical_escalation_agent.py` | `role_based_access_present` | `ac_vertical_escalation_confirmed` | → `admin_session_obtained` |
+| | `ac_force_browse_agent.py` | `force_browse_endpoints_visible` | `access_control_confirmed` | → — |
 | **Brute Force** | `bf_dictionary_agent.py` | `no_rate_limit` | `brute_force_confirmed` | → `authenticated_session` → `ac_idor` |
-| | `bf_spray_agent.py` | `multiple_usernames_available` | `brute_force_confirmed` | → `authenticated_session` → `ac_idor` |
+| | `bf_spray_agent.py` | `no_rate_limit` | `brute_force_confirmed` | → `authenticated_session` → `ac_idor` |
 
 **Modul DVWA lainnya (out of scope per revisi final):**
 | Modul | Alasan Dikecualikan |

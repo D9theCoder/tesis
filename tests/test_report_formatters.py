@@ -24,7 +24,7 @@ def _single_artifact() -> dict:
             },
             "summary": {
                 "score_distribution": {0: 0, 1: 0, 2: 0, 3: 1, 4: 1},
-                "highest_impact_outcome": "rce_achieved",
+                "highest_impact_outcome": "admin_session_obtained",
                 "longest_chain": "sqli→creds→admin→upload→rce",
                 "total_iterations_used": 10,
                 "guardrail_activations": 2,

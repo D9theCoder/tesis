@@ -71,7 +71,7 @@ class InvalidPreconditionAKG(AttackKnowledgeGraph):
         super()._build_graph()
         self.graph.add_edge(
             "sqli_union_confirmed",
-            "session_hijack",
+            "data_exfiltrated",
             is_chain=True,
             preconditions=["unknown_node"],
             target_agent="bad_chain",
@@ -84,7 +84,7 @@ class MissingTargetAgentAKG(AttackKnowledgeGraph):
         super()._build_graph()
         self.graph.add_edge(
             "sqli_union_confirmed",
-            "session_hijack",
+            "data_exfiltrated",
             is_chain=True,
             preconditions=["sqli_union_confirmed"],
             priority=1,
@@ -96,7 +96,7 @@ class MissingPreconditionsAKG(AttackKnowledgeGraph):
         super()._build_graph()
         self.graph.add_edge(
             "sqli_union_confirmed",
-            "session_hijack",
+            "data_exfiltrated",
             is_chain=True,
             target_agent="missing_preconditions_chain",
             priority=1,
@@ -108,7 +108,7 @@ class InvalidPreconditionsTypeAKG(AttackKnowledgeGraph):
         super()._build_graph()
         self.graph.add_edge(
             "sqli_union_confirmed",
-            "session_hijack",
+            "data_exfiltrated",
             is_chain=True,
             preconditions=None,
             target_agent="invalid_preconditions_type_chain",
@@ -119,7 +119,7 @@ class InvalidPreconditionsTypeAKG(AttackKnowledgeGraph):
 class MissingHighImpactOutcomeAKG(AttackKnowledgeGraph):
     def _build_graph(self) -> None:
         super()._build_graph()
-        self.graph.remove_node("session_hijack")
+        self.graph.remove_node("admin_session_obtained")
 
 
 def test_validation_fails_for_unknown_precondition():

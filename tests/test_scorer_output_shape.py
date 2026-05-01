@@ -14,7 +14,6 @@ def test_scorer_returns_nested_surface_scores():
         assert "label" in surface_dict
         assert "method_selected" in surface_dict
         assert "attempts" in surface_dict
-        assert "akg_path" in surface_dict
         assert "adapted" in surface_dict
 
 
@@ -33,6 +32,7 @@ def test_scorer_returns_summary():
     assert "chain_exploits_achieved" in summary
     assert "guardrail_activations" in summary
     assert "total_iterations_used" in summary
+    assert "akg_path" in summary
     assert "incomplete_surfaces" in summary
     assert "incomplete_reasons" in summary
 

@@ -100,14 +100,14 @@ def _fallback_next_agent(
     kg = AttackKnowledgeGraph()
     viable = kg.get_viable_methods(current_surface, observations)
     
-    # Prefer unattempted viable methods
+    # Prefer unattempted viable methods that have not previously failed
     for method in viable:
-        if method not in attempted and method not in blocked:
+        if method not in attempted and method not in blocked and method not in failure_agents:
             return method
-    
-    # Try any unattempted method on this surface
+
+    # Try any unattempted method on this surface that has not failed
     for method in METHODS_BY_SURFACE.get(current_surface, []):
-        if method not in attempted and method not in blocked:
+        if method not in attempted and method not in blocked and method not in failure_agents:
             return method
     
     # All exhausted
@@ -115,15 +115,31 @@ def _fallback_next_agent(
 
 
 def _run_evasion_pipeline(prompt: str, evasion_max_retries: int) -> tuple[str, bool]:
-    """LangGraph-native retry: paraphrase + validity gate.
-    
-    Returns (enhanced_prompt, success).
-    For now, implement a simple semantic paraphrase by rewording.
+    """LangGraph-native retry: restructure prompt wording + validity gate.
+
+    Uses sentence-level restructuring rather than naive word replacement
+    to avoid mangling technical terms (e.g. "exploitation" → "assessitation").
     """
-    # Simple paraphrase: replace trigger words
-    paraphrased = prompt.replace("exploit", "assess").replace("attack", "evaluate")
-    if paraphrased != prompt:
-        return paraphrased, True
+    replacement_tiers: list[dict[str, str]] = [
+        {
+            "exploit the vulnerability": "test the security control",
+            "attack the application": "evaluate the application",
+            "perform an attack": "conduct a security test",
+        },
+        {
+            "exploit": "verify",
+            "attack": "assess",
+            "payload to exploit": "payload to verify",
+        },
+    ]
+
+    max_attempts = min(max(evasion_max_retries, 0), len(replacement_tiers))
+    for attempt in range(max_attempts):
+        candidate = prompt
+        for old, new in replacement_tiers[attempt].items():
+            candidate = candidate.replace(old, new)
+        if candidate != prompt:
+            return candidate, True
     return prompt, False
 
 
@@ -157,12 +173,14 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
     if iteration_count >= max_iterations:
         return {
             "next_agent": "scorer",
+            "iteration_count": iteration_count + 1,
             "telemetry_events": [{**telemetry_base, "event": "orchestrator.stop", "reason": "budget_exhausted"}],
         }
 
     if (set(confirmed_vulns) | set(achieved_outcomes)) & CRITICAL_OUTCOMES:
         return {
             "next_agent": "scorer",
+            "iteration_count": iteration_count + 1,
             "telemetry_events": [{**telemetry_base, "event": "orchestrator.stop", "reason": "critical_outcome"}],
         }
 
@@ -190,12 +208,14 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
     # Evasion logic
     evasion_triggered = False
     evasion_success = False
+    retries_used = 0
     
     if evasion_enabled and evasion_mode != "disabled":
         if evasion_mode == "proactive":
             # Proactive: always run evasion
             prompt, evasion_success = _run_evasion_pipeline(prompt, evasion_max_retries)
             evasion_triggered = True
+            retries_used = 1
             telemetry_events.append({
                 **telemetry_base,
                 "event": "orchestrator.evasion.triggered",
@@ -213,8 +233,8 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                     "payload": {"reason": "cooldown_active", "consecutive_clean": consecutive_clean},
                 })
             else:
-                # 2. Short-circuit: run LLM first, then check response
-                pass  # will check after LLM call
+                # Reactive: no pre-check; guardrail detection happens after LLM call
+                pass
     
     try:
         provider_name = state.get("llm_provider", "gemini")
@@ -247,31 +267,31 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                     "status": "ok",
                     "payload": {"reason": "guardrail_refusal"},
                 })
-                # Run evasion pipeline
-                for retry in range(evasion_max_retries):
+                retry_budget = max(evasion_max_retries, 0)
+                for retry in range(retry_budget):
+                    retries_used = retry + 1
                     new_prompt, success = _run_evasion_pipeline(prompt, evasion_max_retries)
                     if success:
                         prompt = new_prompt
-                        # Re-invoke LLM with paraphrased prompt
-                        response = llm.invoke([HumanMessage(content=prompt)])
-                        text = _extract_response_text(getattr(response, "content", ""))
-                        if not is_guardrail_refusal(text):
-                            evasion_success = True
-                            break
+                    response = llm.invoke([HumanMessage(content=prompt)])
+                    text = _extract_response_text(getattr(response, "content", ""))
+                    if not is_guardrail_refusal(text):
+                        evasion_success = True
+                        break
                 
                 if evasion_success:
                     telemetry_events.append({
                         **telemetry_base,
                         "event": "orchestrator.evasion.success",
                         "status": "ok",
-                        "payload": {"retries_used": retry + 1},
+                        "payload": {"retries_used": retries_used},
                     })
                 else:
                     telemetry_events.append({
                         **telemetry_base,
                         "event": "orchestrator.evasion.failed",
                         "status": "fallback",
-                        "payload": {"reason": "max_retries_exhausted"},
+                        "payload": {"reason": "max_retries_exhausted", "retries_used": retries_used},
                     })
             else:
                 # Clean response
@@ -288,6 +308,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             # the fallback would permanently disable viable methods.
             return {
                 "next_agent": fallback_agent,
+                "iteration_count": iteration_count + 1,
                 "guardrail_activations": [make_guardrail_event(
                     provider=state.get("llm_provider", "gemini"),
                     context="orchestrator",
@@ -318,10 +339,11 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         
         return {
             "next_agent": next_agent,
+            "iteration_count": iteration_count + 1,
             "telemetry_events": telemetry_events,
             "messages": [HumanMessage(content=prompt), AIMessage(content=text)],
             "consecutive_clean_responses": new_clean_count,
-            "evasion_attempts": state.get("evasion_attempts", 0) + (1 if evasion_triggered else 0),
+            "evasion_attempts": state.get("evasion_attempts", 0) + (retries_used if evasion_triggered else 0),
             "successful_evasions": state.get("successful_evasions", 0) + (1 if evasion_success else 0),
         }
     except Exception as exc:
@@ -329,11 +351,12 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         logger.exception("Orchestrator failed; applying deterministic fallback")
         return {
             "next_agent": fallback_agent,
+            "iteration_count": iteration_count + 1,
             "telemetry_events": [
                 *telemetry_events,
                 {**telemetry_base, "event": "orchestrator.fallback.applied", "status": "fallback", "payload": {"error_type": type(exc).__name__, "next_agent": fallback_agent}},
             ],
             "messages": [HumanMessage(content=prompt), AIMessage(content=f"orchestrator_fallback:{type(exc).__name__}")],
-            "evasion_attempts": state.get("evasion_attempts", 0) + (1 if evasion_triggered else 0),
+            "evasion_attempts": state.get("evasion_attempts", 0) + (retries_used if evasion_triggered else 0),
             "successful_evasions": state.get("successful_evasions", 0) + (1 if evasion_success else 0),
         }

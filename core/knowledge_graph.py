@@ -7,7 +7,7 @@ from typing import TypedDict
 
 import networkx as nx
 
-from core.state import METHODS_BY_SURFACE
+from core.state import METHODS_BY_SURFACE, MODULE_TO_KG_NODE, ALL_METHOD_AGENTS
 
 
 class RawTransition(TypedDict, total=False):
@@ -34,10 +34,7 @@ class Transition:
 class AttackKnowledgeGraph:
     HIGH_IMPACT_OUTCOMES: tuple[str, ...] = (
         "admin_session_obtained",
-        "rce_achieved",
-        "user_compromised",
         "data_exfiltrated",
-        "session_hijack",
     )
 
     # Method preconditions: what observation keys must be True
@@ -50,7 +47,7 @@ class AttackKnowledgeGraph:
         "ac_vertical_escalation": ["role_based_access_present"],
         "ac_force_browse": ["force_browse_endpoints_visible"],
         "bf_dictionary": ["no_rate_limit"],
-        "bf_spray": ["no_rate_limit", "low_priv_session_available"],
+        "bf_spray": ["no_rate_limit"],
     }
 
     def __init__(self) -> None:
@@ -103,7 +100,7 @@ class AttackKnowledgeGraph:
             "sqli_confirmed", "access_control_confirmed", "brute_force_confirmed",
             # Outcome nodes
             "credentials_extracted", "admin_session_obtained",
-            "data_exfiltrated", "user_compromised", "session_hijack", "rce_achieved",
+            "data_exfiltrated",
         ]
         self.graph.add_nodes_from(sorted(set(nodes)))
 
@@ -247,7 +244,6 @@ class AttackKnowledgeGraph:
         node that doesn't exist in the graph (e.g., blind_sqli_confirmed
         before Stage 9C fix), causing silent chain lookup failures.
         """
-        from core.state import MODULE_TO_KG_NODE, ALL_METHOD_AGENTS
         graph_nodes = set(self.graph.nodes)
         for agent in ALL_METHOD_AGENTS:
             kg_node = MODULE_TO_KG_NODE.get(agent)
@@ -278,36 +274,29 @@ class AttackKnowledgeGraph:
             return []
         actions: list[tuple[int, dict]] = []
         for _, target, meta in self.graph.out_edges(node, data=True):
-            normalized = self._normalize_transition({
-                "source": node,
-                "target": target,
-                "is_chain": bool(meta.get("is_chain", False)),
-                "preconditions": list(meta.get("preconditions", [])),
-                "target_agent": meta.get("target_agent"),
-                "priority": int(meta.get("priority", 100)),
-            })
             actions.append((
-                normalized.priority,
+                int(meta.get("priority", 100)),
                 {
-                    "source": normalized.source,
-                    "target": normalized.target,
-                    "is_chain": normalized.is_chain,
-                    "preconditions": list(normalized.preconditions),
-                    "target_agent": normalized.target_agent,
+                    "source": node,
+                    "target": target,
+                    "is_chain": bool(meta.get("is_chain", False)),
+                    "preconditions": list(meta.get("preconditions", [])),
+                    "target_agent": meta.get("target_agent"),
                 },
             ))
         ordered = sorted(actions, key=lambda item: (item[0], item[1]["target"], item[1]["target_agent"] or ""))
         return [action for _, action in ordered]
 
     def _path_is_viable(self, path: list[str], known_nodes: set[str]) -> bool:
+        has_chain_edge = False
         for source, target in zip(path, path[1:]):
             edge = self.graph[source][target]
-            if not bool(edge.get("is_chain", False)):
-                continue
+            if bool(edge.get("is_chain", False)):
+                has_chain_edge = True
             required = set(edge.get("preconditions", []))
             if not required.issubset(known_nodes):
                 return False
-        return True
+        return has_chain_edge
 
     def get_viable_chains(self, confirmed_vulns: list[str], achieved_outcomes: list[str] | None = None, max_paths: int = 5) -> list[list[str]]:
         if max_paths <= 0:

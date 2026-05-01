@@ -6,8 +6,7 @@ import logging
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
-from agents.state_utils import already_tried_payloads, make_update, normalize_security_level
-from core.knowledge_graph import AttackKnowledgeGraph
+from agents.state_utils import already_tried_payloads, chain_check as _chain_check, make_update, normalize_security_level
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
@@ -19,17 +18,22 @@ AGENT_ID = "ac_vertical_escalation"
 MODULE_PATH = "/vulnerabilities/authbypass/"
 _PROBE_OBSERVATION_KEY = "role_based_access_present"
 
-# Signals indicating admin-level access or role logic flaw
+# Signals indicating admin-level access or role logic flaw (probe stage)
+# Broader than _EXPLOIT_SIGNALS: matches any admin-user data in response.
 _ADMIN_SIGNALS = [
-    "admin", "admin panel", "administration",
+    "admin panel", "administration",
     "config", "setup", "database setup",
-    "user id: 1", "user id : 1",
+    "first name: admin", "surname: admin",
+    "user id: 1", "user id : 1", "id: 1", "id : 1",
 ]
 
-# Signals for successful privilege escalation
+# Signals for successful privilege escalation (exploit stage)
+# Require explicit admin-user data patterns, not just generic "admin" text.
 _EXPLOIT_SIGNALS = [
-    "admin", "welcome admin", "admin panel",
-    "user id: 1", "first name: admin",
+    "welcome admin", "admin panel",
+    "first name: admin", "surname: admin",
+    "user id: 1", "user id : 1",
+    "id: 1", "id : 1",
 ]
 
 
@@ -101,25 +105,6 @@ def _attempt_exploit(
             events.append(exploit_event(AGENT_ID, f"userId={payload}", None, False))
 
     return score, tried, confirmed, events
-
-
-def _chain_check(confirmed_node: str, state: ExploitationState) -> tuple[int, list[str]]:
-    """Query AKG for chain edges. Returns (score, achieved_outcomes)."""
-    achieved: list[str] = []
-    score = 0
-    kg = AttackKnowledgeGraph()
-    confirmed_set = set(state.get("confirmed_vulns", [])) | {confirmed_node}
-
-    for edge in kg.get_next_actions(confirmed_node):
-        if not edge.get("is_chain"):
-            continue
-        preconditions = edge.get("preconditions", [])
-        if all(p in confirmed_set for p in preconditions):
-            achieved.append(edge["target"])
-            score = 4
-
-    return score, achieved
-
 
 def ac_vertical_escalation_agent(state: ExploitationState) -> dict[str, Any]:
     """Run PROBE -> EXPLOIT -> CHAIN CHECK for ac_vertical_escalation."""

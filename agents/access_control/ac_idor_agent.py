@@ -6,12 +6,11 @@ import logging
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
-from agents.state_utils import already_tried_payloads, make_update, normalize_security_level
-from core.knowledge_graph import AttackKnowledgeGraph
+from agents.state_utils import already_tried_payloads, chain_check as _chain_check, make_update, normalize_security_level
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
-from foundation.verifier import Verifier
+from foundation.verifier import VerificationResult, Verifier
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +39,9 @@ def _probe_preconditions(
     verifier = Verifier()
 
     # Get baseline response for user ID 1 (the admin user)
+    baseline_text = ""
+    baseline_len = 0
+    baseline_signals = VerificationResult()
     try:
         baseline_resp = session.get(MODULE_PATH, params={"userId": "1", "Submit": "Submit"})
         baseline_text = baseline_resp.text
@@ -47,32 +49,40 @@ def _probe_preconditions(
         baseline_signals = verifier.contains_any(baseline_text, _DATA_SIGNALS)
     except Exception as exc:
         logger.warning("[%s] PROBE baseline request failed: %s", AGENT_ID, exc)
-        observations[_PROBE_OBSERVATION_KEY] = False
-        return False, tried, observations, events
+        # Baseline failed — still attempt probes and compare them against each other
+        baseline_text = ""
 
     sent_any = False
+    responses: list[tuple[str, str, int]] = []  # (payload, text, length)
     for payload in payloads:
         if payload in already_tried:
             continue
         sent_any = True
         tried.append(payload)
         try:
-            # Skip ID 1 (baseline) — test other IDs
             test_id = payload.strip()
             if test_id == "1":
                 continue
             resp = session.get(MODULE_PATH, params={"userId": test_id, "Submit": "Submit"})
             events.append(probe_event(AGENT_ID, f"userId={test_id}", resp.status_code, True))
-            # IDOR detected if different user data is returned
             if resp.status_code == 200:
+                responses.append((test_id, resp.text, len(resp.text)))
                 resp_signals = verifier.contains_any(resp.text, _DATA_SIGNALS)
-                if resp_signals.ok and len(resp.text) != baseline_len:
-                    observations[_PROBE_OBSERVATION_KEY] = True
-                    return True, tried, observations, events
-                # Also detect if content changes between user IDs
-                if resp.text != baseline_text and len(resp.text) > 100:
-                    observations[_PROBE_OBSERVATION_KEY] = True
-                    return True, tried, observations, events
+                # IDOR detected if different user data is returned
+                if baseline_text:
+                    if resp_signals.ok and len(resp.text) != baseline_len:
+                        observations[_PROBE_OBSERVATION_KEY] = True
+                        return True, tried, observations, events
+                    if resp.text != baseline_text and len(resp.text) > 100:
+                        observations[_PROBE_OBSERVATION_KEY] = True
+                        return True, tried, observations, events
+                else:
+                    # No baseline — compare against other responses
+                    if len(responses) >= 2:
+                        first_text = responses[0][1]
+                        if resp.text != first_text and resp_signals.ok:
+                            observations[_PROBE_OBSERVATION_KEY] = True
+                            return True, tried, observations, events
         except Exception as exc:
             logger.warning("[%s] PROBE request failed: %s", AGENT_ID, exc)
             events.append(probe_event(AGENT_ID, f"userId={payload}", None, False))
@@ -93,6 +103,14 @@ def _attempt_exploit(
     score = 0
     verifier = Verifier()
 
+    # Fetch baseline for differential comparison
+    baseline_text = ""
+    try:
+        baseline_resp = session.get(MODULE_PATH, params={"userId": "1", "Submit": "Submit"})
+        baseline_text = baseline_resp.text
+    except Exception as exc:
+        logger.warning("[%s] EXPLOIT baseline request failed: %s", AGENT_ID, exc)
+
     for payload in payloads:
         if payload in already_tried:
             continue
@@ -103,7 +121,8 @@ def _attempt_exploit(
             events.append(exploit_event(AGENT_ID, f"userId={test_id}", resp.status_code, True))
             if resp.status_code == 200:
                 result = verifier.contains_any(resp.text, _DATA_SIGNALS)
-                if result.ok:
+                # Require response to differ from baseline to confirm IDOR
+                if result.ok and resp.text != baseline_text:
                     score = max(score, 3)
                     confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
                     break
@@ -112,25 +131,6 @@ def _attempt_exploit(
             events.append(exploit_event(AGENT_ID, f"userId={payload}", None, False))
 
     return score, tried, confirmed, events
-
-
-def _chain_check(confirmed_node: str, state: ExploitationState) -> tuple[int, list[str]]:
-    """Query AKG for chain edges. Returns (score, achieved_outcomes)."""
-    achieved: list[str] = []
-    score = 0
-    kg = AttackKnowledgeGraph()
-    confirmed_set = set(state.get("confirmed_vulns", [])) | {confirmed_node}
-
-    for edge in kg.get_next_actions(confirmed_node):
-        if not edge.get("is_chain"):
-            continue
-        preconditions = edge.get("preconditions", [])
-        if all(p in confirmed_set for p in preconditions):
-            achieved.append(edge["target"])
-            score = 4
-
-    return score, achieved
-
 
 def ac_idor_agent(state: ExploitationState) -> dict[str, Any]:
     """Run PROBE -> EXPLOIT -> CHAIN CHECK for ac_idor."""

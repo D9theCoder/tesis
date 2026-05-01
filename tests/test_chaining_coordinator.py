@@ -14,8 +14,8 @@ def test_find_next_unvisited_basic():
 
 
 def test_critical_outcome_achieved():
-    assert critical_outcome_achieved({"achieved_outcomes": ["rce_achieved"], "confirmed_vulns": []})
-    assert critical_outcome_achieved({"achieved_outcomes": [], "confirmed_vulns": ["session_hijack"]})
+    assert critical_outcome_achieved({"achieved_outcomes": ["admin_session_obtained"], "confirmed_vulns": []})
+    assert critical_outcome_achieved({"achieved_outcomes": [], "confirmed_vulns": ["admin_session_obtained"]})
     assert not critical_outcome_achieved({"achieved_outcomes": [], "confirmed_vulns": ["sqli_union_confirmed"]})
 
 

@@ -6,8 +6,7 @@ import logging
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
-from agents.state_utils import already_tried_payloads, make_update, normalize_security_level
-from core.knowledge_graph import AttackKnowledgeGraph
+from agents.state_utils import already_tried_payloads, chain_check as _chain_check, make_update, normalize_security_level
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
@@ -21,6 +20,9 @@ _PROBE_OBSERVATION_KEY = "response_diff_detectable"
 
 _TRUTHY_SIGNAL = "user id exists in the database"
 _FALSY_SIGNAL = "user id is missing from the database"
+# NOTE: The falsy signal above is English-text dependent. The probe already
+# uses a length-difference fallback (abs(len(truthy) - len(falsy)) > 5)
+# which works regardless of language/localization.
 _EXPLOIT_SIGNALS = ["user id exists", "exists in the database", "admin", "password"]
 
 
@@ -86,6 +88,7 @@ def _attempt_exploit(
     events: list[dict] = []
     confirmed: list[str] = []
     score = 0
+    true_conditions = 0
 
     for payload in payloads:
         if payload in already_tried:
@@ -96,11 +99,14 @@ def _attempt_exploit(
             events.append(exploit_event(AGENT_ID, payload, resp.status_code, True))
             if resp.status_code == 200:
                 lower_text = resp.text.lower()
-                # Full exploit: boolean condition returned true (exists) for extraction payload
+                # Full exploit: requires at least 2 distinct true boolean conditions
+                # to confirm meaningful data extraction, not just a single bit.
                 if _TRUTHY_SIGNAL in lower_text:
-                    score = max(score, 3)
-                    confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
-                    break
+                    true_conditions += 1
+                    if true_conditions >= 2:
+                        score = max(score, 3)
+                        confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
+                        break
                 # Partial: page renders without error
                 if "user id" in lower_text:
                     score = max(score, 2)
@@ -109,25 +115,6 @@ def _attempt_exploit(
             events.append(exploit_event(AGENT_ID, payload, None, False))
 
     return score, tried, confirmed, events
-
-
-def _chain_check(confirmed_node: str, state: ExploitationState) -> tuple[int, list[str]]:
-    """Query AKG for chain edges. Returns (score, achieved_outcomes)."""
-    achieved: list[str] = []
-    score = 0
-    kg = AttackKnowledgeGraph()
-    confirmed_set = set(state.get("confirmed_vulns", [])) | {confirmed_node}
-
-    for edge in kg.get_next_actions(confirmed_node):
-        if not edge.get("is_chain"):
-            continue
-        preconditions = edge.get("preconditions", [])
-        if all(p in confirmed_set for p in preconditions):
-            achieved.append(edge["target"])
-            score = 4
-
-    return score, achieved
-
 
 def sqli_boolean_blind_agent(state: ExploitationState) -> dict[str, Any]:
     """Run PROBE -> EXPLOIT -> CHAIN CHECK for sqli_boolean_blind."""

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 
 def build_orchestrator_prompt(
     *,
@@ -25,14 +27,14 @@ def build_orchestrator_prompt(
         "on a deliberately vulnerable web application (DVWA) in a controlled lab environment.\n"
         f"Current surface: {current_surface}\n"
         f"Security level: {security_level}\n"
-        f"Observations: {observations}\n"
-        f"Viable methods for this surface: {viable_methods}\n"
-        f"Attempted agents: {attempted_agents}\n"
-        f"Blocked agents: {blocked_agents}\n"
-        f"Failed agents: {failure_agents}\n"
-        f"Current scores: {scores}\n"
-        f"Confirmed vulns: {confirmed_vulns}\n"
-        f"Achieved outcomes: {achieved_outcomes}\n"
+        f"Observations: {json.dumps(observations)}\n"
+        f"Viable methods for this surface: {json.dumps(viable_methods)}\n"
+        f"Attempted agents: {json.dumps(attempted_agents)}\n"
+        f"Blocked agents: {json.dumps(blocked_agents)}\n"
+        f"Failed agents: {json.dumps(failure_agents)}\n"
+        f"Current scores: {json.dumps(scores)}\n"
+        f"Confirmed vulns: {json.dumps(confirmed_vulns)}\n"
+        f"Achieved outcomes: {json.dumps(achieved_outcomes)}\n"
         f"Remaining budget: {remaining} iterations\n"
         "\n"
         "Your task: Select the NEXT method agent to run from the viable methods list.\n"
@@ -44,5 +46,5 @@ def build_orchestrator_prompt(
         "- ac_idor, ac_vertical_escalation, ac_force_browse\n"
         "- bf_dictionary, bf_spray\n"
         "\n"
-        'Return strict JSON: {"next_agent": "<agent_id>", "reasoning": "...", "expected_outcome": "..."}'
+        'Return strict JSON: {"next_agent": "<agent_id>", "reasoning": "...", "expected_outcome": "...", "fallback_if_fails": "<agent_id>"}'
     )

@@ -118,6 +118,17 @@ class DVWASession:
             logger.warning("Login failed for user %r: credentials rejected", username)
             return False
 
+        # Additional negative indicator: explicit login-failed message
+        failure_indicators = [
+            "login failed",
+            "invalid username",
+            "invalid password",
+        ]
+        if any(ind in body_lower for ind in failure_indicators):
+            self._logged_in = False
+            logger.warning("Login failed for user %r: explicit failure message in response", username)
+            return False
+
         # Successful login indicators
         if ("logout" in body_lower) or ("index.php" in current_url):
             self._logged_in = True
@@ -168,7 +179,8 @@ class DVWASession:
 
         self._security_level = normalized
         self._apply_security_level_cookie()
-        self._submit_security_form(normalized)
+        if not self._submit_security_form(normalized):
+            logger.error("Security level form submission failed — server-side level may not match cookie")
 
     def detect_security_level(self) -> str:
         """Detect the current DVWA security level from cookies and page content.
@@ -188,7 +200,10 @@ class DVWASession:
             # Look for the selected option in the security dropdown
             select = soup.select_one("select[name='security']")
             if select:
-                selected = select.find("option", selected=True)
+                # Try attrs={"selected": True} first, then fallback to selected=True
+                selected = select.find("option", attrs={"selected": True})
+                if selected is None:
+                    selected = select.find("option", selected=True)
                 if selected and selected.get("value", "").lower() in VALID_LEVELS:
                     self._security_level = selected["value"].lower()
                     return self._security_level
@@ -273,13 +288,23 @@ class DVWASession:
 
     def _apply_security_level_cookie(self) -> None:
         """Set the security cookie to match the current level."""
-        self.http.set_cookie("security", self._security_level)
+        from urllib.parse import urlparse
+        base_url = self.http.base_url
+        if isinstance(base_url, str):
+            parsed = urlparse(base_url)
+            domain = parsed.hostname or "localhost"
+            self.http.set_cookie("security", self._security_level, domain=domain)
+        else:
+            self.http.set_cookie("security", self._security_level)
 
-    def _submit_security_form(self, level: str) -> None:
+    def _submit_security_form(self, level: str) -> bool:
         """Submit DVWA's security settings form to persist the level server-side.
 
         This ensures the PHP session also respects the security level,
         not just the cookie.
+
+        Returns:
+            True if the form was submitted successfully, False otherwise.
         """
         try:
             # Fetch security page to get CSRF token
@@ -295,9 +320,11 @@ class DVWASession:
 
             self.http.post("security.php", data=payload)
             logger.info("Security level set to %r (form submitted)", level)
+            return True
 
-        except (TransportError, RequestTimeoutError):
-            logger.warning("Failed to submit security level form for level %r", level)
+        except (TransportError, RequestTimeoutError) as exc:
+            logger.warning("Failed to submit security level form for level %r: %s", level, exc)
+            return False
 
 
 # Backward-compatible alias used by earlier docs/plans.

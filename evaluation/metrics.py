@@ -28,12 +28,9 @@ def score_distribution(scores: dict[str, int]) -> dict[int, int]:
 
 
 _IMPACT_SEVERITY_ORDER: tuple[str, ...] = (
-    "rce_achieved",
     "admin_session_obtained",
-    "user_compromised",
     "data_exfiltrated",
     "credentials_extracted",
-    "session_hijack",
 )
 
 

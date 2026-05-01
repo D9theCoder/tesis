@@ -7,8 +7,7 @@ import time
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
-from agents.state_utils import already_tried_payloads, make_update, normalize_security_level
-from core.knowledge_graph import AttackKnowledgeGraph
+from agents.state_utils import already_tried_payloads, chain_check as _chain_check, make_update, normalize_security_level
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
@@ -19,7 +18,28 @@ AGENT_ID = "sqli_time_blind"
 MODULE_PATH = "/vulnerabilities/sqli_blind/"
 _PROBE_OBSERVATION_KEY = "response_delay_measurable"
 
-TIME_THRESHOLD = 2.5  # seconds -- response must exceed this to confirm time injection
+TIME_THRESHOLD = 2.5  # seconds — response must exceed this to confirm time injection
+
+
+def _get_baseline_timing(session: DVWASession, samples: int = 3) -> float:
+    """Measure baseline request timing using median of multiple samples.
+
+    Returns the median elapsed time in seconds. If all samples fail,
+    returns 0.0.
+    """
+    times: list[float] = []
+    for _ in range(samples):
+        try:
+            start = time.monotonic()
+            session.get(MODULE_PATH, params={"id": "1", "Submit": "Submit"})
+            times.append(time.monotonic() - start)
+        except Exception:
+            continue
+    if not times:
+        return 0.0
+    sorted_times = sorted(times)
+    median = sorted_times[len(sorted_times) // 2]
+    return median
 
 
 def _probe_preconditions(
@@ -35,16 +55,8 @@ def _probe_preconditions(
     sent_any = False
 
     # Get a baseline timing with a harmless request
-    baseline_elapsed = 0.0
-    for _ in range(2):
-        try:
-            baseline_start = time.monotonic()
-            session.get(MODULE_PATH, params={"id": "1", "Submit": "Submit"})
-            baseline_elapsed = time.monotonic() - baseline_start
-            break
-        except Exception:
-            continue
-    else:
+    baseline_elapsed = _get_baseline_timing(session)
+    if baseline_elapsed == 0.0:
         # All baseline attempts failed
         return False, tried, {}, events
 
@@ -81,18 +93,10 @@ def _attempt_exploit(
     events: list[dict] = []
     confirmed: list[str] = []
     score = 0
+    delay_confirms = 0
 
-    # Baseline timing
-    baseline_elapsed = 0.0
-    for _ in range(2):
-        try:
-            baseline_start = time.monotonic()
-            session.get(MODULE_PATH, params={"id": "1", "Submit": "Submit"})
-            baseline_elapsed = time.monotonic() - baseline_start
-            break
-        except Exception:
-            continue
-    # If baseline can't be established, proceed with raw elapsed time
+    # Baseline timing (extracted helper)
+    baseline_elapsed = _get_baseline_timing(session)
 
     for payload in payloads:
         if payload in already_tried:
@@ -103,35 +107,19 @@ def _attempt_exploit(
             resp = session.get(MODULE_PATH, params={"id": payload, "Submit": "Submit"})
             elapsed = time.monotonic() - start
             events.append(exploit_event(AGENT_ID, payload, resp.status_code, True))
-            # Full exploit: conditional SLEEP confirmed the boolean condition
+            # Full exploit: requires at least 2 distinct delay confirmations
+            # to confirm meaningful extraction, not just a single delay.
             if elapsed - baseline_elapsed > TIME_THRESHOLD:
-                score = max(score, 3)
-                confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
-                break
+                delay_confirms += 1
+                if delay_confirms >= 2:
+                    score = max(score, 3)
+                    confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
+                    break
         except Exception as exc:
             logger.warning("[%s] EXPLOIT request failed: %s", AGENT_ID, exc)
             events.append(exploit_event(AGENT_ID, payload, None, False))
 
     return score, tried, confirmed, events
-
-
-def _chain_check(confirmed_node: str, state: ExploitationState) -> tuple[int, list[str]]:
-    """Query AKG for chain edges. Returns (score, achieved_outcomes)."""
-    achieved: list[str] = []
-    score = 0
-    kg = AttackKnowledgeGraph()
-    confirmed_set = set(state.get("confirmed_vulns", [])) | {confirmed_node}
-
-    for edge in kg.get_next_actions(confirmed_node):
-        if not edge.get("is_chain"):
-            continue
-        preconditions = edge.get("preconditions", [])
-        if all(p in confirmed_set for p in preconditions):
-            achieved.append(edge["target"])
-            score = 4
-
-    return score, achieved
-
 
 def sqli_time_blind_agent(state: ExploitationState) -> dict[str, Any]:
     """Run PROBE -> EXPLOIT -> CHAIN CHECK for sqli_time_blind."""

