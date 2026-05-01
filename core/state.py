@@ -9,9 +9,11 @@ from langgraph.graph.message import add_messages
 
 
 def _merge_dicts(a: dict, b: dict) -> dict:
-    """Reducer for observations: merge b into a without overwriting existing keys to False."""
+    """Reducer for observations: merge b into a; never overwrite True with False."""
     merged = dict(a)
-    merged.update(b)
+    for key, value in b.items():
+        if key not in merged or not merged[key]:
+            merged[key] = value
     return merged
 
 
@@ -199,8 +201,8 @@ MODULE_TO_KG_NODE: dict[str, str] = {
     # 3-surface deep-method agents
     "sqli_union": "sqli_confirmed",
     "sqli_error": "sqli_confirmed",
-    "sqli_boolean_blind": "blind_sqli_confirmed",
-    "sqli_time_blind": "blind_sqli_confirmed",
+    "sqli_boolean_blind": "sqli_confirmed",
+    "sqli_time_blind": "sqli_confirmed",
     "ac_idor": "access_control_confirmed",
     "ac_vertical_escalation": "ac_vertical_escalation_confirmed",
     "ac_force_browse": "access_control_confirmed",
@@ -209,18 +211,35 @@ MODULE_TO_KG_NODE: dict[str, str] = {
 }
 
 KG_NODES: list[str] = [
+    # Surface confirmed nodes
     "sqli_confirmed",
+    "access_control_confirmed",
+    "brute_force_confirmed",
+    # Per-method confirmed nodes
+    "sqli_union_confirmed",
+    "sqli_error_confirmed",
+    "sqli_boolean_blind_confirmed",
+    "sqli_time_blind_confirmed",
+    "ac_idor_confirmed",
+    "ac_vertical_escalation_confirmed",
+    "ac_force_browse_confirmed",
+    "bf_dictionary_confirmed",
+    "bf_spray_confirmed",
+    # Legacy confirmed nodes (backward compatibility)
     "blind_sqli_confirmed",
     "xss_reflected_confirmed",
     "xss_stored_confirmed",
     "xss_dom_confirmed",
     "cmd_injection_confirmed",
-    "brute_force_confirmed",
     "lfi_confirmed",
     "file_upload_confirmed",
     "csrf_confirmed",
     "weak_session_confirmed",
     "idor_confirmed",
+    # Intermediate chain nodes
+    "authenticated_session",
+    "unauthenticated",
+    # Outcome nodes
     "credentials_extracted",
     "admin_session_obtained",
     "log_access_confirmed",

@@ -209,6 +209,9 @@ def ac_idor_agent(state: ExploitationState) -> dict[str, Any]:
         return update
     except Exception as exc:
         logger.warning("[%s] Session or execution failed: %s", AGENT_ID, exc)
-        return make_update(state=state, module_name=AGENT_ID, score=0, tried_payloads=[])
+        return make_update(
+            state=state, module_name=AGENT_ID, score=0, tried_payloads=[],
+            failure_agents=[AGENT_ID],
+        )
     finally:
         session.close()

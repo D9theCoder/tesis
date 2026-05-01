@@ -144,6 +144,7 @@ def make_update(
     found_credentials: list[dict[str, str]] | None = None,
     next_agent: str = "orchestrator",
     telemetry_events: list[dict] | None = None,
+    failure_agents: list[str] | None = None,
 ) -> dict[str, Any]:
     update: dict[str, Any] = {
         "scores": merge_scores(state, module_name, score),
@@ -191,5 +192,13 @@ def make_update(
     # so we must return ONLY the new events, not existing + new.
     if telemetry_events:
         update["telemetry_events"] = list(telemetry_events)
+
+    # Track failure agents for fallback loop and adaptation metrics.
+    # failure_agents uses Annotated[list[str], add] reducer.
+    if failure_agents:
+        existing_failures = set(state.get("failure_agents", []))
+        new_failures = [a for a in failure_agents if a not in existing_failures]
+        if new_failures:
+            update["failure_agents"] = new_failures
 
     return update

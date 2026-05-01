@@ -41,6 +41,7 @@ DVWA_MODULE_HINTS: dict[str, str] = {
     "upload": "upload",
     "csrf": "csrf",
     "brute": "brute",
+    "authbypass": "idor",
 }
 
 

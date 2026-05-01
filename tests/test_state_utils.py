@@ -32,3 +32,36 @@ def test_prepare_agent_session_requires_login_when_requested():
 
     assert ready is False
     assert "session_login_failed" in notes
+
+
+from core.state import new_default_state
+from agents.state_utils import make_update
+
+
+def test_make_update_handles_failure_agents():
+    state = new_default_state()
+    update = make_update(
+        state=state, module_name="sqli_union", score=0,
+        tried_payloads=[], failure_agents=["sqli_union"],
+    )
+    assert "failure_agents" in update
+    assert update["failure_agents"] == ["sqli_union"]
+
+
+def test_make_update_no_failure_agents_when_none():
+    state = new_default_state()
+    update = make_update(
+        state=state, module_name="sqli_union", score=0,
+        tried_payloads=[],
+    )
+    assert "failure_agents" not in update
+
+
+def test_make_update_deduplicates_failure_agents():
+    state = new_default_state()
+    state["failure_agents"] = ["sqli_union"]
+    update = make_update(
+        state=state, module_name="sqli_union", score=0,
+        tried_payloads=[], failure_agents=["sqli_union", "sqli_error"],
+    )
+    assert update["failure_agents"] == ["sqli_error"]

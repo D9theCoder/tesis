@@ -501,3 +501,15 @@ class TestFingerprintServer:
         """Should match headers case-insensitively."""
         fingerprint = fingerprint_server({"server": "nginx"})
         assert fingerprint["server"] == "nginx"
+
+
+def test_authbypass_maps_to_idor():
+    """authbypass endpoint should map to idor module."""
+    assert infer_module_name("http://localhost/dvwa/vulnerabilities/authbypass/") == "idor"
+
+
+def test_object_ids_enumerable_after_authbypass_fix():
+    """DVWA_MODULE_HINTS must include authbypass->idor mapping."""
+    from foundation.recon import DVWA_MODULE_HINTS
+    assert "authbypass" in DVWA_MODULE_HINTS
+    assert DVWA_MODULE_HINTS["authbypass"] == "idor"

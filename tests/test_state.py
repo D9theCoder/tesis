@@ -407,3 +407,49 @@ class TestLangGraphIntegration:
         assert len(result["messages"]) == 2
         assert isinstance(result["messages"][0], HumanMessage)
         assert isinstance(result["messages"][1], AIMessage)
+
+
+class TestMergeDictsReducer:
+    """Validate _merge_dicts never overwrites True with False."""
+
+    def test_merge_dicts_preserves_true_over_false(self):
+        from core.state import _merge_dicts
+        a = {"key1": True, "key2": False}
+        b = {"key1": False, "key3": True}
+        result = _merge_dicts(a, b)
+        assert result["key1"] is True
+        assert result["key2"] is False
+        assert result["key3"] is True
+
+    def test_merge_dicts_allows_false_to_true(self):
+        from core.state import _merge_dicts
+        a = {"key1": False}
+        b = {"key1": True}
+        result = _merge_dicts(a, b)
+        assert result["key1"] is True
+
+    def test_merge_dicts_with_empty_b(self):
+        from core.state import _merge_dicts
+        a = {"key1": True}
+        b = {}
+        result = _merge_dicts(a, b)
+        assert result == {"key1": True}
+
+
+class TestModuleToKgNodeMappings:
+    """Validate MODULE_TO_KG_NODE maps agents to existing AKG nodes."""
+
+    def test_sqli_boolean_blind_maps_to_sqli_confirmed(self):
+        from core.state import MODULE_TO_KG_NODE
+        assert MODULE_TO_KG_NODE["sqli_boolean_blind"] == "sqli_confirmed"
+
+    def test_sqli_time_blind_maps_to_sqli_confirmed(self):
+        from core.state import MODULE_TO_KG_NODE
+        assert MODULE_TO_KG_NODE["sqli_time_blind"] == "sqli_confirmed"
+
+    def test_all_method_agents_map_to_existing_kg_nodes(self):
+        from core.state import MODULE_TO_KG_NODE, ALL_METHOD_AGENTS, KG_NODES
+        for agent in ALL_METHOD_AGENTS:
+            node = MODULE_TO_KG_NODE.get(agent)
+            assert node is not None, f"{agent} has no MODULE_TO_KG_NODE mapping"
+            assert node in KG_NODES, f"{agent} maps to {node} which is not in KG_NODES"

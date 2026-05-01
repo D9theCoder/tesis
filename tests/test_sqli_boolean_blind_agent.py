@@ -81,13 +81,13 @@ def test_exploit_confirmed(base_state):
         result = sqli_boolean_blind_agent(base_state)
 
     assert result["scores"]["sqli_boolean_blind"] >= 3
-    assert "blind_sqli_confirmed" in result.get("confirmed_vulns", [])
+    assert "sqli_confirmed" in result.get("confirmed_vulns", [])
 
 
-def test_chain_check_max_score_three(base_state):
-    """blind_sqli_confirmed is not in the AKG graph, so chain check cannot
-    produce score 4. Max achievable score is 3 (Full Exploit)."""
-    base_state["confirmed_vulns"] = ["blind_sqli_confirmed"]
+def test_chain_check_achieves_score_four(base_state):
+    """sqli_confirmed is in the AKG graph, so chain check can trigger credentials_extracted.
+    Chain exploit score 4 is achievable."""
+    base_state["confirmed_vulns"] = ["sqli_confirmed"]
     mock_session = _make_mock_session()
 
     def mock_get(path, params=None):
@@ -103,7 +103,7 @@ def test_chain_check_max_score_three(base_state):
     with patch("agents.sqli.sqli_boolean_blind_agent.DVWASession", return_value=mock_session):
         result = sqli_boolean_blind_agent(base_state)
 
-    assert result["scores"]["sqli_boolean_blind"] == 3
+    assert result["scores"]["sqli_boolean_blind"] == 4
 
 
 def test_login_failure(base_state):
