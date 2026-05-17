@@ -3,7 +3,13 @@
 > **Full documentation:** See `docs/summary.md` for architecture diagrams, rubric, pseudocode, sample code, coverage matrix, and comparison analysis. This file is a compact reference for implementing code.
 
 ## General Info
-This is a red teaming framework (LLM harness) that uses LLM-driven agents to autonomously discover and exploit vulnerabilities in a target web application (DVWA). The agents operate within a LangGraph execution runtime, which manages state immutability, execution flow, and integration with the Attack Knowledge Graph. Hence. make sure to use `llm-application-dev`, `python-development`, and `secskills` plugins (it is bundled with subagents and skills). MAKE SURE TO USE THE SKILLS.MD AND SUBAGENT FROM THE PLUGINS FOR EVERY IMPLEMENTATION.
+This is a red teaming framework (LLM harness) that uses LLM-driven agents to autonomously discover and exploit vulnerabilities in a target web application (DVWA). The agents operate within a LangGraph execution runtime, which manages state immutability, execution flow, and integration with the Attack Knowledge Graph. Hence. make sure to use the following plugins (each bundled with subagents and skills). MAKE SURE TO USE THE SKILLS.MD AND SUBAGENT FROM THE PLUGINS FOR EVERY IMPLEMENTATION.
+
+| Plugin | Skills | Subagents |
+|--------|--------|-----------|
+| `python-development` | python-anti-patterns, python-background-jobs, python-code-style, python-configuration, python-design-patterns, python-error-handling, python-observability, python-packaging, python-performance-optimization, python-project-structure, python-resilience, python-resource-management, python-testing-patterns, python-type-safety | python-pro |
+| `llm-application-dev` | embedding-strategies, hybrid-search-implementation, langchain-architecture, llm-evaluation, prompt-engineering-patterns, rag-implementation, similarity-search-patterns, vector-index-tuning | ai-engineer, prompt-engineer, vector-database-engineer |
+| `secskills` | initial-access-recon, password-attacks, windows-privilege-escalation, web-app-security, async-python-patterns | pentester, recon-specialist, red-team-operator |
 
 ---
 

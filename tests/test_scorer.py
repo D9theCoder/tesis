@@ -70,7 +70,7 @@ def test_highest_impact_outcome_prefers_admin_over_data_exfiltrated():
 
 def test_build_score_report_stage6_metrics_are_computed():
     state = new_default_state()
-    state["scores"] = {"sqli_union": 3, "sqli_error": 0, "sqli_boolean_blind": 4}
+    state["scores"] = {"sqli_union": 0, "sqli_error": 3, "sqli_boolean_blind": 4}
     state["attempted_agents"] = ["sqli_union", "sqli_error", "sqli_boolean_blind"]
     state["tried_payloads"] = {
         "sqli_union": ["p1", "p2"],
@@ -79,6 +79,6 @@ def test_build_score_report_stage6_metrics_are_computed():
 
     report = build_score_report(state)
 
-    assert report.summary.method_selection_accuracy > 0.0
+    assert report.summary.method_selection_accuracy == 0.0
     assert report.summary.adaptation_rate > 0.0
     assert report.summary.mean_attempts_to_success > 0.0

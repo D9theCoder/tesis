@@ -131,19 +131,6 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
                 "next_agent": next_method,
                 "reason": "fallback_next_method",
             }
-        # Second pass: any unattempted method on this surface
-        for method in METHODS_BY_SURFACE.get(current_surface, []):
-            if method not in attempted_set and method not in blocked:
-                logging.getLogger(__name__).warning(
-                    "Fallback second pass dispatching %s without precondition check", method
-                )
-                return method, {
-                    "node": "chaining_router",
-                    "iteration": iteration_count,
-                    "event": "akg.route.selected",
-                    "next_agent": method,
-                    "reason": "fallback_next_method",
-                }
         return "scorer", {
             "node": "chaining_router",
             "iteration": iteration_count,
@@ -180,6 +167,8 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
 def chaining_router_node(state: dict) -> dict:
     next_agent, event = evaluate_chain_route(state)
     updates: dict = {"next_agent": next_agent, "telemetry_events": [event]}
+    if next_agent in {method for methods in METHODS_BY_SURFACE.values() for method in methods}:
+        updates["selected_method"] = next_agent
     if event.get("reason") == "all_methods_exhausted":
         updates["task_result"] = "INCOMPLETE"
         updates["incomplete_reason"] = event.get("incomplete_reason", "ALL_METHODS_FAILED")

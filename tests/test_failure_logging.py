@@ -21,7 +21,7 @@ def test_failure_artifact_written_on_runner_error(monkeypatch, tmp_path):
     )
 
     assert artifact["status"] == "error"
-    failure_path = tmp_path / "gemini-sqli-low-0.failure.json"
+    failure_path = tmp_path / "gemini-sqli-low-static_only-0.failure.json"
     assert failure_path.exists()
 
 

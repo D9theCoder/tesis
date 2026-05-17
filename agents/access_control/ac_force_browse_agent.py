@@ -6,9 +6,8 @@ import logging
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
-from agents.state_utils import already_tried_payloads, chain_check as _chain_check, make_update, normalize_security_level
+from agents.state_utils import already_tried_payloads, candidate_payloads_for_stage, chain_check as _chain_check, make_update, normalize_security_level
 from core.state import ExploitationState, MODULE_TO_KG_NODE
-from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
 from foundation.verifier import Verifier
 
@@ -34,6 +33,20 @@ _EXPLOIT_SIGNALS = [
     "view source",
     "source code",
 ]
+
+_PATH_SIGNAL_MAP = {
+    "setup.php": ["database setup", "create/reset database"],
+    "phpinfo.php": ["phpinfo()"],
+    "view_source.php": ["view source", "source code"],
+    "security.php": ["security level", "setup"],
+}
+
+
+def _signals_for_path(path: str) -> list[str]:
+    for suffix, signals in _PATH_SIGNAL_MAP.items():
+        if path.endswith(suffix):
+            return signals
+    return _EXPLOIT_SIGNALS
 
 
 def _probe_preconditions(
@@ -92,7 +105,7 @@ def _attempt_exploit(
             resp = session.get(path)
             events.append(exploit_event(AGENT_ID, path, resp.status_code, True))
             if resp.status_code == 200:
-                result = verifier.contains_any(resp.text, _EXPLOIT_SIGNALS)
+                result = verifier.contains_any(resp.text, _signals_for_path(path))
                 if result.ok:
                     score = max(score, 3)
                     confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
@@ -119,9 +132,6 @@ def ac_force_browse_agent(state: ExploitationState) -> dict[str, Any]:
             )
         session.set_security_level(security_level)
 
-        payload_lib = PayloadLibrary()
-        payload_set = payload_lib.get(AGENT_ID, security_level)
-
         already_tried = already_tried_payloads(state, AGENT_ID)
         confirmed_vulns: list[str] = []
         achieved_outcomes: list[str] = []
@@ -131,7 +141,7 @@ def ac_force_browse_agent(state: ExploitationState) -> dict[str, Any]:
         observations: dict[str, bool] = {}
 
         # Stage 1: PROBE
-        probe_payloads = list(payload_set.probe) or ["setup.php", "phpinfo.php"]
+        probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe") or ["setup.php", "phpinfo.php"]
         probe_ok, tried, probe_obs, probe_events = _probe_preconditions(
             session, probe_payloads, already_tried
         )
@@ -150,11 +160,9 @@ def ac_force_browse_agent(state: ExploitationState) -> dict[str, Any]:
         score = max(score, 1)
 
         # Stage 2: EXPLOIT
-        exploit_payloads = list(payload_set.exploit) or [
+        all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit") or [
             "vulnerabilities/view_source.php", "security.php"
         ]
-        bypass_payloads = list(payload_set.bypass.get(security_level, []))
-        all_exploit = exploit_payloads + bypass_payloads
 
         exploit_score, tried, confirmed, exploit_events = _attempt_exploit(
             session, all_exploit, already_tried | set(all_tried)

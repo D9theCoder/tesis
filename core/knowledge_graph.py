@@ -50,6 +50,18 @@ class AttackKnowledgeGraph:
         "bf_spray": ["no_rate_limit"],
     }
 
+    TARGET_PARAMS: dict[str, list[str]] = {
+        "sqli_union": ["id"],
+        "sqli_error": ["id"],
+        "sqli_boolean_blind": ["id"],
+        "sqli_time_blind": ["id"],
+        "ac_idor": ["userId"],
+        "ac_vertical_escalation": ["userId"],
+        "ac_force_browse": ["path"],
+        "bf_dictionary": ["username", "password"],
+        "bf_spray": ["username", "password"],
+    }
+
     def __init__(self) -> None:
         self.graph: nx.DiGraph = nx.DiGraph()
         self._build_graph()
@@ -78,6 +90,99 @@ class AttackKnowledgeGraph:
             priority=priority,
         )
 
+    def _payload_profile(
+        self,
+        *,
+        seed_refs: list[str],
+        allowed: list[str],
+        expected: list[str],
+        budget: int = 5,
+    ) -> dict:
+        return {
+            "payload_mode": "hybrid",
+            "seed_payload_refs": list(seed_refs),
+            "allowed_mutation_types": list(allowed),
+            "forbidden_mutation_types": [
+                "destructive_action",
+                "out_of_scope_target",
+                "wrong_method_family",
+            ],
+            "validation_rules": [
+                "schema_valid",
+                "method_family_match",
+                "target_param_match",
+                "scope_check",
+                "provenance_required",
+            ],
+            "expected_success_signals": list(expected),
+            "target_params": [],
+            "max_generated_candidates": budget,
+            "max_total_candidates": budget + len(seed_refs),
+            "provenance_required": True,
+        }
+
+    def _attach_payload_profiles(self) -> None:
+        profiles = {
+            "sqli_union": self._payload_profile(
+                seed_refs=["sqli_union_low", "sqli_union_medium", "sqli_union_high"],
+                allowed=["column_count", "comment_style", "encoding", "quote_strategy"],
+                expected=["union_result_visible", "data_extraction_evidence"],
+            ),
+            "sqli_error": self._payload_profile(
+                seed_refs=["sqli_error_low", "sqli_error_medium", "sqli_error_high"],
+                allowed=["error_function_variant", "encoding", "quote_strategy"],
+                expected=["database_error_leakage", "schema_evidence"],
+            ),
+            "sqli_boolean_blind": self._payload_profile(
+                seed_refs=["sqli_boolean_low", "sqli_boolean_medium", "sqli_boolean_high"],
+                allowed=["predicate_variant", "operator_variant", "encoding"],
+                expected=["true_false_response_delta"],
+            ),
+            "sqli_time_blind": self._payload_profile(
+                seed_refs=["sqli_time_low", "sqli_time_medium", "sqli_time_high"],
+                allowed=["delay_function_variant", "threshold_value", "predicate_variant"],
+                expected=["measurable_delay"],
+            ),
+            "ac_idor": self._payload_profile(
+                seed_refs=["ac_idor_low", "ac_idor_medium", "ac_idor_high"],
+                allowed=["object_id_sequence", "encoding", "parameter_alias"],
+                expected=["unauthorized_object_access"],
+            ),
+            "ac_vertical_escalation": self._payload_profile(
+                seed_refs=["ac_vertical_low", "ac_vertical_medium", "ac_vertical_high"],
+                allowed=["role_parameter_variant", "action_parameter_variant"],
+                expected=["privileged_action_accessible"],
+            ),
+            "ac_force_browse": self._payload_profile(
+                seed_refs=["ac_force_browse_low", "ac_force_browse_medium", "ac_force_browse_high"],
+                allowed=["endpoint_ordering", "path_normalization"],
+                expected=["restricted_endpoint_accessible"],
+            ),
+            "bf_dictionary": self._payload_profile(
+                seed_refs=["bf_dictionary_low", "bf_dictionary_medium"],
+                allowed=["credential_ordering", "pacing_strategy", "username_priority"],
+                expected=["valid_login"],
+            ),
+            "bf_spray": self._payload_profile(
+                seed_refs=["bf_spray_low", "bf_spray_medium"],
+                allowed=["password_rotation", "account_ordering", "pacing_strategy"],
+                expected=["valid_login"],
+            ),
+        }
+        for method, profile in profiles.items():
+            profile["target_params"] = list(self.TARGET_PARAMS.get(method, []))
+            self.graph.add_node(method, type="method", surface=self._surface_for_method(method), payload_profile=profile)
+
+    @staticmethod
+    def _surface_for_method(method: str) -> str:
+        if method.startswith("sqli_"):
+            return "sqli"
+        if method.startswith("ac_"):
+            return "access_control"
+        if method.startswith("bf_"):
+            return "brute_force"
+        return ""
+
     def _build_graph(self) -> None:
         # Nodes: surfaces, methods, confirmed methods, outcomes
         nodes = [
@@ -103,6 +208,7 @@ class AttackKnowledgeGraph:
             "data_exfiltrated",
         ]
         self.graph.add_nodes_from(sorted(set(nodes)))
+        self._attach_payload_profiles()
 
         transitions: list[RawTransition] = [
             # Entry -> surface (discovery edges)
@@ -211,6 +317,7 @@ class AttackKnowledgeGraph:
         self._validate_preconditions_known()
         self._validate_high_impact_nodes_exist()
         self._validate_agent_kg_node_mappings()
+        self._validate_payload_profiles()
 
     def _validate_chain_metadata(self) -> None:
         for source, target, meta in self.graph.edges(data=True):
@@ -255,6 +362,28 @@ class AttackKnowledgeGraph:
                     f"which does not exist in the AKG graph"
                 )
 
+    def _validate_payload_profiles(self) -> None:
+        required = {
+            "seed_payload_refs",
+            "allowed_mutation_types",
+            "forbidden_mutation_types",
+            "validation_rules",
+            "expected_success_signals",
+            "target_params",
+            "max_generated_candidates",
+            "max_total_candidates",
+            "provenance_required",
+        }
+        for method in ALL_METHOD_AGENTS:
+            profile = self.graph.nodes[method].get("payload_profile")
+            if not isinstance(profile, dict):
+                raise ValueError(f"Method node {method} missing payload_profile")
+            missing = required - set(profile)
+            if missing:
+                raise ValueError(f"Method node {method} payload_profile missing keys: {sorted(missing)}")
+            if not profile.get("seed_payload_refs") or not profile.get("expected_success_signals"):
+                raise ValueError(f"Method node {method} has incomplete payload_profile")
+
     def get_viable_methods(self, surface: str, observations: dict) -> list[str]:
         """Return method nodes for a surface whose preconditions are satisfied."""
         methods = METHODS_BY_SURFACE.get(surface, [])
@@ -268,6 +397,12 @@ class AttackKnowledgeGraph:
     def check_preconditions(self, method_node: str, observations: dict) -> bool:
         preconditions = self.METHOD_PRECONDITIONS.get(method_node, [])
         return all(observations.get(p, False) for p in preconditions)
+
+    def get_payload_profile(self, method_node: str) -> dict:
+        if method_node not in self.graph:
+            return {}
+        profile = self.graph.nodes[method_node].get("payload_profile", {})
+        return dict(profile) if isinstance(profile, dict) else {}
 
     def get_next_actions(self, node: str) -> list[dict]:
         if node not in self.graph:

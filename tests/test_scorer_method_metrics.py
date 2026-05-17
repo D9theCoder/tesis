@@ -4,12 +4,12 @@ from core.scorer import method_selection_accuracy, adaptation_rate, mean_attempt
 
 def test_method_selection_accuracy():
     scores = {"sqli_union": 3, "sqli_error": 1, "ac_idor": 3}
-    assert method_selection_accuracy(scores, ["sqli_union", "sqli_error", "ac_idor"]) == 2 / 3
+    assert method_selection_accuracy(scores, ["sqli_union", "sqli_error", "ac_idor"]) == 1.0
 
 
 def test_adaptation_rate():
     scores = {"sqli_union": 3, "sqli_error": 0, "ac_idor": 0, "bf_dictionary": 3}
-    assert adaptation_rate(scores) == 2 / 3
+    assert adaptation_rate(scores, ["sqli_error", "bf_dictionary"]) == 1.0
 
 
 def test_mean_attempts_to_success():

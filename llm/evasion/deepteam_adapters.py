@@ -1,4 +1,4 @@
-"""DeepTeam adapters for adversarial prompt evasion (Stage 8).
+"""DeepTeam adapters for controlled retry prompt transformations (Stage 8).
 
 Wraps DeepTeam single-turn attacks so the framework can enhance prompts
 before sending them to the target LLM.

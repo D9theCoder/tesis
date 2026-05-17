@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from foundation.http_client import RequestTimeoutError, TransportError
+from foundation.payload_library import PayloadLibrary
 
 # Single source of truth: agent_id → DVWA endpoint path fragment.
 # Keep in sync with ALL_METHOD_AGENTS and foundation/payload_library endpoints.
@@ -85,6 +86,17 @@ def merge_scores(state: dict[str, Any], module_name: str, new_score: int) -> dic
     return scores
 
 
+def merge_score_map(
+    state: dict[str, Any],
+    map_name: str,
+    module_name: str,
+    new_score: int,
+) -> dict[str, int]:
+    scores = dict(state.get(map_name, {}))
+    scores[module_name] = max(int(scores.get(module_name, 0)), int(new_score))
+    return scores
+
+
 def merge_tried_payloads(
     state: dict[str, Any],
     module_name: str,
@@ -123,6 +135,58 @@ def module_endpoint(state: dict[str, Any], module_name: str, fallback_path: str)
     return fallback_path
 
 
+def candidate_payloads_for_stage(
+    state: dict[str, Any],
+    module_name: str,
+    security_level: str,
+    stage: str,
+) -> list[str]:
+    """Return candidate-queue payloads for a stage, with static fallback.
+
+    The fallback preserves direct unit-test and legacy call behavior, while the
+    LangGraph runtime now supplies `payload_candidates` through builder and
+    validator nodes before dispatching method agents.
+    """
+    candidates = state.get("payload_candidates", {}).get(module_name, [])
+    allowed_stages = {stage}
+    if stage == "exploit":
+        allowed_stages.add("bypass")
+    selected = [
+        str(candidate.get("payload_or_logic", ""))
+        for candidate in candidates
+        if isinstance(candidate, dict)
+        and str(candidate.get("stage", stage)) in allowed_stages
+        and candidate.get("payload_or_logic")
+    ]
+    if selected:
+        return selected
+
+    payload_set = PayloadLibrary().get(module_name, security_level)
+    if stage == "probe":
+        return list(payload_set.probe)
+    if stage == "exploit":
+        return list(payload_set.exploit) + list(payload_set.bypass.get(security_level, []))
+    return []
+
+
+def payload_score_updates(state: dict[str, Any], module_name: str, score: int) -> dict[str, int]:
+    """Assign payload-quality scores only to candidates that were actually tried."""
+    updates = dict(state.get("payload_scores", {}))
+    tried_payloads = {
+        str(payload)
+        for payload in state.get("tried_payloads", {}).get(module_name, [])
+        if payload is not None
+    }
+    for candidate in state.get("payload_candidates", {}).get(module_name, []):
+        if not isinstance(candidate, dict):
+            continue
+        candidate_id = candidate.get("candidate_id")
+        payload_value = candidate.get("payload_or_logic")
+        if candidate_id and payload_value is not None and str(payload_value) in tried_payloads:
+            updates[str(candidate_id)] = max(int(updates.get(str(candidate_id), 0)), int(score))
+    return updates
+
+
 def make_update(
     *,
     state: dict[str, Any],
@@ -135,9 +199,15 @@ def make_update(
     next_agent: str = "orchestrator",
     telemetry_events: list[dict] | None = None,
     failure_agents: list[str] | None = None,
+    blocked_agents: list[str] | None = None,
+    task_result: str | None = None,
+    incomplete_reason: str | None = None,
 ) -> dict[str, Any]:
     update: dict[str, Any] = {
         "scores": merge_scores(state, module_name, score),
+        "exploitation_scores": merge_score_map(state, "exploitation_scores", module_name, min(score, 3)),
+        "chain_scores": merge_score_map(state, "chain_scores", module_name, 4 if score >= 4 else 0),
+        "payload_scores": payload_score_updates(state, module_name, min(score, 4)),
         "tried_payloads": merge_tried_payloads(state, module_name, tried_payloads),
         "iteration_count": state.get("iteration_count", 0) + 1,
         "next_agent": next_agent,
@@ -194,6 +264,17 @@ def make_update(
         new_failures = [a for a in failure_agents if a not in existing_failures]
         if new_failures:
             update["failure_agents"] = new_failures
+
+    if blocked_agents:
+        existing_blocked = set(state.get("blocked_agents", []))
+        new_blocked = [a for a in blocked_agents if a not in existing_blocked]
+        if new_blocked:
+            update["blocked_agents"] = new_blocked
+
+    if task_result is not None:
+        update["task_result"] = task_result
+    if incomplete_reason is not None:
+        update["incomplete_reason"] = incomplete_reason
 
     return update
 

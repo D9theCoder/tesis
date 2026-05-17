@@ -22,6 +22,20 @@ class PayloadSet:
     bypass: dict[str, list[str]] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class PayloadSeed:
+    """Validated handwritten payload seed with reproducible provenance."""
+
+    seed_id: str
+    method: str
+    security_level: str
+    stage: str
+    payload_or_logic: str
+    target_param: str
+    expected_signal: str
+    source: str = "static_seed"
+
+
 class PayloadLibrary:
     """Retrieve payloads by vulnerability class and security level."""
 
@@ -72,11 +86,11 @@ class PayloadLibrary:
             },
         ),
         "ac_vertical_escalation": PayloadSet(
-            probe=["1", "2"],
-            exploit=["1", "2", "3"],
+            probe=["2", "3"],
+            exploit=["1"],
             bypass={
-                "medium": ["1", "2"],
-                "high": ["1", "2", "3"],
+                "medium": ["1"],
+                "high": ["1"],
             },
         ),
         "ac_force_browse": PayloadSet(
@@ -137,6 +151,35 @@ class PayloadLibrary:
             bypass=bypass_copy,
         )
 
+    def load_seed_candidates(self, method: str, security_level: str = "low") -> list[dict]:
+        """Return static payloads as validator-ready candidate dictionaries."""
+        normalized_level = security_level.lower().strip()
+        if normalized_level not in _SECURITY_LEVELS:
+            normalized_level = "low"
+        payload_set = self.get(method, normalized_level)
+        rows: list[tuple[str, str]] = []
+        rows.extend(("probe", payload) for payload in payload_set.probe)
+        rows.extend(("exploit", payload) for payload in payload_set.exploit)
+        rows.extend(("bypass", payload) for payload in payload_set.bypass.get(normalized_level, []))
+
+        candidates: list[dict] = []
+        for index, (stage, payload) in enumerate(rows):
+            seed_id = f"{method}_{normalized_level}_{stage}_{index}"
+            candidates.append({
+                "candidate_id": seed_id,
+                "source_seed_id": seed_id,
+                "source": "static_seed",
+                "method": method,
+                "security_level": normalized_level,
+                "stage": stage,
+                "mutation_type": "none",
+                "payload_or_logic": payload,
+                "target_param": target_param_for_method(method),
+                "expected_signal": expected_signal_for_method(method),
+                "rationale": "validated handwritten seed",
+            })
+        return candidates
+
     @staticmethod
     def record_tried(state: dict, agent_id: str, payload: str) -> dict:
         """Produce a partial state update recording *payload* as tried for *agent_id*.
@@ -185,3 +228,30 @@ class PayloadLibrary:
             blocked_existing = list(state.get("blocked_patterns", []))
             update["blocked_patterns"] = [] if blocked_pattern in blocked_existing else [blocked_pattern]
         return update
+
+
+def target_param_for_method(method: str) -> str:
+    if method.startswith("sqli_"):
+        return "id"
+    if method in {"ac_idor", "ac_vertical_escalation"}:
+        return "userId"
+    if method == "ac_force_browse":
+        return "path"
+    if method.startswith("bf_"):
+        return "credential_pair"
+    return "payload"
+
+
+def expected_signal_for_method(method: str) -> str:
+    signals = {
+        "sqli_union": "data_extraction_evidence",
+        "sqli_error": "database_error_leakage",
+        "sqli_boolean_blind": "true_false_response_delta",
+        "sqli_time_blind": "measurable_delay",
+        "ac_idor": "unauthorized_object_access",
+        "ac_vertical_escalation": "privileged_action_accessible",
+        "ac_force_browse": "restricted_endpoint_accessible",
+        "bf_dictionary": "valid_login",
+        "bf_spray": "valid_login",
+    }
+    return signals.get(method, "expected_signal")

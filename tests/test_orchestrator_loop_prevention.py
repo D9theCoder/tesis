@@ -41,7 +41,8 @@ class TestUsedFallbackAccuracy:
 
         decision_event = [e for e in result["telemetry_events"] if e["event"] == "orchestrator.decision"][0]
         assert decision_event["payload"]["used_fallback"] is False
-        assert result["next_agent"] == "sqli_error"
+        assert result["next_agent"] == "payload_candidate_builder"
+        assert result["selected_method"] == "sqli_error"
 
     def test_used_fallback_true_when_llm_returns_invalid_agent(self):
         state = {
@@ -71,8 +72,9 @@ class TestUsedFallbackAccuracy:
 
         decision_event = [e for e in result["telemetry_events"] if e["event"] == "orchestrator.decision"][0]
         assert decision_event["payload"]["used_fallback"] is True
-        # Should fall back to a valid agent from AKG
-        assert result["next_agent"] in ALL_METHOD_AGENTS or result["next_agent"] == "scorer"
+        assert result["next_agent"] in {"payload_candidate_builder", "scorer"}
+        if result["next_agent"] == "payload_candidate_builder":
+            assert result["selected_method"] in ALL_METHOD_AGENTS
 
     def test_used_fallback_true_when_llm_returns_unparseable_json(self):
         state = {

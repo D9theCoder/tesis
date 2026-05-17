@@ -133,6 +133,45 @@ models:
     assert cfg.models["gemini"].api_key == "secret-token-1234"
 
 
+def test_payload_mode_and_candidate_budget_from_yaml(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    _write_yaml(
+        config_path,
+        """
+target_url: http://localhost/dvwa
+provider: gemini
+level: low
+payload_mode: hybrid
+candidate_budget: 7
+""",
+    )
+
+    cfg = load_and_resolve_config(config_path=str(config_path), cli_args={})
+
+    assert cfg.payload_mode == "hybrid"
+    assert cfg.candidate_budget == 7
+
+
+def test_openai_compatible_model_env_override(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    _write_yaml(
+        config_path,
+        """
+target_url: http://localhost/dvwa
+provider: openai_compatible
+level: low
+models:
+  openai_compatible:
+    base_url: http://localhost:1234/v1
+""",
+    )
+
+    monkeypatch.setenv("TESIS_MODEL_OPENAI_COMPATIBLE_API_KEY", "key-from-env")
+    cfg = load_and_resolve_config(config_path=str(config_path), cli_args={})
+
+    assert cfg.models["openai_compatible"].api_key == "key-from-env"
+
+
 def test_cli_omitted_bool_flags_do_not_override_yaml_true(tmp_path):
     config_path = tmp_path / "config.yaml"
     _write_yaml(

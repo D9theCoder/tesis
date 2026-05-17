@@ -6,11 +6,10 @@ import logging
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
-from agents.state_utils import already_tried_payloads, chain_check as _chain_check, make_update, normalize_security_level
+from agents.state_utils import already_tried_payloads, candidate_payloads_for_stage, chain_check as _chain_check, make_update, normalize_security_level
 from core.state import ExploitationState, MODULE_TO_KG_NODE
-from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
-from foundation.verifier import VerificationResult, Verifier
+from foundation.verifier import Verifier
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +40,10 @@ def _probe_preconditions(
     # Get baseline response for user ID 1 (the admin user)
     baseline_text = ""
     baseline_len = 0
-    baseline_signals = VerificationResult()
     try:
         baseline_resp = session.get(MODULE_PATH, params={"userId": "1", "Submit": "Submit"})
         baseline_text = baseline_resp.text
         baseline_len = len(baseline_text)
-        baseline_signals = verifier.contains_any(baseline_text, _DATA_SIGNALS)
     except Exception as exc:
         logger.warning("[%s] PROBE baseline request failed: %s", AGENT_ID, exc)
         # Baseline failed — still attempt probes and compare them against each other
@@ -58,11 +55,11 @@ def _probe_preconditions(
         if payload in already_tried:
             continue
         sent_any = True
-        tried.append(payload)
         try:
             test_id = payload.strip()
             if test_id == "1":
                 continue
+            tried.append(payload)
             resp = session.get(MODULE_PATH, params={"userId": test_id, "Submit": "Submit"})
             events.append(probe_event(AGENT_ID, f"userId={test_id}", resp.status_code, True))
             if resp.status_code == 200:
@@ -149,9 +146,6 @@ def ac_idor_agent(state: ExploitationState) -> dict[str, Any]:
             )
         session.set_security_level(security_level)
 
-        payload_lib = PayloadLibrary()
-        payload_set = payload_lib.get(AGENT_ID, security_level)
-
         already_tried = already_tried_payloads(state, AGENT_ID)
         confirmed_vulns: list[str] = []
         achieved_outcomes: list[str] = []
@@ -161,7 +155,7 @@ def ac_idor_agent(state: ExploitationState) -> dict[str, Any]:
         observations: dict[str, bool] = {}
 
         # Stage 1: PROBE
-        probe_payloads = list(payload_set.probe) or ["2", "3", "4"]
+        probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe") or ["2", "3", "4"]
         probe_ok, tried, probe_obs, probe_events = _probe_preconditions(
             session, probe_payloads, already_tried
         )
@@ -180,9 +174,7 @@ def ac_idor_agent(state: ExploitationState) -> dict[str, Any]:
         score = max(score, 1)
 
         # Stage 2: EXPLOIT
-        exploit_payloads = list(payload_set.exploit) or ["5", "6"]
-        bypass_payloads = list(payload_set.bypass.get(security_level, []))
-        all_exploit = exploit_payloads + bypass_payloads
+        all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit") or ["5", "6"]
 
         exploit_score, tried, confirmed, exploit_events = _attempt_exploit(
             session, all_exploit, already_tried | set(all_tried)

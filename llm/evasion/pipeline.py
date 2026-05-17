@@ -84,7 +84,7 @@ class ValidityOutput(TypedDict):
 
 
 def generate_candidate(state: EvasionState) -> dict[str, Any]:
-    """Generate an adversarial candidate using the template mutator.
+    """Generate a schema-preserving retry candidate using the template mutator.
 
     Falls back to the base seed when mutation is unavailable or fails.
     """

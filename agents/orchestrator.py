@@ -95,11 +95,10 @@ def _fallback_next_agent(
     blocked = set(state.get("blocked_agents", []))
     failure_agents = set(state.get("failure_agents", []))
     observations = state.get("observations", {})
-    scores = state.get("scores", {})
-    
+
     kg = AttackKnowledgeGraph()
     viable = kg.get_viable_methods(current_surface, observations)
-    
+
     # Prefer unattempted viable methods that have not previously failed
     for method in viable:
         if method not in attempted and method not in blocked and method not in failure_agents:
@@ -109,7 +108,7 @@ def _fallback_next_agent(
     for method in METHODS_BY_SURFACE.get(current_surface, []):
         if method not in attempted and method not in blocked and method not in failure_agents:
             return method
-    
+
     # All exhausted
     return "scorer"
 
@@ -197,9 +196,11 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         blocked_agents=blocked_agents,
         failure_agents=failure_agents,
         scores=scores,
+        method_scores=state.get("method_scores", {}),
         confirmed_vulns=confirmed_vulns,
         achieved_outcomes=achieved_outcomes,
         security_level=state.get("security_level", "low"),
+        payload_mode=state.get("payload_mode", "static_only"),
         iteration_count=iteration_count,
         max_iterations=max_iterations,
     )
@@ -232,10 +233,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                     "status": "ok",
                     "payload": {"reason": "cooldown_active", "consecutive_clean": consecutive_clean},
                 })
-            else:
-                # Reactive: no pre-check; guardrail detection happens after LLM call
-                pass
-    
+
     try:
         provider_name = state.get("llm_provider", "gemini")
         model_cfg = state.get("model_config", {})
@@ -307,7 +305,8 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             # are about the orchestrator prompt, not the method agent. Blocking
             # the fallback would permanently disable viable methods.
             return {
-                "next_agent": fallback_agent,
+                "next_agent": "payload_candidate_builder" if fallback_agent != "scorer" else "scorer",
+                "selected_method": fallback_agent if fallback_agent != "scorer" else None,
                 "iteration_count": iteration_count + 1,
                 "guardrail_activations": [make_guardrail_event(
                     provider=state.get("llm_provider", "gemini"),
@@ -326,6 +325,8 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         candidate = parsed["next_agent"] if parse_ok else fallback_agent
         next_agent = candidate if candidate in ALL_METHOD_AGENTS or candidate == "scorer" else fallback_agent
         used_fallback = not parse_ok or candidate != next_agent
+        selected_method = next_agent if next_agent in ALL_METHOD_AGENTS else None
+        method_score = 3 if selected_method in viable_methods else (1 if selected_method in METHODS_BY_SURFACE.get(current_surface, []) else 0)
         
         # Update consecutive_clean_responses
         new_clean_count = consecutive_clean + 1 if not evasion_triggered else 0
@@ -338,7 +339,9 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         })
         
         return {
-            "next_agent": next_agent,
+            "next_agent": "payload_candidate_builder" if selected_method else next_agent,
+            "selected_method": selected_method,
+            "method_scores": {selected_method: method_score} if selected_method else {},
             "iteration_count": iteration_count + 1,
             "telemetry_events": telemetry_events,
             "messages": [HumanMessage(content=prompt), AIMessage(content=text)],
@@ -350,7 +353,8 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         # Harness node — crashing the graph is worse than logging a fallback.
         logger.exception("Orchestrator failed; applying deterministic fallback")
         return {
-            "next_agent": fallback_agent,
+            "next_agent": "payload_candidate_builder" if fallback_agent != "scorer" else "scorer",
+            "selected_method": fallback_agent if fallback_agent != "scorer" else None,
             "iteration_count": iteration_count + 1,
             "telemetry_events": [
                 *telemetry_events,

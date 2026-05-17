@@ -29,6 +29,10 @@ def test_scorer_returns_summary():
     assert "method_selection_accuracy" in summary
     assert "adaptation_rate" in summary
     assert "mean_attempts_to_success" in summary
+    assert "payload_validity_rate" in summary
+    assert "payload_execution_success_rate" in summary
+    assert "payload_improvement_rate" in summary
+    assert "guardrail_activation_rate" in summary
     assert "chain_exploits_achieved" in summary
     assert "guardrail_activations" in summary
     assert "total_iterations_used" in summary

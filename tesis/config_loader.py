@@ -12,7 +12,7 @@ import yaml
 
 from core.state import SECURITY_LEVELS, SURFACES
 from llm.provider import SUPPORTED_PROVIDERS
-from tesis.model_config import EngagementConfig, ModelConfig, EVASION_MODES
+from tesis.model_config import EngagementConfig, ModelConfig, EVASION_MODES, PAYLOAD_MODES
 
 
 class ConfigError(ValueError):
@@ -20,6 +20,7 @@ class ConfigError(ValueError):
 
 
 _VALID_EVASION_MODES: frozenset[str] = EVASION_MODES
+_VALID_PAYLOAD_MODES: frozenset[str] = PAYLOAD_MODES
 
 _ENV_REF_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)}")
 
@@ -101,6 +102,8 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "LEVEL": "level",
         "SECURITY_LEVEL": "level",
         "SURFACE": "surface",
+        "PAYLOAD_MODE": "payload_mode",
+        "CANDIDATE_BUDGET": "candidate_budget",
         "ITERATIONS": "iterations",
         "MAX_ITERATIONS": "iterations",
         "REPEATS": "repeats",
@@ -109,6 +112,7 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "PROVIDERS": "providers",
         "LEVELS": "levels",
         "SURFACES": "surfaces",
+        "PAYLOAD_MODES": "payload_modes",
         "FORMAT": "report_format",
         "ENRICHED_REPORTING": "enriched_reporting",
         "STOP_POLICY": "stop_policy",
@@ -127,13 +131,24 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
 
         suffix = key[len(prefix):]
         if suffix.startswith("MODEL_"):
-            parts = suffix.split("_")
-            if len(parts) < 4:
+            remainder = suffix[len("MODEL_"):]
+            matched_provider = None
+            for candidate in sorted(SUPPORTED_PROVIDERS, key=len, reverse=True):
+                prefix_candidate = f"{candidate.upper()}_"
+                if remainder.startswith(prefix_candidate):
+                    matched_provider = candidate
+                    field_name = remainder[len(prefix_candidate):].lower()
+                    break
+            if not matched_provider:
+                parts = suffix.split("_")
+                if len(parts) < 4:
+                    continue
+                matched_provider = parts[1].lower()
+                field_name = "_".join(parts[2:]).lower()
+            if not field_name:
                 continue
-            provider = parts[1].lower()
-            field_name = "_".join(parts[2:]).lower()
             models = overrides.setdefault("models", {})
-            model = models.setdefault(provider, {})
+            model = models.setdefault(matched_provider, {})
             model[field_name] = raw_value
             continue
 
@@ -142,14 +157,14 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
             continue
 
         value: Any = raw_value
-        if mapped in {"iterations", "repeats", "evasion_max_retries", "evasion_cooldown_threshold"}:
+        if mapped in {"iterations", "repeats", "evasion_max_retries", "evasion_cooldown_threshold", "candidate_budget"}:
             try:
                 value = int(raw_value)
             except ValueError as exc:
                 raise ConfigError(f"Invalid integer value for {key}: {raw_value}") from exc
         elif mapped in {"matrix", "enriched_reporting", "diagnose", "evasion_enabled"}:
             value = _parse_bool(raw_value)
-        elif mapped in {"providers", "levels", "surfaces"}:
+        elif mapped in {"providers", "levels", "surfaces", "payload_modes"}:
             value = _parse_csv(raw_value)
         elif mapped == "coverage_target":
             try:
@@ -180,12 +195,15 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         "provider": "provider",
         "level": "level",
         "surface": "surface",
+        "payload_mode": "payload_mode",
+        "candidate_budget": "candidate_budget",
         "iterations": "iterations",
         "repeats": "repeats",
         "output_dir": "output_dir",
         "providers": "providers",
         "levels": "levels",
         "surfaces": "surfaces",
+        "payload_modes": "payload_modes",
         "format": "report_format",
         "enriched_reporting": "enriched_reporting",
         "stop_policy": "stop_policy",
@@ -229,6 +247,14 @@ def validate_provider(provider: str) -> None:
 def validate_level(level: str) -> None:
     if level not in SECURITY_LEVELS:
         raise ConfigError(f"Unsupported security level: {level}")
+
+
+def validate_payload_mode(payload_mode: str) -> None:
+    if payload_mode not in _VALID_PAYLOAD_MODES:
+        raise ConfigError(
+            f"Unsupported payload mode: {payload_mode}. "
+            f"Must be one of: {', '.join(sorted(_VALID_PAYLOAD_MODES))}"
+        )
 
 
 def _default_model_name(provider: str) -> str:
@@ -313,6 +339,8 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
         raise ConfigError("iterations must be > 0")
     if config.repeats <= 0:
         raise ConfigError("repeats must be > 0")
+    if config.candidate_budget <= 0:
+        raise ConfigError("candidate_budget must be > 0")
     if config.report_format not in {"json", "markdown", "both"}:
         raise ConfigError(f"Unsupported output format: {config.report_format}")
     if config.stop_policy not in {"impact", "coverage"}:
@@ -321,6 +349,7 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
         raise ConfigError("coverage_target must be between 0.0 and 1.0")
 
     _validate_surface(config.surface)
+    validate_payload_mode(config.payload_mode)
 
     evasion_mode = str(getattr(config, "evasion_mode", config.evasion_strategy)).strip().lower()
     if config.evasion_enabled and evasion_mode not in _VALID_EVASION_MODES:
@@ -344,6 +373,8 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
             validate_level(level)
         for surface in config.surfaces:
             _validate_surface(surface)
+        for payload_mode in config.payload_modes:
+            validate_payload_mode(payload_mode)
     else:
         validate_provider(config.provider)
         validate_level(config.level)
@@ -373,10 +404,13 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         or merged.get("default_surface")
         or "sqli"
     ).strip().lower()
+    payload_mode = str(merged.get("payload_mode") or "static_only").strip().lower()
+    candidate_budget = int(merged.get("candidate_budget") or 5)
 
     providers = [str(p).strip().lower() for p in merged.get("providers", merged.get("llm_providers", []))]
     levels = [str(l).strip().lower() for l in merged.get("levels", merged.get("security_levels", []))]
     surfaces = [str(s).strip().lower() for s in merged.get("surfaces", [])]
+    payload_modes = [str(s).strip().lower() for s in merged.get("payload_modes", [])]
 
     # Parse nested evasion config block if present
     evasion_cfg = merged.get("evasion") or {}
@@ -406,6 +440,8 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         provider=provider,
         level=level,
         surface=surface,
+        payload_mode=payload_mode,
+        candidate_budget=candidate_budget,
         iterations=int(merged.get("iterations") or merged.get("max_iterations") or merged.get("default_max_iterations") or 30),
         repeats=int(merged.get("repeats", 1)),
         output_dir=str(merged.get("output_dir", "results")).strip(),
@@ -413,6 +449,7 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         providers=providers or [provider],
         levels=levels or [level],
         surfaces=surfaces or (["sqli", "access_control", "brute_force"] if _coerce_bool(merged.get("matrix", False)) else [surface]),
+        payload_modes=payload_modes or (["static_only", "hybrid"] if _coerce_bool(merged.get("matrix", False)) else [payload_mode]),
         report_format=str(merged.get("report_format") or merged.get("format") or "both").strip().lower(),
         enriched_reporting=_coerce_bool(merged.get("enriched_reporting", False)),
         stop_policy=str(merged.get("stop_policy") or "impact").strip().lower(),

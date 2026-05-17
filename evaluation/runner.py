@@ -15,6 +15,7 @@ from core.scorer import build_score_report
 from core.state import new_default_state
 from evaluation.diagnostics import diagnose_quality
 from evaluation.failure_logger import write_failure_artifact
+from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.reporter import write_events_jsonl, write_rich_report
 from evaluation.telemetry import RunTelemetry, stable_sha256
 
@@ -29,7 +30,9 @@ def run_single_engagement(
     security_level: str,
     llm_provider: str,
     surface: str = "sqli",
+    payload_mode: str = "static_only",
     max_iterations: int = 30,
+    candidate_budget: int = 5,
     repeat_index: int = 0,
     stop_policy: str = "impact",
     coverage_target: float = 0.70,
@@ -43,7 +46,7 @@ def run_single_engagement(
     live_display: bool = False,
     model_config: dict[str, Any] | None = None,
 ) -> dict:
-    run_id = f"{llm_provider}-{surface}-{security_level}-{repeat_index}"
+    run_id = f"{llm_provider}-{surface}-{security_level}-{payload_mode}-{repeat_index}"
     started_at = _now_iso()
     started_clock = perf_counter()
     telemetry = RunTelemetry(run_id=run_id)
@@ -70,6 +73,7 @@ def run_single_engagement(
             "provider": llm_provider,
             "security_level": security_level,
             "surface": surface,
+            "payload_mode": payload_mode,
         },
     )
 
@@ -82,6 +86,8 @@ def run_single_engagement(
             "security_level": security_level,
             "llm_provider": llm_provider,
             "current_surface": surface,
+            "payload_mode": payload_mode,
+            "candidate_budget": candidate_budget,
             "max_iterations": max_iterations,
             "stop_policy": stop_policy,
             "coverage_target": coverage_target,
@@ -94,7 +100,17 @@ def run_single_engagement(
 
         final_state = None
         seen_events = 0
-        for state_snapshot in app.stream(init_state, stream_mode="values"):
+        graph_config = {
+            "configurable": {
+                "thread_id": f"{llm_provider}-{surface}-{security_level}-{payload_mode}-{repeat_index}"
+            }
+        }
+        try:
+            stream_iter = app.stream(init_state, stream_mode="values", config=graph_config)
+        except TypeError:
+            # Lightweight test doubles may not accept LangGraph's config kwarg.
+            stream_iter = app.stream(init_state, stream_mode="values")
+        for state_snapshot in stream_iter:
             final_state = state_snapshot
             if reporter:
                 events = final_state.get("telemetry_events", [])
@@ -103,7 +119,10 @@ def run_single_engagement(
                 for event in new_events:
                     reporter.update(event)
         if final_state is None:
-            final_state = app.invoke(init_state)
+            try:
+                final_state = app.invoke(init_state, config=graph_config)
+            except TypeError:
+                final_state = app.invoke(init_state)
         telemetry.extend_from_state_events(list(final_state.get("telemetry_events", [])))
         report = build_score_report(final_state).to_dict()
         if reporter:
@@ -117,6 +136,8 @@ def run_single_engagement(
             "security_level": security_level,
             "llm_provider": llm_provider,
             "current_surface": surface,
+            "payload_mode": payload_mode,
+            "candidate_budget": candidate_budget,
             "max_iterations": max_iterations,
             "stop_policy": stop_policy,
             "coverage_target": coverage_target,
@@ -211,16 +232,46 @@ def run_single_engagement(
             if isinstance(summary, dict):
                 summary["sidecar_warning"] = f"{type(exc).__name__}: {exc}"
 
-    return {
+    summary = report.get("summary", {}) if isinstance(report, dict) else {}
+    method_scores = dict(final_state.get("method_scores", {}))
+    payload_scores = dict(final_state.get("payload_scores", {}))
+    exploitation_scores = dict(final_state.get("exploitation_scores", {}))
+    chain_scores = dict(final_state.get("chain_scores", {}))
+    selected_method = final_state.get("selected_method")
+    method_score = method_scores.get(selected_method, 0)
+    exploitation_score = exploitation_scores.get(selected_method, 0)
+    chain_score = chain_scores.get(selected_method, 0)
+
+    artifact = {
         "schema_version": "stage8.v1",
         "run_id": run_id,
         "status": status,
+        "provider": llm_provider,
+        "surface": surface,
+        "security_level": security_level,
+        "payload_mode": payload_mode,
+        "selected_method": selected_method,
+        "akg_path": list(final_state.get("akg_path", [])),
+        "method_score": method_score,
+        "payload_scores": payload_scores,
+        "exploitation_score": exploitation_score,
+        "chain_score": chain_score,
+        "payload_validity_rate": summary.get("payload_validity_rate", 0.0),
+        "payload_execution_success_rate": summary.get("payload_execution_success_rate", 0.0),
+        "payload_improvement_rate": summary.get("payload_improvement_rate", 0.0),
+        "consistency_score": summary.get("consistency_score", 0.0),
+        "guardrail_activations": len(final_state.get("guardrail_activations", [])),
+        "payload_guardrail_activations": len(final_state.get("payload_guardrail_activations", [])),
+        "attempts_to_success": int(round(summary.get("mean_attempts_to_success", 0.0) or 0.0)),
+        "token_cost": summary.get("token_cost", 0.0),
         "config": {
             "target_url": target_url,
             "provider": llm_provider,
             "security_level": security_level,
             "surface": surface,
+            "payload_mode": payload_mode,
             "max_iterations": max_iterations,
+            "candidate_budget": candidate_budget,
             "repeat_index": repeat_index,
             "evasion_enabled": evasion_enabled,
             "evasion_mode": evasion_mode,
@@ -237,6 +288,16 @@ def run_single_engagement(
             "confirmed_vulns": list(final_state.get("confirmed_vulns", [])),
             "achieved_outcomes": list(final_state.get("achieved_outcomes", [])),
             "guardrail_activations": list(final_state.get("guardrail_activations", [])),
+            "payload_guardrail_activations": list(final_state.get("payload_guardrail_activations", [])),
+            "selected_method": selected_method,
+            "payload_candidates": dict(final_state.get("payload_candidates", {})),
+            "generated_payloads": dict(final_state.get("generated_payloads", {})),
+            "payload_validation_results": dict(final_state.get("payload_validation_results", {})),
+            "payload_scores": payload_scores,
+            "payload_provenance": dict(final_state.get("payload_provenance", {})),
+            "method_scores": method_scores,
+            "exploitation_scores": exploitation_scores,
+            "chain_scores": chain_scores,
             "evasion_enabled": final_state.get("evasion_enabled", False),
             "evasion_mode": final_state.get("evasion_mode", "reactive"),
             "evasion_max_retries": final_state.get("evasion_max_retries", 3),
@@ -245,3 +306,5 @@ def run_single_engagement(
         "report": report,
         "error": error,
     }
+    artifact["manual_scoring_evidence"] = manual_scoring_rows(artifact)
+    return artifact

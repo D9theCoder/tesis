@@ -89,7 +89,7 @@ def get_llm(provider_name: str, **kwargs):
 def get_simulator_llm(simulator_model: str = "gpt-4o-mini", provider: str | None = None, **kwargs):
     """Return a simulator LLM for the evasion pipeline.
 
-    The simulator model rewrites baseline seeds into adversarial candidates.
+    The simulator model rewrites baseline seeds into schema-preserving retry candidates.
     When *provider* is given, it is used directly; otherwise the function
     guesses from the model name and falls back to gemini.
     """

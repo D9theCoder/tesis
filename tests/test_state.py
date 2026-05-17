@@ -36,6 +36,7 @@ class TestExploitationStateSchema:
         "llm_provider",
         "current_surface",
         "endpoints",
+        "input_vectors",
         "observations",
         "confirmed_vulns",
         "achieved_outcomes",
@@ -61,7 +62,7 @@ class TestExploitationStateSchema:
     ]
 
     # Stage 7.1 optional extensions for telemetry/coverage reporting
-    # Stage 8 optional extensions for adversarial evasion
+    # Stage 8 optional extensions for technical retry/refusal handling
     OPTIONAL_FIELDS = [
         "telemetry_events",
         "stop_policy",
@@ -78,6 +79,19 @@ class TestExploitationStateSchema:
         "max_concurrency",
         "attempted_agents",
         "model_config",
+        "payload_mode",
+        "selected_method",
+        "payload_candidates",
+        "generated_payloads",
+        "payload_validation_results",
+        "payload_scores",
+        "payload_provenance",
+        "generation_prompts",
+        "payload_guardrail_activations",
+        "candidate_budget",
+        "method_scores",
+        "exploitation_scores",
+        "chain_scores",
     ]
 
     def test_all_fields_present(self):
@@ -101,6 +115,7 @@ class TestExploitationStateSchema:
             "llm_provider": "gemini",
             "current_surface": "sqli",
             "endpoints": [{"url": "/dvwa/vulnerabilities/sqli/", "method": "GET"}],
+            "input_vectors": [{"url": "/dvwa/vulnerabilities/sqli/", "inputs": ["id"]}],
             "observations": {"error_messages_enabled": True},
             "confirmed_vulns": ["sqli_confirmed"],
             "achieved_outcomes": ["credentials_extracted"],

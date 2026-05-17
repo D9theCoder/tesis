@@ -8,6 +8,7 @@ from core.graph_builder import (
     RUNTIME_AGENT_NODE_NAMES,
     build_framework,
     route_from_orchestrator,
+    route_from_payload_validator,
 )
 from core.state import DEFAULT_STATE
 
@@ -48,6 +49,19 @@ def test_runtime_with_default_budget_remains_bounded(monkeypatch):
 def test_route_from_orchestrator_unknown_agent_defaults_to_scorer():
     state = {"next_agent": "not_a_real_node"}
     assert route_from_orchestrator(state) == "scorer"
+
+
+def test_route_from_orchestrator_method_goes_to_payload_builder():
+    state = {"next_agent": "sqli_union"}
+    assert route_from_orchestrator(state) == "payload_candidate_builder"
+
+
+def test_payload_validator_routes_to_selected_method_when_candidates_exist():
+    state = {
+        "selected_method": "sqli_union",
+        "payload_candidates": {"sqli_union": [{"candidate_id": "seed"}]},
+    }
+    assert route_from_payload_validator(state) == "sqli_union"
 
 
 def test_stage5_runtime_handlers_are_real_callables():

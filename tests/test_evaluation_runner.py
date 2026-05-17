@@ -32,7 +32,8 @@ def test_run_single_engagement_artifact_shape(monkeypatch):
     )
 
     assert artifact["status"] == "success"
-    assert artifact["run_id"] == "gemini-sqli-low-0"
+    assert artifact["run_id"] == "gemini-sqli-low-static_only-0"
+    assert artifact["config"]["payload_mode"] == "static_only"
     assert "report" in artifact
 
 

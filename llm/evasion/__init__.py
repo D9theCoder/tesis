@@ -1,6 +1,6 @@
-"""Adversarial Prompt Evasion Layer (reactive LangGraph-native retry)."""
+"""Technical retry/refusal handling layer (reactive LangGraph-native retry)."""
 
-# DeepTeam integration removed; evasion is now handled reactively in the orchestrator.
-# This module is reserved for future evasion strategy implementations.
+# Refusal handling is now reactive and falls back to deterministic AKG/static
+# seed behavior when schema-safe retries do not produce usable output.
 
 __all__ = []

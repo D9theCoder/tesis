@@ -15,12 +15,16 @@ from langgraph.graph import END
 from evaluation.contracts import ModuleScoreResult, ScoreSummary, ScorerReport
 from evaluation.metrics import (
     chain_exploit_count,
+    guardrail_activation_rate,
     highest_impact_outcome,
     normalize_method_scores,
     score_distribution,
     method_selection_accuracy,
     adaptation_rate,
     mean_attempts_to_success,
+    payload_execution_success_rate,
+    payload_improvement_rate,
+    payload_validity_rate,
 )
 from core.state import ALL_METHOD_AGENTS, SURFACES, METHODS_BY_SURFACE, SCORE_LABELS
 
@@ -54,12 +58,27 @@ def _infer_longest_chain(chain_history: list[dict], current_chain: list[str]) ->
 
 
 def build_score_report(state: dict) -> ScorerReport:
-    normalized = normalize_method_scores(state.get("scores", {}))
+    aggregate_scores = state.get("scores", {})
+    normalized = normalize_method_scores(aggregate_scores)
     attempted = state.get("attempted_agents", [])
     tried_payloads = state.get("tried_payloads", {})
     method_selection = round(method_selection_accuracy(normalized, attempted), 4)
-    adaptation = round(adaptation_rate(normalized), 4)
+    adaptation = round(adaptation_rate(normalized, attempted), 4)
     mean_attempts = round(mean_attempts_to_success(tried_payloads, normalized), 4)
+    payload_improve = round(
+        payload_improvement_rate(
+            state.get("payload_scores", {}),
+            state.get("payload_provenance", {}),
+        ),
+        4,
+    )
+    guardrail_rate = round(
+        guardrail_activation_rate(
+            state.get("guardrail_activations", []),
+            int(state.get("iteration_count", 0) or 0),
+        ),
+        4,
+    )
     module_scores = {
         agent_id: ModuleScoreResult(
             score=normalized[agent_id],
@@ -79,12 +98,16 @@ def build_score_report(state: dict) -> ScorerReport:
         security_level=state.get("security_level", "low"),
         total_modules_tested=len(ALL_METHOD_AGENTS),
         score_distribution=score_distribution(normalized),
-        chain_exploits_achieved=chain_exploit_count(normalized),
+        chain_exploits_achieved=chain_exploit_count({
+            key: int(value)
+            for key, value in dict(state.get("chain_scores", {})).items()
+        }),
         highest_impact_outcome=highest_impact_outcome(
             state.get("confirmed_vulns", []),
             state.get("achieved_outcomes", []),
         ),
         guardrail_activations=len(state.get("guardrail_activations", [])),
+        payload_guardrail_activations=len(state.get("payload_guardrail_activations", [])),
         total_iterations_used=int(state.get("iteration_count", 0)),
         longest_chain=_infer_longest_chain(
             state.get("chain_history", []),
@@ -96,6 +119,13 @@ def build_score_report(state: dict) -> ScorerReport:
         method_selection_accuracy=method_selection,
         adaptation_rate=adaptation,
         mean_attempts_to_success=mean_attempts,
+        payload_validity_rate=round(payload_validity_rate(state.get("payload_validation_results", {})), 4),
+        payload_execution_success_rate=round(payload_execution_success_rate(state.get("payload_scores", {})), 4),
+        payload_improvement_rate=payload_improve,
+        guardrail_activation_rate=guardrail_rate,
+        consistency_score=0.0,
+        token_cost=0.0,
+        token_cost_per_success=0.0,
     )
     return ScorerReport(module_scores=module_scores, summary=summary)
 
@@ -137,6 +167,12 @@ def scorer(state: dict) -> dict:
         **dataclasses.asdict(report.summary),
         "total_surfaces_tested": len(SURFACES),
         "akg_path": akg_path,
+        "selected_method": state.get("selected_method"),
+        "payload_mode": state.get("payload_mode", "static_only"),
+        "method_scores": dict(state.get("method_scores", {})),
+        "payload_scores": dict(state.get("payload_scores", {})),
+        "exploitation_scores": dict(state.get("exploitation_scores", {})),
+        "chain_scores": dict(state.get("chain_scores", {})),
         "incomplete_surfaces": [
             s for s in SURFACES
             if all(normalized_scores.get(m, 0) == 0 for m in METHODS_BY_SURFACE.get(s, []))

@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import logging
 
-from core.state import MODULE_NAMES
+from core.state import ALL_METHOD_AGENTS
 
 
 logger = logging.getLogger(__name__)
 
 
 def module_coverage_ratio(scores: dict[str, int]) -> float:
-    if not MODULE_NAMES:
+    if not ALL_METHOD_AGENTS:
         return 0.0
     covered = 0
-    for name in MODULE_NAMES:
+    for name in ALL_METHOD_AGENTS:
         try:
             score = int(scores.get(name, 0))
         except (TypeError, ValueError) as exc:
@@ -22,7 +22,7 @@ def module_coverage_ratio(scores: dict[str, int]) -> float:
             score = 0
         if score > 0:
             covered += 1
-    return covered / len(MODULE_NAMES)
+    return covered / len(ALL_METHOD_AGENTS)
 
 
 def diagnose_quality(*, scores: dict[str, int], total_iterations_used: int, highest_outcome: str | None) -> dict:

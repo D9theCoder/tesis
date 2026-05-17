@@ -15,9 +15,9 @@ def test_run_provider_matrix_skips_unsupported_provider(monkeypatch):
         repeats=1,
     )
 
-    assert len(artifacts) == 1
-    assert artifacts[0]["status"] == "skipped"
-    assert "Unsupported provider" in artifacts[0]["error"]
+    assert len(artifacts) == 2
+    assert all(item["status"] == "skipped" for item in artifacts)
+    assert all("Unsupported provider" in item["error"] for item in artifacts)
 
 
 def test_run_provider_matrix_deterministic_ordering(monkeypatch):
@@ -75,13 +75,23 @@ def test_run_provider_matrix_deterministic_ordering(monkeypatch):
         repeats=2,
     )
 
-    # Levels must be sorted alphabetically: high, low, medium
-    assert call_order[0] == ("gemini", "sqli", "high", 0, False, "reactive")
-    assert call_order[1] == ("gemini", "sqli", "high", 1, False, "reactive")
-    assert call_order[2] == ("gemini", "sqli", "low", 0, False, "reactive")
-    assert call_order[3] == ("gemini", "sqli", "low", 1, False, "reactive")
-    assert call_order[4] == ("gemini", "sqli", "medium", 0, False, "reactive")
-    assert call_order[5] == ("gemini", "sqli", "medium", 1, False, "reactive")
+    # Levels must be sorted alphabetically: high, low, medium.
+    # Payload modes default to static_only + hybrid, so each repeat is invoked twice.
+    expected = [
+        ("gemini", "sqli", "high", 0, False, "reactive"),
+        ("gemini", "sqli", "high", 1, False, "reactive"),
+        ("gemini", "sqli", "high", 0, False, "reactive"),
+        ("gemini", "sqli", "high", 1, False, "reactive"),
+        ("gemini", "sqli", "low", 0, False, "reactive"),
+        ("gemini", "sqli", "low", 1, False, "reactive"),
+        ("gemini", "sqli", "low", 0, False, "reactive"),
+        ("gemini", "sqli", "low", 1, False, "reactive"),
+        ("gemini", "sqli", "medium", 0, False, "reactive"),
+        ("gemini", "sqli", "medium", 1, False, "reactive"),
+        ("gemini", "sqli", "medium", 0, False, "reactive"),
+        ("gemini", "sqli", "medium", 1, False, "reactive"),
+    ]
+    assert call_order == expected
 
 
 def test_run_provider_matrix_include_aggregate(monkeypatch):
@@ -192,5 +202,5 @@ def test_run_provider_matrix_evasion_forwarding(monkeypatch):
         evasion_mode="proactive",
     )
 
-    assert len(captured) == 1
-    assert captured[0] == (True, "proactive")
+    assert len(captured) == 2
+    assert captured == [(True, "proactive"), (True, "proactive")]

@@ -35,6 +35,14 @@ class ScoreSummary:
     method_selection_accuracy: float = 0.0
     adaptation_rate: float = 0.0
     mean_attempts_to_success: float = 0.0
+    payload_validity_rate: float = 0.0
+    payload_execution_success_rate: float = 0.0
+    payload_improvement_rate: float = 0.0
+    guardrail_activation_rate: float = 0.0
+    payload_guardrail_activations: int = 0
+    consistency_score: float = 0.0
+    token_cost: float = 0.0
+    token_cost_per_success: float = 0.0
 
     def __post_init__(self):
         if self.evasion_attempts < 0 or self.successful_evasions < 0:

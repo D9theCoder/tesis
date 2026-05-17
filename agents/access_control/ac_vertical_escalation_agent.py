@@ -6,9 +6,8 @@ import logging
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
-from agents.state_utils import already_tried_payloads, chain_check as _chain_check, make_update, normalize_security_level
+from agents.state_utils import already_tried_payloads, candidate_payloads_for_stage, chain_check as _chain_check, make_update, normalize_security_level
 from core.state import ExploitationState, MODULE_TO_KG_NODE
-from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
 from foundation.verifier import Verifier
 
@@ -123,9 +122,6 @@ def ac_vertical_escalation_agent(state: ExploitationState) -> dict[str, Any]:
             )
         session.set_security_level(security_level)
 
-        payload_lib = PayloadLibrary()
-        payload_set = payload_lib.get(AGENT_ID, security_level)
-
         already_tried = already_tried_payloads(state, AGENT_ID)
         confirmed_vulns: list[str] = []
         achieved_outcomes: list[str] = []
@@ -135,7 +131,7 @@ def ac_vertical_escalation_agent(state: ExploitationState) -> dict[str, Any]:
         observations: dict[str, bool] = {}
 
         # Stage 1: PROBE
-        probe_payloads = list(payload_set.probe) or ["1", "2"]
+        probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe") or ["2", "3"]
         probe_ok, tried, probe_obs, probe_events = _probe_preconditions(
             session, probe_payloads, already_tried
         )
@@ -154,9 +150,7 @@ def ac_vertical_escalation_agent(state: ExploitationState) -> dict[str, Any]:
         score = max(score, 1)
 
         # Stage 2: EXPLOIT
-        exploit_payloads = list(payload_set.exploit) or ["1"]
-        bypass_payloads = list(payload_set.bypass.get(security_level, []))
-        all_exploit = exploit_payloads + bypass_payloads
+        all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit") or ["1"]
 
         exploit_score, tried, confirmed, exploit_events = _attempt_exploit(
             session, all_exploit, already_tried | set(all_tried)
