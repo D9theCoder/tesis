@@ -11,7 +11,6 @@ from typing import Any
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 
-SAMPLE_QUERY = "What model do you use?"
 SUPPORTED_PROVIDERS = ["gemini", "openai", "claude", "openai_compatible"]
 logger = logging.getLogger(__name__)
 
@@ -159,24 +158,3 @@ def get_llm_from_model_config(config: "ModelConfig", **kwargs):
         api_key=config.api_key,
         **merged_kwargs,
     )
-
-
-def _resolve_model_name(llm: Any) -> str:
-    return getattr(llm, "model_name", getattr(llm, "model", "unknown"))
-
-
-def invoke_sample_query(provider_name: str, query: str = SAMPLE_QUERY, **kwargs) -> dict[str, str]:
-    """
-    Sends a hardcoded sample query to the requested provider using LangChain.
-    Returns a normalized response payload for display in the program.
-    """
-    llm = get_llm(provider_name, **kwargs)
-    response = llm.invoke([HumanMessage(content=query)])
-    response_content = response.content if isinstance(response.content, str) else str(response.content)
-
-    return {
-        "provider": provider_name,
-        "model": _resolve_model_name(llm),
-        "query": query,
-        "response": response_content,
-    }
