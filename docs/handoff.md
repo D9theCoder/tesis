@@ -4,6 +4,8 @@
 
 ## 1. Research Mission
 
+> **Implementation status note:** This handoff describes the current research and implementation direction. It should be read as a design and orientation document, not as an execution-accurate replacement for the code. For runtime-exact behavior, use the code in `core/`, `foundation/`, `agents/`, `llm/`, and `evaluation/`.
+
 **Core Problem:**
 Build an autonomous LLM-based penetration testing framework targeting DVWA (Damn Vulnerable Web Application), where the primary contribution is a static, pre-validated Attack Knowledge Graph (AKG) that guides LLM method selection and constrains hybrid payload generation within bounded vulnerability domains.
 
@@ -18,7 +20,7 @@ Build an autonomous LLM-based penetration testing framework targeting DVWA (Damn
 - Vulnerability surfaces: **SQL Injection, Access Control, Brute Force**.
 - Per surface: all selected method families tested deeply, not all DVWA modules broadly.
 - Security levels: Low / Medium / High per method per surface.
-- Multi-LLM comparison: Claude, GPT, open model (Llama/DeepSeek or other open model TBD).
+- Multi-LLM comparison in the current codebase: Gemini, OpenAI, Claude, and optionally an OpenAI-compatible endpoint for an open or third-party model.
 - Payload strategy: validated static payload seeds + constrained LLM mutation/generation, not unrestricted payload generation.
 - No fine-tuning. No defense/detection system. No network-layer attacks. No dynamic graph generation.
 
@@ -231,7 +233,7 @@ Different LLMs may show different strengths across method families, such as UNIO
 |---|---|---|
 | Knowledge graph | `networkx` (DiGraph) | Static payload-aware AKG, method traversal, precondition checks, payload profiles |
 | Agent orchestration | `langgraph` | Stateful multi-step execution, conditional routing, fallback, checkpointing |
-| State schema | `pydantic` / `TypedDict` | Type-safe exploitation state and payload artifact tracking |
+| State schema | `TypedDict` + LangGraph reducers | Type-safe exploitation state and payload artifact tracking |
 | LLM interface | provider abstraction | Swappable provider for method selection and constrained payload generation |
 | HTTP interaction | `httpx` | Session-based DVWA requests |
 | HTML parsing | `beautifulsoup4` | Form parsing, CSRF token extraction, response analysis |
@@ -300,6 +302,8 @@ dvwa-llm-pentest/
 ---
 
 ### ExploitationState TypedDict (core/state.py)
+
+The outline below is representative, not a literal copy of the current reducer-heavy state contract.
 
 ```python
 from typing import TypedDict, Annotated, Optional
@@ -514,29 +518,22 @@ Stage 1: PROBE
   → Check AKG preconditions
   → Update observations and method score
 
-Stage 2: PAYLOAD CANDIDATE BUILDING
-  → Load static seed payload metadata from payload_library
-  → If payload_mode = hybrid, ask LLM for AKG-constrained variants
-  → Log prompt, response, model, temperature, candidate ID, and provenance
+Stage 2: CANDIDATE INPUT
+  → Read validated payload candidates from the payload pipeline state
+  → Keep seed provenance and validation artifacts intact
 
-Stage 3: VALIDATION
-  → Enforce output schema
-  → Check method-family alignment
-  → Check target parameter and scope
-  → Reject malformed or out-of-method candidates
-
-Stage 4: EXECUTION
-  → Static method agent executes candidate queue under fixed budget
-  → Verifier checks expected success signals
+Stage 3: EXECUTION
+  → Static method agent executes candidate set under fixed budget
+  → Internal verifier checks expected success signals
   → Log evidence
 
-Stage 5: SCORING
+Stage 4: SCORING
   → Score method selection separately
   → Score payload quality separately
   → Score exploitation outcome separately
   → Score chain outcome separately
 
-Stage 6: CHAIN CHECK
+Stage 5: CHAIN CHECK
   → Query AKG for chain edges from confirmed outcome
   → Dispatch next viable method or finish
 ```
@@ -596,8 +593,17 @@ Shows full autonomy remains difficult. Supports controlled orchestration and bas
 **SecLLMHolmes:**
 Shows LLM security reasoning instability. Supports validation, separated metrics, and repeated trials.
 
-### Kevin's Own Results
-None yet. Implementation not started.
+### Current Implementation Status
+
+Implementation exists and includes:
+
+- LangGraph runtime assembly
+- static AKG and method agents
+- payload candidate builder / validator / ranker
+- guardrail and evasion handling
+- evaluation and matrix runner support
+
+What remains should be treated as iteration, refinement, validation, and research execution, not greenfield implementation from zero.
 
 ### Metrics
 

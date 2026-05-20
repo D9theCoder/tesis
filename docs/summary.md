@@ -1,4 +1,6 @@
 # Thesis Research Summary
+
+> **Documentation status note:** This document is an architecture and research-design summary. It is intentionally higher-level than the runtime code. For execution-accurate topology, state shape, and routing behavior, use `core/graph_builder.py`, `core/state.py`, `core/knowledge_graph.py`, `foundation/`, and `agents/` as the source of truth.
 ## Evolusi Tujuan Penelitian: Dari Prompting & Guardrail Evaluation → AKG-Guided Autonomous Web Exploitation with Controlled Hybrid Payload Generation
 
 ---
@@ -93,21 +95,24 @@
 │                         EXECUTION GRAPH (LangGraph)                         │
 │                                                                             │
 │  [recon] ──► [orchestrator] ──► [payload_candidate_builder] ──► [validator] │
-│                    │                        │                     │         │
-│                    ▼                        ▼                     ▼         │
-│              [method_agent_N] ─────────► [verifier] ─────► [state_update]   │
-│                    │                                              │         │
-│                    ▼                                              ▼         │
-│            [chaining coordinator] ◄──────── fallback / chain check ──────── │
-│                    │                                                        │
-│                    └────────────────────────► [scorer] ─────────► END       │
+│                                                              │              │
+│                                                              ├──► method    │
+│                                                              │    agent     │
+│                                                              └──► chaining  │
+│                                                                   router    │
+│                                                                             │
+│  method agent: PROBE → EXPLOIT → internal verification → state update       │
+│                                                                             │
+│  [chaining router] ──► [orchestrator] OR [payload_candidate_builder]        │
+│                  └──► [scorer] ─────────► END                               │
 └───────────────────────────────┬─────────────────────────────────────────────┘
                                 │ LLM API calls
 ┌───────────────────────────────▼─────────────────────────────────────────────┐
 │                   MULTI-LLM ABSTRACTION LAYER                               │
 │                                                                             │
-│   Claude / GPT / Open model: same AKG, same method agents, same seed        │
-│   payloads, same candidate budget, same validator, same scoring rubric.     │
+│   Gemini / OpenAI / Claude / OpenAI-compatible: same AKG, same method       │
+│   agents, same seed payloads, same candidate budget, same validator,        │
+│   same scoring rubric.                                                      │
 │                                                                             │
 │   Model comparison focuses on method selection, payload validity,            │
 │   generated payload effectiveness, consistency, guardrail activation,        │
@@ -117,13 +122,13 @@
 
 ### Penjelasan Alur Arsitektur
 
-**Foundation Layer** menyediakan layanan umum untuk semua agen: recon awal, session management, payload seed library, candidate generation interface, payload validator, verifier, dan artifact logging. Payload library tidak lagi hanya dipahami sebagai daftar payload tetap, tetapi sebagai kombinasi antara **validated static seed payloads** dan **LLM-generated candidate variants** yang tetap dibatasi oleh AKG.
+**Foundation Layer** menyediakan layanan umum untuk semua agen: recon awal, session management, HTTP transport, payload seed library, payload candidate builder, payload validator/ranker, verifier utility, dan artifact logging. Payload library tidak lagi hanya dipahami sebagai daftar payload tetap, tetapi sebagai kombinasi antara **validated static seed payloads** dan **LLM-generated candidate variants** yang tetap dibatasi oleh AKG.
 
 **Attack Knowledge Graph (NetworkX)** tetap merupakan representasi statis dari pengetahuan domain. Struktur utama tetap terdiri dari surface node dan method node, tetapi setiap method node kini diperluas dengan **payload-generation profile**. Profile ini berisi referensi payload seed, allowed mutation types, validation rules, expected success signals, maximum candidate budget, dan provenance requirements. Dengan demikian, AKG tidak hanya memilih metode, tetapi juga mengontrol ruang payload generation.
 
-**Static Method Agents** tetap digunakan sebagai modul eksekusi. Agen tidak digenerate secara dinamis oleh LLM. Perubahan utama ada pada input agen: sebelumnya agen menjalankan daftar payload statis, sedangkan pada desain revisi agen menjalankan **candidate queue** yang berisi static seeds dan AKG-constrained LLM variants.
+**Static Method Agents** tetap digunakan sebagai modul eksekusi. Agen tidak digenerate secara dinamis oleh LLM. Perubahan utama ada pada input agen: sebelumnya agen menjalankan daftar payload statis, sedangkan pada desain revisi agen menjalankan **validated candidate set** yang berisi static seeds dan AKG-constrained LLM variants. Verifikasi dilakukan di dalam kode agent, bukan sebagai node LangGraph terpisah.
 
-**Execution Graph (LangGraph)** mengelola alur stateful: recon → method selection → payload candidate generation → validation → execution → verification → fallback/chaining → scoring. Conditional routing tetap dikontrol oleh state dan AKG.
+**Execution Graph (LangGraph)** mengelola alur stateful: recon → method selection → payload candidate generation → validation → method execution → fallback/chaining → scoring. Secara runtime, `payload_validator` dapat langsung merutekan ke `chaining_router` jika tidak ada kandidat valid, dan verifikasi dilakukan di dalam method agent melalui utility verifier.
 
 **Multi-LLM Abstraction Layer** memastikan setiap model diuji pada kondisi yang identik. Perbandingan antar model tidak hanya melihat keberhasilan eksploitasi, tetapi juga kecenderungan model pada metode tertentu, validitas payload, efektivitas payload, refusal rate, dan konsistensi hasil.
 
@@ -186,28 +191,29 @@ graph TB
         ORCH["orchestrator"]
         BUILD["payload_candidate_builder"]
         VALID["payload_validator"]
-        MA["static_method_agent_N"]
-        VERIFY["verifier"]
-        CHAIN["chaining coordinator"]
+        MA["static method agent nodes"]
+        CHAIN["chaining_router"]
         SCORER["scorer"]
         END["END"]
 
         RECON --> ORCH
         ORCH --> BUILD
         BUILD --> VALID
-        VALID --> MA
-        MA --> VERIFY
-        VERIFY --> CHAIN
+        VALID -->|"validated candidates exist"| MA
+        VALID -->|"no valid candidates"| CHAIN
+        MA -->|"agent returns partial state update"| CHAIN
         CHAIN -->|"fallback loop"| ORCH
+        CHAIN -->|"next method via payload pipeline"| BUILD
         CHAIN -->|"complete/exhausted"| SCORER
         SCORER --> END
     end
 
     subgraph LLM["Multi-LLM Abstraction Layer + Baselines"]
         direction TB
-        L1["Claude"]
-        L2["GPT"]
-        L3["Open Model"]
+        L1["Gemini"]
+        L2["OpenAI"]
+        L3["Claude"]
+        L4["OpenAI-compatible or open model endpoint"]
         L0["Linear baseline"]
         H0["Optional AKG heuristic baseline"]
     end
@@ -288,8 +294,8 @@ Artifact sidecar untuk reproduksibilitas:
 dvwa-llm-pentest/
 │
 ├── README.md
-├── summary.md
-├── requirements.txt
+├── pyproject.toml
+├── uv.lock
 ├── .env.example
 ├── config.yaml                         # Target URL, LLM provider, temperature, budgets, surface selection
 ├── tesis/
@@ -373,6 +379,8 @@ dvwa-llm-pentest/
 
 ## 5. Pseudocode
 
+> **Pseudocode note:** The pseudocode below is conceptual and intentionally simplified. It describes the intended control flow, not the exact runtime implementation line-for-line.
+
 ### 5.1 Main Entry Point (Per Surface)
 
 ```
@@ -381,7 +389,7 @@ PROGRAM run_engagement(target_url, llm_provider, security_level, surface, payloa
     session.login("admin", "password")
     session.set_security_level(security_level)
 
-    framework = build_langgraph_workflow(llm_provider=provider, surface=surface)
+    framework = build_framework(llm_provider=llm_provider, surface=surface)
 
     initial_state = {
         target_url: target_url,
@@ -426,7 +434,7 @@ PROGRAM run_engagement(target_url, llm_provider, security_level, surface, payloa
 
     result = framework.invoke(
         initial_state,
-        config={"configurable": {"thread_id": f"{provider}-{surface}-{level}-{payload_mode}"}}
+        config={"configurable": {"thread_id": f"{llm_provider}-{surface}-{security_level}"}}
     )
 
     RETURN result
@@ -674,7 +682,7 @@ LLM_PROVIDERS × SECURITY_LEVELS × SURFACES × METHODS × PAYLOAD_MODE × REPEA
 
 Recommended minimum:
 
-- Providers: Claude, GPT, Open model
+- Providers: Gemini, OpenAI, Claude, and optionally an OpenAI-compatible open-model endpoint
 - Security levels: Low, Medium, High
 - Surfaces: SQLi, Access Control, Brute Force
 - Payload modes: static_only, hybrid
