@@ -1,8 +1,14 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 import pytest
 from agents.orchestrator import orchestrator, _fallback_next_agent
 
 
 def test_fallback_next_agent_returns_viable_method():
+    """Verifies fallback next agent returns viable method behavior."""
     state = {
         "current_surface": "sqli",
         "observations": {"error_messages_enabled": True},
@@ -16,6 +22,7 @@ def test_fallback_next_agent_returns_viable_method():
 
 
 def test_orchestrator_returns_dict():
+    """Verifies orchestrator returns dict behavior."""
     state = {
         "target_url": "http://localhost/dvwa",
         "security_level": "low",

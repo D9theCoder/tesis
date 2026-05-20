@@ -284,22 +284,28 @@ def fingerprint_server(headers: dict) -> dict[str, str]:
 # ── Main recon function (LangGraph node) ────────────────────────────────
 
 def recon(state: ExploitationState) -> dict[str, Any]:
-    """LangGraph recon node — crawl DVWA and populate the attack surface.
+    """Execute the reconnaissance stage of the LangGraph workflow.
 
-    This function is designed to be registered as a node in the LangGraph
-    ``StateGraph``. It receives the current ``ExploitationState`` and returns
-    a partial state update dict.
+    Reads:
+        Target URL and requested DVWA security level.
 
-    The recon pipeline:
-    1. Authenticate to DVWA using the target URL.
-    2. Detect (or confirm) the current security level.
-    3. Crawl the DVWA navigation to find module pages.
-    4. Parse each module page for forms, inputs, and CSRF tokens.
-    5. Build normalized ``endpoints`` and ``input_vectors`` lists.
-    6. Return a partial state update with ``next_agent="orchestrator"``.
+    Writes:
+        Discovered endpoints, input vectors, observations, security level,
+        server fingerprint data, telemetry events, and `next_agent`.
+
+    Routing:
+        Returns `next_agent="orchestrator"` so method selection runs next.
+
+    Side Effects:
+        Authenticates to DVWA, sets security level, crawls module pages, and
+        parses forms and inputs through HTTP requests.
+
+    Failure:
+        Returns empty discovery lists and routes to orchestrator when target URL
+        is missing or reconnaissance cannot complete.
 
     Args:
-        state: The current ``ExploitationState`` dict.
+        state: Current shared LangGraph state.
 
     Returns:
         Partial state update dict compatible with LangGraph reducers.
@@ -400,13 +406,13 @@ def recon(state: ExploitationState) -> dict[str, Any]:
     # Derive observations from discovered endpoints
     observations: dict[str, bool] = {}
     module_names = {ep.get("module_name", "unknown") for ep in all_endpoints}
-    
+
     # SQLi observations
     observations["error_messages_enabled"] = "sqli" in module_names
     observations["union_select_possible"] = "sqli" in module_names
     observations["response_diff_detectable"] = "sqli_blind" in module_names or "sqli" in module_names
     observations["response_delay_measurable"] = "sqli_blind" in module_names or "sqli" in module_names
-    
+
     # Access control observations
     observations["object_ids_enumerable"] = "idor" in module_names
     # Check specifically for the authbypass endpoint URL pattern
@@ -430,7 +436,7 @@ def recon(state: ExploitationState) -> dict[str, Any]:
         )
     except (TransportError, RequestTimeoutError):
         observations["force_browse_endpoints_visible"] = False
-    
+
     # Brute force observations
     observations["no_rate_limit"] = "brute" in module_names
     observations["low_priv_session_available"] = session is not None and getattr(session, "is_logged_in", False)

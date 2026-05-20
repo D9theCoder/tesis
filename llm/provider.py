@@ -1,3 +1,7 @@
+"""Multi-LLM Layer utilities and prompts for framework decisions.
+
+This module prepares provider integrations, guardrail handling, evasion retry
+logic, or prompt text used by the LangGraph Execution Flow."""
 import copy
 import os
 import logging
@@ -18,6 +22,10 @@ if TYPE_CHECKING:
 
 
 def get_llm(provider_name: str, **kwargs):
+    """Returns llm for framework callers.
+
+    Args:
+        provider_name: Value used by this function."""
     normalized_provider = provider_name.strip().lower()
 
     if normalized_provider == "gemini":

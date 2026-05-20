@@ -46,6 +46,38 @@ def run_single_engagement(
     live_display: bool = False,
     model_config: dict[str, Any] | None = None,
 ) -> dict:
+    """Run one configured DVWA framework engagement and write evaluation artifacts.
+
+    The runner builds an initial `ExploitationState`, compiles the LangGraph
+    workflow, invokes it, computes score reports, records telemetry, and writes
+    JSONL/report artifacts. Exceptions are captured into failure artifacts so a
+    matrix run can continue.
+
+    Args:
+        target_url: DVWA base URL for the engagement.
+        security_level: DVWA security level to configure.
+        llm_provider: Provider identifier passed into framework state.
+        surface: Vulnerability surface selected for the run.
+        payload_mode: Payload candidate mode for the run.
+        max_iterations: Maximum LangGraph method iterations.
+        candidate_budget: Maximum generated-candidate budget per method.
+        repeat_index: Matrix repeat index used in artifact IDs.
+        stop_policy: Evaluation stop policy recorded in artifacts.
+        coverage_target: Coverage threshold recorded for diagnostics.
+        enriched_reporting: Whether to emit richer text reports.
+        diagnose: Whether to add diagnostic quality analysis.
+        output_dir: Optional directory for written run artifacts.
+        evasion_enabled: Whether guardrail retry behavior is enabled.
+        evasion_mode: Evasion retry mode stored in state.
+        evasion_max_retries: Maximum retry attempts for guardrail false positives.
+        evasion_cooldown_threshold: Clean-response threshold for cooldown logic.
+        live_display: Whether to run the terminal progress reporter.
+        model_config: Optional provider model configuration.
+
+    Returns:
+        Run artifact containing final state, report, telemetry, paths, and
+        failure details when execution fails.
+    """
     run_id = f"{llm_provider}-{surface}-{security_level}-{payload_mode}-{repeat_index}"
     started_at = _now_iso()
     started_clock = perf_counter()

@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def _coerce_bool(value: Any) -> bool:
+    """Supports coerce bool behavior for this module."""
     if isinstance(value, bool):
         return value
     if value is None:
@@ -27,7 +28,7 @@ def _coerce_bool(value: Any) -> bool:
 
 class BaseAgent(ABC):
     """Abstract base class for all method agents.
-    
+
     Every agent must:
     - Accept ExploitationState as input
     - Return a partial state dict (not modify state directly)

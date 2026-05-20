@@ -398,6 +398,7 @@ class TestReconNodeIntegration:
             setup_result.text = "Forbidden"
 
             def mock_http_get(path, *args, **kwargs):
+                """Supports regression tests for test recon."""
                 path_str = str(path)
                 if path_str.endswith("index.php"):
                     return index_result
@@ -436,6 +437,7 @@ class TestReconNodeIntegration:
             setup_result.text = "Database Setup"
 
             def mock_http_get(path, *args, **kwargs):
+                """Supports regression tests for test recon."""
                 path_str = str(path)
                 if path_str.endswith("index.php"):
                     return index_result
@@ -469,6 +471,7 @@ class TestReconNodeIntegration:
             setup_result.text = "Forbidden"
 
             def mock_http_get(path, *args, **kwargs):
+                """Supports regression tests for test recon."""
                 path_str = str(path)
                 if path_str.endswith("index.php"):
                     return index_result

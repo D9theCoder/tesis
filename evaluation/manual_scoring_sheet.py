@@ -6,6 +6,10 @@ from typing import Any
 
 
 def manual_scoring_rows(artifact: dict[str, Any]) -> list[dict[str, Any]]:
+    """Handles manual scoring rows behavior for this module.
+
+    Args:
+        artifact: Value used by this function."""
     config = artifact.get("config", {}) if isinstance(artifact.get("config"), dict) else {}
     final_state = artifact.get("final_state", {}) if isinstance(artifact.get("final_state"), dict) else {}
     provenance = final_state.get("payload_provenance", {})

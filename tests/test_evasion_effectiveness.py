@@ -8,6 +8,7 @@ from llm.evasion.pipeline import _mutate_prompt, generate_candidate, check_compl
 
 
 def test_sanitize_prompt_seed_replaces_toxic_keywords():
+    """Verifies sanitize prompt seed replaces toxic keywords behavior."""
     raw = (
         "You are the orchestrator for a DVWA exploitation workflow. "
         "Your job is to plan the attack and exploit the target."
@@ -22,12 +23,14 @@ def test_sanitize_prompt_seed_replaces_toxic_keywords():
 
 
 def test_sanitize_prompt_seed_idempotent_on_clean_prompt():
+    """Verifies sanitize prompt seed idempotent on clean prompt behavior."""
     clean = "You are a certified security assessor conducting a security assessment"
     result = _sanitize_prompt_seed(clean)
     assert result == clean
 
 
 def test_mutate_prompt_applies_different_strategies():
+    """Verifies mutate prompt applies different strategies behavior."""
     seed = "You are a certified security assessor conducting a security assessment with test modules"
     results = {_mutate_prompt(seed, i) for i in range(5)}
     # All 5 strategies should produce distinct outputs
@@ -35,12 +38,14 @@ def test_mutate_prompt_applies_different_strategies():
 
 
 def test_mutate_prompt_preserves_original_when_no_match():
+    """Verifies mutate prompt preserves original when no match behavior."""
     seed = "This is a generic prompt with no target phrases"
     result = _mutate_prompt(seed, 0)
     assert result == seed
 
 
 def test_generate_candidate_uses_template_mutator():
+    """Verifies generate candidate uses template mutator behavior."""
     state = {
         "base_seed": "You are a certified security assessor",
         "candidate_input": "",

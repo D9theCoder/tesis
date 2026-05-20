@@ -9,6 +9,7 @@ from core.state import new_default_state
 
 @pytest.fixture
 def base_state():
+    """Supports regression tests for test ac vertical escalation agent."""
     state = new_default_state()
     state["target_url"] = "http://localhost/dvwa"
     state["security_level"] = "low"
@@ -16,6 +17,7 @@ def base_state():
 
 
 def _make_mock_session(login_ok=True):
+    """Supports regression tests for test ac vertical escalation agent."""
     session = MagicMock()
     session.login.return_value = login_ok
     session.set_security_level.return_value = None
@@ -23,6 +25,7 @@ def _make_mock_session(login_ok=True):
 
 
 def _make_response(status_code=200, text="No data"):
+    """Supports regression tests for test ac vertical escalation agent."""
     resp = MagicMock()
     resp.status_code = status_code
     resp.text = text
@@ -59,6 +62,7 @@ def test_exploit_confirms_escalation(base_state):
     mock_session = _make_mock_session()
 
     def mock_get(path, params=None):
+        """Supports regression tests for test ac vertical escalation agent."""
         return _make_response(200, "First name: admin<br>Surname: admin<br>User ID: 1")
 
     mock_session.get.side_effect = mock_get
@@ -70,6 +74,7 @@ def test_exploit_confirms_escalation(base_state):
 
 
 def test_login_failure(base_state):
+    """Verifies login failure behavior."""
     mock_session = _make_mock_session(login_ok=False)
     with patch("agents.access_control.ac_vertical_escalation_agent.DVWASession", return_value=mock_session):
         result = ac_vertical_escalation_agent(base_state)

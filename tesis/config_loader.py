@@ -26,6 +26,11 @@ _ENV_REF_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)}")
 
 
 def mask_secret(value: str, *, unmasked_tail: int = 4) -> str:
+    """Handles mask secret behavior for this module.
+
+    Args:
+        value: Value used by this function.
+        unmasked_tail: Value used by this function."""
     if not value:
         return ""
     if len(value) <= unmasked_tail:
@@ -34,6 +39,10 @@ def mask_secret(value: str, *, unmasked_tail: int = 4) -> str:
 
 
 def load_yaml_config(path: str | Path) -> dict[str, Any]:
+    """Loads yaml config from configured inputs.
+
+    Args:
+        path: Value used by this function."""
     config_path = Path(path)
     if not config_path.exists():
         return {}
@@ -46,6 +55,11 @@ def load_yaml_config(path: str | Path) -> dict[str, Any]:
 
 
 def save_yaml_config(path: str | Path, payload: Mapping[str, Any]) -> Path:
+    """Handles save yaml config behavior for this module.
+
+    Args:
+        path: Value used by this function.
+        payload: Value used by this function."""
     config_path = Path(path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(yaml.safe_dump(dict(payload), sort_keys=False), encoding="utf-8")
@@ -53,6 +67,7 @@ def save_yaml_config(path: str | Path, payload: Mapping[str, Any]) -> Path:
 
 
 def _resolve_env_refs(value: Any) -> Any:
+    """Supports resolve env refs behavior for this module."""
     if isinstance(value, dict):
         return {k: _resolve_env_refs(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -61,6 +76,7 @@ def _resolve_env_refs(value: Any) -> Any:
         return value
 
     def _replace(match: re.Match[str]) -> str:
+        """Supports replace behavior for this module."""
         env_key = match.group(1)
         env_value = os.getenv(env_key)
         if env_value is None:
@@ -71,6 +87,10 @@ def _resolve_env_refs(value: Any) -> Any:
 
 
 def resolve_env_references(config: dict[str, Any]) -> dict[str, Any]:
+    """Handles resolve env references behavior for this module.
+
+    Args:
+        config: Value used by this function."""
     return _resolve_env_refs(config)
 
 
@@ -79,6 +99,7 @@ def _parse_bool(raw: str) -> bool:
 
 
 def _coerce_bool(value: Any) -> bool:
+    """Supports coerce bool behavior for this module."""
     if isinstance(value, bool):
         return value
     if value is None:
@@ -95,6 +116,10 @@ def _parse_csv(raw: str) -> list[str]:
 
 
 def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
+    """Loads env overrides from configured inputs.
+
+    Args:
+        prefix: Value used by this function."""
     overrides: dict[str, Any] = {}
     mapping: dict[str, str] = {
         "TARGET_URL": "target_url",
@@ -178,6 +203,11 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
 
 
 def merge_config(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
+    """Handles merge config behavior for this module.
+
+    Args:
+        base: Value used by this function.
+        override: Value used by this function."""
     merged: dict[str, Any] = dict(base)
     for key, value in override.items():
         if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
@@ -188,6 +218,7 @@ def merge_config(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str,
 
 
 def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
+    """Supports extract cli overrides behavior for this module."""
     overrides: dict[str, Any] = {}
     key_mapping: dict[str, str] = {
         "target": "target_url",
@@ -234,22 +265,38 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def validate_target_url(url: str) -> None:
+    """Validates target url according to current framework rules.
+
+    Args:
+        url: Value used by this function."""
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ConfigError(f"Invalid target URL: {url}")
 
 
 def validate_provider(provider: str) -> None:
+    """Validates provider according to current framework rules.
+
+    Args:
+        provider: Value used by this function."""
     if provider not in SUPPORTED_PROVIDERS:
         raise ConfigError(f"Unsupported provider: {provider}")
 
 
 def validate_level(level: str) -> None:
+    """Validates level according to current framework rules.
+
+    Args:
+        level: Value used by this function."""
     if level not in SECURITY_LEVELS:
         raise ConfigError(f"Unsupported security level: {level}")
 
 
 def validate_payload_mode(payload_mode: str) -> None:
+    """Validates payload mode according to current framework rules.
+
+    Args:
+        payload_mode: Value used by this function."""
     if payload_mode not in _VALID_PAYLOAD_MODES:
         raise ConfigError(
             f"Unsupported payload mode: {payload_mode}. "
@@ -258,6 +305,7 @@ def validate_payload_mode(payload_mode: str) -> None:
 
 
 def _default_model_name(provider: str) -> str:
+    """Supports default model name behavior for this module."""
     if provider == "gemini":
         return "gemini-3-flash-preview"
     if provider == "openai":
@@ -268,6 +316,7 @@ def _default_model_name(provider: str) -> str:
 
 
 def _default_api_key(provider: str) -> str:
+    """Supports default api key behavior for this module."""
     if provider == "gemini":
         return os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     if provider == "openai":
@@ -334,6 +383,7 @@ def _validate_surface(surface: str) -> None:
 
 
 def _validate_engagement_config(config: EngagementConfig) -> None:
+    """Supports validate engagement config behavior for this module."""
     validate_target_url(config.target_url)
     if config.iterations <= 0:
         raise ConfigError("iterations must be > 0")
@@ -381,6 +431,11 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
 
 
 def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) -> EngagementConfig:
+    """Loads and resolve config from configured inputs.
+
+    Args:
+        config_path: Value used by this function.
+        cli_args: Value used by this function."""
     yaml_cfg = resolve_env_references(load_yaml_config(config_path))
     env_cfg = load_env_overrides(prefix="TESIS_")
     cli_cfg = _extract_cli_overrides(cli_args)

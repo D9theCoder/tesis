@@ -1,7 +1,13 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 from agents.orchestrator import orchestrator
 
 
 def test_orchestrator_budget_exhausted_returns_scorer():
+    """Verifies orchestrator budget exhausted returns scorer behavior."""
     state = {
         "target_url": "http://localhost/dvwa",
         "confirmed_vulns": [],

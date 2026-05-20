@@ -247,12 +247,15 @@ class TestDefaultState:
             assert field in DEFAULT_STATE, f"DEFAULT_STATE missing field: {field}"
 
     def test_default_iteration_count(self):
+        """Verifies default iteration count behavior."""
         assert DEFAULT_STATE["iteration_count"] == 0
 
     def test_default_max_iterations(self):
+        """Verifies default max iterations behavior."""
         assert DEFAULT_STATE["max_iterations"] == 30
 
     def test_default_next_agent(self):
+        """Verifies default next agent behavior."""
         assert DEFAULT_STATE["next_agent"] == "recon"
 
     def test_default_empty_collections(self):
@@ -338,18 +341,22 @@ class TestMergeTriedPayloadsReducer:
     """Verify _merge_tried_payloads deduplicates across and within batches."""
 
     def test_empty_a_returns_b_unchanged(self):
+        """Verifies empty a returns b unchanged behavior."""
         result = _merge_tried_payloads({}, {"x": ["a", "b"]})
         assert result == {"x": ["a", "b"]}
 
     def test_empty_b_returns_a_unchanged(self):
+        """Verifies empty b returns a unchanged behavior."""
         result = _merge_tried_payloads({"x": ["a"]}, {})
         assert result == {"x": ["a"]}
 
     def test_deduplicates_within_b(self):
+        """Verifies deduplicates within b behavior."""
         result = _merge_tried_payloads({"agent1": ["a"]}, {"agent1": ["c", "c"]})
         assert result == {"agent1": ["a", "c"]}
 
     def test_deduplicates_across_a_and_b(self):
+        """Verifies deduplicates across a and b behavior."""
         result = _merge_tried_payloads(
             {"agent1": ["a", "b"]},
             {"agent1": ["a", "c"]},
@@ -357,10 +364,12 @@ class TestMergeTriedPayloadsReducer:
         assert result == {"agent1": ["a", "b", "c"]}
 
     def test_preserves_order_a_then_b(self):
+        """Verifies preserves order a then b behavior."""
         result = _merge_tried_payloads({"agent1": ["first"]}, {"agent1": ["second"]})
         assert result["agent1"] == ["first", "second"]
 
     def test_score_labels(self):
+        """Verifies score labels behavior."""
         assert SCORE_LABELS[0] == "Not Found"
         assert SCORE_LABELS[1] == "Identified"
         assert SCORE_LABELS[2] == "Partial Exploit"
@@ -369,9 +378,11 @@ class TestMergeTriedPayloadsReducer:
         assert len(SCORE_LABELS) == 5
 
     def test_security_levels(self):
+        """Verifies security levels behavior."""
         assert SECURITY_LEVELS == ["low", "medium", "high"]
 
     def test_llm_providers(self):
+        """Verifies llm providers behavior."""
         assert "gemini" in LLM_PROVIDERS
         assert "openai" in LLM_PROVIDERS
 
@@ -384,6 +395,7 @@ class TestLangGraphIntegration:
         from langgraph.graph import StateGraph, START, END
 
         def dummy_node(state: ExploitationState) -> dict:
+            """Supports regression tests for test state."""
             return {"iteration_count": state.get("iteration_count", 0) + 1}
 
         graph = StateGraph(ExploitationState)
@@ -399,6 +411,7 @@ class TestLangGraphIntegration:
         from langgraph.graph import StateGraph, START, END
 
         def recon_stub(state: ExploitationState) -> dict:
+            """Supports regression tests for test state."""
             return {
                 "endpoints": [{"url": "/test", "method": "GET"}],
                 "next_agent": "orchestrator",
@@ -419,9 +432,11 @@ class TestLangGraphIntegration:
         from langgraph.graph import StateGraph, START, END
 
         def node_a(state: ExploitationState) -> dict:
+            """Supports regression tests for test state."""
             return {"confirmed_vulns": ["sqli_confirmed"]}
 
         def node_b(state: ExploitationState) -> dict:
+            """Supports regression tests for test state."""
             return {"confirmed_vulns": ["xss_reflected_confirmed"]}
 
         graph = StateGraph(ExploitationState)
@@ -442,9 +457,11 @@ class TestLangGraphIntegration:
         from langgraph.graph import StateGraph, START, END
 
         def add_human_msg(state: ExploitationState) -> dict:
+            """Supports regression tests for test state."""
             return {"messages": [HumanMessage(content="test recon")]}
 
         def add_ai_msg(state: ExploitationState) -> dict:
+            """Supports regression tests for test state."""
             return {"messages": [AIMessage(content="test response")]}
 
         graph = StateGraph(ExploitationState)
@@ -465,6 +482,7 @@ class TestMergeDictsReducer:
     """Validate _merge_dicts never overwrites True with False."""
 
     def test_merge_dicts_preserves_true_over_false(self):
+        """Verifies merge dicts preserves true over false behavior."""
         from core.state import _merge_dicts
         a = {"key1": True, "key2": False}
         b = {"key1": False, "key3": True}
@@ -474,6 +492,7 @@ class TestMergeDictsReducer:
         assert result["key3"] is True
 
     def test_merge_dicts_allows_false_to_true(self):
+        """Verifies merge dicts allows false to true behavior."""
         from core.state import _merge_dicts
         a = {"key1": False}
         b = {"key1": True}
@@ -481,6 +500,7 @@ class TestMergeDictsReducer:
         assert result["key1"] is True
 
     def test_merge_dicts_with_empty_b(self):
+        """Verifies merge dicts with empty b behavior."""
         from core.state import _merge_dicts
         a = {"key1": True}
         b = {}
@@ -492,14 +512,17 @@ class TestModuleToKgNodeMappings:
     """Validate MODULE_TO_KG_NODE maps agents to existing AKG nodes."""
 
     def test_sqli_boolean_blind_maps_to_sqli_confirmed(self):
+        """Verifies sqli boolean blind maps to sqli confirmed behavior."""
         from core.state import MODULE_TO_KG_NODE
         assert MODULE_TO_KG_NODE["sqli_boolean_blind"] == "sqli_confirmed"
 
     def test_sqli_time_blind_maps_to_sqli_confirmed(self):
+        """Verifies sqli time blind maps to sqli confirmed behavior."""
         from core.state import MODULE_TO_KG_NODE
         assert MODULE_TO_KG_NODE["sqli_time_blind"] == "sqli_confirmed"
 
     def test_all_method_agents_map_to_existing_kg_nodes(self):
+        """Verifies all method agents map to existing kg nodes behavior."""
         from core.state import MODULE_TO_KG_NODE, ALL_METHOD_AGENTS, KG_NODES
         for agent in ALL_METHOD_AGENTS:
             node = MODULE_TO_KG_NODE.get(agent)

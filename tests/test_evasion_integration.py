@@ -1,9 +1,16 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 import pytest
 from tesis.config_loader import ConfigError, load_and_resolve_config
 
 
 class TestEvasionConfigLoading:
+    """Groups regression tests for TestEvasionConfigLoading behavior."""
     def test_evasion_defaults_false(self, tmp_path):
+        """Verifies evasion defaults false behavior."""
         config_path = tmp_path / "config.yaml"
         config_path.write_text("target_url: http://localhost/dvwa\n")
         config = load_and_resolve_config(config_path=str(config_path), cli_args={})
@@ -11,6 +18,7 @@ class TestEvasionConfigLoading:
         assert config.evasion_mode == "reactive"
 
     def test_evasion_from_yaml(self, tmp_path):
+        """Verifies evasion from yaml behavior."""
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
             "target_url: http://localhost/dvwa\n"
@@ -22,6 +30,7 @@ class TestEvasionConfigLoading:
         assert config.evasion_mode == "proactive"
 
     def test_evasion_cli_override(self, tmp_path):
+        """Verifies evasion cli override behavior."""
         config_path = tmp_path / "config.yaml"
         config_path.write_text("target_url: http://localhost/dvwa\n")
         config = load_and_resolve_config(
@@ -32,6 +41,7 @@ class TestEvasionConfigLoading:
         assert config.evasion_mode == "disabled"
 
     def test_invalid_evasion_mode_raises(self, tmp_path):
+        """Verifies invalid evasion mode raises behavior."""
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
             "target_url: http://localhost/dvwa\n"
@@ -42,6 +52,7 @@ class TestEvasionConfigLoading:
             load_and_resolve_config(config_path=str(config_path), cli_args={})
 
     def test_evasion_env_overrides(self, tmp_path, monkeypatch):
+        """Verifies evasion env overrides behavior."""
         config_path = tmp_path / "config.yaml"
         config_path.write_text("target_url: http://localhost/dvwa\n")
         monkeypatch.setenv("TESIS_EVASION_ENABLED", "true")
@@ -52,7 +63,9 @@ class TestEvasionConfigLoading:
 
 
 class TestEvasionStatePropagation:
+    """Groups regression tests for TestEvasionStatePropagation behavior."""
     def test_runner_injects_evasion_into_state(self, monkeypatch):
+        """Verifies runner injects evasion into state behavior."""
         from evaluation.runner import run_single_engagement
         from core.graph_builder import build_framework
 
@@ -60,8 +73,11 @@ class TestEvasionStatePropagation:
         captured_states = []
 
         def mock_build_framework(*, llm_provider, surface="sqli"):
+            """Supports regression tests for test evasion integration."""
             class FakeApp:
+                """Groups regression tests for FakeApp behavior."""
                 def invoke(self, state):
+                    """Supports regression tests for test evasion integration."""
                     captured_states.append(state)
                     return {
                         "iteration_count": 1,
@@ -74,6 +90,7 @@ class TestEvasionStatePropagation:
                     }
 
                 def stream(self, state, stream_mode=None):
+                    """Supports regression tests for test evasion integration."""
                     captured_states.append(state)
                     yield {
                         "iteration_count": 1,
@@ -108,13 +125,17 @@ class TestEvasionStatePropagation:
         assert artifact["config"]["evasion_mode"] == "reactive"
 
     def test_runner_evasion_defaults_when_omitted(self, monkeypatch):
+        """Verifies runner evasion defaults when omitted behavior."""
         from evaluation.runner import run_single_engagement
 
         captured_states = []
 
         def mock_build_framework(*, llm_provider, surface="sqli"):
+            """Supports regression tests for test evasion integration."""
             class FakeApp:
+                """Groups regression tests for FakeApp behavior."""
                 def invoke(self, state):
+                    """Supports regression tests for test evasion integration."""
                     captured_states.append(state)
                     return {
                         "iteration_count": 0,
@@ -127,6 +148,7 @@ class TestEvasionStatePropagation:
                     }
 
                 def stream(self, state, stream_mode=None):
+                    """Supports regression tests for test evasion integration."""
                     captured_states.append(state)
                     yield {
                         "iteration_count": 0,
@@ -157,7 +179,9 @@ class TestEvasionStatePropagation:
 
 
 class TestEvasionReportFormatting:
+    """Groups regression tests for TestEvasionReportFormatting behavior."""
     def test_format_evasion_table(self):
+        """Verifies format evasion table behavior."""
         from tesis.report_formatters import format_evasion_table
 
         data = {

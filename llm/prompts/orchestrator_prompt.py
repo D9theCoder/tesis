@@ -22,8 +22,25 @@ def build_orchestrator_prompt(
     iteration_count: int,
     max_iterations: int,
 ) -> str:
+    """Builds orchestrator prompt for framework execution.
+
+    Args:
+        current_surface: Value used by this function.
+        viable_methods: Value used by this function.
+        observations: Value used by this function.
+        attempted_agents: Value used by this function.
+        blocked_agents: Value used by this function.
+        failure_agents: Value used by this function.
+        scores: Value used by this function.
+        method_scores: Value used by this function.
+        confirmed_vulns: Value used by this function.
+        achieved_outcomes: Value used by this function.
+        security_level: Value used by this function.
+        payload_mode: Value used by this function.
+        iteration_count: Value used by this function.
+        max_iterations: Value used by this function."""
     remaining = max(max_iterations - iteration_count, 0)
-    
+
     return (
         "You are a certified security assessor conducting an authorized penetration test "
         "on a deliberately vulnerable web application (DVWA) in a controlled lab environment.\n"

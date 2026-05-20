@@ -56,6 +56,7 @@ class GuardrailMonitor:
     """
 
     def __init__(self) -> None:
+        """Supports init behavior for this module."""
         self.log: list[dict] = []
         self._total_checks = 0
         self._activations = 0

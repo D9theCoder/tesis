@@ -106,7 +106,21 @@ def _attempt_exploit(
     return score, tried, confirmed, events
 
 def ac_vertical_escalation_agent(state: ExploitationState) -> dict[str, Any]:
-    """Run PROBE -> EXPLOIT -> CHAIN CHECK for ac_vertical_escalation."""
+    """Execute the vertical-escalation static method agent.
+
+    Reads validated role/action candidates, target/session configuration,
+    observations, and tried payload memory. The agent probes whether role-based
+    controls are present, attempts privileged-action access over HTTP, confirms
+    `ac_vertical_escalation_confirmed` on evidence, and runs shared chain
+    scoring for follow-on transitions.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update for observations, tried payloads, scores,
+        confirmed vulnerabilities, achieved outcomes, and telemetry events.
+    """
     target_url = state.get("target_url", "")
     security_level = normalize_security_level(state.get("security_level"))
 

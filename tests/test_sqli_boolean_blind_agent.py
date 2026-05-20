@@ -9,6 +9,7 @@ from core.state import new_default_state
 
 @pytest.fixture
 def base_state():
+    """Supports regression tests for test sqli boolean blind agent."""
     state = new_default_state()
     state["target_url"] = "http://localhost/dvwa"
     state["security_level"] = "low"
@@ -16,6 +17,7 @@ def base_state():
 
 
 def _make_mock_session(login_ok=True):
+    """Supports regression tests for test sqli boolean blind agent."""
     session = MagicMock()
     session.login.return_value = login_ok
     session.set_security_level.return_value = None
@@ -23,6 +25,7 @@ def _make_mock_session(login_ok=True):
 
 
 def _make_response(status_code=200, text="No results"):
+    """Supports regression tests for test sqli boolean blind agent."""
     resp = MagicMock()
     resp.status_code = status_code
     resp.text = text
@@ -34,6 +37,7 @@ def test_probe_detects_boolean_difference(base_state):
     mock_session = _make_mock_session()
 
     def mock_get(path, params=None):
+        """Supports regression tests for test sqli boolean blind agent."""
         payload = (params or {}).get("id", "")
         if "1=1" in payload:
             return _make_response(200, "User ID exists in the database")
@@ -66,6 +70,7 @@ def test_exploit_confirmed(base_state):
     mock_session = _make_mock_session()
 
     def mock_get(path, params=None):
+        """Supports regression tests for test sqli boolean blind agent."""
         payload = (params or {}).get("id", "")
         # Probe payloads need differentiated responses
         if "1=1" in payload:
@@ -91,6 +96,7 @@ def test_chain_check_achieves_score_four(base_state):
     mock_session = _make_mock_session()
 
     def mock_get(path, params=None):
+        """Supports regression tests for test sqli boolean blind agent."""
         payload = (params or {}).get("id", "")
         if "1=1" in payload:
             return _make_response(200, "User ID exists in the database")

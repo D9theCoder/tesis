@@ -11,6 +11,10 @@ logger = logging.getLogger(__name__)
 
 
 def module_coverage_ratio(scores: dict[str, int]) -> float:
+    """Handles module coverage ratio behavior for this module.
+
+    Args:
+        scores: Value used by this function."""
     if not ALL_METHOD_AGENTS:
         return 0.0
     covered = 0
@@ -26,6 +30,12 @@ def module_coverage_ratio(scores: dict[str, int]) -> float:
 
 
 def diagnose_quality(*, scores: dict[str, int], total_iterations_used: int, highest_outcome: str | None) -> dict:
+    """Handles diagnose quality behavior for this module.
+
+    Args:
+        scores: Value used by this function.
+        total_iterations_used: Value used by this function.
+        highest_outcome: Value used by this function."""
     coverage = module_coverage_ratio(scores)
     flags: list[str] = []
 

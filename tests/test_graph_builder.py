@@ -1,3 +1,8 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 from copy import deepcopy
 
 import agents.orchestrator as orchestrator_module
@@ -14,12 +19,15 @@ from core.state import DEFAULT_STATE
 
 
 def test_build_framework_compiles():
+    """Verifies build framework compiles behavior."""
     app = build_framework(llm_provider="gemini")
     assert app is not None
 
 
 def test_runtime_starts_from_recon(monkeypatch):
+    """Verifies runtime starts from recon behavior."""
     def fail_get_llm(*args, **kwargs):
+        """Supports regression tests for test graph builder."""
         raise RuntimeError("offline test")
 
     monkeypatch.setattr(orchestrator_module, "get_llm", fail_get_llm)
@@ -33,7 +41,9 @@ def test_runtime_starts_from_recon(monkeypatch):
 
 
 def test_runtime_with_default_budget_remains_bounded(monkeypatch):
+    """Verifies runtime with default budget remains bounded behavior."""
     def fail_get_llm(*args, **kwargs):
+        """Supports regression tests for test graph builder."""
         raise RuntimeError("offline test")
 
     monkeypatch.setattr(orchestrator_module, "get_llm", fail_get_llm)
@@ -47,16 +57,19 @@ def test_runtime_with_default_budget_remains_bounded(monkeypatch):
 
 
 def test_route_from_orchestrator_unknown_agent_defaults_to_scorer():
+    """Verifies route from orchestrator unknown agent defaults to scorer behavior."""
     state = {"next_agent": "not_a_real_node"}
     assert route_from_orchestrator(state) == "scorer"
 
 
 def test_route_from_orchestrator_method_goes_to_payload_builder():
+    """Verifies route from orchestrator method goes to payload builder behavior."""
     state = {"next_agent": "sqli_union"}
     assert route_from_orchestrator(state) == "payload_candidate_builder"
 
 
 def test_payload_validator_routes_to_selected_method_when_candidates_exist():
+    """Verifies payload validator routes to selected method when candidates exist behavior."""
     state = {
         "selected_method": "sqli_union",
         "payload_candidates": {"sqli_union": [{"candidate_id": "seed"}]},
@@ -65,6 +78,7 @@ def test_payload_validator_routes_to_selected_method_when_candidates_exist():
 
 
 def test_stage5_runtime_handlers_are_real_callables():
+    """Verifies stage5 runtime handlers are real callables behavior."""
     assert set(RUNTIME_AGENT_NODE_NAMES) == set(RUNTIME_AGENT_HANDLERS.keys())
     for name, handler in RUNTIME_AGENT_HANDLERS.items():
         assert callable(handler), f"Handler for {name} is not callable"
@@ -72,7 +86,9 @@ def test_stage5_runtime_handlers_are_real_callables():
 
 
 def test_stage6_real_scorer_node_executes(monkeypatch):
+    """Verifies stage6 real scorer node executes behavior."""
     def fail_get_llm(*args, **kwargs):
+        """Supports regression tests for test graph builder."""
         raise RuntimeError("offline test")
 
     monkeypatch.setattr(orchestrator_module, "get_llm", fail_get_llm)

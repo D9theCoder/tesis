@@ -122,7 +122,21 @@ def _attempt_exploit(
     return score, tried, confirmed, events
 
 def sqli_time_blind_agent(state: ExploitationState) -> dict[str, Any]:
-    """Run PROBE -> EXPLOIT -> CHAIN CHECK for sqli_time_blind."""
+    """Execute the SQL injection time-blind static method agent.
+
+    Reads validated candidate queues, target configuration, prior attempts, and
+    timing observations. The agent establishes whether response delay is
+    measurable, sends time-delay payloads through HTTP, confirms
+    `sqli_time_blind_confirmed` when timing evidence is sufficient, and applies
+    shared chain scoring after confirmation.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update for observations, tried payloads, scores,
+        confirmed vulnerabilities, achieved outcomes, and telemetry events.
+    """
     target_url = state.get("target_url", "")
     security_level = normalize_security_level(state.get("security_level"))
 

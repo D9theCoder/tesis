@@ -50,6 +50,7 @@ def _parse_chain_candidates(chain_history: list[dict], current_chain: list[str])
 
 
 def _infer_longest_chain(chain_history: list[dict], current_chain: list[str]) -> str | None:
+    """Infers longest observed chain length from chain history entries."""
     candidates = _parse_chain_candidates(chain_history, current_chain)
     if not candidates:
         return None
@@ -58,6 +59,14 @@ def _infer_longest_chain(chain_history: list[dict], current_chain: list[str]) ->
 
 
 def build_score_report(state: dict) -> ScorerReport:
+    """Builds aggregate scoring metrics from the final exploitation state.
+
+    Args:
+        state: Final or intermediate shared LangGraph state.
+
+    Returns:
+        Dictionary containing method, payload, guardrail, adaptation, and surface
+        metrics for reporting."""
     aggregate_scores = state.get("scores", {})
     normalized = normalize_method_scores(aggregate_scores)
     attempted = state.get("attempted_agents", [])
@@ -131,6 +140,21 @@ def build_score_report(state: dict) -> ScorerReport:
 
 
 def scorer(state: dict) -> dict:
+    """Executes the scoring stage of the LangGraph workflow.
+
+    Reads:
+        Method scores, exploitation scores, chain scores, payload validation
+        results, tried payloads, guardrail events, and chain history.
+
+    Writes:
+        Final task result, score report fields, and telemetry-compatible summary
+        values.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update containing final scoring output."""
     report = build_score_report(state)
     normalized_scores = {
         agent_id: result.score

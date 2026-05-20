@@ -52,6 +52,7 @@ def _signals_for_path(path: str) -> list[str]:
 def _probe_preconditions(
     session: DVWASession, payloads: list[str], already_tried: set[str]
 ) -> tuple[bool, list[str], dict[str, bool], list[dict]]:
+    """Supports probe preconditions behavior for this module."""
     observations: dict[str, bool] = {}
     tried: list[str] = []
     events: list[dict] = []
@@ -117,6 +118,21 @@ def _attempt_exploit(
     return score, tried, confirmed, events
 
 def ac_force_browse_agent(state: ExploitationState) -> dict[str, Any]:
+    """Execute the force-browsing static method agent.
+
+    Reads validated path candidates, discovered endpoints, target/session
+    configuration, observations, and tried payload memory. The agent probes for
+    visible restricted endpoints, attempts direct path access over HTTP,
+    confirms `ac_force_browse_confirmed` when restricted content is reachable,
+    and applies shared chain scoring after confirmation.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update for observations, tried payloads, scores,
+        confirmed vulnerabilities, achieved outcomes, and telemetry events.
+    """
     target_url = state.get("target_url", "")
     security_level = normalize_security_level(state.get("security_level"))
 

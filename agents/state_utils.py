@@ -24,6 +24,10 @@ _MODULE_ENDPOINT_FRAGMENTS: dict[str, str] = {
 
 
 def normalize_security_level(level: str | None) -> str:
+    """Handles normalize security level behavior for this module.
+
+    Args:
+        level: Value used by this function."""
     normalized = (level or "low").strip().lower()
     return normalized if normalized in {"low", "medium", "high"} else "low"
 
@@ -81,6 +85,12 @@ def prepare_agent_session(
 
 
 def merge_scores(state: dict[str, Any], module_name: str, new_score: int) -> dict[str, int]:
+    """Handles merge scores behavior for this module.
+
+    Args:
+        state: Value used by this function.
+        module_name: Value used by this function.
+        new_score: Value used by this function."""
     scores = dict(state.get("scores", {}))
     scores[module_name] = max(int(scores.get(module_name, 0)), int(new_score))
     return scores
@@ -92,6 +102,13 @@ def merge_score_map(
     module_name: str,
     new_score: int,
 ) -> dict[str, int]:
+    """Handles merge score map behavior for this module.
+
+    Args:
+        state: Value used by this function.
+        map_name: Value used by this function.
+        module_name: Value used by this function.
+        new_score: Value used by this function."""
     scores = dict(state.get(map_name, {}))
     scores[module_name] = max(int(scores.get(module_name, 0)), int(new_score))
     return scores
@@ -102,6 +119,12 @@ def merge_tried_payloads(
     module_name: str,
     payloads: list[str],
 ) -> dict[str, list[str]]:
+    """Handles merge tried payloads behavior for this module.
+
+    Args:
+        state: Value used by this function.
+        module_name: Value used by this function.
+        payloads: Value used by this function."""
     tried_payloads = dict(state.get("tried_payloads", {}))
     module_payloads = list(tried_payloads.get(module_name, []))
     for payload in payloads:
@@ -112,6 +135,12 @@ def merge_tried_payloads(
 
 
 def module_endpoint(state: dict[str, Any], module_name: str, fallback_path: str) -> str:
+    """Handles module endpoint behavior for this module.
+
+    Args:
+        state: Value used by this function.
+        module_name: Value used by this function.
+        fallback_path: Value used by this function."""
     endpoints = state.get("endpoints", [])
     expected_fragment = _MODULE_ENDPOINT_FRAGMENTS.get(module_name, "")
 
@@ -203,6 +232,30 @@ def make_update(
     task_result: str | None = None,
     incomplete_reason: str | None = None,
 ) -> dict[str, Any]:
+    """Build a method-agent partial state update without mutating input state.
+
+    The helper applies the 0-4 scoring rubric, deduplicates list-reducer fields,
+    records tried payloads, updates payload scores for executed candidates, and
+    emits routing/failure fields used by the chaining router.
+
+    Args:
+        state: Current shared LangGraph state.
+        module_name: Static method agent identifier.
+        score: Highest method score reached during this agent invocation.
+        tried_payloads: Payload strings attempted by this invocation.
+        confirmed_vulns: AKG node IDs confirmed by this invocation.
+        achieved_outcomes: Outcome node IDs achieved by chain checks.
+        found_credentials: Credentials recovered by brute-force agents.
+        next_agent: Routing hint for the next graph stage.
+        telemetry_events: Agent telemetry events to append.
+        failure_agents: Method IDs to mark as failed.
+        blocked_agents: Method IDs to mark as blocked.
+        task_result: Optional terminal task status.
+        incomplete_reason: Optional reason for incomplete execution.
+
+    Returns:
+        Partial `ExploitationState` update suitable for LangGraph reducers.
+    """
     update: dict[str, Any] = {
         "scores": merge_scores(state, module_name, score),
         "exploitation_scores": merge_score_map(state, "exploitation_scores", module_name, min(score, 3)),

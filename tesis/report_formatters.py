@@ -8,6 +8,10 @@ from typing import Any, Mapping
 
 
 def parse_artifact_or_matrix(path: str | Path) -> dict[str, Any]:
+    """Parses artifact or matrix into the structure expected by callers.
+
+    Args:
+        path: Value used by this function."""
     file_path = Path(path)
     payload = json.loads(file_path.read_text(encoding="utf-8"))
     if isinstance(payload, list):
@@ -28,6 +32,7 @@ def parse_artifact_or_matrix(path: str | Path) -> dict[str, Any]:
 
 
 def _extract_runs(data: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Supports extract runs behavior for this module."""
     if isinstance(data.get("runs"), list):
         return [item for item in data["runs"] if isinstance(item, dict)]
     if isinstance(data.get("artifacts"), list):
@@ -38,6 +43,7 @@ def _extract_runs(data: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def _as_table(headers: list[str], rows: list[list[str]]) -> str:
+    """Supports as table behavior for this module."""
     widths = [len(header) for header in headers]
     for row in rows:
         for idx, cell in enumerate(row):
@@ -53,6 +59,10 @@ def _as_table(headers: list[str], rows: list[list[str]]) -> str:
 
 
 def format_evasion_table(data: Mapping[str, Any]) -> str:
+    """Formats evasion table for CLI or report output.
+
+    Args:
+        data: Value used by this function."""
     runs = _extract_runs(data)
     if not runs:
         return "No run artifacts found for evasion analysis."
@@ -78,6 +88,11 @@ def format_evasion_table(data: Mapping[str, Any]) -> str:
 
 
 def format_rejection_table(data: Mapping[str, Any], *, verbose: bool = False) -> str:
+    """Formats rejection table for CLI or report output.
+
+    Args:
+        data: Value used by this function.
+        verbose: Value used by this function."""
     runs = _extract_runs(data)
     if not runs:
         return "No run artifacts found for rejection analysis."
@@ -139,6 +154,13 @@ def format_module_scores_table(
     module_filter: str | None = None,
     level_filter: str | None = None,
 ) -> str:
+    """Formats module scores table for CLI or report output.
+
+    Args:
+        data: Value used by this function.
+        show_chains: Value used by this function.
+        module_filter: Value used by this function.
+        level_filter: Value used by this function."""
     runs = _extract_runs(data)
     if level_filter:
         runs = [run for run in runs if str(run.get("config", {}).get("security_level", "")).lower() == level_filter.lower()]
@@ -204,6 +226,10 @@ def format_module_scores_table(
 
 
 def format_provider_comparison_table(matrix_data: Mapping[str, Any]) -> str:
+    """Formats provider comparison table for CLI or report output.
+
+    Args:
+        matrix_data: Value used by this function."""
     runs = _extract_runs(matrix_data)
     if not runs:
         return "No run artifacts found for matrix comparison."

@@ -1,17 +1,26 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 from agents.state_utils import prepare_agent_session
 
 
 def test_prepare_agent_session_skips_login_when_not_required():
+    """Verifies prepare agent session skips login when not required behavior."""
     class FakeSession:
+        """Groups regression tests for FakeSession behavior."""
         def __init__(self):
             self.login_calls = 0
             self.level_calls = 0
 
         def login(self):
+            """Supports regression tests for test state utils."""
             self.login_calls += 1
             return True
 
         def set_security_level(self, _level):
+            """Supports regression tests for test state utils."""
             self.level_calls += 1
 
     session = FakeSession()
@@ -24,8 +33,11 @@ def test_prepare_agent_session_skips_login_when_not_required():
 
 
 def test_prepare_agent_session_requires_login_when_requested():
+    """Verifies prepare agent session requires login when requested behavior."""
     class FakeSession:
+        """Groups regression tests for FakeSession behavior."""
         def login(self):
+            """Supports regression tests for test state utils."""
             return False
 
     ready, notes = prepare_agent_session(FakeSession(), "low", require_login=True)
@@ -39,6 +51,7 @@ from agents.state_utils import make_update
 
 
 def test_make_update_handles_failure_agents():
+    """Verifies make update handles failure agents behavior."""
     state = new_default_state()
     update = make_update(
         state=state, module_name="sqli_union", score=0,
@@ -49,6 +62,7 @@ def test_make_update_handles_failure_agents():
 
 
 def test_make_update_no_failure_agents_when_none():
+    """Verifies make update no failure agents when none behavior."""
     state = new_default_state()
     update = make_update(
         state=state, module_name="sqli_union", score=0,
@@ -58,6 +72,7 @@ def test_make_update_no_failure_agents_when_none():
 
 
 def test_make_update_deduplicates_failure_agents():
+    """Verifies make update deduplicates failure agents behavior."""
     state = new_default_state()
     state["failure_agents"] = ["sqli_union"]
     update = make_update(

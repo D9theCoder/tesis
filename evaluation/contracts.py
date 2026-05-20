@@ -9,6 +9,7 @@ from typing import Any
 
 @dataclass(frozen=True, slots=True)
 class ModuleScoreResult:
+    """Score contract for one evaluated module or vulnerability surface."""
     score: int
     label: str
     chain: str | None = None
@@ -16,6 +17,7 @@ class ModuleScoreResult:
 
 @dataclass(frozen=True, slots=True)
 class ScoreSummary:
+    """Aggregated score summary emitted by the Evaluation Layer."""
     llm_provider: str
     security_level: str
     total_modules_tested: int
@@ -56,10 +58,12 @@ class ScoreSummary:
 
 @dataclass(frozen=True, slots=True)
 class ScorerReport:
+    """Structured report containing per-run evaluation scores and metadata."""
     module_scores: dict[str, ModuleScoreResult]
     summary: ScoreSummary
 
     def to_dict(self) -> dict[str, Any]:
+        """Handles to dict behavior for this module."""
         return {
             "module_scores": {
                 module: dataclasses.asdict(result)
@@ -71,6 +75,7 @@ class ScorerReport:
 
 @dataclass(frozen=True, slots=True)
 class RunArtifact:
+    """Serializable artifact produced by one framework run."""
     schema_version: str
     run_id: str
     status: str
@@ -83,6 +88,7 @@ class RunArtifact:
 
 @dataclass(frozen=True, slots=True)
 class AggregateReport:
+    """Aggregate report across multiple framework runs or model configurations."""
     schema_version: str
     matrix: dict[str, Any]
     totals: dict[str, Any]

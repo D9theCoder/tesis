@@ -1,3 +1,8 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 import pytest
 
 from core.chaining_coordinator import (
@@ -8,18 +13,21 @@ from core.chaining_coordinator import (
 
 
 def test_find_next_unvisited_basic():
+    """Verifies find next unvisited basic behavior."""
     assert _find_next_unvisited(["a", "b", "c"], ["a"], []) == "b"
     assert _find_next_unvisited(["a", "b"], ["a", "b"], []) is None
     assert _find_next_unvisited(["a", "b"], [], ["a"]) == "b"
 
 
 def test_critical_outcome_achieved():
+    """Verifies critical outcome achieved behavior."""
     assert critical_outcome_achieved({"achieved_outcomes": ["admin_session_obtained"], "confirmed_vulns": []})
     assert critical_outcome_achieved({"achieved_outcomes": [], "confirmed_vulns": ["admin_session_obtained"]})
     assert not critical_outcome_achieved({"achieved_outcomes": [], "confirmed_vulns": ["sqli_union_confirmed"]})
 
 
 def test_route_after_agent_budget_exhausted():
+    """Verifies route after agent budget exhausted behavior."""
     state = {
         "confirmed_vulns": [],
         "achieved_outcomes": [],
@@ -35,6 +43,7 @@ def test_route_after_agent_budget_exhausted():
 
 
 def test_route_after_agent_fallback_orchestrator():
+    """Verifies route after agent fallback orchestrator behavior."""
     state = {
         "confirmed_vulns": ["sqli_union_confirmed"],
         "achieved_outcomes": [],
@@ -52,6 +61,7 @@ def test_route_after_agent_fallback_orchestrator():
 
 def test_route_after_agent_chain_ready():
     # brute_force_confirmed -> ac_idor chain
+    """Verifies route after agent chain ready behavior."""
     state = {
         "confirmed_vulns": ["bf_dictionary_confirmed", "brute_force_confirmed"],
         "achieved_outcomes": [],
@@ -70,6 +80,7 @@ def test_route_after_agent_chain_ready():
 
 
 def test_route_after_agent_all_methods_exhausted():
+    """Verifies route after agent all methods exhausted behavior."""
     state = {
         "confirmed_vulns": [],
         "achieved_outcomes": [],
@@ -107,6 +118,7 @@ def test_chain_preconditions_use_confirmed_vulns_only():
 
 
 def test_achieved_outcomes_alone_cannot_trigger_chain():
+    """Verifies achieved outcomes alone cannot trigger chain behavior."""
     state = {
         "confirmed_vulns": [],
         "achieved_outcomes": ["brute_force_confirmed", "credentials_extracted"],

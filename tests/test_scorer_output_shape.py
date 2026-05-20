@@ -1,8 +1,14 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 from core.scorer import scorer
 from core.state import new_default_state, SURFACES
 
 
 def test_scorer_returns_nested_surface_scores():
+    """Verifies scorer returns nested surface scores behavior."""
     state = new_default_state()
     state["scores"] = {"sqli_union": 3}
     update = scorer(state)
@@ -18,6 +24,7 @@ def test_scorer_returns_nested_surface_scores():
 
 
 def test_scorer_returns_summary():
+    """Verifies scorer returns summary behavior."""
     state = new_default_state()
     update = scorer(state)
     assert "summary" in update
@@ -42,12 +49,14 @@ def test_scorer_returns_summary():
 
 
 def test_scorer_no_method_quality_metrics_key():
+    """Verifies scorer no method quality metrics key behavior."""
     state = new_default_state()
     update = scorer(state)
     assert "method_quality_metrics" not in update
 
 
 def test_scorer_nested_surface_scores_correct_values():
+    """Verifies scorer nested surface scores correct values behavior."""
     state = new_default_state()
     state["scores"] = {"sqli_union": 3, "sqli_error": 1}
     state["attempted_agents"] = ["sqli_union", "sqli_error"]

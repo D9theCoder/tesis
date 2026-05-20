@@ -1,3 +1,8 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 import json
 from pathlib import Path
 
@@ -23,12 +28,14 @@ def _config(*, matrix: bool = False) -> EngagementConfig:
 
 
 def test_run_single_invokes_runner_with_expected_args(monkeypatch):
+    """Verifies run single invokes runner with expected args behavior."""
     called = {}
 
     monkeypatch.setattr(cli, "load_and_resolve_config", lambda **kwargs: _config(matrix=False))
     monkeypatch.setattr(cli, "_preflight_target_reachable", lambda *_args, **_kwargs: True)
 
     def fake_single(**kwargs):
+        """Supports regression tests for test cli."""
         called.update(kwargs)
         return {
             "run_id": "gemini-low-0",
@@ -52,12 +59,14 @@ def test_run_single_invokes_runner_with_expected_args(monkeypatch):
 
 
 def test_run_matrix_invokes_matrix_runner_with_expected_args(monkeypatch):
+    """Verifies run matrix invokes matrix runner with expected args behavior."""
     called = {}
 
     monkeypatch.setattr(cli, "load_and_resolve_config", lambda **kwargs: _config(matrix=True))
     monkeypatch.setattr(cli, "_preflight_target_reachable", lambda *_args, **_kwargs: True)
 
     def fake_matrix(**kwargs):
+        """Supports regression tests for test cli."""
         called.update(kwargs)
         return ([{
             "run_id": "gemini-low-0",
@@ -80,6 +89,7 @@ def test_run_matrix_invokes_matrix_runner_with_expected_args(monkeypatch):
 
 
 def test_dry_run_skips_runtime_invocation(monkeypatch):
+    """Verifies dry run skips runtime invocation behavior."""
     monkeypatch.setattr(cli, "load_and_resolve_config", lambda **kwargs: _config(matrix=False))
     monkeypatch.setattr(cli, "run_single_engagement", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("should not run")))
 
@@ -89,6 +99,7 @@ def test_dry_run_skips_runtime_invocation(monkeypatch):
 
 
 def test_info_subcommand_outputs_schema_modules_providers(capsys):
+    """Verifies info subcommand outputs schema modules providers behavior."""
     exit_code = cli.main(["info"])
 
     captured = capsys.readouterr().out
@@ -101,7 +112,9 @@ def test_info_subcommand_outputs_schema_modules_providers(capsys):
 
 
 def test_exit_code_2_for_config_error(monkeypatch):
+    """Verifies exit code 2 for config error behavior."""
     def raise_config_error(**_kwargs):
+        """Supports regression tests for test cli."""
         raise ConfigError("bad config")
 
     monkeypatch.setattr(cli, "load_and_resolve_config", raise_config_error)
@@ -111,10 +124,12 @@ def test_exit_code_2_for_config_error(monkeypatch):
 
 
 def test_exit_code_1_for_runtime_error(monkeypatch):
+    """Verifies exit code 1 for runtime error behavior."""
     monkeypatch.setattr(cli, "load_and_resolve_config", lambda **kwargs: _config(matrix=False))
     monkeypatch.setattr(cli, "_preflight_target_reachable", lambda *_args, **_kwargs: True)
 
     def raise_runtime_error(**_kwargs):
+        """Supports regression tests for test cli."""
         raise RuntimeError("boom")
 
     monkeypatch.setattr(cli, "run_single_engagement", raise_runtime_error)
@@ -124,6 +139,7 @@ def test_exit_code_1_for_runtime_error(monkeypatch):
 
 
 def test_exit_code_0_for_success(monkeypatch):
+    """Verifies exit code 0 for success behavior."""
     monkeypatch.setattr(cli, "load_and_resolve_config", lambda **kwargs: _config(matrix=False))
     monkeypatch.setattr(cli, "_preflight_target_reachable", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
@@ -146,6 +162,7 @@ def test_exit_code_0_for_success(monkeypatch):
 
 
 def test_exit_code_3_for_target_unreachable(monkeypatch):
+    """Verifies exit code 3 for target unreachable behavior."""
     monkeypatch.setattr(cli, "load_and_resolve_config", lambda **kwargs: _config(matrix=False))
     monkeypatch.setattr(cli, "_preflight_target_reachable", lambda *_args, **_kwargs: False)
 
@@ -154,6 +171,7 @@ def test_exit_code_3_for_target_unreachable(monkeypatch):
 
 
 def test_config_default_output_masks_api_keys(tmp_path, capsys):
+    """Verifies config default output masks api keys behavior."""
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
         """
@@ -174,6 +192,7 @@ models:
 
 
 def test_report_invalid_json_returns_config_error(tmp_path):
+    """Verifies report invalid json returns config error behavior."""
     artifact = tmp_path / "bad.json"
     artifact.write_text("not-json", encoding="utf-8")
 

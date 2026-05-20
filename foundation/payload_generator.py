@@ -36,6 +36,7 @@ def _extract_text(raw_content: Any) -> str:
 
 
 def _parse_candidates(raw_text: str, method: str) -> list[dict]:
+    """Supports parse candidates behavior for this module."""
     try:
         payload = json.loads(raw_text)
     except json.JSONDecodeError:
@@ -94,6 +95,7 @@ def generate_llm_variants(
     profile: dict[str, Any],
     budget: int,
 ) -> tuple[list[dict], dict[str, Any] | None, list[dict]]:
+    """Generates constrained LLM payload variants from AKG-linked seed candidates."""
     prompt = build_payload_generation_prompt(
         method=method,
         security_level=str(state.get("security_level", "low")),
@@ -130,6 +132,7 @@ def generate_llm_variants(
 
 
 def build_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
+    """Builds static and optional generated payload candidates for one method."""
     method = str(state.get("selected_method") or state.get("next_agent") or "")
     if not method:
         return {"payload_candidates": {}}
@@ -178,4 +181,22 @@ def build_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def payload_candidate_builder_node(state: dict[str, Any]) -> dict[str, Any]:
+    """Executes payload candidate construction in the LangGraph workflow.
+
+    Reads:
+        Selected method, payload mode, LLM provider, model config, AKG payload
+        profile, and candidate budget fields.
+
+    Writes:
+        Payload candidates, generated payloads, prompt artifacts, provenance, and
+        guardrail activation records.
+
+    Side Effects:
+        May call an LLM provider when payload mode allows generated candidates.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update with candidate and provenance fields."""
     return build_payload_candidates(state)

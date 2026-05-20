@@ -96,7 +96,22 @@ def _attempt_exploit(
     return score, tried, confirmed, events
 
 def sqli_union_agent(state: ExploitationState) -> dict[str, Any]:
-    """Run PROBE -> EXPLOIT -> CHAIN CHECK for sqli_union."""
+    """Execute the SQL injection UNION static method agent.
+
+    Reads validated probe and exploit payload candidates, target/session
+    configuration, previously tried payloads, and current observations from
+    `ExploitationState`. The agent performs DVWA HTTP requests, records tried
+    payloads, returns monotonic observations, updates method and payload scores,
+    confirms `sqli_union_confirmed` on evidence, and runs the shared chain
+    check when exploitation succeeds.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update for scores, observations, tried payloads,
+        confirmed vulnerabilities, achieved outcomes, and telemetry events.
+    """
     target_url = state.get("target_url", "")
     security_level = normalize_security_level(state.get("security_level"))
 

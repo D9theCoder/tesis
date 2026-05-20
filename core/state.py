@@ -75,6 +75,12 @@ def _merge_nested_dicts(a: dict[str, dict], b: dict[str, dict]) -> dict[str, dic
 
 class ExploitationState(TypedDict):
     # Target context
+    """Shared state passed across the LangGraph execution workflow.
+
+    The state stores target configuration, reconnaissance results, selected attack
+    method, payload candidates, execution evidence, scoring fields, guardrail
+    events, and chaining history. Nodes exchange information by reading current
+    fields and returning partial updates."""
     target_url: str
     security_level: str  # "low" | "medium" | "high"
     llm_provider: str
@@ -217,6 +223,10 @@ DEFAULT_STATE: dict[str, Any] = _default_state_template()
 
 
 def new_default_state() -> dict[str, Any]:
+    """Builds a fresh default `ExploitationState` dictionary.
+
+    Returns:
+        Independent default state values for one LangGraph run."""
     return deepcopy(_default_state_template())
 
 

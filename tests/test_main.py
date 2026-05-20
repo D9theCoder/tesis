@@ -1,8 +1,15 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 import main as main_module
 
 
 def test_main_returns_success_payloads(monkeypatch):
+    """Verifies main returns success payloads behavior."""
     def fake_invoke_sample_query(provider_name: str):
+        """Supports regression tests for test main."""
         return {
             "provider": provider_name,
             "model": f"{provider_name}-model",
@@ -21,7 +28,9 @@ def test_main_returns_success_payloads(monkeypatch):
 
 
 def test_main_returns_error_payloads(monkeypatch):
+    """Verifies main returns error payloads behavior."""
     def fake_invoke_sample_query(provider_name: str):
+        """Supports regression tests for test main."""
         if provider_name == "gemini":
             raise RuntimeError("provider unavailable")
         return {

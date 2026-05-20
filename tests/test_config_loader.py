@@ -1,3 +1,8 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 from pathlib import Path
 
 import pytest
@@ -10,20 +15,24 @@ def _write_yaml(path: Path, content: str) -> None:
 
 
 def test_default_model_name_openai_compatible():
+    """Verifies default model name openai compatible behavior."""
     assert _default_model_name("openai_compatible") == ""
 
 
 def test_default_api_key_openai_compatible(monkeypatch):
+    """Verifies default api key openai compatible behavior."""
     monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "test-compatible-key")
     assert _default_api_key("openai_compatible") == "test-compatible-key"
 
 
 def test_default_api_key_openai_compatible_fallback_empty(monkeypatch):
+    """Verifies default api key openai compatible fallback empty behavior."""
     monkeypatch.delenv("OPENAI_COMPATIBLE_API_KEY", raising=False)
     assert _default_api_key("openai_compatible") == ""
 
 
 def test_yaml_roundtrip_to_dataclass(tmp_path):
+    """Verifies yaml roundtrip to dataclass behavior."""
     config_path = tmp_path / "config.yaml"
     _write_yaml(
         config_path,
@@ -46,6 +55,7 @@ security_levels: [low, medium, high]
 
 
 def test_env_override_target_url(tmp_path, monkeypatch):
+    """Verifies env override target url behavior."""
     config_path = tmp_path / "config.yaml"
     _write_yaml(
         config_path,
@@ -63,6 +73,7 @@ default_security_level: low
 
 
 def test_cli_override_has_highest_priority(tmp_path, monkeypatch):
+    """Verifies cli override has highest priority behavior."""
     config_path = tmp_path / "config.yaml"
     _write_yaml(
         config_path,
@@ -83,6 +94,7 @@ default_security_level: low
 
 
 def test_invalid_provider_raises_validation_error(tmp_path):
+    """Verifies invalid provider raises validation error behavior."""
     config_path = tmp_path / "config.yaml"
     _write_yaml(
         config_path,
@@ -98,6 +110,7 @@ level: low
 
 
 def test_invalid_level_raises_validation_error(tmp_path):
+    """Verifies invalid level raises validation error behavior."""
     config_path = tmp_path / "config.yaml"
     _write_yaml(
         config_path,
@@ -113,6 +126,7 @@ level: impossible
 
 
 def test_env_reference_resolution_for_model_api_key(tmp_path, monkeypatch):
+    """Verifies env reference resolution for model api key behavior."""
     config_path = tmp_path / "config.yaml"
     _write_yaml(
         config_path,
@@ -134,6 +148,7 @@ models:
 
 
 def test_payload_mode_and_candidate_budget_from_yaml(tmp_path):
+    """Verifies payload mode and candidate budget from yaml behavior."""
     config_path = tmp_path / "config.yaml"
     _write_yaml(
         config_path,
@@ -153,6 +168,7 @@ candidate_budget: 7
 
 
 def test_openai_compatible_model_env_override(tmp_path, monkeypatch):
+    """Verifies openai compatible model env override behavior."""
     config_path = tmp_path / "config.yaml"
     _write_yaml(
         config_path,
@@ -173,6 +189,7 @@ models:
 
 
 def test_cli_omitted_bool_flags_do_not_override_yaml_true(tmp_path):
+    """Verifies cli omitted bool flags do not override yaml true behavior."""
     config_path = tmp_path / "config.yaml"
     _write_yaml(
         config_path,
@@ -195,6 +212,7 @@ diagnose: true
 
 
 def test_string_false_flags_in_yaml_are_parsed_as_false(tmp_path):
+    """Verifies string false flags in yaml are parsed as false behavior."""
     config_path = tmp_path / "config.yaml"
     _write_yaml(
         config_path,
@@ -216,6 +234,7 @@ diagnose: "false"
 
 
 def test_string_true_flags_in_yaml_are_parsed_as_true(tmp_path):
+    """Verifies string true flags in yaml are parsed as true behavior."""
     config_path = tmp_path / "config.yaml"
     _write_yaml(
         config_path,

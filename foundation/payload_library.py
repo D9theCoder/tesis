@@ -231,6 +231,10 @@ class PayloadLibrary:
 
 
 def target_param_for_method(method: str) -> str:
+    """Handles target param for method behavior for this module.
+
+    Args:
+        method: Value used by this function."""
     if method.startswith("sqli_"):
         return "id"
     if method in {"ac_idor", "ac_vertical_escalation"}:
@@ -243,6 +247,10 @@ def target_param_for_method(method: str) -> str:
 
 
 def expected_signal_for_method(method: str) -> str:
+    """Handles expected signal for method behavior for this module.
+
+    Args:
+        method: Value used by this function."""
     signals = {
         "sqli_union": "data_extraction_evidence",
         "sqli_error": "database_error_leakage",

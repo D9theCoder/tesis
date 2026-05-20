@@ -117,7 +117,21 @@ def _attempt_exploit(
     return score, tried, confirmed, events
 
 def sqli_boolean_blind_agent(state: ExploitationState) -> dict[str, Any]:
-    """Run PROBE -> EXPLOIT -> CHAIN CHECK for sqli_boolean_blind."""
+    """Execute the SQL injection boolean-blind static method agent.
+
+    Reads validated candidate queues, target configuration, prior attempts, and
+    response-difference observations. The agent compares true and false payload
+    responses over HTTP, records evidence for detectable response deltas,
+    confirms `sqli_boolean_blind_confirmed` when exploitation evidence is
+    observed, and performs shared chain scoring after confirmation.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update for observations, tried payloads, scores,
+        confirmed vulnerabilities, achieved outcomes, and telemetry events.
+    """
     target_url = state.get("target_url", "")
     security_level = normalize_security_level(state.get("security_level"))
 

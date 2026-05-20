@@ -1,8 +1,15 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 from evaluation.multi_llm_runner import run_provider_matrix
 
 
 def test_run_provider_matrix_skips_unsupported_provider(monkeypatch):
+    """Verifies run provider matrix skips unsupported provider behavior."""
     def fail_engagement(**kwargs):
+        """Supports regression tests for test evaluation multi llm runner."""
         raise RuntimeError("should not be called for unsupported provider")
 
     monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", fail_engagement)
@@ -21,6 +28,7 @@ def test_run_provider_matrix_skips_unsupported_provider(monkeypatch):
 
 
 def test_run_provider_matrix_deterministic_ordering(monkeypatch):
+    """Verifies run provider matrix deterministic ordering behavior."""
     call_order = []
 
     def track_engagement(
@@ -43,6 +51,7 @@ def test_run_provider_matrix_deterministic_ordering(monkeypatch):
         live_display=False,
         model_config=None,
     ):
+        """Supports regression tests for test evaluation multi llm runner."""
         call_order.append((llm_provider, surface, security_level, repeat_index, evasion_enabled, evasion_mode))
         return {
             "schema_version": "stage8.v1",
@@ -95,7 +104,9 @@ def test_run_provider_matrix_deterministic_ordering(monkeypatch):
 
 
 def test_run_provider_matrix_include_aggregate(monkeypatch):
+    """Verifies run provider matrix include aggregate behavior."""
     def mock_engagement(**kwargs):
+        """Supports regression tests for test evaluation multi llm runner."""
         return {
             "schema_version": "stage8.v1",
             "run_id": "gemini-sqli-low-0",
@@ -136,7 +147,9 @@ def test_run_provider_matrix_include_aggregate(monkeypatch):
 
 
 def test_run_provider_matrix_zero_success_avg_score_is_zero(monkeypatch):
+    """Verifies run provider matrix zero success avg score is zero behavior."""
     def failed_engagement(**kwargs):
+        """Supports regression tests for test evaluation multi llm runner."""
         return {
             "schema_version": "stage8.v1",
             "run_id": "gemini-sqli-low-0",
@@ -174,9 +187,11 @@ def test_run_provider_matrix_zero_success_avg_score_is_zero(monkeypatch):
 
 
 def test_run_provider_matrix_evasion_forwarding(monkeypatch):
+    """Verifies run provider matrix evasion forwarding behavior."""
     captured = []
 
     def mock_engagement(*, evasion_enabled, evasion_mode, **kwargs):
+        """Supports regression tests for test evaluation multi llm runner."""
         captured.append((evasion_enabled, evasion_mode))
         return {
             "schema_version": "stage8.v1",

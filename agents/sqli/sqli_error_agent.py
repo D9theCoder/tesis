@@ -108,7 +108,21 @@ def _attempt_exploit(
     return score, tried, confirmed, events
 
 def sqli_error_agent(state: ExploitationState) -> dict[str, Any]:
-    """Run PROBE -> EXPLOIT -> CHAIN CHECK for sqli_error."""
+    """Execute the SQL injection error-based static method agent.
+
+    Reads validated candidates, DVWA target/session configuration, existing
+    observations, and tried payload memory. The agent probes for database error
+    disclosure, attempts error-leak payloads through HTTP, records telemetry,
+    confirms `sqli_error_confirmed` when evidence is present, and delegates
+    chain scoring to shared state utilities.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update for observations, tried payloads, scores,
+        confirmed vulnerabilities, achieved outcomes, and telemetry events.
+    """
     target_url = state.get("target_url", "")
     security_level = normalize_security_level(state.get("security_level"))
 

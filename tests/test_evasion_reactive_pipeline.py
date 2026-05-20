@@ -1,8 +1,14 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 import pytest
 from unittest.mock import MagicMock, patch
 
 
 def test_clean_response_skips_evasion():
+    """Verifies clean response skips evasion behavior."""
     from agents.orchestrator import orchestrator
     state = {
         "target_url": "http://localhost/dvwa",

@@ -1,3 +1,4 @@
+"""Package marker for the core components of the DVWA framework."""
 from core.state import (
     ExploitationState,
     DEFAULT_STATE,

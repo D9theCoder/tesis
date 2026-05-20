@@ -130,7 +130,21 @@ def _attempt_exploit(
     return score, tried, confirmed, events
 
 def ac_idor_agent(state: ExploitationState) -> dict[str, Any]:
-    """Run PROBE -> EXPLOIT -> CHAIN CHECK for ac_idor."""
+    """Execute the IDOR static method agent for access-control testing.
+
+    Reads validated object-id candidates, discovered endpoints, session
+    configuration, existing observations, and tried payload memory. The agent
+    probes object-id enumerability, attempts unauthorized object access over
+    HTTP, confirms `ac_idor_confirmed` on access evidence, and runs shared
+    chain scoring when the method succeeds.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update for observations, tried payloads, scores,
+        confirmed vulnerabilities, achieved outcomes, and telemetry events.
+    """
     target_url = state.get("target_url", "")
     security_level = normalize_security_level(state.get("security_level"))
 

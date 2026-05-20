@@ -49,6 +49,13 @@ RUNTIME_AGENT_HANDLERS = {
 
 
 def route_from_orchestrator(state: ExploitationState) -> str:
+    """Routes from orchestrator output to payload preparation or graph termination.
+
+    Args:
+        state: Current shared LangGraph state after method selection.
+
+    Returns:
+        Name of the next graph node or `END` when execution should stop."""
     next_agent = state.get("next_agent", "scorer")
     if next_agent in {"payload_candidate_builder", "scorer"}:
         return next_agent
@@ -59,6 +66,13 @@ def route_from_orchestrator(state: ExploitationState) -> str:
 
 
 def route_from_payload_validator(state: ExploitationState) -> str:
+    """Routes validated payload output to the selected method agent or chaining router.
+
+    Args:
+        state: Current shared LangGraph state after candidate validation.
+
+    Returns:
+        Method node name or `chaining_router` when no method can run."""
     selected = state.get("selected_method") or state.get("next_agent")
     if selected in RUNTIME_AGENT_NODE_NAMES:
         candidates = state.get("payload_candidates", {}).get(selected, [])
@@ -68,6 +82,13 @@ def route_from_payload_validator(state: ExploitationState) -> str:
 
 
 def route_from_chaining_router(state: ExploitationState) -> str:
+    """Routes chaining-router decisions to orchestrator, candidate building, scorer, or end.
+
+    Args:
+        state: Current shared LangGraph state after chain evaluation.
+
+    Returns:
+        Next graph node name or `END`."""
     next_agent = state.get("next_agent", "scorer")
     if next_agent in RUNTIME_AGENT_NODE_NAMES:
         return "payload_candidate_builder"
@@ -80,6 +101,15 @@ def route_from_chaining_router(state: ExploitationState) -> str:
 # do not alter graph topology. Future per-surface or per-provider customization
 # may use these parameters.
 def build_framework(llm_provider: str = "gemini", surface: str = "sqli"):
+    """Builds the LangGraph execution graph for the DVWA framework.
+
+    Args:
+        llm_provider: Provider name accepted for API compatibility.
+        surface: Initial surface name accepted for API compatibility.
+
+    Returns:
+        Compiled graph with recon, orchestration, payload, method-agent, chaining,
+        and scoring nodes wired according to the runtime topology."""
     # Lazy import to avoid circular dependency: scorer imports from core.state
     # which is imported by graph_builder.
     from core.scorer import scorer

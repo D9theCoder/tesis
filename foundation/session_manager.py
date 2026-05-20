@@ -50,6 +50,7 @@ class DVWASession:
     """
 
     def __init__(self, base_url: str = "http://localhost/dvwa") -> None:
+        """Supports init behavior for this module."""
         self.http = HTTPClient(base_url)
         self._logged_in = False
         self._security_level: str = "low"

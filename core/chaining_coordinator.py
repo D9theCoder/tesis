@@ -27,6 +27,7 @@ HIGH_IMPACT_OUTCOMES = set(AttackKnowledgeGraph.HIGH_IMPACT_OUTCOMES)
 
 
 def critical_outcome_achieved(state: dict) -> bool:
+    """Checks whether achieved outcomes contain a high-impact terminal condition."""
     achieved = set(state.get("achieved_outcomes", []))
     confirmed = set(state.get("confirmed_vulns", []))
     return bool((achieved | confirmed) & HIGH_IMPACT_OUTCOMES)
@@ -56,11 +57,24 @@ def _derive_surface_confirmed(confirmed: set[str]) -> set[str]:
 
 
 def route_after_agent(state: dict) -> str:
+    """Evaluates the current state and returns the next graph route after an agent."""
     next_agent, _ = evaluate_chain_route(state)
     return next_agent
 
 
 def evaluate_chain_route(state: dict) -> tuple[str, dict]:
+    """Evaluates chain continuation, fallback, stop, and scoring decisions.
+
+    Reads:
+        Confirmed vulnerabilities, achieved outcomes, attempted agents, blocked
+        agents, failure agents, iteration counters, selected method, and surface.
+
+    Writes:
+        Routing hints, selected method changes, task result, incomplete reason, and
+        telemetry events as partial state updates.
+
+    Returns:
+        Partial state update consumed by the chaining router node."""
     iteration_count = state.get("iteration_count", 0)
     max_iterations = state.get("max_iterations", 30)
     confirmed = set(state.get("confirmed_vulns", []))
@@ -165,6 +179,25 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
 
 
 def chaining_router_node(state: dict) -> dict:
+    """Executes the chaining-router stage of the LangGraph workflow.
+
+    Reads:
+        Current method results, chain history, confirmed vulnerabilities, outcomes,
+        iteration count, and method-attempt tracking fields.
+
+    Writes:
+        Next-agent routing hints, selected method updates, completion status,
+        incomplete reason, and telemetry events.
+
+    Routing:
+        The graph maps `next_agent` to orchestrator, payload candidate builder,
+        scorer, or termination.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update merged into the LangGraph state."""
     next_agent, event = evaluate_chain_route(state)
     updates: dict = {"next_agent": next_agent, "telemetry_events": [event]}
     if next_agent in {method for methods in METHODS_BY_SURFACE.values() for method in methods}:

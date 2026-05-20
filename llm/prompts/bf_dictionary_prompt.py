@@ -1,7 +1,15 @@
+"""Multi-LLM Layer utilities and prompts for framework decisions.
+
+This module prepares provider integrations, guardrail handling, evasion retry
+logic, or prompt text used by the LangGraph Execution Flow."""
 from __future__ import annotations
 
 
 def build_bf_dictionary_prompt(state: dict) -> str:
+    """Builds bf dictionary prompt for framework execution.
+
+    Args:
+        state: Value used by this function."""
     target_url = state.get("target_url", "")
     security_level = state.get("security_level", "low")
     endpoints = state.get("endpoints", [])

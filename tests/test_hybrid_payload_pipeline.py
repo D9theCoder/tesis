@@ -1,3 +1,8 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.state import ALL_METHOD_AGENTS, new_default_state
 from foundation.payload_generator import build_payload_candidates
@@ -8,6 +13,7 @@ from agents.state_utils import payload_score_updates
 
 
 def test_all_methods_have_payload_profiles():
+    """Verifies all methods have payload profiles behavior."""
     kg = AttackKnowledgeGraph()
     for method in ALL_METHOD_AGENTS:
         profile = kg.get_payload_profile(method)
@@ -20,6 +26,7 @@ def test_all_methods_have_payload_profiles():
 
 
 def test_payload_library_loads_seed_candidates():
+    """Verifies payload library loads seed candidates behavior."""
     seeds = PayloadLibrary().load_seed_candidates("sqli_union", "low")
     assert seeds
     assert seeds[0]["source"] == "static_seed"
@@ -29,6 +36,7 @@ def test_payload_library_loads_seed_candidates():
 
 
 def test_static_only_candidate_builder_does_not_generate_llm_candidates():
+    """Verifies static only candidate builder does not generate llm candidates behavior."""
     state = {
         **new_default_state(),
         "selected_method": "sqli_union",
@@ -43,6 +51,7 @@ def test_static_only_candidate_builder_does_not_generate_llm_candidates():
 
 
 def test_hybrid_candidate_builder_marks_generated_candidates_as_exploit_stage():
+    """Verifies hybrid candidate builder marks generated candidates as exploit stage behavior."""
     state = {
         **new_default_state(),
         "selected_method": "sqli_union",
@@ -56,6 +65,7 @@ def test_hybrid_candidate_builder_marks_generated_candidates_as_exploit_stage():
 
 
 def test_validator_rejects_wrong_target_param_and_keeps_valid_seed():
+    """Verifies validator rejects wrong target param and keeps valid seed behavior."""
     state = {
         **new_default_state(),
         "selected_method": "sqli_union",
@@ -82,6 +92,7 @@ def test_validator_rejects_wrong_target_param_and_keeps_valid_seed():
 
 
 def test_validator_rejects_generated_candidates_without_seed_provenance():
+    """Verifies validator rejects generated candidates without seed provenance behavior."""
     state = {
         **new_default_state(),
         "selected_method": "sqli_union",
@@ -107,6 +118,7 @@ def test_validator_rejects_generated_candidates_without_seed_provenance():
 
 
 def test_validator_rejects_duplicate_payload_strings():
+    """Verifies validator rejects duplicate payload strings behavior."""
     seed = PayloadLibrary().load_seed_candidates("sqli_union", "low")[0]
     state = {
         **new_default_state(),
@@ -130,6 +142,7 @@ def test_validator_rejects_duplicate_payload_strings():
 
 
 def test_payload_score_updates_only_attempted_candidates():
+    """Verifies payload score updates only attempted candidates behavior."""
     state = {
         **new_default_state(),
         "tried_payloads": {"sqli_union": ["1' UNION SELECT user,password FROM users-- -"]},
@@ -152,6 +165,7 @@ def test_payload_score_updates_only_attempted_candidates():
 
 
 def test_rank_candidates_seed_first_and_budgeted():
+    """Verifies rank candidates seed first and budgeted behavior."""
     ranked = rank_candidates(
         [
             {"candidate_id": "z", "source": "llm_generated"},

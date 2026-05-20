@@ -11,6 +11,7 @@ from core.state import METHODS_BY_SURFACE, MODULE_TO_KG_NODE, ALL_METHOD_AGENTS
 
 
 class RawTransition(TypedDict, total=False):
+    """Intermediate transition record used while normalizing AKG chain metadata."""
     source: str
     target: str
     is_chain: bool
@@ -23,6 +24,7 @@ class RawTransition(TypedDict, total=False):
 
 @dataclass(frozen=True, slots=True)
 class Transition:
+    """Validated AKG transition used by chain-routing logic."""
     source: str
     target: str
     is_chain: bool
@@ -32,6 +34,11 @@ class Transition:
 
 
 class AttackKnowledgeGraph:
+    """Represents the static payload-aware Attack Knowledge Graph.
+
+    The graph encodes vulnerability surfaces, static method agents, method
+    preconditions, payload profiles, expected success signals, outcome nodes, and
+    cross-surface chain transitions used during routing."""
     HIGH_IMPACT_OUTCOMES: tuple[str, ...] = (
         "admin_session_obtained",
         "data_exfiltrated",
@@ -76,6 +83,7 @@ class AttackKnowledgeGraph:
         return [item for item in value if isinstance(item, str)]
 
     def _normalize_transition(self, raw: RawTransition) -> Transition:
+        """Converts raw AKG transition metadata into a validated transition record."""
         preconditions_raw = raw.get("preconditions", raw.get("precondition"))
         target_agent_raw = raw.get("target_agent", raw.get("agent"))
         preconditions = tuple(sorted(set(self._as_preconditions(preconditions_raw))))
@@ -175,6 +183,7 @@ class AttackKnowledgeGraph:
 
     @staticmethod
     def _surface_for_method(method: str) -> str:
+        """Returns the vulnerability surface associated with a static method node."""
         if method.startswith("sqli_"):
             return "sqli"
         if method.startswith("ac_"):
@@ -185,6 +194,7 @@ class AttackKnowledgeGraph:
 
     def _build_graph(self) -> None:
         # Nodes: surfaces, methods, confirmed methods, outcomes
+        """Constructs AKG nodes, method edges, payload profiles, and chain transitions."""
         nodes = [
             # Entry node
             "unauthenticated",
@@ -313,6 +323,7 @@ class AttackKnowledgeGraph:
             )
 
     def _validate_graph(self) -> None:
+        """Validates AKG structural invariants after graph construction."""
         self._validate_chain_metadata()
         self._validate_preconditions_known()
         self._validate_high_impact_nodes_exist()
@@ -395,16 +406,19 @@ class AttackKnowledgeGraph:
         return viable
 
     def check_preconditions(self, method_node: str, observations: dict) -> bool:
+        """Checks whether observations satisfy preconditions for a method node."""
         preconditions = self.METHOD_PRECONDITIONS.get(method_node, [])
         return all(observations.get(p, False) for p in preconditions)
 
     def get_payload_profile(self, method_node: str) -> dict:
+        """Returns the AKG payload profile associated with a method node."""
         if method_node not in self.graph:
             return {}
         profile = self.graph.nodes[method_node].get("payload_profile", {})
         return dict(profile) if isinstance(profile, dict) else {}
 
     def get_next_actions(self, node: str) -> list[dict]:
+        """Returns AKG successor nodes for the provided graph node."""
         if node not in self.graph:
             return []
         actions: list[tuple[int, dict]] = []
@@ -434,6 +448,7 @@ class AttackKnowledgeGraph:
         return has_chain_edge
 
     def get_viable_chains(self, confirmed_vulns: list[str], achieved_outcomes: list[str] | None = None, max_paths: int = 5) -> list[list[str]]:
+        """Returns chain transitions whose source has been confirmed in the current state."""
         if max_paths <= 0:
             return []
         achieved = set(achieved_outcomes or [])

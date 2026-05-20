@@ -14,6 +14,7 @@ EVASION_STRATEGIES = EVASION_MODES
 
 @dataclass(slots=True)
 class ModelConfig:
+    """Model provider configuration resolved from CLI and config files."""
     provider: str
     api_key: str
     model_name: str
@@ -27,6 +28,7 @@ class ModelConfig:
 
 @dataclass(slots=True)
 class EngagementConfig:
+    """Target and execution configuration for one DVWA engagement."""
     target_url: str
     provider: str
     level: str

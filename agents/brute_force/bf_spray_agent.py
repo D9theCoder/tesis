@@ -145,7 +145,22 @@ def _attempt_exploit(
     return score, tried, confirmed, events, found_credentials, False
 
 def bf_spray_agent(state: ExploitationState) -> dict[str, Any]:
-    """Run PROBE -> EXPLOIT -> CHAIN CHECK for bf_spray."""
+    """Execute the password-spray brute-force static method agent.
+
+    Reads validated spray candidates, target/session configuration, rate-limit
+    observations, and tried payload memory. The agent probes for missing rate
+    limiting, stops on CAPTCHA evidence, attempts account/password combinations
+    over HTTP, records discovered credentials, confirms `bf_spray_confirmed`
+    on successful login, and runs shared chain scoring after confirmation.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update for observations, tried payloads, scores,
+        found credentials, confirmed vulnerabilities, achieved outcomes, and
+        telemetry events.
+    """
     target_url = state.get("target_url", "")
     security_level = normalize_security_level(state.get("security_level"))
 

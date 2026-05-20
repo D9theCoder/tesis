@@ -148,7 +148,22 @@ def _attempt_exploit(
     return score, tried, confirmed, events, found_credentials, False
 
 def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
-    """Run PROBE -> EXPLOIT -> CHAIN CHECK for bf_dictionary."""
+    """Execute the dictionary brute-force static method agent.
+
+    Reads validated credential candidates, target/session configuration,
+    rate-limit observations, and tried payload memory. The agent probes for a
+    missing rate limit, stops on CAPTCHA evidence, attempts credential pairs
+    over HTTP, records found credentials, confirms `bf_dictionary_confirmed` on
+    successful login, and runs shared chain scoring after confirmation.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update for observations, tried payloads, scores,
+        found credentials, confirmed vulnerabilities, achieved outcomes, and
+        telemetry events.
+    """
     target_url = state.get("target_url", "")
     security_level = normalize_security_level(state.get("security_level"))
 

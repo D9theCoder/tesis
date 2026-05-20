@@ -19,7 +19,9 @@ def test_enhance_with_deepteam_normalizes_strategy_names(monkeypatch):
     """Strategy names with mixed case/separators should still resolve."""
 
     class FakeAttack:
+        """Groups regression tests for FakeAttack behavior."""
         def enhance(self, prompt: str, simulator_model=None, **kwargs) -> str:
+            """Supports regression tests for test deepteam adapters."""
             return f"enhanced:{prompt}"
 
     monkeypatch.setattr(deepteam_adapters, "_DEEPTEAM_AVAILABLE", True)
@@ -34,7 +36,9 @@ def test_partial_strategy_map_does_not_disable_available_strategies(monkeypatch)
     """Missing classes should not affect strategies that are present."""
 
     class FakeAttack:
+        """Groups regression tests for FakeAttack behavior."""
         def enhance(self, prompt: str) -> str:
+            """Supports regression tests for test deepteam adapters."""
             return "ok"
 
     monkeypatch.setattr(deepteam_adapters, "_DEEPTEAM_AVAILABLE", True)

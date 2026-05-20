@@ -26,6 +26,7 @@ def _run_single_with_payload_kwargs(kwargs: dict[str, Any]) -> dict:
 
 
 def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Supports build matrix aggregate behavior for this module."""
     derived_providers = sorted({
         str(artifact.get("config", {}).get("provider", "unknown"))
         for artifact in artifacts
@@ -224,6 +225,29 @@ def run_provider_matrix(
     live_display: bool = False,
     model_configs: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict] | tuple[list[dict], dict[str, Any]]:
+    """Handles run provider matrix behavior for this module.
+
+    Args:
+        target_url: Value used by this function.
+        providers: Value used by this function.
+        security_levels: Value used by this function.
+        surfaces: Value used by this function.
+        payload_modes: Value used by this function.
+        repeats: Value used by this function.
+        max_iterations: Value used by this function.
+        candidate_budget: Value used by this function.
+        stop_policy: Value used by this function.
+        coverage_target: Value used by this function.
+        enriched_reporting: Value used by this function.
+        diagnose: Value used by this function.
+        output_dir: Value used by this function.
+        include_aggregate: Value used by this function.
+        evasion_enabled: Value used by this function.
+        evasion_mode: Value used by this function.
+        evasion_max_retries: Value used by this function.
+        evasion_cooldown_threshold: Value used by this function.
+        live_display: Value used by this function.
+        model_configs: Value used by this function."""
     chosen_providers = sorted(providers or list(SUPPORTED_PROVIDERS))
     chosen_levels = sorted(security_levels or list(SECURITY_LEVELS))
     chosen_surfaces = sorted(surfaces or ["sqli", "access_control", "brute_force"])

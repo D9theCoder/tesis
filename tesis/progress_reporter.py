@@ -16,6 +16,7 @@ class EngagementProgressReporter:
     """Live dashboard for tesis run command."""
 
     def __init__(self, max_iterations: int, provider: str = "gemini", level: str = "low"):
+        """Supports init behavior for this module."""
         self.console = Console()
         self.max_iterations = max_iterations
         self.provider = provider
@@ -42,14 +43,17 @@ class EngagementProgressReporter:
         self._live = None
 
     def start(self):
+        """Handles start behavior for this module."""
         self._live = Live(self._build_layout(), console=self.console, refresh_per_second=4)
         self._live.start()
 
     def stop(self):
+        """Handles stop behavior for this module."""
         if self._live:
             self._live.stop()
 
     def _build_layout(self) -> Layout:
+        """Supports build layout behavior for this module."""
         layout = Layout()
         layout.split_column(
             Layout(name="header", size=3),
@@ -87,6 +91,7 @@ class EngagementProgressReporter:
         return layout
 
     def refresh(self):
+        """Handles refresh behavior for this module."""
         if self._live:
             self._live.update(self._build_layout())
 

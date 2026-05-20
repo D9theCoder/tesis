@@ -9,6 +9,7 @@ from core.state import new_default_state
 
 @pytest.fixture
 def base_state():
+    """Supports regression tests for test bf dictionary agent."""
     state = new_default_state()
     state["target_url"] = "http://localhost/dvwa"
     state["security_level"] = "low"
@@ -16,6 +17,7 @@ def base_state():
 
 
 def _make_mock_session(login_ok=True):
+    """Supports regression tests for test bf dictionary agent."""
     session = MagicMock()
     session.login.return_value = login_ok
     session.set_security_level.return_value = None
@@ -23,6 +25,7 @@ def _make_mock_session(login_ok=True):
 
 
 def _make_response(status_code=200, text="Incorrect"):
+    """Supports regression tests for test bf dictionary agent."""
     resp = MagicMock()
     resp.status_code = status_code
     resp.text = text
@@ -46,6 +49,7 @@ def test_exploit_finds_credentials(base_state):
     mock_session = _make_mock_session()
 
     def mock_get(path, params=None):
+        """Supports regression tests for test bf dictionary agent."""
         username = (params or {}).get("username", "")
         password = (params or {}).get("password", "")
         if username == "admin" and password == "password":
@@ -69,6 +73,7 @@ def test_chain_check_triggers_score_four(base_state):
     mock_session = _make_mock_session()
 
     def mock_get(path, params=None):
+        """Supports regression tests for test bf dictionary agent."""
         username = (params or {}).get("username", "")
         password = (params or {}).get("password", "")
         if username == "admin" and password == "password":
@@ -87,6 +92,7 @@ def test_chain_check_triggers_score_four(base_state):
 
 
 def test_login_failure(base_state):
+    """Verifies login failure behavior."""
     mock_session = _make_mock_session(login_ok=False)
     with patch("agents.brute_force.bf_dictionary_agent.DVWASession", return_value=mock_session):
         result = bf_dictionary_agent(base_state)
@@ -94,6 +100,7 @@ def test_login_failure(base_state):
 
 
 def test_missing_target_url():
+    """Verifies missing target url behavior."""
     state = new_default_state()
     state["security_level"] = "low"
     result = bf_dictionary_agent(state)

@@ -46,9 +46,11 @@ class FakeLLM:
         self.call_count = 0
 
     def with_structured_output(self, schema):
+        """Supports regression tests for test evasion pipeline."""
         return self
 
     def invoke(self, *args, **kwargs):
+        """Supports regression tests for test evasion pipeline."""
         if self.call_count < len(self.responses):
             resp = self.responses[self.call_count]
             self.call_count += 1
@@ -72,9 +74,11 @@ class SharedFakeLLM:
         self._state = shared_state
 
     def with_structured_output(self, schema):
+        """Supports regression tests for test evasion pipeline."""
         return self
 
     def invoke(self, *args, **kwargs):
+        """Supports regression tests for test evasion pipeline."""
         index = self._state.get("index", 0)
         if index < len(self._responses):
             resp = self._responses[index]
@@ -218,6 +222,7 @@ def test_check_validity_fails_open_on_exception(monkeypatch):
 
 
 def test_route_evasion_success_when_both_gates_pass():
+    """Verifies route evasion success when both gates pass behavior."""
     state = _make_state(
         candidate_input="candidate", strategy_reasoning="reason", is_compliant=True, is_valid=True, retries=1
     )
@@ -225,6 +230,7 @@ def test_route_evasion_success_when_both_gates_pass():
 
 
 def test_route_evasion_fallback_when_retries_exhausted():
+    """Verifies route evasion fallback when retries exhausted behavior."""
     state = _make_state(
         candidate_input="candidate", strategy_reasoning="reason", is_compliant=False, is_valid=False, retries=3
     )
@@ -232,6 +238,7 @@ def test_route_evasion_fallback_when_retries_exhausted():
 
 
 def test_route_evasion_retry_when_gates_fail_and_budget_remains():
+    """Verifies route evasion retry when gates fail and budget remains behavior."""
     state = _make_state(
         candidate_input="candidate", strategy_reasoning="reason", is_compliant=True, is_valid=False, retries=1
     )
@@ -253,12 +260,14 @@ def test_route_evasion_retries_when_gates_fail_and_budget_remains_for_any_strate
 
 
 def test_build_evasion_graph_is_cached_singleton():
+    """Verifies build evasion graph is cached singleton behavior."""
     graph1 = build_evasion_graph()
     graph2 = build_evasion_graph()
     assert graph1 is graph2
 
 
 def test_finalize_success_returns_candidate():
+    """Verifies finalize success returns candidate behavior."""
     state = _make_state(
         candidate_input="final candidate", strategy_reasoning="reason", is_compliant=True, is_valid=True, retries=1
     )
@@ -267,6 +276,7 @@ def test_finalize_success_returns_candidate():
 
 
 def test_finalize_fallback_returns_base_seed():
+    """Verifies finalize fallback returns base seed behavior."""
     state = _make_state(
         base_seed="original seed",
         candidate_input="candidate",

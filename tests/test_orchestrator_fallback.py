@@ -6,6 +6,7 @@ from agents.orchestrator import _fallback_next_agent
 
 
 def test_fallback_returns_starter_when_nothing_confirmed():
+    """Verifies fallback returns starter when nothing confirmed behavior."""
     state = {
         "current_surface": "sqli",
         "observations": {},
@@ -19,6 +20,7 @@ def test_fallback_returns_starter_when_nothing_confirmed():
 
 
 def test_fallback_cycles_starters_when_all_attempted():
+    """Verifies fallback cycles starters when all attempted behavior."""
     state = {
         "current_surface": "sqli",
         "observations": {},
@@ -32,6 +34,7 @@ def test_fallback_cycles_starters_when_all_attempted():
 
 
 def test_fallback_prioritizes_unexplored_method():
+    """Verifies fallback prioritizes unexplored method behavior."""
     state = {
         "current_surface": "sqli",
         "observations": {},
@@ -46,6 +49,7 @@ def test_fallback_prioritizes_unexplored_method():
 
 
 def test_fallback_prioritizes_lowest_score():
+    """Verifies fallback prioritizes lowest score behavior."""
     state = {
         "current_surface": "sqli",
         "observations": {},
@@ -60,6 +64,7 @@ def test_fallback_prioritizes_lowest_score():
 
 
 def test_fallback_returns_scorer_for_exhausted_surface():
+    """Verifies fallback returns scorer for exhausted surface behavior."""
     state = {
         "current_surface": "access_control",
         "observations": {},
@@ -73,6 +78,7 @@ def test_fallback_returns_scorer_for_exhausted_surface():
 
 
 def test_fallback_exhausts_surface_methods_before_scorer():
+    """Verifies fallback exhausts surface methods before scorer behavior."""
     state = {
         "current_surface": "sqli",
         "observations": {},
@@ -86,6 +92,7 @@ def test_fallback_exhausts_surface_methods_before_scorer():
 
 
 def test_fallback_does_not_repeat_blocked_agent():
+    """Verifies fallback does not repeat blocked agent behavior."""
     state = {
         "current_surface": "sqli",
         "observations": {},
@@ -100,6 +107,7 @@ def test_fallback_does_not_repeat_blocked_agent():
 
 
 def test_fallback_all_attempted_returns_scorer():
+    """Verifies fallback all attempted returns scorer behavior."""
     state = {
         "current_surface": "sqli",
         "observations": {},

@@ -32,18 +32,22 @@ class RequestResult:
 
     @property
     def status_code(self) -> int:
+        """Handles status code behavior for this module."""
         return self.response.status_code
 
     @property
     def text(self) -> str:
+        """Handles text behavior for this module."""
         return self.response.text
 
     @property
     def url(self) -> str:
+        """Handles url behavior for this module."""
         return str(self.response.url)
 
     @property
     def headers(self) -> httpx.Headers:
+        """Handles headers behavior for this module."""
         return self.response.headers
 
 

@@ -32,6 +32,7 @@ _OUT_OF_SCOPE_MARKERS = (
 
 
 def allowed_target_params(method: str) -> set[str]:
+    """Returns target parameters allowed by the AKG payload profile for a method."""
     profile = AttackKnowledgeGraph().get_payload_profile(method)
     target_params = profile.get("target_params", [])
     allowed = {str(item) for item in target_params if item}
@@ -46,6 +47,15 @@ def _is_out_of_scope(payload: str) -> bool:
 
 
 def validate_candidate(candidate: dict[str, Any], method: str, profile: dict[str, Any]) -> dict[str, Any]:
+    """Validates one payload candidate against method profile and provenance rules.
+
+    Args:
+        candidate: Candidate payload metadata to validate.
+        method: Selected static method agent.
+        profile: AKG payload profile for the method.
+
+    Returns:
+        Validation result describing whether the candidate is accepted and why."""
     if not isinstance(candidate, dict):
         return {"valid": False, "reason": "not_a_dict", "candidate": candidate}
 
@@ -100,6 +110,15 @@ def validate_candidate(candidate: dict[str, Any], method: str, profile: dict[str
 
 
 def validate_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
+    """Validates, deduplicates, and ranks candidates for the selected method.
+
+    Args:
+        state: Current shared LangGraph state containing the selected method,
+            payload candidate map, generated candidate map, and provenance map.
+
+    Returns:
+        Partial state update with validation results, accepted payload
+        candidates, and provenance records for ranked candidates."""
     method = str(state.get("selected_method") or state.get("next_agent") or "")
     if not method:
         return {"payload_validation_results": {"unknown": [{"valid": False, "reason": "missing_method"}]}}
@@ -172,4 +191,23 @@ def validate_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def payload_validator_node(state: dict[str, Any]) -> dict[str, Any]:
+    """Executes payload validation in the LangGraph workflow.
+
+    Reads:
+        Selected method, payload candidates, generated payloads, payload provenance,
+        AKG payload profile, and candidate budget fields.
+
+    Writes:
+        Payload validation results and ranked valid candidates for the selected
+        method.
+
+    Routing:
+        Downstream graph routing sends valid candidates to the method agent or no
+        valid candidates to the chaining router.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update with validation results."""
     return validate_payload_candidates(state)

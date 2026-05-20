@@ -1,3 +1,8 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 from tesis.report_formatters import (
     format_module_scores_table,
     format_provider_comparison_table,
@@ -6,6 +11,7 @@ from tesis.report_formatters import (
 
 
 def _single_artifact() -> dict:
+    """Build a formatter-only artifact containing legacy labels and chain text."""
     return {
         "run_id": "gemini-low-0",
         "status": "success",
@@ -34,6 +40,7 @@ def _single_artifact() -> dict:
 
 
 def test_show_rejections_no_guardrail_data_message():
+    """Verifies show rejections no guardrail data message behavior."""
     artifact = _single_artifact()
     artifact["final_state"]["guardrail_activations"] = []
     artifact["report"]["summary"]["guardrail_activations"] = 0
@@ -43,6 +50,7 @@ def test_show_rejections_no_guardrail_data_message():
 
 
 def test_rejection_rate_aggregation_by_provider_and_context():
+    """Verifies rejection rate aggregation by provider and context behavior."""
     runs = {"runs": [_single_artifact(), _single_artifact()]}
     rendered = format_rejection_table(runs)
 
@@ -53,6 +61,7 @@ def test_rejection_rate_aggregation_by_provider_and_context():
 
 
 def test_score_table_renders_module_label_and_chain():
+    """Verifies score table renders module label and chain behavior."""
     rendered = format_module_scores_table(_single_artifact(), show_chains=True)
 
     assert "Module" in rendered
@@ -62,6 +71,7 @@ def test_score_table_renders_module_label_and_chain():
 
 
 def test_score_table_distribution_summary():
+    """Verifies score table distribution summary behavior."""
     rendered = format_module_scores_table(_single_artifact(), show_chains=False)
 
     assert "Score Distribution" in rendered
@@ -70,6 +80,7 @@ def test_score_table_distribution_summary():
 
 
 def test_matrix_cross_provider_table_layout():
+    """Verifies matrix cross provider table layout behavior."""
     first = _single_artifact()
     second = _single_artifact()
     second["config"]["provider"] = "claude"
