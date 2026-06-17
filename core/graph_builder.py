@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from langgraph.graph import END, START, StateGraph
 
 from agents.orchestrator import orchestrator
@@ -16,6 +18,8 @@ from agents.brute_force.bf_dictionary_agent import bf_dictionary_agent
 from agents.brute_force.bf_spray_agent import bf_spray_agent
 from core.chaining_coordinator import chaining_router_node
 from core.state import ExploitationState
+from foundation.payload_generator import payload_candidate_builder_node
+from foundation.payload_validator import payload_validator_node
 from foundation.recon import recon
 
 
@@ -45,25 +49,75 @@ RUNTIME_AGENT_HANDLERS = {
 
 
 def route_from_orchestrator(state: ExploitationState) -> str:
+    """Routes from orchestrator output to payload preparation or graph termination.
+
+    Args:
+        state: Current shared LangGraph state after method selection.
+
+    Returns:
+        Name of the next graph node or `END` when execution should stop."""
     next_agent = state.get("next_agent", "scorer")
-    if next_agent in RUNTIME_AGENT_NODE_NAMES or next_agent == "scorer":
+    if next_agent in {"payload_candidate_builder", "scorer"}:
         return next_agent
+    if next_agent in RUNTIME_AGENT_NODE_NAMES:
+        return "payload_candidate_builder"
+    logging.getLogger(__name__).warning("Unknown next_agent %r — falling back to scorer", next_agent)
     return "scorer"
+
+
+def route_from_payload_validator(state: ExploitationState) -> str:
+    """Routes validated payload output to the selected method agent or chaining router.
+
+    Args:
+        state: Current shared LangGraph state after candidate validation.
+
+    Returns:
+        Method node name or `chaining_router` when no method can run."""
+    selected = state.get("selected_method") or state.get("next_agent")
+    if selected in RUNTIME_AGENT_NODE_NAMES:
+        candidates = state.get("payload_candidates", {}).get(selected, [])
+        if candidates:
+            return selected
+    return "chaining_router"
 
 
 def route_from_chaining_router(state: ExploitationState) -> str:
+    """Routes chaining-router decisions to orchestrator, candidate building, scorer, or end.
+
+    Args:
+        state: Current shared LangGraph state after chain evaluation.
+
+    Returns:
+        Next graph node name or `END`."""
     next_agent = state.get("next_agent", "scorer")
-    if next_agent in RUNTIME_AGENT_NODE_NAMES or next_agent in {"orchestrator", "scorer"}:
+    if next_agent in RUNTIME_AGENT_NODE_NAMES:
+        return "payload_candidate_builder"
+    if next_agent in {"orchestrator", "scorer"}:
         return next_agent
     return "scorer"
 
 
+# NOTE: llm_provider and surface are accepted for API compatibility but currently
+# do not alter graph topology. Future per-surface or per-provider customization
+# may use these parameters.
 def build_framework(llm_provider: str = "gemini", surface: str = "sqli"):
+    """Builds the LangGraph execution graph for the DVWA framework.
+
+    Args:
+        llm_provider: Provider name accepted for API compatibility.
+        surface: Initial surface name accepted for API compatibility.
+
+    Returns:
+        Compiled graph with recon, orchestration, payload, method-agent, chaining,
+        and scoring nodes wired according to the runtime topology."""
+    # Lazy import to avoid circular dependency: scorer imports from core.state
+    # which is imported by graph_builder.
     from core.scorer import scorer
-    _ = llm_provider
     graph = StateGraph(ExploitationState)
     graph.add_node("recon", recon)
     graph.add_node("orchestrator", orchestrator)
+    graph.add_node("payload_candidate_builder", payload_candidate_builder_node)
+    graph.add_node("payload_validator", payload_validator_node)
     graph.add_node("chaining_router", chaining_router_node)
     graph.add_node("scorer", scorer)
     for name in RUNTIME_AGENT_NODE_NAMES:
@@ -72,6 +126,9 @@ def build_framework(llm_provider: str = "gemini", surface: str = "sqli"):
     graph.add_edge(START, "recon")
     graph.add_edge("recon", "orchestrator")
     graph.add_conditional_edges("orchestrator", route_from_orchestrator)
+    graph.add_edge("payload_candidate_builder", "payload_validator")
+    graph.add_conditional_edges("payload_validator", route_from_payload_validator)
     graph.add_conditional_edges("chaining_router", route_from_chaining_router)
     graph.add_edge("scorer", END)
-    return graph.compile()
+    from langgraph.checkpoint.memory import MemorySaver
+    return graph.compile(checkpointer=MemorySaver())

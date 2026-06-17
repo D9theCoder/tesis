@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 EVASION_MODES: frozenset[str] = frozenset({"reactive", "proactive", "disabled"})
+PAYLOAD_MODES: frozenset[str] = frozenset({"static_only", "hybrid", "llm_mutation_only"})
 
 # Backward-compatible alias
 EVASION_STRATEGIES = EVASION_MODES
@@ -13,6 +14,7 @@ EVASION_STRATEGIES = EVASION_MODES
 
 @dataclass(slots=True)
 class ModelConfig:
+    """Model provider configuration resolved from CLI and config files."""
     provider: str
     api_key: str
     model_name: str
@@ -26,10 +28,13 @@ class ModelConfig:
 
 @dataclass(slots=True)
 class EngagementConfig:
+    """Target and execution configuration for one DVWA engagement."""
     target_url: str
     provider: str
     level: str
     surface: str = "sqli"
+    payload_mode: str = "static_only"
+    candidate_budget: int = 5
     iterations: int = 30
     repeats: int = 1
     output_dir: str = "results"
@@ -37,6 +42,7 @@ class EngagementConfig:
     providers: list[str] = field(default_factory=list)
     levels: list[str] = field(default_factory=list)
     surfaces: list[str] = field(default_factory=list)
+    payload_modes: list[str] = field(default_factory=list)
     report_format: str = "both"
     enriched_reporting: bool = False
     stop_policy: str = "impact"
@@ -55,4 +61,4 @@ class EngagementConfig:
     evasion_attempts_max: int = 3
 
 
-__all__ = ["ModelConfig", "EngagementConfig"]
+__all__ = ["ModelConfig", "EngagementConfig", "PAYLOAD_MODES"]

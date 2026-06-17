@@ -1,9 +1,15 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 import json
 
 from tesis.report_formatters import format_rich_report_sections, parse_artifact_or_matrix
 
 
 def test_report_includes_prompt_response_section_when_rich_sidecar_present(tmp_path):
+    """Verifies report includes prompt response section when rich sidecar present behavior."""
     artifact = {
         "run_id": "gemini-low-0",
         "report": {"summary": {}},
@@ -27,6 +33,7 @@ def test_report_includes_prompt_response_section_when_rich_sidecar_present(tmp_p
 
 
 def test_report_includes_diagnostics_when_present():
+    """Verifies report includes diagnostics when present behavior."""
     data = {
         "rich_sidecar": {
             "schema_version": "stage7.rich.v1",

@@ -8,6 +8,11 @@ from pathlib import Path
 
 
 def write_json_report(path: str | Path, payload: dict) -> Path:
+    """Handles write json report behavior for this module.
+
+    Args:
+        path: Value used by this function.
+        payload: Value used by this function."""
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -15,6 +20,10 @@ def write_json_report(path: str | Path, payload: dict) -> Path:
 
 
 def build_markdown_summary(aggregate: dict) -> str:
+    """Builds markdown summary for framework execution.
+
+    Args:
+        aggregate: Value used by this function."""
     totals = aggregate.get("totals", {})
     return "\n".join([
         "# Evaluation Summary",
@@ -27,6 +36,11 @@ def build_markdown_summary(aggregate: dict) -> str:
 
 
 def write_markdown_report(path: str | Path, aggregate: dict) -> Path:
+    """Handles write markdown report behavior for this module.
+
+    Args:
+        path: Value used by this function.
+        aggregate: Value used by this function."""
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(build_markdown_summary(aggregate), encoding="utf-8")
@@ -34,6 +48,12 @@ def write_markdown_report(path: str | Path, aggregate: dict) -> Path:
 
 
 def write_matrix_reports(output_dir: str | Path, run_id: str, aggregate: dict) -> dict[str, Path]:
+    """Handles write matrix reports behavior for this module.
+
+    Args:
+        output_dir: Value used by this function.
+        run_id: Value used by this function.
+        aggregate: Value used by this function."""
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -50,6 +70,11 @@ def write_matrix_reports(output_dir: str | Path, run_id: str, aggregate: dict) -
 
 
 def write_events_jsonl(path: str | Path, events: list[dict]) -> Path:
+    """Handles write events jsonl behavior for this module.
+
+    Args:
+        path: Value used by this function.
+        events: Value used by this function."""
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [json.dumps(event, sort_keys=True) for event in events]
@@ -61,6 +86,11 @@ def write_events_jsonl(path: str | Path, events: list[dict]) -> Path:
 
 
 def write_rich_report(path: str | Path, payload: dict) -> Path:
+    """Handles write rich report behavior for this module.
+
+    Args:
+        path: Value used by this function.
+        payload: Value used by this function."""
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")

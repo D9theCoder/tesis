@@ -29,6 +29,7 @@ security_levels:
 llm_providers:
   - gemini
   - openai
+  - claude
   - openai_compatible
 
 # -----------------------------------------------------------------------------
@@ -39,6 +40,8 @@ llm_providers:
 provider: openai_compatible
 level: low
 surface: sqli
+payload_mode: static_only
+candidate_budget: 5
 
 # Max LangGraph orchestration iterations for a run.
 iterations: 10
@@ -76,10 +79,10 @@ stop_policy: coverage
 coverage_target: 0.70
 
 # -----------------------------------------------------------------------------
-# Stage 8: Adversarial Prompt Evasion
+# Stage 8: Technical Retry / Refusal Handling
 # -----------------------------------------------------------------------------
-# Enable the evasion layer to rewrite prompts and bypass LLM guardrails.
-# When disabled, the framework sends baseline prompts directly.
+# Enable technical retry handling for schema-safe prompt clarification.
+# Refusals are logged and fall back to AKG/static seed behavior.
 evasion:
   enabled: true
 
@@ -106,6 +109,7 @@ matrix: false
 providers:
   - gemini
   - openai
+  - claude
   - openai_compatible
 
 levels:
@@ -117,6 +121,10 @@ surfaces:
   - sqli
   - access_control
   - brute_force
+
+payload_modes:
+  - static_only
+  - hybrid
 
 # -----------------------------------------------------------------------------
 # Optional DVWA credentials (if your runtime/session manager uses them)

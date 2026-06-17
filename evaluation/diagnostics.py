@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import logging
 
-from core.state import MODULE_NAMES
+from core.state import ALL_METHOD_AGENTS
 
 
 logger = logging.getLogger(__name__)
 
 
 def module_coverage_ratio(scores: dict[str, int]) -> float:
-    if not MODULE_NAMES:
+    """Handles module coverage ratio behavior for this module.
+
+    Args:
+        scores: Value used by this function."""
+    if not ALL_METHOD_AGENTS:
         return 0.0
     covered = 0
-    for name in MODULE_NAMES:
+    for name in ALL_METHOD_AGENTS:
         try:
             score = int(scores.get(name, 0))
         except (TypeError, ValueError) as exc:
@@ -22,10 +26,16 @@ def module_coverage_ratio(scores: dict[str, int]) -> float:
             score = 0
         if score > 0:
             covered += 1
-    return covered / len(MODULE_NAMES)
+    return covered / len(ALL_METHOD_AGENTS)
 
 
 def diagnose_quality(*, scores: dict[str, int], total_iterations_used: int, highest_outcome: str | None) -> dict:
+    """Handles diagnose quality behavior for this module.
+
+    Args:
+        scores: Value used by this function.
+        total_iterations_used: Value used by this function.
+        highest_outcome: Value used by this function."""
     coverage = module_coverage_ratio(scores)
     flags: list[str] = []
 
@@ -33,7 +43,7 @@ def diagnose_quality(*, scores: dict[str, int], total_iterations_used: int, high
         flags.append("low_module_coverage")
     if total_iterations_used <= 3:
         flags.append("early_termination")
-    if highest_outcome in {"admin_session_obtained", "rce_achieved"} and coverage < 0.4:
+    if highest_outcome in {"admin_session_obtained", "data_exfiltrated"} and coverage < 0.4:
         flags.append("impact_before_coverage")
 
     return {

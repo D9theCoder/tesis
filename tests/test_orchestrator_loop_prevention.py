@@ -14,6 +14,7 @@ class TestUsedFallbackAccuracy:
     """Verify used_fallback is true ONLY when LLM parsing fails."""
 
     def test_used_fallback_false_when_llm_returns_valid_agent(self):
+        """Verifies used fallback false when llm returns valid agent behavior."""
         state = {
             "iteration_count": 0,
             "max_iterations": 30,
@@ -41,9 +42,11 @@ class TestUsedFallbackAccuracy:
 
         decision_event = [e for e in result["telemetry_events"] if e["event"] == "orchestrator.decision"][0]
         assert decision_event["payload"]["used_fallback"] is False
-        assert result["next_agent"] == "sqli_error"
+        assert result["next_agent"] == "payload_candidate_builder"
+        assert result["selected_method"] == "sqli_error"
 
     def test_used_fallback_true_when_llm_returns_invalid_agent(self):
+        """Verifies used fallback true when llm returns invalid agent behavior."""
         state = {
             "iteration_count": 0,
             "max_iterations": 30,
@@ -71,10 +74,12 @@ class TestUsedFallbackAccuracy:
 
         decision_event = [e for e in result["telemetry_events"] if e["event"] == "orchestrator.decision"][0]
         assert decision_event["payload"]["used_fallback"] is True
-        # Should fall back to a valid agent from AKG
-        assert result["next_agent"] in ALL_METHOD_AGENTS or result["next_agent"] == "scorer"
+        assert result["next_agent"] in {"payload_candidate_builder", "scorer"}
+        if result["next_agent"] == "payload_candidate_builder":
+            assert result["selected_method"] in ALL_METHOD_AGENTS
 
     def test_used_fallback_true_when_llm_returns_unparseable_json(self):
+        """Verifies used fallback true when llm returns unparseable json behavior."""
         state = {
             "iteration_count": 0,
             "max_iterations": 30,
@@ -109,6 +114,7 @@ class TestOrchestratorDeduplicatesAttemptedAgents:
     """Verify orchestrator deduplicates attempted_agents before using them."""
 
     def test_does_not_select_already_attempted_agent(self):
+        """Verifies does not select already attempted agent behavior."""
         state = {
             "iteration_count": 1,
             "max_iterations": 30,
@@ -145,6 +151,7 @@ class TestChainingRouterExhaustion:
     """Verify chaining router routes to scorer when all methods are exhausted."""
 
     def test_all_methods_exhausted_routes_to_scorer(self):
+        """Verifies all methods exhausted routes to scorer behavior."""
         from core.chaining_coordinator import evaluate_chain_route
 
         state = {
@@ -167,6 +174,7 @@ class TestChainingRouterExhaustion:
         assert event["reason"] == "all_methods_exhausted"
 
     def test_duplicate_attempted_agents_still_exhausted(self):
+        """Verifies duplicate attempted agents still exhausted behavior."""
         from core.chaining_coordinator import evaluate_chain_route
 
         state = {

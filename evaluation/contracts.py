@@ -9,6 +9,7 @@ from typing import Any
 
 @dataclass(frozen=True, slots=True)
 class ModuleScoreResult:
+    """Score contract for one evaluated module or vulnerability surface."""
     score: int
     label: str
     chain: str | None = None
@@ -16,6 +17,7 @@ class ModuleScoreResult:
 
 @dataclass(frozen=True, slots=True)
 class ScoreSummary:
+    """Aggregated score summary emitted by the Evaluation Layer."""
     llm_provider: str
     security_level: str
     total_modules_tested: int
@@ -31,6 +33,19 @@ class ScoreSummary:
     successful_evasions: int = 0
     evasion_strategy: str = "pipeline"
 
+    # Stage 6 — Method selection & adaptation metrics (computed by scorer)
+    method_selection_accuracy: float = 0.0
+    adaptation_rate: float = 0.0
+    mean_attempts_to_success: float = 0.0
+    payload_validity_rate: float = 0.0
+    payload_execution_success_rate: float = 0.0
+    payload_improvement_rate: float = 0.0
+    guardrail_activation_rate: float = 0.0
+    payload_guardrail_activations: int = 0
+    consistency_score: float = 0.0
+    token_cost: float = 0.0
+    token_cost_per_success: float = 0.0
+
     def __post_init__(self):
         if self.evasion_attempts < 0 or self.successful_evasions < 0:
             raise ValueError("Evasion counts must be non-negative")
@@ -43,10 +58,12 @@ class ScoreSummary:
 
 @dataclass(frozen=True, slots=True)
 class ScorerReport:
+    """Structured report containing per-run evaluation scores and metadata."""
     module_scores: dict[str, ModuleScoreResult]
     summary: ScoreSummary
 
     def to_dict(self) -> dict[str, Any]:
+        """Handles to dict behavior for this module."""
         return {
             "module_scores": {
                 module: dataclasses.asdict(result)
@@ -58,6 +75,7 @@ class ScorerReport:
 
 @dataclass(frozen=True, slots=True)
 class RunArtifact:
+    """Serializable artifact produced by one framework run."""
     schema_version: str
     run_id: str
     status: str
@@ -70,6 +88,7 @@ class RunArtifact:
 
 @dataclass(frozen=True, slots=True)
 class AggregateReport:
+    """Aggregate report across multiple framework runs or model configurations."""
     schema_version: str
     matrix: dict[str, Any]
     totals: dict[str, Any]

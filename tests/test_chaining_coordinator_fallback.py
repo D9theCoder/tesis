@@ -1,13 +1,20 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 import pytest
 from core.chaining_coordinator import evaluate_chain_route, _find_next_unvisited
 
 
 def test_find_next_unvisited():
+    """Verifies find next unvisited behavior."""
     assert _find_next_unvisited(["a", "b", "c"], ["a"], []) == "b"
     assert _find_next_unvisited(["a", "b"], ["a", "b"], []) is None
 
 
 def test_all_exhausted_returns_scorer():
+    """Verifies all exhausted returns scorer behavior."""
     state = {
         "iteration_count": 5,
         "max_iterations": 30,

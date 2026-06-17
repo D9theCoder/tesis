@@ -50,6 +50,7 @@ class TestPayloadLibraryGet:
     """Validate PayloadLibrary.get() behavior."""
 
     def test_get_known_module_returns_payloads(self):
+        """Verifies get known module returns payloads behavior."""
         lib = PayloadLibrary()
         payload_set = lib.get("sqli_union", "low")
 
@@ -58,6 +59,7 @@ class TestPayloadLibraryGet:
         assert isinstance(payload_set.bypass, dict)
 
     def test_get_unknown_module_returns_empty_payload_set(self):
+        """Verifies get unknown module returns empty payload set behavior."""
         lib = PayloadLibrary()
         payload_set = lib.get("not_a_module", "low")
 
@@ -66,11 +68,13 @@ class TestPayloadLibraryGet:
         assert payload_set.bypass == {}
 
     def test_get_unknown_security_level_falls_back_to_low(self):
+        """Verifies get unknown security level falls back to low behavior."""
         lib = PayloadLibrary()
         payload_set = lib.get("sqli_union", "ultra")
         assert "low" in payload_set.bypass
 
     def test_get_returns_defensive_copy(self):
+        """Verifies get returns defensive copy behavior."""
         lib = PayloadLibrary()
         payload_a = lib.get("sqli_error", "low")
         payload_b = lib.get("sqli_error", "low")
@@ -148,6 +152,7 @@ class TestPayloadLibraryRecordBypass:
         assert state["successful_bypasses"] == []
 
     def test_record_bypass_deduplicates_against_state(self):
+        """Verifies record bypass deduplicates against state behavior."""
         state = {"successful_bypasses": ["double_encode"]}
         update = PayloadLibrary.record_bypass(state, "double_encode")
         assert update["successful_bypasses"] == []

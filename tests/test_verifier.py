@@ -58,28 +58,45 @@ class TestVerifierBehavior:
     """Validate Stage 5 verifier behavior."""
 
     def test_contains_any_detects_signals_case_insensitive(self):
+        """Verifies contains any detects signals case insensitive behavior."""
         v = Verifier()
         result = v.contains_any("Warning: MySQL syntax error", ["mysql", "oracle"])
         assert result.ok is True
         assert "mysql" in [item.lower() for item in result.evidence]
 
     def test_contains_any_empty_input(self):
+        """Verifies contains any empty input behavior."""
         v = Verifier()
         result = v.contains_any("", ["signal"])
         assert result.ok is False
 
     def test_regex_match_detects_pattern(self):
+        """Verifies regex match detects pattern behavior."""
         v = Verifier()
         result = v.regex_match("uid=33(www-data)", [r"uid=\d+"])
         assert result.ok is True
         assert r"uid=\d+" in result.evidence
 
-    def test_regex_match_records_invalid_pattern(self):
+    def test_regex_match_skips_invalid_pattern(self):
+        """Verifies regex match skips invalid pattern behavior."""
         v = Verifier()
         result = v.regex_match("text", ["(", r"uid=\\d+"])
-        assert any(item.startswith("invalid_regex:") for item in result.evidence)
+        # Invalid regex patterns should NOT be included in evidence
+        assert not any(item.startswith("invalid_regex:") for item in result.evidence)
+        assert result.ok is False
+        assert result.evidence == []
+
+    def test_regex_match_valid_pattern_ignores_invalid(self):
+        """Verifies regex match valid pattern ignores invalid behavior."""
+        v = Verifier()
+        result = v.regex_match("uid=33(www-data)", ["(", r"uid=\d+"])
+        # Invalid regex should be skipped, valid regex should still match
+        assert not any(item.startswith("invalid_regex:") for item in result.evidence)
+        assert result.ok is True
+        assert r"uid=\d+" in result.evidence
 
     def test_verify_xss_dialog_disabled_via_env(self, monkeypatch):
+        """Verifies verify xss dialog disabled via env behavior."""
         v = Verifier()
         monkeypatch.setenv("ENABLE_BROWSER_VERIFIER", "0")
         result = v.verify_xss_dialog("http://localhost/dvwa/vulnerabilities/xss_r/")
@@ -87,6 +104,7 @@ class TestVerifierBehavior:
         assert "browser verifier disabled" in result.evidence
 
     def test_verify_xss_dialog_invalid_url(self, monkeypatch):
+        """Verifies verify xss dialog invalid url behavior."""
         v = Verifier()
         monkeypatch.setenv("ENABLE_BROWSER_VERIFIER", "1")
         result = v.verify_xss_dialog("not-a-url")

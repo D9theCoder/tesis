@@ -47,6 +47,11 @@ EXIT_TARGET_UNREACHABLE = 3
 
 
 def setup_logging(*, verbose: bool = False, quiet: bool = False) -> None:
+    """Handles setup logging behavior for this module.
+
+    Args:
+        verbose: Value used by this function.
+        quiet: Value used by this function."""
     level = logging.INFO
     if verbose:
         level = logging.DEBUG
@@ -77,6 +82,7 @@ def _summarize_totals(artifacts: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def _write_run_artifacts(output_dir: Path, artifacts: list[dict[str, Any]]) -> list[Path]:
+    """Supports write run artifacts behavior for this module."""
     paths: list[Path] = []
     runs_dir = output_dir / "runs"
     for artifact in artifacts:
@@ -102,6 +108,8 @@ def _print_resolved_config(config: Any) -> None:
         "provider": config.provider,
         "level": config.level,
         "surface": config.surface,
+        "payload_mode": config.payload_mode,
+        "candidate_budget": config.candidate_budget,
         "iterations": config.iterations,
         "repeats": config.repeats,
         "output_dir": config.output_dir,
@@ -109,6 +117,7 @@ def _print_resolved_config(config: Any) -> None:
         "providers": config.providers,
         "levels": config.levels,
         "surfaces": config.surfaces,
+        "payload_modes": config.payload_modes,
         "format": config.report_format,
         "enriched_reporting": config.enriched_reporting,
         "stop_policy": config.stop_policy,
@@ -133,10 +142,11 @@ def _model_config_to_dict(model_cfg: Any) -> dict[str, Any]:
 def _announce_runtime_config(config: Any) -> None:
     """Print active provider, model, and endpoint before execution."""
     if config.matrix:
-        combos = len(config.providers) * len(config.levels) * len(config.surfaces) * config.repeats
+        combos = len(config.providers) * len(config.levels) * len(config.surfaces) * len(config.payload_modes) * config.repeats
         print(
             f"Matrix mode: {len(config.providers)} providers × {len(config.levels)} levels × "
-            f"{len(config.surfaces)} surfaces × {config.repeats} repeats = {combos} total runs"
+            f"{len(config.surfaces)} surfaces × {len(config.payload_modes)} payload modes × "
+            f"{config.repeats} repeats = {combos} total runs"
         )
         return
 
@@ -149,6 +159,7 @@ def _announce_runtime_config(config: Any) -> None:
 
 
 def _masked_config_payload(config: dict[str, Any]) -> dict[str, Any]:
+    """Supports masked config payload behavior for this module."""
     masked = json.loads(json.dumps(config))
     models = masked.get("models", {})
     if isinstance(models, dict):
@@ -160,6 +171,10 @@ def _masked_config_payload(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_run(args: argparse.Namespace) -> int:
+    """Handles handle run behavior for this module.
+
+    Args:
+        args: Value used by this function."""
     try:
         config = load_and_resolve_config(config_path=args.config, cli_args=vars(args))
     except ConfigError as exc:
@@ -187,8 +202,10 @@ def handle_run(args: argparse.Namespace) -> int:
                 providers=config.providers,
                 security_levels=config.levels,
                 surfaces=config.surfaces,
+                payload_modes=config.payload_modes,
                 repeats=config.repeats,
                 max_iterations=config.iterations,
+                candidate_budget=config.candidate_budget,
                 stop_policy=config.stop_policy,
                 coverage_target=config.coverage_target,
                 enriched_reporting=config.enriched_reporting,
@@ -237,7 +254,9 @@ def handle_run(args: argparse.Namespace) -> int:
             security_level=config.level,
             llm_provider=config.provider,
             surface=config.surface,
+            payload_mode=config.payload_mode,
             max_iterations=config.iterations,
+            candidate_budget=config.candidate_budget,
             repeat_index=0,
             stop_policy=config.stop_policy,
             coverage_target=config.coverage_target,
@@ -281,6 +300,10 @@ def handle_run(args: argparse.Namespace) -> int:
 
 
 def handle_info(args: argparse.Namespace) -> int:
+    """Handles handle info behavior for this module.
+
+    Args:
+        args: Value used by this function."""
     info = {
         "schema_version": SCHEMA_VERSION,
         "providers": list(SUPPORTED_PROVIDERS),
@@ -293,6 +316,10 @@ def handle_info(args: argparse.Namespace) -> int:
 
 
 def handle_config(args: argparse.Namespace) -> int:
+    """Handles handle config behavior for this module.
+
+    Args:
+        args: Value used by this function."""
     try:
         config_path = Path(args.config)
         config = load_yaml_config(config_path)
@@ -355,6 +382,10 @@ def handle_config(args: argparse.Namespace) -> int:
 
 
 def handle_report(args: argparse.Namespace) -> int:
+    """Handles handle report behavior for this module.
+
+    Args:
+        args: Value used by this function."""
     try:
         data = parse_artifact_or_matrix(args.artifact)
         show_rejections = bool(args.show_rejections)
@@ -406,6 +437,10 @@ def handle_report(args: argparse.Namespace) -> int:
 
 
 def handle_validate(args: argparse.Namespace) -> int:
+    """Handles handle validate behavior for this module.
+
+    Args:
+        args: Value used by this function."""
     try:
         config = load_and_resolve_config(config_path=args.config, cli_args=vars(args))
     except ConfigError as exc:
@@ -492,6 +527,7 @@ def handle_validate(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Builds parser for framework execution."""
     parser = argparse.ArgumentParser(prog="tesis", description="Stage 7 CLI for tesis framework")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -500,6 +536,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--target", dest="target", help="Target URL")
     run_parser.add_argument("--level", choices=SECURITY_LEVELS, help="Security level")
     run_parser.add_argument("--surface", choices=SURFACES, help="Attack surface to test")
+    run_parser.add_argument("--payload-mode", choices=["static_only", "hybrid", "llm_mutation_only"], help="Payload mode")
+    run_parser.add_argument("--payload-modes", nargs="+", choices=["static_only", "hybrid", "llm_mutation_only"], help="Payload modes for matrix mode")
+    run_parser.add_argument("--candidate-budget", type=int, help="Generated payload candidate budget")
     run_parser.add_argument("--provider", help="LLM provider")
     run_parser.add_argument("--iterations", type=int, help="Max iterations")
     run_parser.add_argument("--matrix", action="store_true", help="Run provider/level matrix")
@@ -521,7 +560,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Coverage target in [0.0, 1.0] when using coverage stop policy",
     )
     run_parser.add_argument("--diagnose", action="store_true", help="Attach quality diagnostics in report summary")
-    run_parser.add_argument("--evasion-enabled", action="store_true", help="Enable adversarial prompt evasion layer")
+    run_parser.add_argument("--evasion-enabled", action="store_true", help="Enable technical retry/refusal handling layer")
     run_parser.add_argument(
         "--evasion-mode",
         choices=["reactive", "proactive", "disabled"],
@@ -585,6 +624,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Handles main behavior for this module.
+
+    Args:
+        argv: Value used by this function."""
     parser = build_parser()
     args = parser.parse_args(argv)
     setup_logging(verbose=bool(getattr(args, "verbose", False)), quiet=bool(getattr(args, "quiet", False)))

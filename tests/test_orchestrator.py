@@ -6,6 +6,7 @@ from agents.orchestrator import orchestrator, _fallback_next_agent
 
 
 def test_orchestrator_stops_when_budget_exhausted():
+    """Verifies orchestrator stops when budget exhausted behavior."""
     state = {
         "target_url": "http://localhost/dvwa",
         "confirmed_vulns": [],
@@ -30,10 +31,11 @@ def test_orchestrator_stops_when_budget_exhausted():
 
 
 def test_orchestrator_critical_outcome_routes_to_scorer():
+    """Verifies orchestrator critical outcome routes to scorer behavior."""
     state = {
         "target_url": "http://localhost/dvwa",
         "confirmed_vulns": [],
-        "achieved_outcomes": ["rce_achieved"],
+        "achieved_outcomes": ["admin_session_obtained"],
         "iteration_count": 1,
         "max_iterations": 30,
         "security_level": "low",
@@ -54,6 +56,7 @@ def test_orchestrator_critical_outcome_routes_to_scorer():
 
 
 def test_fallback_next_agent_returns_viable_method():
+    """Verifies fallback next agent returns viable method behavior."""
     state = {
         "current_surface": "sqli",
         "observations": {"error_messages_enabled": True, "union_select_possible": True},
@@ -67,6 +70,7 @@ def test_fallback_next_agent_returns_viable_method():
 
 
 def test_fallback_next_agent_all_exhausted():
+    """Verifies fallback next agent all exhausted behavior."""
     state = {
         "current_surface": "sqli",
         "observations": {},

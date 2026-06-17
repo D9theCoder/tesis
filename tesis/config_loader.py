@@ -12,7 +12,7 @@ import yaml
 
 from core.state import SECURITY_LEVELS, SURFACES
 from llm.provider import SUPPORTED_PROVIDERS
-from tesis.model_config import EngagementConfig, ModelConfig, EVASION_MODES
+from tesis.model_config import EngagementConfig, ModelConfig, EVASION_MODES, PAYLOAD_MODES
 
 
 class ConfigError(ValueError):
@@ -20,11 +20,17 @@ class ConfigError(ValueError):
 
 
 _VALID_EVASION_MODES: frozenset[str] = EVASION_MODES
+_VALID_PAYLOAD_MODES: frozenset[str] = PAYLOAD_MODES
 
 _ENV_REF_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)}")
 
 
 def mask_secret(value: str, *, unmasked_tail: int = 4) -> str:
+    """Handles mask secret behavior for this module.
+
+    Args:
+        value: Value used by this function.
+        unmasked_tail: Value used by this function."""
     if not value:
         return ""
     if len(value) <= unmasked_tail:
@@ -33,6 +39,10 @@ def mask_secret(value: str, *, unmasked_tail: int = 4) -> str:
 
 
 def load_yaml_config(path: str | Path) -> dict[str, Any]:
+    """Loads yaml config from configured inputs.
+
+    Args:
+        path: Value used by this function."""
     config_path = Path(path)
     if not config_path.exists():
         return {}
@@ -45,6 +55,11 @@ def load_yaml_config(path: str | Path) -> dict[str, Any]:
 
 
 def save_yaml_config(path: str | Path, payload: Mapping[str, Any]) -> Path:
+    """Handles save yaml config behavior for this module.
+
+    Args:
+        path: Value used by this function.
+        payload: Value used by this function."""
     config_path = Path(path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(yaml.safe_dump(dict(payload), sort_keys=False), encoding="utf-8")
@@ -52,6 +67,7 @@ def save_yaml_config(path: str | Path, payload: Mapping[str, Any]) -> Path:
 
 
 def _resolve_env_refs(value: Any) -> Any:
+    """Supports resolve env refs behavior for this module."""
     if isinstance(value, dict):
         return {k: _resolve_env_refs(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -60,6 +76,7 @@ def _resolve_env_refs(value: Any) -> Any:
         return value
 
     def _replace(match: re.Match[str]) -> str:
+        """Supports replace behavior for this module."""
         env_key = match.group(1)
         env_value = os.getenv(env_key)
         if env_value is None:
@@ -70,6 +87,10 @@ def _resolve_env_refs(value: Any) -> Any:
 
 
 def resolve_env_references(config: dict[str, Any]) -> dict[str, Any]:
+    """Handles resolve env references behavior for this module.
+
+    Args:
+        config: Value used by this function."""
     return _resolve_env_refs(config)
 
 
@@ -78,6 +99,7 @@ def _parse_bool(raw: str) -> bool:
 
 
 def _coerce_bool(value: Any) -> bool:
+    """Supports coerce bool behavior for this module."""
     if isinstance(value, bool):
         return value
     if value is None:
@@ -94,6 +116,10 @@ def _parse_csv(raw: str) -> list[str]:
 
 
 def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
+    """Loads env overrides from configured inputs.
+
+    Args:
+        prefix: Value used by this function."""
     overrides: dict[str, Any] = {}
     mapping: dict[str, str] = {
         "TARGET_URL": "target_url",
@@ -101,6 +127,8 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "LEVEL": "level",
         "SECURITY_LEVEL": "level",
         "SURFACE": "surface",
+        "PAYLOAD_MODE": "payload_mode",
+        "CANDIDATE_BUDGET": "candidate_budget",
         "ITERATIONS": "iterations",
         "MAX_ITERATIONS": "iterations",
         "REPEATS": "repeats",
@@ -109,6 +137,7 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "PROVIDERS": "providers",
         "LEVELS": "levels",
         "SURFACES": "surfaces",
+        "PAYLOAD_MODES": "payload_modes",
         "FORMAT": "report_format",
         "ENRICHED_REPORTING": "enriched_reporting",
         "STOP_POLICY": "stop_policy",
@@ -127,13 +156,24 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
 
         suffix = key[len(prefix):]
         if suffix.startswith("MODEL_"):
-            parts = suffix.split("_")
-            if len(parts) < 4:
+            remainder = suffix[len("MODEL_"):]
+            matched_provider = None
+            for candidate in sorted(SUPPORTED_PROVIDERS, key=len, reverse=True):
+                prefix_candidate = f"{candidate.upper()}_"
+                if remainder.startswith(prefix_candidate):
+                    matched_provider = candidate
+                    field_name = remainder[len(prefix_candidate):].lower()
+                    break
+            if not matched_provider:
+                parts = suffix.split("_")
+                if len(parts) < 4:
+                    continue
+                matched_provider = parts[1].lower()
+                field_name = "_".join(parts[2:]).lower()
+            if not field_name:
                 continue
-            provider = parts[1].lower()
-            field_name = "_".join(parts[2:]).lower()
             models = overrides.setdefault("models", {})
-            model = models.setdefault(provider, {})
+            model = models.setdefault(matched_provider, {})
             model[field_name] = raw_value
             continue
 
@@ -142,14 +182,14 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
             continue
 
         value: Any = raw_value
-        if mapped in {"iterations", "repeats", "evasion_max_retries", "evasion_cooldown_threshold"}:
+        if mapped in {"iterations", "repeats", "evasion_max_retries", "evasion_cooldown_threshold", "candidate_budget"}:
             try:
                 value = int(raw_value)
             except ValueError as exc:
                 raise ConfigError(f"Invalid integer value for {key}: {raw_value}") from exc
         elif mapped in {"matrix", "enriched_reporting", "diagnose", "evasion_enabled"}:
             value = _parse_bool(raw_value)
-        elif mapped in {"providers", "levels", "surfaces"}:
+        elif mapped in {"providers", "levels", "surfaces", "payload_modes"}:
             value = _parse_csv(raw_value)
         elif mapped == "coverage_target":
             try:
@@ -163,6 +203,11 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
 
 
 def merge_config(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
+    """Handles merge config behavior for this module.
+
+    Args:
+        base: Value used by this function.
+        override: Value used by this function."""
     merged: dict[str, Any] = dict(base)
     for key, value in override.items():
         if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
@@ -173,6 +218,7 @@ def merge_config(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str,
 
 
 def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
+    """Supports extract cli overrides behavior for this module."""
     overrides: dict[str, Any] = {}
     key_mapping: dict[str, str] = {
         "target": "target_url",
@@ -180,12 +226,15 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         "provider": "provider",
         "level": "level",
         "surface": "surface",
+        "payload_mode": "payload_mode",
+        "candidate_budget": "candidate_budget",
         "iterations": "iterations",
         "repeats": "repeats",
         "output_dir": "output_dir",
         "providers": "providers",
         "levels": "levels",
         "surfaces": "surfaces",
+        "payload_modes": "payload_modes",
         "format": "report_format",
         "enriched_reporting": "enriched_reporting",
         "stop_policy": "stop_policy",
@@ -216,22 +265,47 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def validate_target_url(url: str) -> None:
+    """Validates target url according to current framework rules.
+
+    Args:
+        url: Value used by this function."""
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ConfigError(f"Invalid target URL: {url}")
 
 
 def validate_provider(provider: str) -> None:
+    """Validates provider according to current framework rules.
+
+    Args:
+        provider: Value used by this function."""
     if provider not in SUPPORTED_PROVIDERS:
         raise ConfigError(f"Unsupported provider: {provider}")
 
 
 def validate_level(level: str) -> None:
+    """Validates level according to current framework rules.
+
+    Args:
+        level: Value used by this function."""
     if level not in SECURITY_LEVELS:
         raise ConfigError(f"Unsupported security level: {level}")
 
 
+def validate_payload_mode(payload_mode: str) -> None:
+    """Validates payload mode according to current framework rules.
+
+    Args:
+        payload_mode: Value used by this function."""
+    if payload_mode not in _VALID_PAYLOAD_MODES:
+        raise ConfigError(
+            f"Unsupported payload mode: {payload_mode}. "
+            f"Must be one of: {', '.join(sorted(_VALID_PAYLOAD_MODES))}"
+        )
+
+
 def _default_model_name(provider: str) -> str:
+    """Supports default model name behavior for this module."""
     if provider == "gemini":
         return "gemini-3-flash-preview"
     if provider == "openai":
@@ -242,6 +316,7 @@ def _default_model_name(provider: str) -> str:
 
 
 def _default_api_key(provider: str) -> str:
+    """Supports default api key behavior for this module."""
     if provider == "gemini":
         return os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     if provider == "openai":
@@ -308,11 +383,14 @@ def _validate_surface(surface: str) -> None:
 
 
 def _validate_engagement_config(config: EngagementConfig) -> None:
+    """Supports validate engagement config behavior for this module."""
     validate_target_url(config.target_url)
     if config.iterations <= 0:
         raise ConfigError("iterations must be > 0")
     if config.repeats <= 0:
         raise ConfigError("repeats must be > 0")
+    if config.candidate_budget <= 0:
+        raise ConfigError("candidate_budget must be > 0")
     if config.report_format not in {"json", "markdown", "both"}:
         raise ConfigError(f"Unsupported output format: {config.report_format}")
     if config.stop_policy not in {"impact", "coverage"}:
@@ -321,6 +399,7 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
         raise ConfigError("coverage_target must be between 0.0 and 1.0")
 
     _validate_surface(config.surface)
+    validate_payload_mode(config.payload_mode)
 
     evasion_mode = str(getattr(config, "evasion_mode", config.evasion_strategy)).strip().lower()
     if config.evasion_enabled and evasion_mode not in _VALID_EVASION_MODES:
@@ -344,12 +423,19 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
             validate_level(level)
         for surface in config.surfaces:
             _validate_surface(surface)
+        for payload_mode in config.payload_modes:
+            validate_payload_mode(payload_mode)
     else:
         validate_provider(config.provider)
         validate_level(config.level)
 
 
 def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) -> EngagementConfig:
+    """Loads and resolve config from configured inputs.
+
+    Args:
+        config_path: Value used by this function.
+        cli_args: Value used by this function."""
     yaml_cfg = resolve_env_references(load_yaml_config(config_path))
     env_cfg = load_env_overrides(prefix="TESIS_")
     cli_cfg = _extract_cli_overrides(cli_args)
@@ -373,10 +459,13 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         or merged.get("default_surface")
         or "sqli"
     ).strip().lower()
+    payload_mode = str(merged.get("payload_mode") or "static_only").strip().lower()
+    candidate_budget = int(merged.get("candidate_budget") or 5)
 
     providers = [str(p).strip().lower() for p in merged.get("providers", merged.get("llm_providers", []))]
     levels = [str(l).strip().lower() for l in merged.get("levels", merged.get("security_levels", []))]
     surfaces = [str(s).strip().lower() for s in merged.get("surfaces", [])]
+    payload_modes = [str(s).strip().lower() for s in merged.get("payload_modes", [])]
 
     # Parse nested evasion config block if present
     evasion_cfg = merged.get("evasion") or {}
@@ -406,6 +495,8 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         provider=provider,
         level=level,
         surface=surface,
+        payload_mode=payload_mode,
+        candidate_budget=candidate_budget,
         iterations=int(merged.get("iterations") or merged.get("max_iterations") or merged.get("default_max_iterations") or 30),
         repeats=int(merged.get("repeats", 1)),
         output_dir=str(merged.get("output_dir", "results")).strip(),
@@ -413,6 +504,7 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         providers=providers or [provider],
         levels=levels or [level],
         surfaces=surfaces or (["sqli", "access_control", "brute_force"] if _coerce_bool(merged.get("matrix", False)) else [surface]),
+        payload_modes=payload_modes or (["static_only", "hybrid"] if _coerce_bool(merged.get("matrix", False)) else [payload_mode]),
         report_format=str(merged.get("report_format") or merged.get("format") or "both").strip().lower(),
         enriched_reporting=_coerce_bool(merged.get("enriched_reporting", False)),
         stop_policy=str(merged.get("stop_policy") or "impact").strip().lower(),

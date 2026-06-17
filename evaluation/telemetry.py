@@ -11,15 +11,21 @@ import json
 
 
 def utc_now_iso() -> str:
+    """Handles utc now iso behavior for this module."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def stable_sha256(text: str) -> str:
+    """Handles stable sha256 behavior for this module.
+
+    Args:
+        text: Value used by this function."""
     return "sha256:" + sha256(text.encode("utf-8")).hexdigest()
 
 
 @dataclass(slots=True)
 class TelemetryEvent:
+    """Single telemetry event recorded during framework execution."""
     seq: int
     ts: str
     iteration: int
@@ -30,6 +36,7 @@ class TelemetryEvent:
 
 
 class RunTelemetry:
+    """Telemetry container for events collected during one run."""
     def __init__(self, run_id: str):
         self.run_id = run_id
         self._seq = 0
@@ -45,6 +52,15 @@ class RunTelemetry:
         payload: dict[str, Any],
         ts: str | None = None,
     ) -> None:
+        """Handles emit behavior for this module.
+
+        Args:
+            iteration: Value used by this function.
+            node: Value used by this function.
+            event_type: Value used by this function.
+            status: Value used by this function.
+            payload: Value used by this function.
+            ts: Value used by this function."""
         self._seq += 1
         self.events.append(
             TelemetryEvent(
@@ -59,6 +75,10 @@ class RunTelemetry:
         )
 
     def extend_from_state_events(self, state_events: list[dict[str, Any]]) -> None:
+        """Handles extend from state events behavior for this module.
+
+        Args:
+            state_events: Value used by this function."""
         for item in state_events:
             if not isinstance(item, dict):
                 continue
@@ -91,9 +111,14 @@ class RunTelemetry:
             )
 
     def as_dict_list(self) -> list[dict[str, Any]]:
+        """Handles as dict list behavior for this module."""
         return [asdict(event) for event in self.events]
 
     def write_jsonl(self, path: str | Path) -> Path:
+        """Handles write jsonl behavior for this module.
+
+        Args:
+            path: Value used by this function."""
         out_path = Path(path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with out_path.open("w", encoding="utf-8") as handle:

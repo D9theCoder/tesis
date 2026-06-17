@@ -1,14 +1,33 @@
-"""Chaining Coordinator — conditional edge routing for 3-surface architecture."""
+"""Chaining Coordinator — conditional edge routing for 3-surface architecture.
+
+Design note: chain preconditions are checked against `confirmed_vulns` ONLY,
+not `achieved_outcomes`. This is intentional: outcomes are terminal rewards,
+not stepping-stones for further chains. `get_viable_chains` (reporting) includes
+`achieved_outcomes` for path-preview completeness, but the runtime router does
+not use them to satisfy chain preconditions.
+"""
 
 from __future__ import annotations
 
+import logging
+
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.state import METHODS_BY_SURFACE, MODULE_TO_KG_NODE
+
+_KG_SINGLETON: AttackKnowledgeGraph | None = None
+
+
+def _get_kg() -> AttackKnowledgeGraph:
+    global _KG_SINGLETON
+    if _KG_SINGLETON is None:
+        _KG_SINGLETON = AttackKnowledgeGraph()
+    return _KG_SINGLETON
 
 HIGH_IMPACT_OUTCOMES = set(AttackKnowledgeGraph.HIGH_IMPACT_OUTCOMES)
 
 
 def critical_outcome_achieved(state: dict) -> bool:
+    """Checks whether achieved outcomes contain a high-impact terminal condition."""
     achieved = set(state.get("achieved_outcomes", []))
     confirmed = set(state.get("confirmed_vulns", []))
     return bool((achieved | confirmed) & HIGH_IMPACT_OUTCOMES)
@@ -38,23 +57,36 @@ def _derive_surface_confirmed(confirmed: set[str]) -> set[str]:
 
 
 def route_after_agent(state: dict) -> str:
+    """Evaluates the current state and returns the next graph route after an agent."""
     next_agent, _ = evaluate_chain_route(state)
     return next_agent
 
 
 def evaluate_chain_route(state: dict) -> tuple[str, dict]:
+    """Evaluates chain continuation, fallback, stop, and scoring decisions.
+
+    Reads:
+        Confirmed vulnerabilities, achieved outcomes, attempted agents, blocked
+        agents, failure agents, iteration counters, selected method, and surface.
+
+    Writes:
+        Routing hints, selected method changes, task result, incomplete reason, and
+        telemetry events as partial state updates.
+
+    Returns:
+        Partial state update consumed by the chaining router node."""
     iteration_count = state.get("iteration_count", 0)
     max_iterations = state.get("max_iterations", 30)
     confirmed = set(state.get("confirmed_vulns", []))
     achieved = set(state.get("achieved_outcomes", []))
-    known = confirmed | achieved
+    known = confirmed  # chain preconditions must be confirmed_vulns only, not achieved_outcomes
     current_surface = state.get("current_surface", "sqli")
     # Deduplicate attempted_agents because Annotated[list[str], add]
     # reducer can accumulate duplicates when agents return the full list.
     attempted = list(dict.fromkeys(state.get("attempted_agents", [])))
     blocked = state.get("blocked_agents", [])
     failure_agents = state.get("failure_agents", [])
-    kg = AttackKnowledgeGraph()
+    kg = _get_kg()
 
     if iteration_count >= max_iterations:
         return "scorer", {
@@ -84,7 +116,17 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
                         "target": edge.get("target"),
                     }
 
-    # 2. Fallback loop: if last agent was blocked or failed, try next unexplored method
+    # 2. Critical outcome check — route to scorer immediately if high-impact outcome achieved
+    if critical_outcome_achieved(state):
+        return "scorer", {
+            "node": "chaining_router",
+            "iteration": iteration_count,
+            "event": "akg.route.selected",
+            "next_agent": "scorer",
+            "reason": "critical_outcome",
+        }
+
+    # 3. Fallback loop: if last agent was blocked or failed, try next unexplored method
     attempted_set = set(attempted)
     last_agent = attempted[-1] if attempted else None
     last_status = None
@@ -103,16 +145,6 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
                 "next_agent": next_method,
                 "reason": "fallback_next_method",
             }
-        # Second pass: any unattempted method on this surface
-        for method in METHODS_BY_SURFACE.get(current_surface, []):
-            if method not in attempted_set and method not in blocked:
-                return method, {
-                    "node": "chaining_router",
-                    "iteration": iteration_count,
-                    "event": "akg.route.selected",
-                    "next_agent": method,
-                    "reason": "fallback_next_method",
-                }
         return "scorer", {
             "node": "chaining_router",
             "iteration": iteration_count,
@@ -120,15 +152,6 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
             "next_agent": "scorer",
             "reason": "all_methods_exhausted",
             "incomplete_reason": "ALL_METHODS_FAILED",
-        }
-
-    if critical_outcome_achieved(state):
-        return "scorer", {
-            "node": "chaining_router",
-            "iteration": iteration_count,
-            "event": "akg.route.selected",
-            "next_agent": "scorer",
-            "reason": "critical_outcome",
         }
 
     # 3. Exhaustion check: if every method on this surface has been attempted
@@ -156,8 +179,29 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
 
 
 def chaining_router_node(state: dict) -> dict:
+    """Executes the chaining-router stage of the LangGraph workflow.
+
+    Reads:
+        Current method results, chain history, confirmed vulnerabilities, outcomes,
+        iteration count, and method-attempt tracking fields.
+
+    Writes:
+        Next-agent routing hints, selected method updates, completion status,
+        incomplete reason, and telemetry events.
+
+    Routing:
+        The graph maps `next_agent` to orchestrator, payload candidate builder,
+        scorer, or termination.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update merged into the LangGraph state."""
     next_agent, event = evaluate_chain_route(state)
     updates: dict = {"next_agent": next_agent, "telemetry_events": [event]}
+    if next_agent in {method for methods in METHODS_BY_SURFACE.values() for method in methods}:
+        updates["selected_method"] = next_agent
     if event.get("reason") == "all_methods_exhausted":
         updates["task_result"] = "INCOMPLETE"
         updates["incomplete_reason"] = event.get("incomplete_reason", "ALL_METHODS_FAILED")

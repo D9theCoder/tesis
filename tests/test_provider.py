@@ -1,3 +1,8 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 import pytest
 import llm.provider as provider_module
 from langchain_core.messages import HumanMessage
@@ -7,6 +12,7 @@ from llm.provider import SAMPLE_QUERY, SUPPORTED_PROVIDERS, get_llm, invoke_samp
 
 
 def test_get_llm_gemini(monkeypatch):
+    """Verifies get llm gemini behavior."""
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
     llm = get_llm("gemini")
     assert isinstance(llm, ChatGoogleGenerativeAI)
@@ -14,6 +20,7 @@ def test_get_llm_gemini(monkeypatch):
 
 
 def test_get_llm_openai(monkeypatch):
+    """Verifies get llm openai behavior."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     llm = get_llm("openai")
     assert isinstance(llm, ChatOpenAI)
@@ -21,6 +28,7 @@ def test_get_llm_openai(monkeypatch):
 
 
 def test_get_llm_openai_compatible_base_url(monkeypatch):
+    """Verifies get llm openai compatible base url behavior."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     llm = get_llm("openai", model_name="meta-llama/llama-3.1-8b-instruct", base_url="https://openrouter.ai/api/v1")
     assert isinstance(llm, ChatOpenAI)
@@ -29,6 +37,7 @@ def test_get_llm_openai_compatible_base_url(monkeypatch):
 
 
 def test_get_llm_openai_compatible_with_base_url(monkeypatch):
+    """Verifies get llm openai compatible with base url behavior."""
     monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "test-key")
     llm = get_llm(
         "openai_compatible",
@@ -41,11 +50,13 @@ def test_get_llm_openai_compatible_with_base_url(monkeypatch):
 
 
 def test_get_llm_openai_compatible_missing_base_url():
+    """Verifies get llm openai compatible missing base url behavior."""
     with pytest.raises(ValueError, match="openai_compatible provider requires base_url"):
         get_llm("openai_compatible", model_name="llama3.2")
 
 
 def test_get_llm_openai_compatible_base_url_from_env(monkeypatch):
+    """Verifies get llm openai compatible base url from env behavior."""
     monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_COMPATIBLE_BASE_URL", "http://localhost:8080/v1")
     llm = get_llm("openai_compatible", model_name="llama3.2")
@@ -54,32 +65,39 @@ def test_get_llm_openai_compatible_base_url_from_env(monkeypatch):
 
 
 def test_openai_compatible_in_supported_providers():
+    """Verifies openai compatible in supported providers behavior."""
     assert "openai_compatible" in SUPPORTED_PROVIDERS
 
 
 def test_get_llm_invalid():
+    """Verifies get llm invalid behavior."""
     with pytest.raises(ValueError, match="Unsupported LLM provider: unknown"):
         get_llm("unknown")
 
 
 def test_invoke_sample_query_uses_hardcoded_prompt(monkeypatch):
+    """Verifies invoke sample query uses hardcoded prompt behavior."""
     class FakeResponse:
+        """Groups regression tests for FakeResponse behavior."""
         def __init__(self, content):
             self.content = content
 
     class FakeLLM:
+        """Groups regression tests for FakeLLM behavior."""
         model_name = "fake-model"
 
         def __init__(self):
             self.received_messages = []
 
         def invoke(self, messages):
+            """Supports regression tests for test provider."""
             self.received_messages = messages
             return FakeResponse("I am fake-model")
 
     fake_llm = FakeLLM()
 
     def fake_get_llm(provider_name: str, **kwargs):
+        """Supports regression tests for test provider."""
         assert provider_name == "gemini"
         return fake_llm
 

@@ -53,6 +53,7 @@ def _parse_decision_payload(raw_text: str) -> dict[str, Any] | None:
 
 
 def _coerce_bool(value: Any) -> bool:
+    """Supports coerce bool behavior for this module."""
     if isinstance(value, bool):
         return value
     if value is None:
@@ -95,39 +96,74 @@ def _fallback_next_agent(
     blocked = set(state.get("blocked_agents", []))
     failure_agents = set(state.get("failure_agents", []))
     observations = state.get("observations", {})
-    scores = state.get("scores", {})
-    
+
     kg = AttackKnowledgeGraph()
     viable = kg.get_viable_methods(current_surface, observations)
-    
-    # Prefer unattempted viable methods
+
+    # Prefer unattempted viable methods that have not previously failed
     for method in viable:
-        if method not in attempted and method not in blocked:
+        if method not in attempted and method not in blocked and method not in failure_agents:
             return method
-    
-    # Try any unattempted method on this surface
+
+    # Try any unattempted method on this surface that has not failed
     for method in METHODS_BY_SURFACE.get(current_surface, []):
-        if method not in attempted and method not in blocked:
+        if method not in attempted and method not in blocked and method not in failure_agents:
             return method
-    
+
     # All exhausted
     return "scorer"
 
 
 def _run_evasion_pipeline(prompt: str, evasion_max_retries: int) -> tuple[str, bool]:
-    """LangGraph-native retry: paraphrase + validity gate.
-    
-    Returns (enhanced_prompt, success).
-    For now, implement a simple semantic paraphrase by rewording.
+    """LangGraph-native retry: restructure prompt wording + validity gate.
+
+    Uses sentence-level restructuring rather than naive word replacement
+    to avoid mangling technical terms (e.g. "exploitation" → "assessitation").
     """
-    # Simple paraphrase: replace trigger words
-    paraphrased = prompt.replace("exploit", "assess").replace("attack", "evaluate")
-    if paraphrased != prompt:
-        return paraphrased, True
+    replacement_tiers: list[dict[str, str]] = [
+        {
+            "exploit the vulnerability": "test the security control",
+            "attack the application": "evaluate the application",
+            "perform an attack": "conduct a security test",
+        },
+        {
+            "exploit": "verify",
+            "attack": "assess",
+            "payload to exploit": "payload to verify",
+        },
+    ]
+
+    max_attempts = min(max(evasion_max_retries, 0), len(replacement_tiers))
+    for attempt in range(max_attempts):
+        candidate = prompt
+        for old, new in replacement_tiers[attempt].items():
+            candidate = candidate.replace(old, new)
+        if candidate != prompt:
+            return candidate, True
     return prompt, False
 
 
 def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
+    """Executes method selection for the LangGraph workflow.
+
+    Reads:
+        Surface, observations, viable methods, attempted/blocked/failure agents,
+        scores, confirmed vulnerabilities, achieved outcomes, payload mode, and
+        iteration budget fields.
+
+    Writes:
+        Selected method, next agent, guardrail/evasion telemetry, and iteration
+        tracking fields.
+
+    Side Effects:
+        May call the configured LLM provider and evasion retry pipeline before
+        deterministic fallback is used.
+
+    Args:
+        state: Current shared LangGraph state.
+
+    Returns:
+        Partial state update containing method-selection routing hints."""
     iteration_count = state.get("iteration_count", 0)
     max_iterations = state.get("max_iterations", 30)
     confirmed_vulns = state.get("confirmed_vulns", [])
@@ -142,35 +178,37 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
     observations = state.get("observations", {})
     scores = state.get("scores", {})
     consecutive_clean = state.get("consecutive_clean_responses", 0)
-    
+
     evasion_enabled = _coerce_bool(state.get("evasion_enabled", False))
     evasion_mode = str(state.get("evasion_mode", "reactive")).strip().lower()
     evasion_max_retries = int(state.get("evasion_max_retries", 3))
     evasion_cooldown_threshold = int(state.get("evasion_cooldown_threshold", 5))
-    
+
     telemetry_base = {
         "node": "orchestrator",
         "iteration": iteration_count,
     }
     telemetry_events: list[dict[str, Any]] = []
-    
+
     if iteration_count >= max_iterations:
         return {
             "next_agent": "scorer",
+            "iteration_count": iteration_count + 1,
             "telemetry_events": [{**telemetry_base, "event": "orchestrator.stop", "reason": "budget_exhausted"}],
         }
 
     if (set(confirmed_vulns) | set(achieved_outcomes)) & CRITICAL_OUTCOMES:
         return {
             "next_agent": "scorer",
+            "iteration_count": iteration_count + 1,
             "telemetry_events": [{**telemetry_base, "event": "orchestrator.stop", "reason": "critical_outcome"}],
         }
 
     kg = AttackKnowledgeGraph()
     viable_methods = kg.get_viable_methods(current_surface, observations)
-    
+
     fallback_agent = _fallback_next_agent(state)
-    
+
     base_prompt = build_orchestrator_prompt(
         current_surface=current_surface,
         viable_methods=viable_methods,
@@ -179,23 +217,27 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         blocked_agents=blocked_agents,
         failure_agents=failure_agents,
         scores=scores,
+        method_scores=state.get("method_scores", {}),
         confirmed_vulns=confirmed_vulns,
         achieved_outcomes=achieved_outcomes,
         security_level=state.get("security_level", "low"),
+        payload_mode=state.get("payload_mode", "static_only"),
         iteration_count=iteration_count,
         max_iterations=max_iterations,
     )
     prompt = _sanitize_prompt_seed(base_prompt)
-    
+
     # Evasion logic
     evasion_triggered = False
     evasion_success = False
-    
+    retries_used = 0
+
     if evasion_enabled and evasion_mode != "disabled":
         if evasion_mode == "proactive":
             # Proactive: always run evasion
             prompt, evasion_success = _run_evasion_pipeline(prompt, evasion_max_retries)
             evasion_triggered = True
+            retries_used = 1
             telemetry_events.append({
                 **telemetry_base,
                 "event": "orchestrator.evasion.triggered",
@@ -212,10 +254,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                     "status": "ok",
                     "payload": {"reason": "cooldown_active", "consecutive_clean": consecutive_clean},
                 })
-            else:
-                # 2. Short-circuit: run LLM first, then check response
-                pass  # will check after LLM call
-    
+
     try:
         provider_name = state.get("llm_provider", "gemini")
         model_cfg = state.get("model_config", {})
@@ -229,14 +268,14 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             llm = get_llm(provider_name)
         response = llm.invoke([HumanMessage(content=prompt)])
         text = _extract_response_text(getattr(response, "content", ""))
-        
+
         telemetry_events.append({
             **telemetry_base,
             "event": "orchestrator.llm.response",
             "status": "ok",
             "payload": {"response_text": _clip_text(text)},
         })
-        
+
         # Reactive evasion check AFTER LLM response
         if evasion_enabled and evasion_mode == "reactive" and consecutive_clean < evasion_cooldown_threshold:
             if is_guardrail_refusal(text):
@@ -247,31 +286,31 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                     "status": "ok",
                     "payload": {"reason": "guardrail_refusal"},
                 })
-                # Run evasion pipeline
-                for retry in range(evasion_max_retries):
+                retry_budget = max(evasion_max_retries, 0)
+                for retry in range(retry_budget):
+                    retries_used = retry + 1
                     new_prompt, success = _run_evasion_pipeline(prompt, evasion_max_retries)
                     if success:
                         prompt = new_prompt
-                        # Re-invoke LLM with paraphrased prompt
-                        response = llm.invoke([HumanMessage(content=prompt)])
-                        text = _extract_response_text(getattr(response, "content", ""))
-                        if not is_guardrail_refusal(text):
-                            evasion_success = True
-                            break
-                
+                    response = llm.invoke([HumanMessage(content=prompt)])
+                    text = _extract_response_text(getattr(response, "content", ""))
+                    if not is_guardrail_refusal(text):
+                        evasion_success = True
+                        break
+
                 if evasion_success:
                     telemetry_events.append({
                         **telemetry_base,
                         "event": "orchestrator.evasion.success",
                         "status": "ok",
-                        "payload": {"retries_used": retry + 1},
+                        "payload": {"retries_used": retries_used},
                     })
                 else:
                     telemetry_events.append({
                         **telemetry_base,
                         "event": "orchestrator.evasion.failed",
                         "status": "fallback",
-                        "payload": {"reason": "max_retries_exhausted"},
+                        "payload": {"reason": "max_retries_exhausted", "retries_used": retries_used},
                     })
             else:
                 # Clean response
@@ -281,13 +320,15 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                     "status": "ok",
                     "payload": {"reason": "clean_response"},
                 })
-        
+
         if is_guardrail_refusal(text) and not evasion_success:
             # Do NOT add fallback_agent to blocked_agents — guardrail refusals
             # are about the orchestrator prompt, not the method agent. Blocking
             # the fallback would permanently disable viable methods.
             return {
-                "next_agent": fallback_agent,
+                "next_agent": "payload_candidate_builder" if fallback_agent != "scorer" else "scorer",
+                "selected_method": fallback_agent if fallback_agent != "scorer" else None,
+                "iteration_count": iteration_count + 1,
                 "guardrail_activations": [make_guardrail_event(
                     provider=state.get("llm_provider", "gemini"),
                     context="orchestrator",
@@ -299,41 +340,48 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                 "evasion_attempts": state.get("evasion_attempts", 0) + (1 if evasion_triggered else 0),
                 "successful_evasions": state.get("successful_evasions", 0),
             }
-        
+
         parsed = _parse_decision_payload(text)
         parse_ok = isinstance(parsed, dict) and isinstance(parsed.get("next_agent"), str)
         candidate = parsed["next_agent"] if parse_ok else fallback_agent
         next_agent = candidate if candidate in ALL_METHOD_AGENTS or candidate == "scorer" else fallback_agent
         used_fallback = not parse_ok or candidate != next_agent
-        
+        selected_method = next_agent if next_agent in ALL_METHOD_AGENTS else None
+        method_score = 3 if selected_method in viable_methods else (1 if selected_method in METHODS_BY_SURFACE.get(current_surface, []) else 0)
+
         # Update consecutive_clean_responses
         new_clean_count = consecutive_clean + 1 if not evasion_triggered else 0
-        
+
         telemetry_events.append({
             **telemetry_base,
             "event": "orchestrator.decision",
             "status": "ok",
             "payload": {"next_agent": next_agent, "used_fallback": used_fallback},
         })
-        
+
         return {
-            "next_agent": next_agent,
+            "next_agent": "payload_candidate_builder" if selected_method else next_agent,
+            "selected_method": selected_method,
+            "method_scores": {selected_method: method_score} if selected_method else {},
+            "iteration_count": iteration_count + 1,
             "telemetry_events": telemetry_events,
             "messages": [HumanMessage(content=prompt), AIMessage(content=text)],
             "consecutive_clean_responses": new_clean_count,
-            "evasion_attempts": state.get("evasion_attempts", 0) + (1 if evasion_triggered else 0),
+            "evasion_attempts": state.get("evasion_attempts", 0) + (retries_used if evasion_triggered else 0),
             "successful_evasions": state.get("successful_evasions", 0) + (1 if evasion_success else 0),
         }
     except Exception as exc:
         # Harness node — crashing the graph is worse than logging a fallback.
         logger.exception("Orchestrator failed; applying deterministic fallback")
         return {
-            "next_agent": fallback_agent,
+            "next_agent": "payload_candidate_builder" if fallback_agent != "scorer" else "scorer",
+            "selected_method": fallback_agent if fallback_agent != "scorer" else None,
+            "iteration_count": iteration_count + 1,
             "telemetry_events": [
                 *telemetry_events,
                 {**telemetry_base, "event": "orchestrator.fallback.applied", "status": "fallback", "payload": {"error_type": type(exc).__name__, "next_agent": fallback_agent}},
             ],
             "messages": [HumanMessage(content=prompt), AIMessage(content=f"orchestrator_fallback:{type(exc).__name__}")],
-            "evasion_attempts": state.get("evasion_attempts", 0) + (1 if evasion_triggered else 0),
+            "evasion_attempts": state.get("evasion_attempts", 0) + (retries_used if evasion_triggered else 0),
             "successful_evasions": state.get("successful_evasions", 0) + (1 if evasion_success else 0),
         }

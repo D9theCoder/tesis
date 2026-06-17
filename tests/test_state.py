@@ -16,6 +16,7 @@ from core.state import (
     ExploitationState,
     DEFAULT_STATE,
     new_default_state,
+    _merge_tried_payloads,
     MODULE_NAMES,
     KG_NODES,
     SCORE_LABELS,
@@ -35,19 +36,20 @@ class TestExploitationStateSchema:
         "llm_provider",
         "current_surface",
         "endpoints",
+        "input_vectors",
         "observations",
         "confirmed_vulns",
         "achieved_outcomes",
         "found_credentials",
         "tried_payloads",
-        "blocked_patterns",
-        "successful_bypasses",
         "scores",
         "current_chain",
         "chain_history",
         "akg_path",
         "messages",
         "guardrail_activations",
+        "blocked_patterns",
+        "successful_bypasses",
         "blocked_agents",
         "failure_agents",
         "consecutive_clean_responses",
@@ -60,7 +62,7 @@ class TestExploitationStateSchema:
     ]
 
     # Stage 7.1 optional extensions for telemetry/coverage reporting
-    # Stage 8 optional extensions for adversarial evasion
+    # Stage 8 optional extensions for technical retry/refusal handling
     OPTIONAL_FIELDS = [
         "telemetry_events",
         "stop_policy",
@@ -77,6 +79,19 @@ class TestExploitationStateSchema:
         "max_concurrency",
         "attempted_agents",
         "model_config",
+        "payload_mode",
+        "selected_method",
+        "payload_candidates",
+        "generated_payloads",
+        "payload_validation_results",
+        "payload_scores",
+        "payload_provenance",
+        "generation_prompts",
+        "payload_guardrail_activations",
+        "candidate_budget",
+        "method_scores",
+        "exploitation_scores",
+        "chain_scores",
     ]
 
     def test_all_fields_present(self):
@@ -100,19 +115,20 @@ class TestExploitationStateSchema:
             "llm_provider": "gemini",
             "current_surface": "sqli",
             "endpoints": [{"url": "/dvwa/vulnerabilities/sqli/", "method": "GET"}],
+            "input_vectors": [{"url": "/dvwa/vulnerabilities/sqli/", "inputs": ["id"]}],
             "observations": {"error_messages_enabled": True},
             "confirmed_vulns": ["sqli_confirmed"],
             "achieved_outcomes": ["credentials_extracted"],
             "found_credentials": [{"username": "admin", "password": "password"}],
             "tried_payloads": {"sqli": ["1'", "1 OR 1=1"]},
-            "blocked_patterns": [],
-            "successful_bypasses": [],
             "scores": {"sqli": 3},
             "current_chain": ["sqli_confirmed", "credentials_extracted"],
             "chain_history": [{"chain": "sqli→creds", "evidence": "users table dumped"}],
             "akg_path": [],
             "messages": [HumanMessage(content="test")],
             "guardrail_activations": [],
+            "blocked_patterns": [],
+            "successful_bypasses": [],
             "blocked_agents": [],
             "failure_agents": [],
             "consecutive_clean_responses": 0,
@@ -152,20 +168,6 @@ class TestReducerBehavior:
         args = get_args(annotated_type)
         assert args[1] is add
 
-    def test_blocked_patterns_uses_add(self):
-        """blocked_patterns should use operator.add reducer."""
-        hints = get_type_hints(ExploitationState, include_extras=True)
-        annotated_type = hints["blocked_patterns"]
-        args = get_args(annotated_type)
-        assert args[1] is add
-
-    def test_successful_bypasses_uses_add(self):
-        """successful_bypasses should use operator.add reducer."""
-        hints = get_type_hints(ExploitationState, include_extras=True)
-        annotated_type = hints["successful_bypasses"]
-        args = get_args(annotated_type)
-        assert args[1] is add
-
     def test_chain_history_uses_add(self):
         """chain_history should use operator.add reducer."""
         hints = get_type_hints(ExploitationState, include_extras=True)
@@ -177,6 +179,20 @@ class TestReducerBehavior:
         """guardrail_activations should use operator.add reducer."""
         hints = get_type_hints(ExploitationState, include_extras=True)
         annotated_type = hints["guardrail_activations"]
+        args = get_args(annotated_type)
+        assert args[1] is add
+
+    def test_blocked_patterns_uses_add(self):
+        """blocked_patterns should use operator.add reducer."""
+        hints = get_type_hints(ExploitationState, include_extras=True)
+        annotated_type = hints["blocked_patterns"]
+        args = get_args(annotated_type)
+        assert args[1] is add
+
+    def test_successful_bypasses_uses_add(self):
+        """successful_bypasses should use operator.add reducer."""
+        hints = get_type_hints(ExploitationState, include_extras=True)
+        annotated_type = hints["successful_bypasses"]
         args = get_args(annotated_type)
         assert args[1] is add
 
@@ -193,20 +209,33 @@ class TestReducerBehavior:
         hints = get_type_hints(ExploitationState, include_extras=True)
         assert hints["target_url"] is str
 
-    def test_scores_is_plain_dict(self):
-        """scores should NOT have an annotated reducer (overwrite default)."""
+    def test_scores_uses_merge_scores(self):
+        """scores should use _merge_scores reducer."""
+        from core.state import _merge_scores
         hints = get_type_hints(ExploitationState, include_extras=True)
-        # scores should be dict[str, int] without annotation
         assert "scores" in hints
-        # It should NOT be an Annotated type
         raw = hints["scores"]
-        assert get_args(raw) == () or not hasattr(raw, "__metadata__"), \
-            "scores should be plain dict, not Annotated"
+        args = get_args(raw)
+        assert len(args) == 2, "scores should be Annotated[type, reducer]"
+        assert args[1] is _merge_scores, "scores reducer should be _merge_scores"
 
-    def test_tried_payloads_is_plain_dict(self):
-        """tried_payloads should NOT have an annotated reducer (overwrite default)."""
+    def test_tried_payloads_uses_merge_tried_payloads(self):
+        """tried_payloads should use _merge_tried_payloads reducer."""
+        from core.state import _merge_tried_payloads
         hints = get_type_hints(ExploitationState, include_extras=True)
         assert "tried_payloads" in hints
+        raw = hints["tried_payloads"]
+        args = get_args(raw)
+        assert len(args) == 2, "tried_payloads should be Annotated[type, reducer]"
+        assert args[1] is _merge_tried_payloads, "tried_payloads reducer should be _merge_tried_payloads"
+
+    def test_akg_path_uses_add(self):
+        """akg_path should use operator.add reducer."""
+        hints = get_type_hints(ExploitationState, include_extras=True)
+        annotated_type = hints["akg_path"]
+        args = get_args(annotated_type)
+        assert len(args) == 2, "akg_path should be Annotated[type, reducer]"
+        assert args[1] is add, "akg_path reducer should be operator.add"
 
 
 class TestDefaultState:
@@ -218,12 +247,15 @@ class TestDefaultState:
             assert field in DEFAULT_STATE, f"DEFAULT_STATE missing field: {field}"
 
     def test_default_iteration_count(self):
+        """Verifies default iteration count behavior."""
         assert DEFAULT_STATE["iteration_count"] == 0
 
     def test_default_max_iterations(self):
+        """Verifies default max iterations behavior."""
         assert DEFAULT_STATE["max_iterations"] == 30
 
     def test_default_next_agent(self):
+        """Verifies default next agent behavior."""
         assert DEFAULT_STATE["next_agent"] == "recon"
 
     def test_default_empty_collections(self):
@@ -231,14 +263,14 @@ class TestDefaultState:
         assert DEFAULT_STATE["confirmed_vulns"] == []
         assert DEFAULT_STATE["achieved_outcomes"] == []
         assert DEFAULT_STATE["found_credentials"] == []
-        assert DEFAULT_STATE["blocked_patterns"] == []
-        assert DEFAULT_STATE["successful_bypasses"] == []
         assert DEFAULT_STATE["scores"] == {}
         assert DEFAULT_STATE["current_chain"] == []
         assert DEFAULT_STATE["chain_history"] == []
         assert DEFAULT_STATE["akg_path"] == []
         assert DEFAULT_STATE["messages"] == []
         assert DEFAULT_STATE["guardrail_activations"] == []
+        assert DEFAULT_STATE["blocked_patterns"] == []
+        assert DEFAULT_STATE["successful_bypasses"] == []
         assert DEFAULT_STATE["tried_payloads"] == {}
         assert DEFAULT_STATE["endpoints"] == []
         assert DEFAULT_STATE["blocked_agents"] == []
@@ -299,16 +331,45 @@ class TestConstants:
         expected_outcomes = [
             "credentials_extracted",
             "admin_session_obtained",
-            "rce_achieved",
-            "user_compromised",
             "data_exfiltrated",
-            "session_hijack",
-            "log_access_confirmed",
         ]
         for outcome in expected_outcomes:
             assert outcome in KG_NODES, f"Missing KG outcome: {outcome}"
 
+
+class TestMergeTriedPayloadsReducer:
+    """Verify _merge_tried_payloads deduplicates across and within batches."""
+
+    def test_empty_a_returns_b_unchanged(self):
+        """Verifies empty a returns b unchanged behavior."""
+        result = _merge_tried_payloads({}, {"x": ["a", "b"]})
+        assert result == {"x": ["a", "b"]}
+
+    def test_empty_b_returns_a_unchanged(self):
+        """Verifies empty b returns a unchanged behavior."""
+        result = _merge_tried_payloads({"x": ["a"]}, {})
+        assert result == {"x": ["a"]}
+
+    def test_deduplicates_within_b(self):
+        """Verifies deduplicates within b behavior."""
+        result = _merge_tried_payloads({"agent1": ["a"]}, {"agent1": ["c", "c"]})
+        assert result == {"agent1": ["a", "c"]}
+
+    def test_deduplicates_across_a_and_b(self):
+        """Verifies deduplicates across a and b behavior."""
+        result = _merge_tried_payloads(
+            {"agent1": ["a", "b"]},
+            {"agent1": ["a", "c"]},
+        )
+        assert result == {"agent1": ["a", "b", "c"]}
+
+    def test_preserves_order_a_then_b(self):
+        """Verifies preserves order a then b behavior."""
+        result = _merge_tried_payloads({"agent1": ["first"]}, {"agent1": ["second"]})
+        assert result["agent1"] == ["first", "second"]
+
     def test_score_labels(self):
+        """Verifies score labels behavior."""
         assert SCORE_LABELS[0] == "Not Found"
         assert SCORE_LABELS[1] == "Identified"
         assert SCORE_LABELS[2] == "Partial Exploit"
@@ -317,9 +378,11 @@ class TestConstants:
         assert len(SCORE_LABELS) == 5
 
     def test_security_levels(self):
+        """Verifies security levels behavior."""
         assert SECURITY_LEVELS == ["low", "medium", "high"]
 
     def test_llm_providers(self):
+        """Verifies llm providers behavior."""
         assert "gemini" in LLM_PROVIDERS
         assert "openai" in LLM_PROVIDERS
 
@@ -332,6 +395,7 @@ class TestLangGraphIntegration:
         from langgraph.graph import StateGraph, START, END
 
         def dummy_node(state: ExploitationState) -> dict:
+            """Supports regression tests for test state."""
             return {"iteration_count": state.get("iteration_count", 0) + 1}
 
         graph = StateGraph(ExploitationState)
@@ -347,6 +411,7 @@ class TestLangGraphIntegration:
         from langgraph.graph import StateGraph, START, END
 
         def recon_stub(state: ExploitationState) -> dict:
+            """Supports regression tests for test state."""
             return {
                 "endpoints": [{"url": "/test", "method": "GET"}],
                 "next_agent": "orchestrator",
@@ -367,9 +432,11 @@ class TestLangGraphIntegration:
         from langgraph.graph import StateGraph, START, END
 
         def node_a(state: ExploitationState) -> dict:
+            """Supports regression tests for test state."""
             return {"confirmed_vulns": ["sqli_confirmed"]}
 
         def node_b(state: ExploitationState) -> dict:
+            """Supports regression tests for test state."""
             return {"confirmed_vulns": ["xss_reflected_confirmed"]}
 
         graph = StateGraph(ExploitationState)
@@ -390,9 +457,11 @@ class TestLangGraphIntegration:
         from langgraph.graph import StateGraph, START, END
 
         def add_human_msg(state: ExploitationState) -> dict:
+            """Supports regression tests for test state."""
             return {"messages": [HumanMessage(content="test recon")]}
 
         def add_ai_msg(state: ExploitationState) -> dict:
+            """Supports regression tests for test state."""
             return {"messages": [AIMessage(content="test response")]}
 
         graph = StateGraph(ExploitationState)
@@ -407,3 +476,55 @@ class TestLangGraphIntegration:
         assert len(result["messages"]) == 2
         assert isinstance(result["messages"][0], HumanMessage)
         assert isinstance(result["messages"][1], AIMessage)
+
+
+class TestMergeDictsReducer:
+    """Validate _merge_dicts never overwrites True with False."""
+
+    def test_merge_dicts_preserves_true_over_false(self):
+        """Verifies merge dicts preserves true over false behavior."""
+        from core.state import _merge_dicts
+        a = {"key1": True, "key2": False}
+        b = {"key1": False, "key3": True}
+        result = _merge_dicts(a, b)
+        assert result["key1"] is True
+        assert result["key2"] is False
+        assert result["key3"] is True
+
+    def test_merge_dicts_allows_false_to_true(self):
+        """Verifies merge dicts allows false to true behavior."""
+        from core.state import _merge_dicts
+        a = {"key1": False}
+        b = {"key1": True}
+        result = _merge_dicts(a, b)
+        assert result["key1"] is True
+
+    def test_merge_dicts_with_empty_b(self):
+        """Verifies merge dicts with empty b behavior."""
+        from core.state import _merge_dicts
+        a = {"key1": True}
+        b = {}
+        result = _merge_dicts(a, b)
+        assert result == {"key1": True}
+
+
+class TestModuleToKgNodeMappings:
+    """Validate MODULE_TO_KG_NODE maps agents to existing AKG nodes."""
+
+    def test_sqli_boolean_blind_maps_to_sqli_confirmed(self):
+        """Verifies sqli boolean blind maps to sqli confirmed behavior."""
+        from core.state import MODULE_TO_KG_NODE
+        assert MODULE_TO_KG_NODE["sqli_boolean_blind"] == "sqli_confirmed"
+
+    def test_sqli_time_blind_maps_to_sqli_confirmed(self):
+        """Verifies sqli time blind maps to sqli confirmed behavior."""
+        from core.state import MODULE_TO_KG_NODE
+        assert MODULE_TO_KG_NODE["sqli_time_blind"] == "sqli_confirmed"
+
+    def test_all_method_agents_map_to_existing_kg_nodes(self):
+        """Verifies all method agents map to existing kg nodes behavior."""
+        from core.state import MODULE_TO_KG_NODE, ALL_METHOD_AGENTS, KG_NODES
+        for agent in ALL_METHOD_AGENTS:
+            node = MODULE_TO_KG_NODE.get(agent)
+            assert node is not None, f"{agent} has no MODULE_TO_KG_NODE mapping"
+            assert node in KG_NODES, f"{agent} maps to {node} which is not in KG_NODES"

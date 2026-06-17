@@ -1,3 +1,8 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 import pytest
 from agents.access_control.ac_idor_agent import ac_idor_agent
 from agents.access_control.ac_vertical_escalation_agent import ac_vertical_escalation_agent
@@ -10,6 +15,7 @@ from agents.access_control.ac_force_browse_agent import ac_force_browse_agent
     (ac_force_browse_agent, "ac_force_browse"),
 ])
 def test_access_control_agent_returns_dict(agent_func, agent_id):
+    """Verifies access control agent returns dict behavior."""
     state = {
         "target_url": "http://localhost/dvwa",
         "security_level": "low",

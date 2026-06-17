@@ -1,3 +1,8 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 import pytest
 from agents.brute_force.bf_dictionary_agent import bf_dictionary_agent
 from agents.brute_force.bf_spray_agent import bf_spray_agent
@@ -8,6 +13,7 @@ from agents.brute_force.bf_spray_agent import bf_spray_agent
     (bf_spray_agent, "bf_spray"),
 ])
 def test_brute_force_agent_returns_dict(agent_func, agent_id):
+    """Verifies brute force agent returns dict behavior."""
     state = {
         "target_url": "http://localhost/dvwa",
         "security_level": "low",

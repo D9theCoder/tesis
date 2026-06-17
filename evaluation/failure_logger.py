@@ -15,6 +15,14 @@ def write_failure_artifact(
     final_state: dict[str, Any],
     recent_events: list[dict[str, Any]],
 ) -> Path:
+    """Handles write failure artifact behavior for this module.
+
+    Args:
+        output_dir: Value used by this function.
+        run_id: Value used by this function.
+        error: Value used by this function.
+        final_state: Value used by this function.
+        recent_events: Value used by this function."""
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 

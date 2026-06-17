@@ -1,3 +1,8 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 import json
 
 from evaluation.failure_logger import write_failure_artifact
@@ -5,7 +10,9 @@ from evaluation.runner import run_single_engagement
 
 
 def test_failure_artifact_written_on_runner_error(monkeypatch, tmp_path):
+    """Verifies failure artifact written on runner error behavior."""
     def fail_framework(llm_provider):
+        """Supports regression tests for test failure logging."""
         raise RuntimeError("boom")
 
     monkeypatch.setattr("evaluation.runner.build_framework", fail_framework)
@@ -21,11 +28,12 @@ def test_failure_artifact_written_on_runner_error(monkeypatch, tmp_path):
     )
 
     assert artifact["status"] == "error"
-    failure_path = tmp_path / "gemini-sqli-low-0.failure.json"
+    failure_path = tmp_path / "gemini-sqli-low-static_only-0.failure.json"
     assert failure_path.exists()
 
 
 def test_failure_artifact_contains_recent_events_tail(tmp_path):
+    """Verifies failure artifact contains recent events tail behavior."""
     path = write_failure_artifact(
         output_dir=tmp_path,
         run_id="sample",

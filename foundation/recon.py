@@ -41,6 +41,7 @@ DVWA_MODULE_HINTS: dict[str, str] = {
     "upload": "upload",
     "csrf": "csrf",
     "brute": "brute",
+    "authbypass": "idor",
 }
 
 
@@ -210,8 +211,8 @@ def extract_nav_links(html: str, base_url: str) -> list[str]:
         # Only include links to DVWA vulnerability module pages
         if "/vulnerabilities/" in href or "/vulnerabilities/" in str(a_tag.get("href", "")):
             absolute = urljoin(base_url, href)
-            # Strip fragment identifiers
-            absolute = absolute.split("#")[0]
+            # Strip query parameters and fragment identifiers to avoid GET side-effects
+            absolute = absolute.split("?")[0].split("#")[0]
             links.append(absolute)
 
     # Deduplicate and sort for deterministic ordering
@@ -283,22 +284,28 @@ def fingerprint_server(headers: dict) -> dict[str, str]:
 # ── Main recon function (LangGraph node) ────────────────────────────────
 
 def recon(state: ExploitationState) -> dict[str, Any]:
-    """LangGraph recon node — crawl DVWA and populate the attack surface.
+    """Execute the reconnaissance stage of the LangGraph workflow.
 
-    This function is designed to be registered as a node in the LangGraph
-    ``StateGraph``. It receives the current ``ExploitationState`` and returns
-    a partial state update dict.
+    Reads:
+        Target URL and requested DVWA security level.
 
-    The recon pipeline:
-    1. Authenticate to DVWA using the target URL.
-    2. Detect (or confirm) the current security level.
-    3. Crawl the DVWA navigation to find module pages.
-    4. Parse each module page for forms, inputs, and CSRF tokens.
-    5. Build normalized ``endpoints`` and ``input_vectors`` lists.
-    6. Return a partial state update with ``next_agent="orchestrator"``.
+    Writes:
+        Discovered endpoints, input vectors, observations, security level,
+        server fingerprint data, telemetry events, and `next_agent`.
+
+    Routing:
+        Returns `next_agent="orchestrator"` so method selection runs next.
+
+    Side Effects:
+        Authenticates to DVWA, sets security level, crawls module pages, and
+        parses forms and inputs through HTTP requests.
+
+    Failure:
+        Returns empty discovery lists and routes to orchestrator when target URL
+        is missing or reconnaissance cannot complete.
 
     Args:
-        state: The current ``ExploitationState`` dict.
+        state: Current shared LangGraph state.
 
     Returns:
         Partial state update dict compatible with LangGraph reducers.
@@ -324,6 +331,7 @@ def recon(state: ExploitationState) -> dict[str, Any]:
     try:
         # Step 1: Create session and login
         session = DVWASession(target_url)
+        login_success = False
         try:
             login_success = session.login()
             if not login_success:
@@ -398,25 +406,44 @@ def recon(state: ExploitationState) -> dict[str, Any]:
     # Derive observations from discovered endpoints
     observations: dict[str, bool] = {}
     module_names = {ep.get("module_name", "unknown") for ep in all_endpoints}
-    
+
     # SQLi observations
     observations["error_messages_enabled"] = "sqli" in module_names
     observations["union_select_possible"] = "sqli" in module_names
     observations["response_diff_detectable"] = "sqli_blind" in module_names or "sqli" in module_names
     observations["response_delay_measurable"] = "sqli_blind" in module_names or "sqli" in module_names
-    
+
     # Access control observations
     observations["object_ids_enumerable"] = "idor" in module_names
-    observations["role_based_access_present"] = "authbypass" in str(all_endpoints).lower() or "admin" in str(all_endpoints).lower()
-    observations["force_browse_endpoints_visible"] = len(all_endpoints) > 0
-    
+    # Check specifically for the authbypass endpoint URL pattern
+    has_authbypass = any("/vulnerabilities/authbypass/" in str(ep.get("url", "")).lower() for ep in all_endpoints)
+    observations["role_based_access_present"] = has_authbypass
+    # Probe a known force-browsable page directly so this observation reflects
+    # actual accessibility instead of a hardcoded conservative default.
+    try:
+        probe_resp = session.http.get("setup.php") if session is not None else None
+        accessible_signals = (
+            "database setup",
+            "create/reset database",
+            "phpinfo()",
+            "view source",
+            "source code",
+        )
+        observations["force_browse_endpoints_visible"] = bool(
+            probe_resp is not None
+            and probe_resp.status_code == 200
+            and any(signal in str(getattr(probe_resp, "text", "")).lower() for signal in accessible_signals)
+        )
+    except (TransportError, RequestTimeoutError):
+        observations["force_browse_endpoints_visible"] = False
+
     # Brute force observations
     observations["no_rate_limit"] = "brute" in module_names
-    observations["low_priv_session_available"] = True  # assume logged in
+    observations["low_priv_session_available"] = session is not None and getattr(session, "is_logged_in", False)
+    observations["authenticated_crawl"] = login_success
 
     return {
         "endpoints": all_endpoints,
-        "input_vectors": all_vectors,
         "security_level": requested_level,
         "next_agent": "orchestrator",
         "observations": observations,

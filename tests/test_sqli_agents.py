@@ -1,3 +1,8 @@
+"""Regression tests for the DVWA LangGraph framework.
+
+This module verifies current behavior for state handling, routing, payloads,
+LLM adapters, agents, evaluation, or CLI integration without changing runtime
+code."""
 import pytest
 from agents.sqli.sqli_union_agent import sqli_union_agent
 from agents.sqli.sqli_error_agent import sqli_error_agent
@@ -12,6 +17,7 @@ from agents.sqli.sqli_time_blind_agent import sqli_time_blind_agent
     (sqli_time_blind_agent, "sqli_time_blind"),
 ])
 def test_sqli_agent_returns_dict(agent_func, agent_id):
+    """Verifies sqli agent returns dict behavior."""
     state = {
         "target_url": "http://localhost/dvwa",
         "security_level": "low",

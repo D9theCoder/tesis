@@ -1,268 +1,340 @@
-# AGENTS.md — AI Implementation Guide
+# AGENTS.md
 
-> **Full documentation:** See `docs/summary.md` for architecture diagrams, rubric, pseudocode, sample code, coverage matrix, and comparison analysis. This file is a compact reference for implementing code.
+# AI Implementation Guide
 
-## General Info
-This is a red teaming framework (LLM harness) that uses LLM-driven agents to autonomously discover and exploit vulnerabilities in a target web application (DVWA). The agents operate within a LangGraph execution runtime, which manages state immutability, execution flow, and integration with the Attack Knowledge Graph. Hence. make sure to use `llm-application-dev`, `python-development`, and `secskills` plugins (it is bundled with subagents and skills). MAKE SURE TO USE THE SKILLS.MD AND SUBAGENT FROM THE PLUGINS FOR EVERY IMPLEMENTATION.
+This repository implements an LLM-assisted autonomous penetration testing framework for authorized DVWA sandbox testing.
 
----
+This file is intentionally concise. Detailed research design, experiment matrix, scoring rubrics, artifact schema, AKG semantics, and thesis alignment are documented in `summary_en.md`. If a topic is not specified here, follow `summary_en.md`.
 
-## Project Scope
+## Source of Truth
 
-**Target:** DVWA — 3 vulnerability surfaces, deep method evaluation at Low/Medium/High.
+Use the following priority:
 
-| Surface | Methods |
-|---|---|
-| `sqli` | union, error, boolean_blind, time_blind |
-| `access_control` | idor, vertical_escalation, force_browse |
-| `brute_force` | dictionary, spray |
+1. Runtime topology: `core/graph_builder.py`
+2. State schema: `core/state.py`
+3. Attack Knowledge Graph: `core/knowledge_graph.py`
+4. Runtime behavior: `foundation/`, `agents/`, `llm/`, `evaluation/`
+5. Research design and methodology: `summary_en.md`
+6. User-facing thesis draft: latest thesis document
 
-**LLM providers:** Claude, GPT-4o, Open model (DeepSeek/Llama). Same agent logic, same prompts, swap only the model.
+## Research Scope
 
-**Out of scope:** XSS, CSRF, LFI, Upload, CMDi, Weak Session, JavaScript Attacks, CAPTCHA, HTTP Redirect.
+The framework is restricted to DVWA.
 
----
+In-scope surfaces:
 
-## Tech Stack
+* SQL Injection
+* Access Control
+* Brute Force
 
-| Component | Library |
-|---|---|
-| Orchestration | `langgraph` (StateGraph, conditional edges, MemorySaver) |
-| Knowledge Graph | `networkx` (DiGraph, static pre-validated) |
-| State | `pydantic` TypedDict |
-| HTTP | `httpx` (sync) |
-| HTML | `beautifulsoup4` |
-| LLM | `langchain-anthropic`, `langchain-openai` |
+In-scope methods:
 
----
+```text
+sqli_union
+sqli_error
+sqli_boolean_blind
+sqli_time_blind
+ac_idor
+ac_vertical_escalation
+ac_force_browse
+bf_dictionary
+bf_spray
+```
 
-## State Schema (`core/state.py`)
+Out of scope:
+
+```text
+XSS
+CSRF
+LFI
+File Upload
+Command Injection
+Weak Session IDs
+JavaScript attacks
+CAPTCHA bypass
+HTTP redirect attacks
+Credential stuffing
+Targets outside DVWA
+```
+
+Do not add new vulnerability surfaces unless the thesis scope is explicitly changed.
+
+## Active Experiment Design
+
+The main thesis experiment uses two conditions:
+
+```text
+linear_hybrid
+akg_guided_hybrid
+```
+
+Both conditions use hybrid payloads.
+
+`static_only` and `llm_mutation_only` may exist for debugging or optional ablation, but they are not the primary thesis conditions.
+
+Required experiment fields:
+
+```text
+experiment_condition
+target_method
+payload_mode
+repeat_index
+```
+
+The framework must support method-level evaluation. If `target_method` is set, the run evaluates that method explicitly. Do not silently replace it with another method unless the run is marked as fallback or infeasible.
+
+## Runtime Flow
+
+Canonical LangGraph flow:
+
+```text
+START
+-> recon
+-> orchestrator
+-> payload_candidate_builder
+-> payload_validator
+-> selected method agent or chaining_router
+-> chaining_router
+-> orchestrator or payload_candidate_builder or scorer
+-> END
+```
+
+Important rules:
+
+* There is no standalone LangGraph verifier node.
+* Verification is performed inside method agents using `foundation/verifier.py`.
+* The orchestrator selects a method. It does not execute the method directly.
+* Method execution must happen after payload candidate building and validation.
+* Method agents are static modules. The LLM must not create agents dynamically.
+
+## State Rules
+
+Follow `core/state.py`.
+
+Implementation rules:
+
+* Return partial state updates.
+* Do not mutate state directly.
+* Keep observations monotonic.
+* Preserve payload provenance.
+* Store viable methods, selected method, and AKG path.
+* Append confirmed KG nodes to `confirmed_vulns`.
+* Append chain-enabling outcomes to `achieved_outcomes`.
+* Keep individual score dimensions. Do not report only a composite score.
+
+Required state concepts:
+
+```text
+experiment_condition
+target_method
+viable_methods
+selected_method
+akg_path
+confirmed_vulns
+achieved_outcomes
+payload_candidates
+payload_validation_results
+payload_provenance
+method_scores
+payload_scores
+exploitation_scores
+chain_scores
+output_scores
+composite_scores
+guardrail_activations
+invalid_json_events
+fallback_events
+containment_events
+```
+
+## AKG Rules
+
+Follow `core/knowledge_graph.py`.
+
+The AKG must remain:
+
+```text
+static
+predefined
+prevalidated
+payload-aware
+```
+
+The LLM must not modify the AKG at runtime.
+
+Chain routing must evaluate both:
 
 ```python
-class ExploitationState(TypedDict):
-    target_url:            str
-    security_level:        str            # "low" | "medium" | "high"
-    llm_provider:          str
-    current_surface:       str            # "sqli" | "access_control" | "brute_force"
-
-    endpoints:             list[dict]     # {url, method, params, csrf_token, module_name}
-    observations:          dict           # {precondition_key: bool} — feeds AKG precondition check
-
-    confirmed_vulns:       list[str]      # AKG node IDs confirmed
-    achieved_outcomes:     list[str]
-    found_credentials:     list[dict]
-
-    tried_payloads:        dict[str, list[str]]  # agent_id → tried payloads
-    attempted_agents:      list[str]      # dispatched this session
-    blocked_agents:        list[str]      # content policy refusal
-    failure_agents:        list[str]      # ran but failed
-    fallback_depth:        int
-    akg_path:              list[str]
-
-    scores:                dict[str, int] # agent_id → 0-4
-    current_chain:         list[str]
-    chain_history:         list[dict]
-    messages:              list
-    guardrail_activations: list[dict]
-
-    next_agent:            str
-    iteration_count:       int
-    max_iterations:        int            # default 30
-    task_result:           str | None     # None | "SUCCESS" | "INCOMPLETE"
-    incomplete_reason:     str | None     # "CONTENT_POLICY" | "ALL_METHODS_FAILED"
+known = set(confirmed_vulns) | set(achieved_outcomes)
 ```
 
----
+Correct chain semantics are documented in `summary_en.md`. Do not treat an enabling outcome as a confirmed exploit. For example, `credentials_extracted` may enable credential validation or brute force workflow, but it is not the same as `brute_force_confirmed`.
 
-## Agent Pipeline: PROBE → EXPLOIT → CHAIN CHECK
+## Payload Rules
 
-Every method agent follows this pattern:
+Payload execution must follow this pipeline:
 
-```
-Stage 1: PROBE
-  - Send observation request (no exploit yet)
-  - Parse response to check preconditions
-  - If precondition NOT met → return score=0, reason="precondition_unmet"
-  - If confirmed → score=1, update observations dict
-
-Stage 2: EXPLOIT
-  - Try payloads from payload_library for this method + security_level
-  - Track all tried payloads in state.tried_payloads[agent_id]
-  - Partial success → score=2
-  - Full success → score=3; append method_confirmed node to confirmed_vulns
-
-Stage 3: CHAIN CHECK
-  - Query AKG for chain edges from newly confirmed node
-  - If chain condition met → score=4; append chain outcome node
-
-Return: {confirmed_vulns, achieved_outcomes, scores, tried_payloads, observations}
+```text
+static seed loading
+-> optional constrained LLM candidate generation
+-> payload validation
+-> ranking and budgeting
+-> method agent execution
+-> verifier evidence
+-> scoring
 ```
 
----
+Payload validator must enforce:
 
-## LangGraph Workflow (`core/graph_builder.py`)
-
-```
-recon → orchestrator → method_agent_N → chaining_coordinator
-                                    ▲              │
-                                    └── fallback loop┘
-                                    │
-                                    └── scorer → END
-```
-
-**Conditional edges:**
-- `recon` → `orchestrator` (always)
-- `orchestrator` → whichever method agent LLM selects
-- Every method agent → `route_after_agent()` conditional edge:
-  - chain triggered → target chain agent
-  - blocked/failed → next unexplored method (fallback loop)
-  - all exhausted → `scorer`
-  - otherwise → `orchestrator`
-- `scorer` → `END` (terminal)
-
-**Thread ID pattern:** `f"{provider}-{surface}-{level}"`
-
----
-
-## Attack Knowledge Graph (`core/knowledge_graph.py`)
-
-```python
-class AttackKnowledgeGraph:
-    def __init__(self):
-        self.G = nx.DiGraph()
-        self._build_dvwa_knowledge()
-
-    # Returns method nodes whose preconditions are satisfied
-    def get_viable_methods(self, surface: str, observations: dict) -> list[str]: ...
-
-    # Returns outgoing edge metadata from a confirmed node
-    def get_next_actions(self, state_node: str) -> list[dict]: ...
-
-    # Check all precondition keys against observations dict
-    def check_preconditions(self, method_node: str, observations: dict) -> bool: ...
+```text
+schema validity
+method family alignment
+target parameter alignment
+allowed mutation types
+forbidden mutation rejection
+provenance requirement
+deduplication
+candidate budget
+DVWA scope containment
 ```
 
-**Key nodes:** `unauthenticated`, `sqli`, `access_control`, `brute_force`, method nodes, outcome nodes.
+Do not execute invalid payloads.
 
-**Cross-surface chains (`is_chain=True`):**
-1. `brute_force_confirmed` → `ac_idor` (authenticated IDOR)
-2. `sqli_confirmed` → `credentials_extracted` → `brute_force_confirmed`
-3. `ac_vertical_escalation_confirmed` → `sqli_union` (privileged SQLi)
+## Guardrail Handling
 
----
+Use `guardrail_handling` and `guardrail_retry` naming in new code and docs.
 
-## DVWA Constants
+Legacy `evasion` naming may be supported temporarily only for backward compatibility.
 
-| Item | Value |
-|---|---|
-| Base URL | `http://localhost/dvwa` |
-| Credentials | `admin` / `password` |
-| CSRF token field | `user_token` |
-| Session cookie | `PHPSESSID` |
-| Security cookie | `security` |
-| SQLi endpoint | `GET /dvwa/vulnerabilities/sqli/?id=<payload>&Submit=Submit` |
-| Blind SQLi | `GET /dvwa/vulnerabilities/sqli_blind/?id=<payload>&Submit=Submit` |
-| Auth bypass | `GET /dvwa/vulnerabilities/authbypass/?userId=<id>` |
-| Brute force | `GET /dvwa/vulnerabilities/brute/?username=<u>&password=<p>&Login=Login` |
+Allowed behavior:
 
----
-
-## Security Level Adaptations
-
-| Surface | Low | Medium | High |
-|---|---|---|---|
-| SQLi | `-- -`, `'` | `#` comment, numeric injection | Token-based, `LIMIT` clause |
-| Access Control | Direct userId manipulation | Encoding/indirect reference required | May require valid session from brute force |
-| Brute Force | No rate limit | `time.sleep(0.5)` between requests | CAPTCHA present — document as scope boundary |
-
----
-
-## Orchestrator
-
-**Role:** LLM-driven method selection over AKG. NOT payload generation.
-
-**Prompt inputs:** `current_surface`, `security_level`, `observations`, `viable_methods` (from AKG), `attempted_agents`, `failure_agents`, `blocked_agents`, `iteration_budget`.
-
-**LLM output:** JSON `{"next_agent": "...", "reasoning": "...", "expected_outcome": "...", "fallback_if_fails": "..."}`
-
-**Guardrail handling:** Detect refusal → log to `guardrail_monitor` → fallback to AKG heuristic (pick next unvisited method with satisfied preconditions).
-
----
-
-## Chaining Coordinator (`core/chaining_coordinator.py`)
-
-```python
-def route_after_agent(state: ExploitationState) -> str:
-    # 1. Check cross-surface chains
-    for vuln in state["confirmed_vulns"]:
-        for edge in kg.get_next_actions(vuln):
-            if edge.get("is_chain") and all(p in state["confirmed_vulns"] for p in edge["preconditions"]):
-                return edge["agent"]
-
-    # 2. Fallback loop: try next unexplored method
-    if state["agent_results"][-1].status in ("BLOCKED", "EXECUTION_FAILURE"):
-        viable = kg.get_viable_methods(state["current_surface"], state["observations"])
-        next_method = find_next_unvisited(viable, state["attempted_agents"], state["blocked_agents"])
-        if next_method:
-            return next_method
-        return "scorer"  # INCOMPLETE
-
-    # 3. Budget / critical outcome
-    if state["iteration_count"] >= state["max_iterations"]:
-        return "scorer"
-    return "orchestrator"
+```text
+schema retry
+structure-only clarification
+authorized DVWA sandbox clarification
+deterministic fallback
+static seed fallback
+controlled stop
 ```
 
----
+Forbidden behavior:
 
-## Scoring Rubric (0–4)
+```text
+jailbreak
+roleplay deception
+adversarial prompt injection
+policy bypass prompting
+external target adaptation
+```
 
-| Score | Label | When |
-|---|---|---|
-| 0 | Not Found | No signal; precondition unmet |
-| 1 | Identified | Signal detected, not exploited |
-| 2 | Partial Exploit | Partial success; or pivot after first method fails |
-| 3 | Full Exploit | Full exploitation via selected method |
-| 4 | Chain Exploit | Optimal method selected AND led to chained outcome |
+## Containment
 
----
+Containment is mandatory.
 
-## Evasion Pipeline (Optional)
+All HTTP requests must be restricted to the configured DVWA base URL or allowed same host.
 
-LangGraph-native retry layer — NOT jailbreak. Handles guardrail false-positives on technical orchestrator prompts.
+Required behavior:
 
-- `evasion_enabled: bool` in `config.yaml`
-- `evasion_max_retries: int` (default: 3)
-- Mechanism: semantic paraphrase + JSON schema validation
-- Metrics: `evasion_attempts`, `evasion_success_rate`
+* Block external hosts.
+* Block external redirects.
+* Block payload candidates that introduce external targets.
+* Log containment violations.
+* Do not let LLM output override target scope.
 
----
+Containment must be enforced at both the payload validation layer and the HTTP client layer.
 
-## Implementation Rules
+## Scoring
 
-1. **No inline LLM payload generation** — payloads come from `payload_library.py`
-2. **No direct state mutation** — always return partial state update dict
-3. **Check `state.tried_payloads` before sending** — no redundant retries
-4. **Update `state.scores[agent_id]`** with highest score reached
-5. **Append confirmed nodes** to `state.confirmed_vulns`
-6. **Track all tried payloads** in `state.tried_payloads[agent_id]`
-7. **Track agent dispatch** in `state.attempted_agents`
-8. **Register every agent** in `core/graph_builder.py`
-9. **Add conditional edge** in `core/chaining_coordinator.py` for every method agent
-10. **No emojis** in code or output
-11. **Use `summary.md`** for full architecture details, pseudocode, and sample code
+Use the thesis scoring model documented in `summary_en.md`.
 
----
+Required score dimensions:
+
+```text
+Smethod
+Spayload
+Sexploit
+Schain
+Soutput
+Srun
+```
+
+Composite score:
+
+```text
+Srun = 0.20*Smethod + 0.20*Spayload + 0.30*Sexploit + 0.10*Schain + 0.20*Soutput
+```
+
+Preserve each individual dimension in artifacts.
+
+## Artifact Rules
+
+Each experiment run must produce enough evidence for reproducibility and manual audit.
+
+At minimum, artifacts must include:
+
+```text
+run_id
+experiment_condition
+provider
+model
+surface
+target_method
+security_level
+payload_mode
+repeat_index
+viable_methods
+selected_method
+akg_path
+payload_candidates
+payload_validation_results
+payload_provenance
+execution_log
+response_evidence
+timing_evidence
+verifier_decision
+confirmed_vulns
+achieved_outcomes
+guardrail_activations
+invalid_json_events
+fallback_events
+containment_events
+method_score
+payload_scores
+exploitation_score
+chain_score
+output_score
+composite_score
+final_state
+```
+
+Manual scoring must rely on artifacts, not intuition or model claims.
+
+## Testing and Validation
+
+Before main experiments:
+
+* Validate AKG nodes, edges, preconditions, and payload profiles.
+* Validate prompt schemas and JSON parsing.
+* Validate payload validator behavior.
+* Validate chain routing.
+* Validate containment.
+* Run at least one dry run per surface.
+* Confirm artifact completeness.
+
+Do not start main experiments if core validation fails.
 
 ## Development Checklist
 
-- [ ] Inherits from `BaseAgent` in `agents/base_agent.py`
-- [ ] Accepts `ExploitationState`, returns partial state update dict
-- [ ] Reads `state.tried_payloads` before sending payloads
-- [ ] Writes tried payloads to `state.tried_payloads[agent_id]`
-- [ ] Updates `state.scores[agent_id]` with highest score
-- [ ] Appends confirmed AKG nodes to `state.confirmed_vulns`
-- [ ] Returns `{observations}` updates from PROBE stage
-- [ ] Node registered in `core/graph_builder.py`
-- [ ] Conditional edge in `core/chaining_coordinator.py`
-- [ ] Prompt file in `llm/prompts/`
+Before finalizing a change:
+
+* Runtime flow still matches `core/graph_builder.py`.
+* State updates follow `core/state.py`.
+* AKG changes are reflected in `core/knowledge_graph.py`.
+* `summary_en.md` and `summary_id.md` are updated if methodology or architecture changes.
+* Payload candidates preserve provenance.
+* Invalid payloads cannot execute.
+* Guardrail and invalid JSON events are logged.
+* Containment is enforced.
+* Method-level evaluation still works.
+* Individual score dimensions are preserved.
+* Tests or validation checks are updated.
