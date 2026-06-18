@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from statistics import mean
 from typing import Any
 
-from core.state import SECURITY_LEVELS
+from core.state import SECURITY_LEVELS, EXPERIMENT_CONDITIONS
 from evaluation.metrics import aggregate_runs
 from llm.provider import SUPPORTED_PROVIDERS
 
@@ -209,6 +209,8 @@ def run_provider_matrix(
     security_levels: list[str] | None = None,
     surfaces: list[str] | None = None,
     payload_modes: list[str] | None = None,
+    experiment_conditions: list[str] | None = None,
+    target_methods: list[str] | None = None,
     repeats: int = 1,
     max_iterations: int = 30,
     candidate_budget: int = 5,
@@ -252,6 +254,8 @@ def run_provider_matrix(
     chosen_levels = sorted(security_levels or list(SECURITY_LEVELS))
     chosen_surfaces = sorted(surfaces or ["sqli", "access_control", "brute_force"])
     chosen_payload_modes = sorted(payload_modes or ["static_only", "hybrid"])
+    chosen_conditions = sorted(experiment_conditions or list(EXPERIMENT_CONDITIONS))
+    chosen_target_methods: list[str | None] = list(target_methods) if target_methods else [None]
 
     artifacts: list[dict] = []
     for provider in chosen_providers:
@@ -259,59 +263,68 @@ def run_provider_matrix(
             for surface in chosen_surfaces:
                 for level in chosen_levels:
                     for payload_mode in chosen_payload_modes:
-                        for repeat_index in range(repeats):
-                            artifacts.append(
-                                {
-                                    "schema_version": "stage8.v1",
-                                    "run_id": f"{provider}-{surface}-{level}-{payload_mode}-{repeat_index}",
-                                    "status": "skipped",
-                                    "config": {
-                                        "target_url": target_url,
-                                        "provider": provider,
-                                        "security_level": level,
-                                        "surface": surface,
-                                        "payload_mode": payload_mode,
-                                        "max_iterations": max_iterations,
-                                        "candidate_budget": candidate_budget,
-                                        "repeat_index": repeat_index,
-                                        "evasion_enabled": evasion_enabled,
-                                        "evasion_mode": evasion_mode,
-                                    },
-                                    "timing": {},
-                                    "final_state": {},
-                                    "report": {},
-                                    "error": f"Unsupported provider: {provider}",
-                                }
-                            )
+                        for condition in chosen_conditions:
+                            for target_method in chosen_target_methods:
+                                for repeat_index in range(repeats):
+                                    method_tag = f"-{target_method}" if target_method else ""
+                                    artifacts.append(
+                                        {
+                                            "schema_version": "stage8.v1",
+                                            "run_id": f"{provider}-{condition}-{surface}{method_tag}-{level}-{payload_mode}-{repeat_index}",
+                                            "status": "skipped",
+                                            "config": {
+                                                "target_url": target_url,
+                                                "provider": provider,
+                                                "security_level": level,
+                                                "surface": surface,
+                                                "payload_mode": payload_mode,
+                                                "experiment_condition": condition,
+                                                "target_method": target_method,
+                                                "max_iterations": max_iterations,
+                                                "candidate_budget": candidate_budget,
+                                                "repeat_index": repeat_index,
+                                                "evasion_enabled": evasion_enabled,
+                                                "evasion_mode": evasion_mode,
+                                            },
+                                            "timing": {},
+                                            "final_state": {},
+                                            "report": {},
+                                            "error": f"Unsupported provider: {provider}",
+                                        }
+                                    )
             continue
 
         for surface in chosen_surfaces:
             for level in chosen_levels:
                 for payload_mode in chosen_payload_modes:
-                    for repeat_index in range(repeats):
-                        artifacts.append(
-                            _run_single_with_payload_kwargs({
-                                "target_url": target_url,
-                                "security_level": level,
-                                "llm_provider": provider,
-                                "surface": surface,
-                                "payload_mode": payload_mode,
-                                "max_iterations": max_iterations,
-                                "candidate_budget": candidate_budget,
-                                "repeat_index": repeat_index,
-                                "stop_policy": stop_policy,
-                                "coverage_target": coverage_target,
-                                "enriched_reporting": enriched_reporting,
-                                "diagnose": diagnose,
-                                "evasion_enabled": evasion_enabled,
-                                "evasion_mode": evasion_mode,
-                                "evasion_max_retries": evasion_max_retries,
-                                "evasion_cooldown_threshold": evasion_cooldown_threshold,
-                                "output_dir": output_dir,
-                                "live_display": live_display,
-                                "model_config": (model_configs or {}).get(provider),
-                            })
-                        )
+                    for condition in chosen_conditions:
+                        for target_method in chosen_target_methods:
+                            for repeat_index in range(repeats):
+                                artifacts.append(
+                                    _run_single_with_payload_kwargs({
+                                        "target_url": target_url,
+                                        "security_level": level,
+                                        "llm_provider": provider,
+                                        "surface": surface,
+                                        "payload_mode": payload_mode,
+                                        "experiment_condition": condition,
+                                        "target_method": target_method,
+                                        "max_iterations": max_iterations,
+                                        "candidate_budget": candidate_budget,
+                                        "repeat_index": repeat_index,
+                                        "stop_policy": stop_policy,
+                                        "coverage_target": coverage_target,
+                                        "enriched_reporting": enriched_reporting,
+                                        "diagnose": diagnose,
+                                        "evasion_enabled": evasion_enabled,
+                                        "evasion_mode": evasion_mode,
+                                        "evasion_max_retries": evasion_max_retries,
+                                        "evasion_cooldown_threshold": evasion_cooldown_threshold,
+                                        "output_dir": output_dir,
+                                        "live_display": live_display,
+                                        "model_config": (model_configs or {}).get(provider),
+                                    })
+                                )
 
     if include_aggregate:
         return artifacts, _build_matrix_aggregate(artifacts)

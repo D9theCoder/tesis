@@ -8,7 +8,7 @@ and captures response metadata for verification and logging.
 import logging
 import os
 from dataclasses import dataclass
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -21,6 +21,25 @@ class TransportError(Exception):
 
 class RequestTimeoutError(Exception):
     """Raised when an HTTP request exceeds the configured timeout."""
+
+
+class ContainmentError(Exception):
+    """Raised when a request or redirect would leave the allowed DVWA scope."""
+
+    def __init__(self, message: str, *, url: str, allowed_host: str, kind: str) -> None:
+        super().__init__(message)
+        self.url = url
+        self.allowed_host = allowed_host
+        self.kind = kind  # "request" | "redirect"
+
+    def as_event(self) -> dict:
+        """Return a structured containment violation event for state logging."""
+        return {
+            "kind": self.kind,
+            "blocked_url": self.url,
+            "allowed_host": self.allowed_host,
+            "reason": str(self),
+        }
 
 
 @dataclass
@@ -89,8 +108,11 @@ class HTTPClient:
             }
 
         self.base_url = base_url.rstrip("/") + "/"
+        self.allowed_host = urlsplit(self.base_url).netloc.lower()
+        self.containment_events: list[dict] = []
+        self._max_redirects = 10
         self._client = httpx.Client(
-            follow_redirects=True,
+            follow_redirects=False,
             verify=verify_ssl,
             timeout=httpx.Timeout(
                 connect=timeout_connect,
@@ -102,6 +124,40 @@ class HTTPClient:
                 max_connections=max_connections,
                 max_keepalive_connections=max_keepalive,
             ),
+        )
+
+    # ── Containment ──────────────────────────────────────────────
+
+    def _is_in_scope(self, url: str) -> bool:
+        """Return True when the URL targets the allowed DVWA host (or is relative)."""
+        netloc = urlsplit(url).netloc.lower()
+        return netloc == "" or netloc == self.allowed_host
+
+    def _assert_in_scope(self, url: str, *, kind: str) -> None:
+        """Raise ContainmentError when the URL leaves the allowed DVWA scope.
+
+        Args:
+            url: Absolute or relative URL being requested or redirected to.
+            kind: Either "request" or "redirect" for event classification.
+
+        Raises:
+            ContainmentError: When the URL host differs from the allowed host.
+        """
+        if self._is_in_scope(url):
+            return
+        event = {
+            "kind": kind,
+            "blocked_url": url,
+            "allowed_host": self.allowed_host,
+            "reason": f"{kind} target outside allowed DVWA scope",
+        }
+        self.containment_events.append(event)
+        logger.warning("Containment violation (%s): %s not in %s", kind, url, self.allowed_host)
+        raise ContainmentError(
+            f"{kind} to {url!r} blocked: outside allowed host {self.allowed_host!r}",
+            url=url,
+            allowed_host=self.allowed_host,
+            kind=kind,
         )
 
     # ── Request methods ──────────────────────────────────────────
@@ -173,14 +229,41 @@ class HTTPClient:
     # ── Internals ────────────────────────────────────────────────
 
     def _request(self, method: str, url: str, **kwargs) -> RequestResult:
-        """Execute a request with error mapping.
+        """Execute a request with containment enforcement and error mapping.
 
-        Maps httpx exceptions to typed domain exceptions for cleaner
-        handling upstream.
+        The initial URL and every redirect target are validated against the
+        allowed DVWA host before a connection is made. External hosts and
+        external redirects raise ``ContainmentError``. httpx exceptions are
+        mapped to typed domain exceptions for cleaner handling upstream.
         """
+        self._assert_in_scope(url, kind="request")
+        current_method = method
+        current_url = url
         try:
-            resp = self._client.request(method, url, **kwargs)
-            elapsed_ms = resp.elapsed.total_seconds() * 1000
+            resp = self._client.request(current_method, current_url, **kwargs)
+            total_elapsed = resp.elapsed.total_seconds() * 1000
+            redirects = 0
+            # httpx returns real booleans here; the strict `is True` checks also
+            # prevent test doubles (MagicMock) from being treated as redirects.
+            while resp.is_redirect is True and resp.has_redirect_location is True:
+                redirects += 1
+                if redirects > self._max_redirects:
+                    raise TransportError(f"Too many redirects: {method} {url}")
+                next_url = str(resp.next_request.url) if resp.next_request else urljoin(
+                    current_url, resp.headers.get("location", "")
+                )
+                self._assert_in_scope(next_url, kind="redirect")
+                # GET/HEAD preserve method; other methods become GET on 301/302/303.
+                if resp.status_code in (301, 302, 303) and current_method not in ("GET", "HEAD"):
+                    current_method = "GET"
+                    kwargs.pop("data", None)
+                    kwargs.pop("content", None)
+                    kwargs.pop("json", None)
+                    kwargs.pop("files", None)
+                current_url = next_url
+                resp = self._client.request(current_method, current_url)
+                total_elapsed += resp.elapsed.total_seconds() * 1000
+            elapsed_ms = total_elapsed
         except httpx.TimeoutException as exc:
             logger.warning("Request timeout: %s %s – %s", method, url, exc)
             raise RequestTimeoutError(f"Request timed out: {method} {url}") from exc

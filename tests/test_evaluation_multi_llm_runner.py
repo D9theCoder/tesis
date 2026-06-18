@@ -19,6 +19,7 @@ def test_run_provider_matrix_skips_unsupported_provider(monkeypatch):
         providers=["nonexistent_provider"],
         security_levels=["low"],
         surfaces=["sqli"],
+        experiment_conditions=["akg_guided_hybrid"],
         repeats=1,
     )
 
@@ -39,6 +40,10 @@ def test_run_provider_matrix_deterministic_ordering(monkeypatch):
         surface,
         max_iterations,
         repeat_index,
+        payload_mode="static_only",
+        experiment_condition="akg_guided_hybrid",
+        target_method=None,
+        candidate_budget=5,
         stop_policy="impact",
         coverage_target=0.70,
         enriched_reporting=False,
@@ -81,6 +86,7 @@ def test_run_provider_matrix_deterministic_ordering(monkeypatch):
         providers=["gemini"],
         security_levels=["high", "low", "medium"],
         surfaces=["sqli"],
+        experiment_conditions=["akg_guided_hybrid"],
         repeats=2,
     )
 
@@ -212,6 +218,7 @@ def test_run_provider_matrix_evasion_forwarding(monkeypatch):
         providers=["gemini"],
         security_levels=["low"],
         surfaces=["sqli"],
+        experiment_conditions=["akg_guided_hybrid"],
         repeats=1,
         evasion_enabled=True,
         evasion_mode="proactive",

@@ -7,6 +7,17 @@ from collections import Counter
 from core.state import ALL_METHOD_AGENTS, SURFACES, METHODS_BY_SURFACE
 
 
+# Composite score weights (thesis §7.1):
+# Srun = 0.20*Smethod + 0.20*Spayload + 0.30*Sexploit + 0.10*Schain + 0.20*Soutput
+SCORE_WEIGHTS: dict[str, float] = {
+    "method": 0.20,
+    "payload": 0.20,
+    "exploit": 0.30,
+    "chain": 0.10,
+    "output": 0.20,
+}
+
+
 def clamp_score(raw: object) -> int:
     """Handles clamp score behavior for this module.
 
@@ -188,6 +199,94 @@ def guardrail_activation_rate(guardrail_activations: list[dict], total_iteration
     if total_iterations <= 0:
         return 0.0
     return min(len(guardrail_activations) / total_iterations, 1.0)
+
+
+def invalid_json_rate(invalid_json_events: list[dict], total_iterations: int) -> float:
+    """Return the ratio of invalid-JSON parse failures to iterations (0.0-1.0).
+
+    Args:
+        invalid_json_events: Recorded JSON-parse failure events.
+        total_iterations: LangGraph iterations used in the run.
+
+    Returns:
+        Invalid-JSON ratio clamped to the range 0.0 to 1.0.
+    """
+    if total_iterations <= 0:
+        return 0.0
+    return min(len(invalid_json_events) / total_iterations, 1.0)
+
+
+def fallback_rate(fallback_events: list[dict], total_iterations: int) -> float:
+    """Return the ratio of fallback activations to iterations (0.0-1.0).
+
+    Args:
+        fallback_events: Recorded deterministic-fallback events.
+        total_iterations: LangGraph iterations used in the run.
+
+    Returns:
+        Fallback ratio clamped to the range 0.0 to 1.0.
+    """
+    if total_iterations <= 0:
+        return 0.0
+    return min(len(fallback_events) / total_iterations, 1.0)
+
+
+def output_validity_score(
+    guardrail_rate: float,
+    invalid_rate: float,
+    fb_rate: float,
+) -> int:
+    """Return a 0-4 output-quality score (Soutput) from output-health rates.
+
+    Soutput rewards clean, parseable, non-refused LLM output. A combined penalty
+    is built from guardrail-activation, invalid-JSON, and fallback rates; the
+    score is `4` when output is perfectly clean and degrades toward `0` as the
+    penalty grows.
+
+    Args:
+        guardrail_rate: Guardrail/refusal activation rate (0.0-1.0).
+        invalid_rate: Invalid-JSON rate (0.0-1.0).
+        fb_rate: Fallback rate (0.0-1.0).
+
+    Returns:
+        Integer output-quality score in the range 0 to 4.
+    """
+    penalty = min(max(guardrail_rate, 0.0), 1.0)
+    penalty += min(max(invalid_rate, 0.0), 1.0)
+    penalty += min(max(fb_rate, 0.0), 1.0)
+    penalty = penalty / 3.0  # average penalty in 0.0-1.0
+    return clamp_score(round((1.0 - penalty) * 4))
+
+
+def composite_run_score(
+    s_method: int,
+    s_payload: int,
+    s_exploit: int,
+    s_chain: int,
+    s_output: int,
+) -> float:
+    """Return the weighted composite run score (Srun) on a 0-4 scale.
+
+    Applies the thesis §7.1 weighting to the five clamped dimension scores.
+
+    Args:
+        s_method: Method-selection score (0-4).
+        s_payload: Payload-quality score (0-4).
+        s_exploit: Exploitation score (0-4).
+        s_chain: Chain score (0-4).
+        s_output: Output-quality score (0-4).
+
+    Returns:
+        Composite score in the range 0.0 to 4.0, rounded to four decimals.
+    """
+    composite = (
+        SCORE_WEIGHTS["method"] * clamp_score(s_method)
+        + SCORE_WEIGHTS["payload"] * clamp_score(s_payload)
+        + SCORE_WEIGHTS["exploit"] * clamp_score(s_exploit)
+        + SCORE_WEIGHTS["chain"] * clamp_score(s_chain)
+        + SCORE_WEIGHTS["output"] * clamp_score(s_output)
+    )
+    return round(composite, 4)
 
 
 def aggregate_runs(run_artifacts: list[dict]) -> dict:

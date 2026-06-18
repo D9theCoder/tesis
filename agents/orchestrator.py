@@ -179,10 +179,21 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
     scores = state.get("scores", {})
     consecutive_clean = state.get("consecutive_clean_responses", 0)
 
-    evasion_enabled = _coerce_bool(state.get("evasion_enabled", False))
-    evasion_mode = str(state.get("evasion_mode", "reactive")).strip().lower()
-    evasion_max_retries = int(state.get("evasion_max_retries", 3))
-    evasion_cooldown_threshold = int(state.get("evasion_cooldown_threshold", 5))
+    evasion_enabled = _coerce_bool(
+        state.get("guardrail_retry_enabled", state.get("evasion_enabled", False))
+    )
+    evasion_mode = str(
+        state.get("guardrail_retry_mode", state.get("evasion_mode", "reactive"))
+    ).strip().lower()
+    evasion_max_retries = int(
+        state.get("guardrail_retry_max", state.get("evasion_max_retries", 3))
+    )
+    evasion_cooldown_threshold = int(
+        state.get(
+            "guardrail_retry_cooldown_threshold",
+            state.get("evasion_cooldown_threshold", 5),
+        )
+    )
 
     telemetry_base = {
         "node": "orchestrator",
@@ -205,9 +216,19 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         }
 
     kg = AttackKnowledgeGraph()
-    viable_methods = kg.get_viable_methods(current_surface, observations)
+    experiment_condition = str(state.get("experiment_condition", "akg_guided_hybrid")).strip().lower()
+    target_method = state.get("target_method")
+    if experiment_condition == "linear_hybrid":
+        # Linear baseline: no AKG precondition filtering — all surface methods offered.
+        viable_methods = list(METHODS_BY_SURFACE.get(current_surface, []))
+    else:
+        viable_methods = kg.get_viable_methods(current_surface, observations)
 
     fallback_agent = _fallback_next_agent(state)
+    # Method-level evaluation: honor an explicit target_method when it is runnable.
+    if target_method and target_method in METHODS_BY_SURFACE.get(current_surface, []):
+        if experiment_condition == "linear_hybrid" or kg.check_preconditions(target_method, observations):
+            fallback_agent = target_method
 
     base_prompt = build_orchestrator_prompt(
         current_surface=current_surface,
@@ -359,9 +380,10 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "payload": {"next_agent": next_agent, "used_fallback": used_fallback},
         })
 
-        return {
+        decision_update: dict[str, Any] = {
             "next_agent": "payload_candidate_builder" if selected_method else next_agent,
             "selected_method": selected_method,
+            "viable_methods": viable_methods,
             "method_scores": {selected_method: method_score} if selected_method else {},
             "iteration_count": iteration_count + 1,
             "telemetry_events": telemetry_events,
@@ -370,17 +392,39 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "evasion_attempts": state.get("evasion_attempts", 0) + (retries_used if evasion_triggered else 0),
             "successful_evasions": state.get("successful_evasions", 0) + (1 if evasion_success else 0),
         }
+        if not parse_ok:
+            decision_update["invalid_json_events"] = [{
+                "node": "orchestrator",
+                "iteration": iteration_count,
+                "snippet": _clip_text(text, 200),
+            }]
+        if used_fallback:
+            decision_update["fallback_events"] = [{
+                "node": "orchestrator",
+                "iteration": iteration_count,
+                "reason": "invalid_json" if not parse_ok else "invalid_method_selection",
+                "next_agent": next_agent,
+            }]
+        return decision_update
     except Exception as exc:
         # Harness node — crashing the graph is worse than logging a fallback.
         logger.exception("Orchestrator failed; applying deterministic fallback")
         return {
             "next_agent": "payload_candidate_builder" if fallback_agent != "scorer" else "scorer",
             "selected_method": fallback_agent if fallback_agent != "scorer" else None,
+            "viable_methods": viable_methods,
             "iteration_count": iteration_count + 1,
             "telemetry_events": [
                 *telemetry_events,
                 {**telemetry_base, "event": "orchestrator.fallback.applied", "status": "fallback", "payload": {"error_type": type(exc).__name__, "next_agent": fallback_agent}},
             ],
+            "fallback_events": [{
+                "node": "orchestrator",
+                "iteration": iteration_count,
+                "reason": "exception",
+                "error_type": type(exc).__name__,
+                "next_agent": fallback_agent,
+            }],
             "messages": [HumanMessage(content=prompt), AIMessage(content=f"orchestrator_fallback:{type(exc).__name__}")],
             "evasion_attempts": state.get("evasion_attempts", 0) + (retries_used if evasion_triggered else 0),
             "successful_evasions": state.get("successful_evasions", 0) + (1 if evasion_success else 0),

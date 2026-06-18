@@ -7,6 +7,7 @@ from typing import Any
 
 EVASION_MODES: frozenset[str] = frozenset({"reactive", "proactive", "disabled"})
 PAYLOAD_MODES: frozenset[str] = frozenset({"static_only", "hybrid", "llm_mutation_only"})
+EXPERIMENT_CONDITIONS: frozenset[str] = frozenset({"linear_hybrid", "akg_guided_hybrid"})
 
 # Backward-compatible alias
 EVASION_STRATEGIES = EVASION_MODES
@@ -34,6 +35,8 @@ class EngagementConfig:
     level: str
     surface: str = "sqli"
     payload_mode: str = "static_only"
+    experiment_condition: str = "akg_guided_hybrid"
+    target_method: str | None = None
     candidate_budget: int = 5
     iterations: int = 30
     repeats: int = 1
@@ -43,6 +46,8 @@ class EngagementConfig:
     levels: list[str] = field(default_factory=list)
     surfaces: list[str] = field(default_factory=list)
     payload_modes: list[str] = field(default_factory=list)
+    experiment_conditions: list[str] = field(default_factory=list)
+    target_methods: list[str] = field(default_factory=list)
     report_format: str = "both"
     enriched_reporting: bool = False
     stop_policy: str = "impact"
@@ -61,4 +66,4 @@ class EngagementConfig:
     evasion_attempts_max: int = 3
 
 
-__all__ = ["ModelConfig", "EngagementConfig", "PAYLOAD_MODES"]
+__all__ = ["ModelConfig", "EngagementConfig", "PAYLOAD_MODES", "EXPERIMENT_CONDITIONS"]

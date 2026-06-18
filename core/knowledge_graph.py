@@ -124,9 +124,22 @@ class AttackKnowledgeGraph:
             ],
             "expected_success_signals": list(expected),
             "target_params": [],
+            # Spec §4.4 canonical field; max_* values derived for backward compat.
+            "payload_budget": budget,
             "max_generated_candidates": budget,
             "max_total_candidates": budget + len(seed_refs),
             "provenance_required": True,
+            # Spec §4.4 expected candidate schema for this method.
+            "output_schema": {
+                "candidate_id": "str",
+                "source": "static_seed|llm_mutated|llm_generated",
+                "source_seed_id": "str",
+                "mutation_type": "str",
+                "payload_or_logic": "str",
+                "target_param": "str",
+                "expected_signal": "str",
+                "provenance": "dict",
+            },
         }
 
     def _attach_payload_profiles(self) -> None:
@@ -381,6 +394,8 @@ class AttackKnowledgeGraph:
             "validation_rules",
             "expected_success_signals",
             "target_params",
+            "payload_budget",
+            "output_schema",
             "max_generated_candidates",
             "max_total_candidates",
             "provenance_required",

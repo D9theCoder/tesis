@@ -87,6 +87,11 @@ class ExploitationState(TypedDict):
     current_surface: str  # "sqli" | "access_control" | "brute_force"
     payload_mode: str  # "static_only" | "hybrid" | "llm_mutation_only"
 
+    # Experiment design (thesis conditions)
+    experiment_condition: str  # "linear_hybrid" | "akg_guided_hybrid"
+    target_method: str | None  # explicit method for method-level evaluation
+    viable_methods: Annotated[list[str], add]
+
     # Discovered attack surface
     endpoints: list[dict]
     input_vectors: Annotated[list[dict], add]
@@ -115,6 +120,8 @@ class ExploitationState(TypedDict):
     method_scores: Annotated[dict[str, int], _merge_scores]
     exploitation_scores: Annotated[dict[str, int], _merge_scores]
     chain_scores: Annotated[dict[str, int], _merge_scores]
+    output_scores: Annotated[dict[str, int], _merge_scores]
+    composite_scores: Annotated[dict[str, int], _merge_scores]
 
     # Chain tracking
     current_chain: list[str]
@@ -125,6 +132,11 @@ class ExploitationState(TypedDict):
 
     # Guardrail monitoring (accumulate)
     guardrail_activations: Annotated[list[dict], add]
+
+    # Structured run events (accumulate)
+    invalid_json_events: Annotated[list[dict], add]
+    fallback_events: Annotated[list[dict], add]
+    containment_events: Annotated[list[dict], add]
 
     # Evasion state persisted for payload-library bypass tracking
     blocked_patterns: Annotated[list[str], add]
@@ -139,6 +151,14 @@ class ExploitationState(TypedDict):
     evasion_cooldown_threshold: NotRequired[int]
     evasion_attempts: NotRequired[int]
     successful_evasions: NotRequired[int]
+
+    # Guardrail-retry naming (primary; evasion_* kept as backward-compatible aliases)
+    guardrail_retry_enabled: NotRequired[bool]
+    guardrail_retry_mode: NotRequired[str]  # "reactive" | "proactive" | "disabled"
+    guardrail_retry_max: NotRequired[int]
+    guardrail_retry_cooldown_threshold: NotRequired[int]
+    guardrail_retry_attempts: NotRequired[int]
+    successful_guardrail_retries: NotRequired[int]
 
     # Model configuration for provider instantiation
     model_config: NotRequired[dict[str, Any]]
@@ -169,6 +189,9 @@ def _default_state_template() -> dict[str, Any]:
         "llm_provider": "gemini",
         "current_surface": "sqli",
         "payload_mode": "static_only",
+        "experiment_condition": "akg_guided_hybrid",
+        "target_method": None,
+        "viable_methods": [],
         "endpoints": [],
         "input_vectors": [],
         "observations": {},
@@ -188,10 +211,15 @@ def _default_state_template() -> dict[str, Any]:
         "method_scores": {},
         "exploitation_scores": {},
         "chain_scores": {},
+        "output_scores": {},
+        "composite_scores": {},
         "current_chain": [],
         "chain_history": [],
         "messages": [],
         "guardrail_activations": [],
+        "invalid_json_events": [],
+        "fallback_events": [],
+        "containment_events": [],
         "blocked_patterns": [],
         "successful_bypasses": [],
         "consecutive_clean_responses": 0,
@@ -203,6 +231,13 @@ def _default_state_template() -> dict[str, Any]:
         "evasion_cooldown_threshold": 5,
         "evasion_attempts": 0,
         "successful_evasions": 0,
+        # Guardrail-retry aliases (kept in sync with evasion_* by normalize_guardrail_retry_fields)
+        "guardrail_retry_enabled": False,
+        "guardrail_retry_mode": "reactive",
+        "guardrail_retry_max": 3,
+        "guardrail_retry_cooldown_threshold": 5,
+        "guardrail_retry_attempts": 0,
+        "successful_guardrail_retries": 0,
         "model_config": {},
         "telemetry_events": [],
         "attempted_agents": [],
@@ -232,6 +267,41 @@ def new_default_state() -> dict[str, Any]:
 
 # Surfaces
 SURFACES: list[str] = ["sqli", "access_control", "brute_force"]
+
+# Thesis experiment conditions
+EXPERIMENT_CONDITIONS: list[str] = ["linear_hybrid", "akg_guided_hybrid"]
+
+# Mapping between legacy evasion_* fields and primary guardrail_retry_* fields
+_GUARDRAIL_RETRY_ALIASES: dict[str, str] = {
+    "guardrail_retry_enabled": "evasion_enabled",
+    "guardrail_retry_mode": "evasion_mode",
+    "guardrail_retry_max": "evasion_max_retries",
+    "guardrail_retry_cooldown_threshold": "evasion_cooldown_threshold",
+    "guardrail_retry_attempts": "evasion_attempts",
+    "successful_guardrail_retries": "successful_evasions",
+}
+
+
+def normalize_guardrail_retry_fields(state: dict[str, Any]) -> dict[str, Any]:
+    """Keeps guardrail_retry_* (primary) and evasion_* (legacy alias) fields in sync.
+
+    New code should read guardrail_retry_* names. When only the legacy evasion_*
+    field is present, its value is copied into the guardrail_retry_* name and vice
+    versa, so both views stay consistent.
+
+    Args:
+        state: Mutable state dictionary to normalize in place.
+
+    Returns:
+        The same dictionary with both naming families populated."""
+    for primary, legacy in _GUARDRAIL_RETRY_ALIASES.items():
+        has_primary = primary in state and state[primary] is not None
+        has_legacy = legacy in state and state[legacy] is not None
+        if has_primary and not has_legacy:
+            state[legacy] = state[primary]
+        elif has_legacy and not has_primary:
+            state[primary] = state[legacy]
+    return state
 
 # Method agents by surface
 METHODS_BY_SURFACE: dict[str, list[str]] = {

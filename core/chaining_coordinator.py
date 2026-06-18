@@ -1,10 +1,12 @@
 """Chaining Coordinator — conditional edge routing for 3-surface architecture.
 
-Design note: chain preconditions are checked against `confirmed_vulns` ONLY,
-not `achieved_outcomes`. This is intentional: outcomes are terminal rewards,
-not stepping-stones for further chains. `get_viable_chains` (reporting) includes
-`achieved_outcomes` for path-preview completeness, but the runtime router does
-not use them to satisfy chain preconditions.
+Design note: chain preconditions are evaluated against the union of confirmed
+vulnerabilities and achieved outcomes, i.e. `known = confirmed_vulns |
+achieved_outcomes` (thesis §5.6 and AGENTS "AKG Rules"). An enabling outcome
+such as `credentials_extracted` can therefore serve as a stepping-stone for a
+follow-up chain (e.g. `credentials_extracted -> bf_dictionary`). An enabling
+outcome is not itself a confirmed exploit; brute force still requires execution
+or login validation before `brute_force_confirmed` is appended.
 """
 
 from __future__ import annotations
@@ -79,7 +81,7 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
     max_iterations = state.get("max_iterations", 30)
     confirmed = set(state.get("confirmed_vulns", []))
     achieved = set(state.get("achieved_outcomes", []))
-    known = confirmed  # chain preconditions must be confirmed_vulns only, not achieved_outcomes
+    known = confirmed | achieved  # chain preconditions use confirmed_vulns and achieved_outcomes (thesis §5.6)
     current_surface = state.get("current_surface", "sqli")
     # Deduplicate attempted_agents because Annotated[list[str], add]
     # reducer can accumulate duplicates when agents return the full list.
@@ -97,8 +99,9 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
             "reason": "budget_exhausted",
         }
 
-    # Derive surface-level confirmed nodes for chain precondition checks
-    confirmed_for_chains = confirmed | _derive_surface_confirmed(confirmed)
+    # Derive surface-level confirmed nodes for chain precondition checks.
+    # Sources include confirmed vulns, achieved outcomes, and surface-mapped nodes.
+    confirmed_for_chains = known | _derive_surface_confirmed(confirmed)
 
     # 1. Check cross-surface chains from confirmed nodes
     for vuln in sorted(confirmed_for_chains):
@@ -202,7 +205,15 @@ def chaining_router_node(state: dict) -> dict:
     updates: dict = {"next_agent": next_agent, "telemetry_events": [event]}
     if next_agent in {method for methods in METHODS_BY_SURFACE.values() for method in methods}:
         updates["selected_method"] = next_agent
-    if event.get("reason") == "all_methods_exhausted":
+    reason = event.get("reason")
+    if reason in ("fallback_next_method", "all_methods_exhausted"):
+        updates["fallback_events"] = [{
+            "node": "chaining_router",
+            "reason": reason,
+            "next_agent": next_agent,
+            "iteration": event.get("iteration"),
+        }]
+    if reason == "all_methods_exhausted":
         updates["task_result"] = "INCOMPLETE"
         updates["incomplete_reason"] = event.get("incomplete_reason", "ALL_METHODS_FAILED")
     return updates

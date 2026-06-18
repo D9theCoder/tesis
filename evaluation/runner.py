@@ -31,6 +31,8 @@ def run_single_engagement(
     llm_provider: str,
     surface: str = "sqli",
     payload_mode: str = "static_only",
+    experiment_condition: str = "akg_guided_hybrid",
+    target_method: str | None = None,
     max_iterations: int = 30,
     candidate_budget: int = 5,
     repeat_index: int = 0,
@@ -59,6 +61,9 @@ def run_single_engagement(
         llm_provider: Provider identifier passed into framework state.
         surface: Vulnerability surface selected for the run.
         payload_mode: Payload candidate mode for the run.
+        experiment_condition: Thesis condition ("linear_hybrid" or
+            "akg_guided_hybrid") controlling AKG-guided method selection.
+        target_method: Optional explicit method for method-level evaluation.
         max_iterations: Maximum LangGraph method iterations.
         candidate_budget: Maximum generated-candidate budget per method.
         repeat_index: Matrix repeat index used in artifact IDs.
@@ -78,7 +83,8 @@ def run_single_engagement(
         Run artifact containing final state, report, telemetry, paths, and
         failure details when execution fails.
     """
-    run_id = f"{llm_provider}-{surface}-{security_level}-{payload_mode}-{repeat_index}"
+    method_tag = f"-{target_method}" if target_method else ""
+    run_id = f"{llm_provider}-{experiment_condition}-{surface}{method_tag}-{security_level}-{payload_mode}-{repeat_index}"
     started_at = _now_iso()
     started_clock = perf_counter()
     telemetry = RunTelemetry(run_id=run_id)
@@ -119,6 +125,8 @@ def run_single_engagement(
             "llm_provider": llm_provider,
             "current_surface": surface,
             "payload_mode": payload_mode,
+            "experiment_condition": experiment_condition,
+            "target_method": target_method,
             "candidate_budget": candidate_budget,
             "max_iterations": max_iterations,
             "stop_policy": stop_policy,
@@ -169,6 +177,8 @@ def run_single_engagement(
             "llm_provider": llm_provider,
             "current_surface": surface,
             "payload_mode": payload_mode,
+            "experiment_condition": experiment_condition,
+            "target_method": target_method,
             "candidate_budget": candidate_budget,
             "max_iterations": max_iterations,
             "stop_policy": stop_policy,
@@ -273,6 +283,8 @@ def run_single_engagement(
     method_score = method_scores.get(selected_method, 0)
     exploitation_score = exploitation_scores.get(selected_method, 0)
     chain_score = chain_scores.get(selected_method, 0)
+    output_score = int(summary.get("output_validity_score", 0) or 0)
+    composite_score = float(summary.get("composite_score", 0.0) or 0.0)
 
     artifact = {
         "schema_version": "stage8.v1",
@@ -282,18 +294,26 @@ def run_single_engagement(
         "surface": surface,
         "security_level": security_level,
         "payload_mode": payload_mode,
+        "experiment_condition": experiment_condition,
+        "target_method": target_method,
         "selected_method": selected_method,
         "akg_path": list(final_state.get("akg_path", [])),
+        "viable_methods": list(final_state.get("viable_methods", [])),
         "method_score": method_score,
         "payload_scores": payload_scores,
         "exploitation_score": exploitation_score,
         "chain_score": chain_score,
+        "output_score": output_score,
+        "composite_score": composite_score,
         "payload_validity_rate": summary.get("payload_validity_rate", 0.0),
         "payload_execution_success_rate": summary.get("payload_execution_success_rate", 0.0),
         "payload_improvement_rate": summary.get("payload_improvement_rate", 0.0),
         "consistency_score": summary.get("consistency_score", 0.0),
         "guardrail_activations": len(final_state.get("guardrail_activations", [])),
         "payload_guardrail_activations": len(final_state.get("payload_guardrail_activations", [])),
+        "invalid_json_events": len(final_state.get("invalid_json_events", [])),
+        "fallback_events": len(final_state.get("fallback_events", [])),
+        "containment_events": len(final_state.get("containment_events", [])),
         "attempts_to_success": int(round(summary.get("mean_attempts_to_success", 0.0) or 0.0)),
         "token_cost": summary.get("token_cost", 0.0),
         "config": {
@@ -302,6 +322,8 @@ def run_single_engagement(
             "security_level": security_level,
             "surface": surface,
             "payload_mode": payload_mode,
+            "experiment_condition": experiment_condition,
+            "target_method": target_method,
             "max_iterations": max_iterations,
             "candidate_budget": candidate_budget,
             "repeat_index": repeat_index,
@@ -321,7 +343,11 @@ def run_single_engagement(
             "achieved_outcomes": list(final_state.get("achieved_outcomes", [])),
             "guardrail_activations": list(final_state.get("guardrail_activations", [])),
             "payload_guardrail_activations": list(final_state.get("payload_guardrail_activations", [])),
+            "invalid_json_events": list(final_state.get("invalid_json_events", [])),
+            "fallback_events": list(final_state.get("fallback_events", [])),
+            "containment_events": list(final_state.get("containment_events", [])),
             "selected_method": selected_method,
+            "viable_methods": list(final_state.get("viable_methods", [])),
             "payload_candidates": dict(final_state.get("payload_candidates", {})),
             "generated_payloads": dict(final_state.get("generated_payloads", {})),
             "payload_validation_results": dict(final_state.get("payload_validation_results", {})),
@@ -330,6 +356,10 @@ def run_single_engagement(
             "method_scores": method_scores,
             "exploitation_scores": exploitation_scores,
             "chain_scores": chain_scores,
+            "output_scores": dict(final_state.get("output_scores", {})),
+            "composite_scores": dict(final_state.get("composite_scores", {})),
+            "experiment_condition": final_state.get("experiment_condition", experiment_condition),
+            "target_method": final_state.get("target_method", target_method),
             "evasion_enabled": final_state.get("evasion_enabled", False),
             "evasion_mode": final_state.get("evasion_mode", "reactive"),
             "evasion_max_retries": final_state.get("evasion_max_retries", 3),

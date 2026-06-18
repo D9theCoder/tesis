@@ -46,6 +46,12 @@ class ScoreSummary:
     token_cost: float = 0.0
     token_cost_per_success: float = 0.0
 
+    # Thesis §7.1 — output quality & composite run score
+    output_validity_score: float = 0.0
+    composite_score: float = 0.0
+    invalid_json_rate: float = 0.0
+    fallback_rate: float = 0.0
+
     def __post_init__(self):
         if self.evasion_attempts < 0 or self.successful_evasions < 0:
             raise ValueError("Evasion counts must be non-negative")

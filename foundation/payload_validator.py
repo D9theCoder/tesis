@@ -173,7 +173,17 @@ def validate_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
 
     max_total = int(profile.get("max_total_candidates", state.get("candidate_budget", 5)) or 5)
     ranked = rank_candidates(valid, max_total)
-    return {
+    containment_events = [
+        {
+            "kind": "payload",
+            "candidate_id": row.get("candidate_id"),
+            "method": method,
+            "reason": "out_of_scope_target",
+        }
+        for row in rejected
+        if row.get("reason") == "out_of_scope_target"
+    ]
+    update: dict[str, Any] = {
         "payload_candidates": {method: ranked},
         "payload_validation_results": {method: [*rejected, *[c["validation"] for c in ranked]]},
         "payload_provenance": {
@@ -188,6 +198,9 @@ def validate_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
             for candidate in ranked
         },
     }
+    if containment_events:
+        update["containment_events"] = containment_events
+    return update
 
 
 def payload_validator_node(state: dict[str, Any]) -> dict[str, Any]:

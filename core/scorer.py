@@ -25,6 +25,10 @@ from evaluation.metrics import (
     payload_execution_success_rate,
     payload_improvement_rate,
     payload_validity_rate,
+    invalid_json_rate,
+    fallback_rate,
+    output_validity_score,
+    composite_run_score,
 )
 from core.state import ALL_METHOD_AGENTS, SURFACES, METHODS_BY_SURFACE, SCORE_LABELS
 
@@ -88,6 +92,19 @@ def build_score_report(state: dict) -> ScorerReport:
         ),
         4,
     )
+    iterations = int(state.get("iteration_count", 0) or 0)
+    inv_json_rate = round(invalid_json_rate(state.get("invalid_json_events", []), iterations), 4)
+    fb_rate = round(fallback_rate(state.get("fallback_events", []), iterations), 4)
+    s_output = output_validity_score(guardrail_rate, inv_json_rate, fb_rate)
+    # Run-level dimension aggregates: best score observed across method agents.
+    s_method = max((normalized.get(a, 0) for a in ALL_METHOD_AGENTS), default=0)
+    payload_scores_map = {k: int(v) for k, v in dict(state.get("payload_scores", {})).items()}
+    s_payload = max(payload_scores_map.values(), default=0)
+    exploitation_map = {k: int(v) for k, v in dict(state.get("exploitation_scores", {})).items()}
+    s_exploit = max(exploitation_map.values(), default=0)
+    chain_map = {k: int(v) for k, v in dict(state.get("chain_scores", {})).items()}
+    s_chain = max(chain_map.values(), default=0)
+    composite = composite_run_score(s_method, s_payload, s_exploit, s_chain, s_output)
     module_scores = {
         agent_id: ModuleScoreResult(
             score=normalized[agent_id],
@@ -135,6 +152,10 @@ def build_score_report(state: dict) -> ScorerReport:
         consistency_score=0.0,
         token_cost=0.0,
         token_cost_per_success=0.0,
+        output_validity_score=float(s_output),
+        composite_score=composite,
+        invalid_json_rate=inv_json_rate,
+        fallback_rate=fb_rate,
     )
     return ScorerReport(module_scores=module_scores, summary=summary)
 
@@ -192,6 +213,8 @@ def scorer(state: dict) -> dict:
         "total_surfaces_tested": len(SURFACES),
         "akg_path": akg_path,
         "selected_method": state.get("selected_method"),
+        "experiment_condition": state.get("experiment_condition", "akg_guided_hybrid"),
+        "target_method": state.get("target_method"),
         "payload_mode": state.get("payload_mode", "static_only"),
         "method_scores": dict(state.get("method_scores", {})),
         "payload_scores": dict(state.get("payload_scores", {})),
@@ -222,5 +245,8 @@ def scorer(state: dict) -> dict:
         "task_result": task_result,
         "incomplete_reason": existing_reason,
         "surface_scores": surface_scores,
+        "output_scores": {"run": int(report.summary.output_validity_score)},
+        "composite_scores": {"run": int(round(report.summary.composite_score))},
+        "composite_score": report.summary.composite_score,
         "summary": summary,
     }

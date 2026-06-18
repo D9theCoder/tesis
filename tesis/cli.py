@@ -109,6 +109,8 @@ def _print_resolved_config(config: Any) -> None:
         "level": config.level,
         "surface": config.surface,
         "payload_mode": config.payload_mode,
+        "experiment_condition": config.experiment_condition,
+        "target_method": config.target_method,
         "candidate_budget": config.candidate_budget,
         "iterations": config.iterations,
         "repeats": config.repeats,
@@ -118,6 +120,8 @@ def _print_resolved_config(config: Any) -> None:
         "levels": config.levels,
         "surfaces": config.surfaces,
         "payload_modes": config.payload_modes,
+        "experiment_conditions": config.experiment_conditions,
+        "target_methods": config.target_methods,
         "format": config.report_format,
         "enriched_reporting": config.enriched_reporting,
         "stop_policy": config.stop_policy,
@@ -142,10 +146,11 @@ def _model_config_to_dict(model_cfg: Any) -> dict[str, Any]:
 def _announce_runtime_config(config: Any) -> None:
     """Print active provider, model, and endpoint before execution."""
     if config.matrix:
-        combos = len(config.providers) * len(config.levels) * len(config.surfaces) * len(config.payload_modes) * config.repeats
+        combos = len(config.providers) * len(config.levels) * len(config.surfaces) * len(config.payload_modes) * len(config.experiment_conditions) * config.repeats
         print(
             f"Matrix mode: {len(config.providers)} providers × {len(config.levels)} levels × "
             f"{len(config.surfaces)} surfaces × {len(config.payload_modes)} payload modes × "
+            f"{len(config.experiment_conditions)} conditions × "
             f"{config.repeats} repeats = {combos} total runs"
         )
         return
@@ -203,6 +208,8 @@ def handle_run(args: argparse.Namespace) -> int:
                 security_levels=config.levels,
                 surfaces=config.surfaces,
                 payload_modes=config.payload_modes,
+                experiment_conditions=config.experiment_conditions,
+                target_methods=config.target_methods or None,
                 repeats=config.repeats,
                 max_iterations=config.iterations,
                 candidate_budget=config.candidate_budget,
@@ -255,6 +262,8 @@ def handle_run(args: argparse.Namespace) -> int:
             llm_provider=config.provider,
             surface=config.surface,
             payload_mode=config.payload_mode,
+            experiment_condition=config.experiment_condition,
+            target_method=config.target_method,
             max_iterations=config.iterations,
             candidate_budget=config.candidate_budget,
             repeat_index=0,
@@ -538,6 +547,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--surface", choices=SURFACES, help="Attack surface to test")
     run_parser.add_argument("--payload-mode", choices=["static_only", "hybrid", "llm_mutation_only"], help="Payload mode")
     run_parser.add_argument("--payload-modes", nargs="+", choices=["static_only", "hybrid", "llm_mutation_only"], help="Payload modes for matrix mode")
+    run_parser.add_argument("--experiment-condition", choices=["linear_hybrid", "akg_guided_hybrid"], help="Thesis experiment condition")
+    run_parser.add_argument("--target-method", help="Explicit method for method-level evaluation")
     run_parser.add_argument("--candidate-budget", type=int, help="Generated payload candidate budget")
     run_parser.add_argument("--provider", help="LLM provider")
     run_parser.add_argument("--iterations", type=int, help="Max iterations")
@@ -545,6 +556,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--providers", nargs="+", help="Providers for matrix mode")
     run_parser.add_argument("--levels", nargs="+", help="Security levels for matrix mode")
     run_parser.add_argument("--surfaces", nargs="+", help="Surfaces for matrix mode")
+    run_parser.add_argument("--experiment-conditions", nargs="+", choices=["linear_hybrid", "akg_guided_hybrid"], help="Experiment conditions for matrix mode")
+    run_parser.add_argument("--target-methods", nargs="+", help="Explicit methods for matrix method-level evaluation")
     run_parser.add_argument("--repeats", type=int, help="Repeats per provider/level")
     run_parser.add_argument("--output-dir", dest="output_dir", help="Output directory")
     run_parser.add_argument("--format", choices=["json", "markdown", "both"], help="Output format")

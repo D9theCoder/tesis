@@ -98,8 +98,13 @@ def test_route_after_agent_all_methods_exhausted():
 from core.chaining_coordinator import evaluate_chain_route
 
 
-def test_chain_preconditions_use_confirmed_vulns_only():
-    """Achieved outcomes alone should NOT trigger a chain."""
+def test_chain_preconditions_use_union_of_confirmed_and_achieved():
+    """An achieved outcome should be able to enable a chain (thesis §5.6 union).
+
+    `credentials_extracted` is an enabling outcome whose chain edge targets
+    `bf_dictionary`. With union semantics, having it in achieved_outcomes is
+    sufficient to route into that follow-up method.
+    """
     state = {
         "confirmed_vulns": [],
         "achieved_outcomes": ["credentials_extracted"],
@@ -112,16 +117,15 @@ def test_chain_preconditions_use_confirmed_vulns_only():
         "observations": {},
     }
     next_agent, event = evaluate_chain_route(state)
-    # Should NOT trigger the credentials_extracted -> brute_force_confirmed chain
-    # because confirmed_vulns is empty
-    assert event["reason"] != "chain_ready" or next_agent != "bf_dictionary"
+    assert event["reason"] == "chain_ready"
+    assert next_agent == "bf_dictionary"
 
 
-def test_achieved_outcomes_alone_cannot_trigger_chain():
-    """Verifies achieved outcomes alone cannot trigger chain behavior."""
+def test_achieved_outcome_enables_cross_surface_chain():
+    """A brute_force_confirmed achieved outcome enables the authenticated chain."""
     state = {
         "confirmed_vulns": [],
-        "achieved_outcomes": ["brute_force_confirmed", "credentials_extracted"],
+        "achieved_outcomes": ["brute_force_confirmed"],
         "iteration_count": 1,
         "max_iterations": 30,
         "current_surface": "brute_force",
@@ -131,5 +135,5 @@ def test_achieved_outcomes_alone_cannot_trigger_chain():
         "observations": {},
     }
     next_agent, event = evaluate_chain_route(state)
-    # achieved_outcomes should not satisfy chain preconditions
-    assert event["reason"] != "chain_ready" or next_agent != "ac_idor"
+    assert event["reason"] == "chain_ready"
+    assert next_agent == "ac_idor"

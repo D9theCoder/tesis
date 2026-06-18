@@ -186,6 +186,11 @@ provenance_required
 output_schema
 ```
 
+> Catatan implementasi: `payload_budget` adalah budget kandidat kanonik. AKG juga
+> menyimpan nilai turunan `max_generated_candidates` dan `max_total_candidates`
+> (sama dengan `payload_budget` dan `payload_budget + len(seed_payload_refs)`)
+> untuk kompatibilitas mundur dengan payload validator dan ranker.
+
 ## 5. Main Workflow
 
 ### 5.1 Recon
@@ -601,6 +606,14 @@ dvwa-llm-pentest/
     ├── payloads/
     └── reports/
 ```
+
+> Catatan: Ini adalah target layout konseptual. Repository aktual juga memuat
+> modul pendukung tambahan yang tidak tercantum di atas (misalnya
+> `agents/agent_telemetry.py`, `agents/state_utils.py`, `tesis/model_config.py`,
+> `tesis/progress_reporter.py`, dan beberapa helper `evaluation/` seperti
+> `contracts.py`, `diagnostics.py`, `failure_logger.py`, dan `telemetry.py`).
+> File-file ini adalah pendukung internal untuk telemetry, typed contract, dan
+> reporting; diperbolehkan dan tidak mengubah arsitektur yang dijelaskan di sini.
 
 ## 15. Current Implementation Notes
 

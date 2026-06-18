@@ -12,7 +12,7 @@ import yaml
 
 from core.state import SECURITY_LEVELS, SURFACES
 from llm.provider import SUPPORTED_PROVIDERS
-from tesis.model_config import EngagementConfig, ModelConfig, EVASION_MODES, PAYLOAD_MODES
+from tesis.model_config import EngagementConfig, ModelConfig, EVASION_MODES, PAYLOAD_MODES, EXPERIMENT_CONDITIONS
 
 
 class ConfigError(ValueError):
@@ -21,6 +21,7 @@ class ConfigError(ValueError):
 
 _VALID_EVASION_MODES: frozenset[str] = EVASION_MODES
 _VALID_PAYLOAD_MODES: frozenset[str] = PAYLOAD_MODES
+_VALID_EXPERIMENT_CONDITIONS: frozenset[str] = EXPERIMENT_CONDITIONS
 
 _ENV_REF_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)}")
 
@@ -128,6 +129,8 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "SECURITY_LEVEL": "level",
         "SURFACE": "surface",
         "PAYLOAD_MODE": "payload_mode",
+        "EXPERIMENT_CONDITION": "experiment_condition",
+        "TARGET_METHOD": "target_method",
         "CANDIDATE_BUDGET": "candidate_budget",
         "ITERATIONS": "iterations",
         "MAX_ITERATIONS": "iterations",
@@ -138,6 +141,8 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "LEVELS": "levels",
         "SURFACES": "surfaces",
         "PAYLOAD_MODES": "payload_modes",
+        "EXPERIMENT_CONDITIONS": "experiment_conditions",
+        "TARGET_METHODS": "target_methods",
         "FORMAT": "report_format",
         "ENRICHED_REPORTING": "enriched_reporting",
         "STOP_POLICY": "stop_policy",
@@ -189,7 +194,7 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
                 raise ConfigError(f"Invalid integer value for {key}: {raw_value}") from exc
         elif mapped in {"matrix", "enriched_reporting", "diagnose", "evasion_enabled"}:
             value = _parse_bool(raw_value)
-        elif mapped in {"providers", "levels", "surfaces", "payload_modes"}:
+        elif mapped in {"providers", "levels", "surfaces", "payload_modes", "experiment_conditions", "target_methods"}:
             value = _parse_csv(raw_value)
         elif mapped == "coverage_target":
             try:
@@ -227,6 +232,8 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         "level": "level",
         "surface": "surface",
         "payload_mode": "payload_mode",
+        "experiment_condition": "experiment_condition",
+        "target_method": "target_method",
         "candidate_budget": "candidate_budget",
         "iterations": "iterations",
         "repeats": "repeats",
@@ -235,6 +242,8 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         "levels": "levels",
         "surfaces": "surfaces",
         "payload_modes": "payload_modes",
+        "experiment_conditions": "experiment_conditions",
+        "target_methods": "target_methods",
         "format": "report_format",
         "enriched_reporting": "enriched_reporting",
         "stop_policy": "stop_policy",
@@ -301,6 +310,22 @@ def validate_payload_mode(payload_mode: str) -> None:
         raise ConfigError(
             f"Unsupported payload mode: {payload_mode}. "
             f"Must be one of: {', '.join(sorted(_VALID_PAYLOAD_MODES))}"
+        )
+
+
+def validate_experiment_condition(condition: str) -> None:
+    """Validates the thesis experiment condition.
+
+    Args:
+        condition: Experiment condition identifier to validate.
+
+    Raises:
+        ConfigError: When the condition is not a supported thesis condition.
+    """
+    if condition not in _VALID_EXPERIMENT_CONDITIONS:
+        raise ConfigError(
+            f"Unsupported experiment condition: {condition}. "
+            f"Must be one of: {', '.join(sorted(_VALID_EXPERIMENT_CONDITIONS))}"
         )
 
 
@@ -400,6 +425,7 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
 
     _validate_surface(config.surface)
     validate_payload_mode(config.payload_mode)
+    validate_experiment_condition(config.experiment_condition)
 
     evasion_mode = str(getattr(config, "evasion_mode", config.evasion_strategy)).strip().lower()
     if config.evasion_enabled and evasion_mode not in _VALID_EVASION_MODES:
@@ -425,6 +451,8 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
             _validate_surface(surface)
         for payload_mode in config.payload_modes:
             validate_payload_mode(payload_mode)
+        for condition in config.experiment_conditions:
+            validate_experiment_condition(condition)
     else:
         validate_provider(config.provider)
         validate_level(config.level)
@@ -460,12 +488,17 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         or "sqli"
     ).strip().lower()
     payload_mode = str(merged.get("payload_mode") or "static_only").strip().lower()
+    experiment_condition = str(merged.get("experiment_condition") or "akg_guided_hybrid").strip().lower()
+    target_method_raw = merged.get("target_method")
+    target_method = str(target_method_raw).strip().lower() if target_method_raw else None
     candidate_budget = int(merged.get("candidate_budget") or 5)
 
     providers = [str(p).strip().lower() for p in merged.get("providers", merged.get("llm_providers", []))]
     levels = [str(l).strip().lower() for l in merged.get("levels", merged.get("security_levels", []))]
     surfaces = [str(s).strip().lower() for s in merged.get("surfaces", [])]
     payload_modes = [str(s).strip().lower() for s in merged.get("payload_modes", [])]
+    experiment_conditions = [str(c).strip().lower() for c in merged.get("experiment_conditions", [])]
+    target_methods = [str(m).strip().lower() for m in merged.get("target_methods", []) if m]
 
     # Parse nested evasion config block if present
     evasion_cfg = merged.get("evasion") or {}
@@ -496,6 +529,8 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         level=level,
         surface=surface,
         payload_mode=payload_mode,
+        experiment_condition=experiment_condition,
+        target_method=target_method,
         candidate_budget=candidate_budget,
         iterations=int(merged.get("iterations") or merged.get("max_iterations") or merged.get("default_max_iterations") or 30),
         repeats=int(merged.get("repeats", 1)),
@@ -505,6 +540,8 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         levels=levels or [level],
         surfaces=surfaces or (["sqli", "access_control", "brute_force"] if _coerce_bool(merged.get("matrix", False)) else [surface]),
         payload_modes=payload_modes or (["static_only", "hybrid"] if _coerce_bool(merged.get("matrix", False)) else [payload_mode]),
+        experiment_conditions=experiment_conditions or (list(EXPERIMENT_CONDITIONS) if _coerce_bool(merged.get("matrix", False)) else [experiment_condition]),
+        target_methods=target_methods,
         report_format=str(merged.get("report_format") or merged.get("format") or "both").strip().lower(),
         enriched_reporting=_coerce_bool(merged.get("enriched_reporting", False)),
         stop_policy=str(merged.get("stop_policy") or "impact").strip().lower(),
