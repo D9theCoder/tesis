@@ -9,7 +9,7 @@ Validates:
 
 import pytest
 
-from foundation.verifier import VerificationResult, Verifier
+from foundation.verifier import VerificationResult, Verifier, has_captcha_challenge
 
 
 class TestVerificationResult:
@@ -99,3 +99,22 @@ class TestVerifierBehavior:
         """XSS/browser verification stays outside the fixed thesis scope."""
         v = Verifier()
         assert not hasattr(v, "verify_xss_dialog")
+
+
+def test_captcha_detector_ignores_dvwa_navigation_label():
+    """The Insecure CAPTCHA menu link is not a challenge boundary."""
+    html = """
+    <nav><a href='/dvwa/vulnerabilities/captcha/'>Insecure CAPTCHA</a></nav>
+    <form><input name='username'><input name='password'></form>
+    """
+    assert has_captcha_challenge(html) is False
+
+
+def test_captcha_detector_requires_a_challenge_control():
+    """A CAPTCHA form control is classified as an out-of-scope boundary."""
+    html = """
+    <form><label>Enter CAPTCHA</label>
+      <input name='captcha' type='text'><input name='Login' type='submit'>
+    </form>
+    """
+    assert has_captcha_challenge(html) is True

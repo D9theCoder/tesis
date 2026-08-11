@@ -105,13 +105,10 @@ def _fallback_next_agent(
         else []
     )
 
-    # Prefer unattempted viable methods that have not previously failed
-    for method in viable:
-        if method not in attempted and method not in blocked and method not in failure_agents:
-            return method
-
-    # Try any unattempted method on this surface that has not failed
-    for method in METHODS_BY_SURFACE.get(current_surface, []):
+    # In AKG-guided runs, only methods whose prerequisites were observed may
+    # execute. Linear runs intentionally retain the deterministic surface order.
+    candidates = viable if condition == "akg_guided_hybrid" else METHODS_BY_SURFACE.get(current_surface, [])
+    for method in candidates:
         if method not in attempted and method not in blocked and method not in failure_agents:
             return method
 
@@ -392,7 +389,8 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         parsed = _parse_decision_payload(text)
         parse_ok = isinstance(parsed, dict) and isinstance(parsed.get("next_agent"), str)
         candidate = parsed["next_agent"] if parse_ok else fallback_agent
-        next_agent = candidate if candidate in ALL_METHOD_AGENTS or candidate == "scorer" else fallback_agent
+        allowed_agents = set(selection_methods) | {"scorer"}
+        next_agent = candidate if candidate in allowed_agents else fallback_agent
         used_fallback = not parse_ok or candidate != next_agent
         selected_method = next_agent if next_agent in ALL_METHOD_AGENTS else None
         method_score = 3 if selected_method in viable_methods else (1 if selected_method in METHODS_BY_SURFACE.get(current_surface, []) else 0)
@@ -422,11 +420,19 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         # Harness node — crashing the graph is worse than logging a fallback.
         logger.exception("Orchestrator failed; applying deterministic fallback")
+        failure_event = {
+            "event": "orchestrator.llm_failure",
+            "error_type": type(exc).__name__,
+            "next_agent": fallback_agent,
+        }
         return {
             "next_agent": "payload_candidate_builder" if fallback_agent != "scorer" else "scorer",
             "selected_method": fallback_agent if fallback_agent != "scorer" else None,
             "viable_methods": viable_methods,
             "iteration_count": iteration_count + 1,
+            "task_result": "INCOMPLETE",
+            "incomplete_reason": "LLM_RUNTIME_FAILURE",
+            "fallback_events": [failure_event],
             "telemetry_events": [
                 *telemetry_events,
                 {**telemetry_base, "event": "orchestrator.fallback.applied", "status": "fallback", "payload": {"error_type": type(exc).__name__, "next_agent": fallback_agent}},

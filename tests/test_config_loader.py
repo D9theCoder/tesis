@@ -181,6 +181,30 @@ models:
     assert cfg.models["gemini"].api_key == "secret-token-1234"
 
 
+def test_dotenv_beside_config_supplies_provider_key(tmp_path, monkeypatch):
+    """The production config path loads its colocated .env before model defaults."""
+    config_path = tmp_path / "config.yaml"
+    dotenv_path = tmp_path / ".env"
+    _write_yaml(
+        config_path,
+        """
+target_url: http://localhost/dvwa
+provider: openai_compatible
+level: low
+models:
+  openai_compatible:
+    model_name: test-model
+    base_url: http://localhost:1234/v1
+""",
+    )
+    dotenv_path.write_text("OPENAI_COMPATIBLE_API_KEY=dotenv-secret\n", encoding="utf-8")
+    monkeypatch.delenv("OPENAI_COMPATIBLE_API_KEY", raising=False)
+
+    cfg = load_and_resolve_config(config_path=str(config_path), cli_args={})
+
+    assert cfg.models["openai_compatible"].api_key == "dotenv-secret"
+
+
 def test_payload_mode_and_candidate_budget_from_yaml(tmp_path):
     """Verifies payload mode and candidate budget from yaml behavior."""
     config_path = tmp_path / "config.yaml"
@@ -199,6 +223,28 @@ candidate_budget: 7
 
     assert cfg.payload_mode == "hybrid"
     assert cfg.candidate_budget == 7
+
+
+def test_matrix_target_method_must_match_every_selected_surface(tmp_path):
+    """Reject ambiguous method-level matrices before any live work is started."""
+    config_path = tmp_path / "config.yaml"
+    _write_yaml(
+        config_path,
+        """
+target_url: http://localhost/dvwa
+provider: gemini
+level: low
+matrix: true
+providers: [gemini]
+levels: [low]
+surfaces: [sqli, access_control]
+payload_modes: [static_only]
+target_method: sqli_union
+""",
+    )
+
+    with pytest.raises(ConfigError, match="every configured matrix surface"):
+        load_and_resolve_config(config_path=str(config_path), cli_args={})
 
 
 def test_openai_compatible_model_env_override(tmp_path, monkeypatch):

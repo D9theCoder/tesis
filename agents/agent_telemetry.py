@@ -11,19 +11,29 @@ def probe_event(
     status_code: int | None,
     signal_detected: bool,
     endpoint: str | None = None,
+    elapsed_ms: float | None = None,
+    baseline_elapsed_ms: float | None = None,
+    delay_ms: float | None = None,
 ) -> dict[str, Any]:
     """Return a telemetry event for a PROBE stage HTTP request."""
+    event_payload: dict[str, Any] = {
+        "agent_id": agent_id,
+        "payload": payload,
+        "endpoint": endpoint,
+        "status_code": status_code,
+        "signal_detected": signal_detected,
+    }
+    if elapsed_ms is not None:
+        event_payload["elapsed_ms"] = float(elapsed_ms)
+    if baseline_elapsed_ms is not None:
+        event_payload["baseline_elapsed_ms"] = float(baseline_elapsed_ms)
+    if delay_ms is not None:
+        event_payload["delay_ms"] = float(delay_ms)
     return {
         "node": agent_id,
         "event": "agent.probe.sent",
         "status": "ok",
-        "payload": {
-            "agent_id": agent_id,
-            "payload": payload,
-            "endpoint": endpoint,
-            "status_code": status_code,
-            "signal_detected": signal_detected,
-        },
+        "payload": event_payload,
     }
 
 
@@ -33,19 +43,29 @@ def exploit_event(
     status_code: int | None,
     success: bool,
     endpoint: str | None = None,
+    elapsed_ms: float | None = None,
+    baseline_elapsed_ms: float | None = None,
+    delay_ms: float | None = None,
 ) -> dict[str, Any]:
     """Return a telemetry event for an EXPLOIT stage HTTP request."""
+    event_payload: dict[str, Any] = {
+        "agent_id": agent_id,
+        "payload": payload,
+        "endpoint": endpoint,
+        "status_code": status_code,
+        "success": success,
+    }
+    if elapsed_ms is not None:
+        event_payload["elapsed_ms"] = float(elapsed_ms)
+    if baseline_elapsed_ms is not None:
+        event_payload["baseline_elapsed_ms"] = float(baseline_elapsed_ms)
+    if delay_ms is not None:
+        event_payload["delay_ms"] = float(delay_ms)
     return {
         "node": agent_id,
         "event": "agent.exploit.sent",
         "status": "ok" if success else "failed",
-        "payload": {
-            "agent_id": agent_id,
-            "payload": payload,
-            "endpoint": endpoint,
-            "status_code": status_code,
-            "success": success,
-        },
+        "payload": event_payload,
     }
 
 

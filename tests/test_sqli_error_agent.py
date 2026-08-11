@@ -75,11 +75,11 @@ def test_exploit_extracts_data(base_state):
         result = sqli_error_agent(base_state)
 
     assert result["scores"]["sqli_error"] >= 3
-    assert "sqli_confirmed" in result.get("confirmed_vulns", [])
+    assert "sqli_error_confirmed" in result.get("confirmed_vulns", [])
 
 
-def test_chain_check_triggers_score_four(base_state):
-    """When sqli_confirmed is in state and chain edge is satisfied, score = 4."""
+def test_error_confirmation_does_not_fabricate_credentials(base_state):
+    """An error-based SQLi signal alone is not evidence of extracted credentials."""
     base_state["confirmed_vulns"] = ["sqli_confirmed"]
     mock_session = _make_mock_session()
 
@@ -95,8 +95,8 @@ def test_chain_check_triggers_score_four(base_state):
     with patch("agents.sqli.sqli_error_agent.DVWASession", return_value=mock_session):
         result = sqli_error_agent(base_state)
 
-    assert result["scores"]["sqli_error"] == 4
-    assert "credentials_extracted" in result.get("achieved_outcomes", [])
+    assert result["scores"]["sqli_error"] == 3
+    assert "credentials_extracted" not in result.get("achieved_outcomes", [])
 
 
 def test_login_failure(base_state):

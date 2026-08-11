@@ -73,7 +73,7 @@ def test_exploit_confirms_force_browse(base_state):
         result = ac_force_browse_agent(base_state)
 
     assert result["scores"]["ac_force_browse"] >= 3
-    assert "access_control_confirmed" in result.get("confirmed_vulns", [])
+    assert "ac_force_browse_confirmed" in result.get("confirmed_vulns", [])
 
 
 def test_login_failure(base_state):

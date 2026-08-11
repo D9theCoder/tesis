@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from agents.brute_force.bf_spray_agent import bf_spray_agent
+from agents.brute_force.bf_spray_agent import _credential_params, _parse_credential, bf_spray_agent
 from core.state import new_default_state
 
 
@@ -62,7 +62,8 @@ def test_exploit_finds_credentials(base_state):
         result = bf_spray_agent(base_state)
 
     assert result["scores"]["bf_spray"] >= 3
-    assert "brute_force_confirmed" in result.get("confirmed_vulns", [])
+    assert "bf_spray_confirmed" in result.get("confirmed_vulns", [])
+    assert "authenticated_session" in result.get("achieved_outcomes", [])
 
 
 def test_chain_check_triggers_score_four(base_state):
@@ -83,7 +84,7 @@ def test_chain_check_triggers_score_four(base_state):
     with patch("agents.brute_force.bf_spray_agent.DVWASession", return_value=mock_session):
         result = bf_spray_agent(base_state)
 
-    assert result["scores"]["bf_spray"] == 4
+    assert result["scores"]["bf_spray"] == 3
     # AKG chain: brute_force_confirmed -> ac_idor (target_agent)
     achieved = result.get("achieved_outcomes", [])
     assert len(achieved) > 0
@@ -95,3 +96,15 @@ def test_login_failure(base_state):
     with patch("agents.brute_force.bf_spray_agent.DVWASession", return_value=mock_session):
         result = bf_spray_agent(base_state)
     assert result["scores"]["bf_spray"] == 0
+
+
+def test_credential_parser_does_not_send_strategy_prose_as_password():
+    """LLM strategy suffixes must not become credential transport data."""
+    assert _parse_credential("admin:password; wait 8-12s between attempts") == ("admin", "password")
+    assert _parse_credential("not-a-credential") == ("", "")
+    assert _credential_params("admin", "password", "token") == {
+        "username": "admin",
+        "password": "password",
+        "Login": "Login",
+        "user_token": "token",
+    }

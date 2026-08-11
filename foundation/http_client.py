@@ -8,7 +8,7 @@ and captures response metadata for verification and logging.
 import logging
 import os
 from dataclasses import dataclass
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -21,6 +21,10 @@ class TransportError(Exception):
 
 class RequestTimeoutError(Exception):
     """Raised when an HTTP request exceeds the configured timeout."""
+
+
+class ContainmentError(ValueError):
+    """Raised when a request or redirect leaves the configured DVWA host."""
 
 
 @dataclass
@@ -89,8 +93,14 @@ class HTTPClient:
             }
 
         self.base_url = base_url.rstrip("/") + "/"
+        parsed_base = urlparse(self.base_url)
+        if not parsed_base.scheme or not parsed_base.hostname:
+            raise ValueError(f"Invalid base URL: {base_url}")
+        self._allowed_hostname = parsed_base.hostname.lower()
+        self._allowed_port = parsed_base.port
         self._client = httpx.Client(
-            follow_redirects=True,
+            # Redirects are followed manually below so every hop is contained.
+            follow_redirects=False,
             verify=verify_ssl,
             timeout=httpx.Timeout(
                 connect=timeout_connect,
@@ -120,7 +130,7 @@ class HTTPClient:
             TransportError: On network-level failures.
             RequestTimeoutError: When the request times out.
         """
-        url = urljoin(self.base_url, path.lstrip("/"))
+        url = self._resolve_url(path)
         return self._request("GET", url, **kwargs)
 
     def post(self, path: str, **kwargs) -> RequestResult:
@@ -137,7 +147,7 @@ class HTTPClient:
             TransportError: On network-level failures.
             RequestTimeoutError: When the request times out.
         """
-        url = urljoin(self.base_url, path.lstrip("/"))
+        url = self._resolve_url(path)
         return self._request("POST", url, **kwargs)
 
     # ── Cookie access ────────────────────────────────────────────
@@ -179,7 +189,43 @@ class HTTPClient:
         handling upstream.
         """
         try:
-            resp = self._client.request(method, url, **kwargs)
+            current_method = method
+            current_url = url
+            request_kwargs = dict(kwargs)
+            for _ in range(6):
+                resp = self._client.request(
+                    current_method,
+                    current_url,
+                    follow_redirects=False,
+                    **request_kwargs,
+                )
+                status_code = int(getattr(resp, "status_code", 0) or 0)
+                if not 300 <= status_code < 400:
+                    break
+                location = resp.headers.get("location")
+                if not location:
+                    break
+                current_url = self._resolve_url(urljoin(current_url, location))
+                # ``params`` belongs to the original request URL.  Passing
+                # it again on every redirect can re-add the original query
+                # string after a Location header intentionally replaces it.
+                # DVWA's high-security brute-force module redirects from
+                # ``?username=...`` to ``index.php``; retaining the query
+                # makes that endpoint redirect to itself indefinitely.
+                request_kwargs.pop("params", None)
+                # Match browser/httpx form semantics for the redirects DVWA
+                # emits after POST submissions.  Retrying a 302 as the same
+                # POST resubmits the form indefinitely (notably security.php).
+                # Preserve methods and bodies only for the explicit 307/308
+                # method-preserving redirects.
+                if status_code in {301, 302, 303} and current_method != "HEAD":
+                    current_method = "GET"
+                    request_kwargs.pop("data", None)
+                    request_kwargs.pop("files", None)
+                    request_kwargs.pop("json", None)
+                    request_kwargs.pop("content", None)
+            else:
+                raise TransportError(f"Too many contained redirects for {method} {url}")
             elapsed_ms = resp.elapsed.total_seconds() * 1000
         except httpx.TimeoutException as exc:
             logger.warning("Request timeout: %s %s – %s", method, url, exc)
@@ -191,3 +237,24 @@ class HTTPClient:
             raise ValueError(f"Invalid URL: {url}") from exc
 
         return RequestResult(response=resp, elapsed_ms=elapsed_ms)
+
+    def _resolve_url(self, path_or_url: str) -> str:
+        """Resolve a relative request and reject any external host.
+
+        The framework may navigate same-host DVWA links discovered during recon,
+        but LLM output, form actions, and redirect locations cannot change the
+        target host.
+        """
+        raw = str(path_or_url).strip()
+        resolved = urljoin(self.base_url, raw if raw.startswith("//") else raw.lstrip("/"))
+        parsed = urlparse(resolved)
+        hostname = (parsed.hostname or "").lower()
+        if (
+            parsed.scheme not in {"http", "https"}
+            or hostname != self._allowed_hostname
+            or parsed.port != self._allowed_port
+        ):
+            raise ContainmentError(
+                f"Blocked out-of-scope HTTP target: {resolved} (allowed host: {self._allowed_hostname})"
+            )
+        return resolved

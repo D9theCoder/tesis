@@ -78,6 +78,8 @@ def route_from_payload_validator(state: ExploitationState) -> str:
         candidates = state.get("payload_candidates", {}).get(selected, [])
         if candidates:
             return selected
+    if state.get("next_agent") == "scorer":
+        return "scorer"
     return "chaining_router"
 
 

@@ -8,7 +8,14 @@ import llm.provider as provider_module
 from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
-from llm.provider import SAMPLE_QUERY, SUPPORTED_PROVIDERS, get_llm, invoke_sample_query
+from llm.provider import (
+    SAMPLE_QUERY,
+    SUPPORTED_PROVIDERS,
+    get_llm,
+    get_llm_from_model_config,
+    invoke_sample_query,
+)
+from tesis.model_config import ModelConfig
 
 
 def test_get_llm_gemini(monkeypatch):
@@ -25,6 +32,7 @@ def test_get_llm_openai(monkeypatch):
     llm = get_llm("openai")
     assert isinstance(llm, ChatOpenAI)
     assert llm.model_name == "gpt-4o-mini"
+    assert llm.max_retries == 0
 
 
 def test_get_llm_openai_compatible_base_url(monkeypatch):
@@ -47,6 +55,34 @@ def test_get_llm_openai_compatible_with_base_url(monkeypatch):
     assert isinstance(llm, ChatOpenAI)
     assert llm.model_name == "llama3.2"
     assert llm.openai_api_base == "http://localhost:11434/v1"
+    assert llm.max_retries == 0
+
+
+def test_typed_model_config_preserves_provider_timeout():
+    """Typed configuration must preserve ChatOpenAI's request timeout field."""
+    llm = get_llm_from_model_config(ModelConfig(
+        provider="openai_compatible",
+        api_key="test-key",
+        model_name="llama3.2",
+        base_url="http://localhost:11434/v1",
+        timeout=7,
+    ))
+
+    assert llm.request_timeout == 7
+    assert llm.max_retries == 0
+
+
+def test_explicit_provider_retries_are_preserved():
+    """Callers can opt into retries when a provider requires them."""
+    llm = get_llm(
+        "openai_compatible",
+        api_key="test-key",
+        model_name="llama3.2",
+        base_url="http://localhost:11434/v1",
+        max_retries=2,
+    )
+
+    assert llm.max_retries == 2
 
 
 def test_get_llm_openai_compatible_missing_base_url():

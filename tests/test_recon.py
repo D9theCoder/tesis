@@ -171,6 +171,13 @@ class TestParseForms:
 
         assert endpoints[0]["url"].startswith("http://localhost")
 
+    def test_parse_form_discards_external_action(self):
+        """Recon must not place external form actions into shared state."""
+        html = '<form action="https://example.invalid/escape"><input name="id"></form>'
+        endpoints, vectors = parse_forms(html, "http://localhost/dvwa/vulnerabilities/sqli/")
+        assert endpoints == []
+        assert vectors == []
+
     def test_parse_form_default_method(self):
         """Forms without method attribute should default to 'get'."""
         html = '''
@@ -236,6 +243,20 @@ class TestExtractNavLinks:
         assert any("xss_r" in l for l in links)
         assert any("exec" in l for l in links)
 
+    def test_extracts_relative_vulnerability_link(self):
+        """DVWA-style relative module links should resolve under the base path."""
+        html = '<a href="vulnerabilities/sqli/">SQL Injection</a>'
+
+        links = extract_nav_links(html, "http://localhost/dvwa/")
+
+        assert links == ["http://localhost/dvwa/vulnerabilities/sqli/"]
+
+    def test_extract_links_ignores_vulnerability_text_outside_path(self):
+        """A query string mentioning a module must not be treated as a module link."""
+        html = '<a href="/dvwa/index.php?next=/vulnerabilities/sqli/">Home</a>'
+
+        assert extract_nav_links(html, "http://localhost/dvwa/") == []
+
     def test_extract_links_deduplicates(self):
         """Should deduplicate and sort links."""
         html = '''
@@ -251,6 +272,11 @@ class TestExtractNavLinks:
         links = extract_nav_links(html, "http://localhost/dvwa/")
         assert len(links) == 1
         assert "#top" not in links[0]
+
+    def test_extract_links_discards_external_host(self):
+        """Recon navigation must remain on the configured DVWA host."""
+        html = '<a href="https://example.invalid/vulnerabilities/sqli/">external</a>'
+        assert extract_nav_links(html, "http://localhost/dvwa/") == []
 
     def test_extract_no_vulnerability_links(self):
         """Should return empty list when no module links are present."""
@@ -356,11 +382,57 @@ class TestReconNodeIntegration:
 
             # Validate all required output keys
             assert "endpoints" in update
+            assert "input_vectors" in update
             assert "security_level" in update
             assert "next_agent" in update
             assert update["next_agent"] == "orchestrator"
             assert update["security_level"] in SECURITY_LEVELS
             assert isinstance(update["endpoints"], list)
+            assert isinstance(update["input_vectors"], list)
+
+    def test_recon_finishes_all_requests_before_closing_session(self):
+        """Regression: recon must not reuse the HTTP client after cleanup."""
+        with patch("foundation.recon.DVWASession") as MockSession:
+            mock_session = MagicMock()
+            client_closed = False
+
+            mock_session.login.return_value = True
+            mock_session.is_logged_in = True
+            mock_session.detect_security_level.return_value = "low"
+            mock_session.http.base_url = "http://localhost/dvwa/"
+
+            index_result = MagicMock()
+            index_result.text = '<a href="/dvwa/vulnerabilities/sqli/">SQLi</a>'
+            sqli_result = MagicMock()
+            sqli_result.text = '<form action="" method="get"><input name="id"></form>'
+            setup_result = MagicMock(status_code=200, text="Database Setup")
+
+            def mock_http_get(path, *args, **kwargs):
+                if client_closed:
+                    raise RuntimeError("Cannot send a request, as the client has been closed.")
+                path_str = str(path)
+                if path_str.endswith("index.php"):
+                    return index_result
+                if "setup.php" in path_str:
+                    return setup_result
+                return sqli_result
+
+            def mock_close():
+                nonlocal client_closed
+                client_closed = True
+
+            mock_session.http.get.side_effect = mock_http_get
+            mock_session.close.side_effect = mock_close
+            MockSession.return_value = mock_session
+
+            update = recon({
+                "target_url": "http://localhost/dvwa",
+                "security_level": "low",
+            })
+
+            assert client_closed is True
+            assert update["observations"]["force_browse_endpoints_visible"] is True
+            assert update["input_vectors"][0]["param_name"] == "id"
 
     def test_recon_with_empty_target_url(self):
         """recon() should handle empty target_url gracefully."""

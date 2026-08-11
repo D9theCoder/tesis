@@ -61,7 +61,8 @@ def test_probe_success_then_exploit_full(base_state):
         result = sqli_union_agent(base_state)
 
     assert result["scores"]["sqli_union"] >= 3
-    assert "sqli_confirmed" in result.get("confirmed_vulns", [])
+    assert "sqli_union_confirmed" in result.get("confirmed_vulns", [])
+    assert "credentials_extracted" in result.get("achieved_outcomes", [])
 
 
 def test_exploit_partial_success(base_state):
@@ -97,7 +98,8 @@ def test_chain_check_triggers_score_four(base_state):
     with patch("agents.sqli.sqli_union_agent.DVWASession", return_value=mock_session):
         result = sqli_union_agent(base_state)
 
-    assert result["scores"]["sqli_union"] == 4
+    assert result["scores"]["sqli_union"] == 3
+    assert "credentials_extracted" in result.get("achieved_outcomes", [])
     assert "credentials_extracted" in result.get("achieved_outcomes", [])
 
 

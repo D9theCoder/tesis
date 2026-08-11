@@ -3,6 +3,8 @@
 This module verifies current behavior for state handling, routing, payloads,
 LLM adapters, agents, evaluation, or CLI integration without changing runtime
 code."""
+import json
+
 from evaluation.runner import run_single_engagement
 from tesis.runtime_events import CancellationToken, CollectingEventSink
 
@@ -39,12 +41,34 @@ def test_run_single_engagement_artifact_shape(monkeypatch):
         llm_provider="gemini",
         max_iterations=5,
         repeat_index=0,
+        target_method="sqli_union",
     )
 
     assert artifact["status"] == "success"
     assert artifact["run_id"] == "gemini-sqli-low-static_only-0"
     assert artifact["config"]["payload_mode"] == "static_only"
+    assert artifact["llm_required"] is False
+    assert artifact["llm_activity"] == {"started": 0, "completed": 0, "failed": 0, "tokens": 0}
     assert "report" in artifact
+
+
+def test_static_auto_selection_without_provider_callback_is_not_reported_as_success(monkeypatch):
+    """Automatic method selection still requires an observed model call."""
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            yield {**state, "iteration_count": 1, "task_result": "SUCCESS"}
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
+
+    artifact = run_single_engagement(
+        target_url="http://localhost/dvwa",
+        security_level="low",
+        llm_provider="gemini",
+        payload_mode="static_only",
+    )
+
+    assert artifact["status"] == "error"
+    assert artifact["incomplete_reason"] == "LLM_NOT_CALLED"
 
 
 def test_run_single_engagement_error_path(monkeypatch):
@@ -67,6 +91,299 @@ def test_run_single_engagement_error_path(monkeypatch):
     assert "RuntimeError" in artifact["error"]
     assert artifact["final_state"]["confirmed_vulns"] == []
     assert "module_scores" in artifact["report"]
+
+
+def test_orchestrator_provider_failure_is_not_reported_as_success(monkeypatch, tmp_path):
+    """Regression for instant-success runs that made zero provider requests."""
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            yield {
+                **state,
+                "iteration_count": 1,
+                "task_result": "INCOMPLETE",
+                "incomplete_reason": "LLM_RUNTIME_FAILURE",
+                "fallback_events": [{
+                    "event": "orchestrator.llm_failure",
+                    "error_type": "OpenAIError",
+                    "next_agent": "scorer",
+                }],
+                "telemetry_events": [{
+                    "node": "orchestrator",
+                    "iteration": 0,
+                    "event": "orchestrator.fallback.applied",
+                    "status": "fallback",
+                    "payload": {"error_type": "OpenAIError", "next_agent": "scorer"},
+                }],
+            }
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
+
+    artifact = run_single_engagement(
+        target_url="http://localhost/dvwa",
+        security_level="low",
+        llm_provider="openai_compatible",
+        enriched_reporting=True,
+        output_dir=str(tmp_path),
+    )
+
+    assert artifact["status"] == "error"
+    assert artifact["task_result"] == "INCOMPLETE"
+    assert artifact["incomplete_reason"] == "LLM_RUNTIME_FAILURE"
+    assert artifact["llm_activity"] == {"started": 0, "completed": 0, "failed": 0, "tokens": 0}
+    assert "OpenAIError" in artifact["error"]
+    event_rows = [
+        json.loads(line)
+        for line in (tmp_path / f"{artifact['execution_id']}.events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(row["event_type"] == "orchestrator.fallback.applied" for row in event_rows)
+    assert any(row["event_type"] == "run.failed" for row in event_rows)
+
+
+def test_hybrid_payload_provider_fallback_is_not_reported_as_success(monkeypatch):
+    """A payload-generation provider error must invalidate a hybrid run."""
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            yield {
+                **state,
+                "iteration_count": 2,
+                "task_result": "SUCCESS",
+                "fallback_events": [{
+                    "event": "payload_generation.static_seed_fallback",
+                    "method": "sqli_union",
+                    "payload_mode": "hybrid",
+                    "reason": "llm_error",
+                }],
+                "telemetry_events": [
+                    {"event": "llm.started", "status": "ok", "payload": {}},
+                    {"event": "llm.failed", "status": "error", "payload": {"error_type": "TimeoutError"}},
+                ],
+            }
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
+
+    artifact = run_single_engagement(
+        target_url="http://localhost/dvwa",
+        security_level="low",
+        llm_provider="openai_compatible",
+        payload_mode="hybrid",
+    )
+
+    assert artifact["status"] == "error"
+    assert artifact["task_result"] == "INCOMPLETE"
+    assert artifact["incomplete_reason"] == "LLM_RUNTIME_FAILURE"
+    assert artifact["llm_required"] is True
+    assert artifact["llm_activity"]["failed"] == 1
+
+
+def test_hybrid_run_without_provider_callback_is_not_reported_as_success(monkeypatch):
+    """Model-backed modes must observe at least one provider callback."""
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            yield {**state, "iteration_count": 1, "task_result": "SUCCESS"}
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
+
+    artifact = run_single_engagement(
+        target_url="http://localhost/dvwa",
+        security_level="low",
+        llm_provider="openai_compatible",
+        payload_mode="hybrid",
+    )
+
+    assert artifact["status"] == "error"
+    assert artifact["task_result"] == "INCOMPLETE"
+    assert artifact["incomplete_reason"] == "LLM_NOT_CALLED"
+    assert artifact["llm_activity"] == {"started": 0, "completed": 0, "failed": 0, "tokens": 0}
+
+
+def test_llm_failed_callback_is_not_reported_as_success(monkeypatch):
+    """An explicit provider failure remains an error even after graph fallback."""
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            yield {
+                **state,
+                "iteration_count": 1,
+                "task_result": "SUCCESS",
+                "telemetry_events": [
+                    {"event": "llm.started", "status": "ok", "payload": {}},
+                    {"event": "llm.failed", "status": "error", "payload": {"error_type": "RuntimeError"}},
+                ],
+            }
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
+
+    artifact = run_single_engagement(
+        target_url="http://localhost/dvwa",
+        security_level="low",
+        llm_provider="openai_compatible",
+        payload_mode="hybrid",
+    )
+
+    assert artifact["status"] == "error"
+    assert artifact["incomplete_reason"] == "LLM_RUNTIME_FAILURE"
+    assert artifact["llm_activity"] == {"started": 1, "completed": 0, "failed": 1, "tokens": 0}
+
+
+def test_partial_llm_activity_is_not_reported_as_success(monkeypatch):
+    """Every observed provider start must have a matching completion."""
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            yield {
+                **state,
+                "iteration_count": 1,
+                "task_result": "SUCCESS",
+                "telemetry_events": [
+                    {"event": "llm.started", "status": "ok", "payload": {}},
+                    {"event": "llm.started", "status": "ok", "payload": {}},
+                    {"event": "llm.completed", "status": "ok", "payload": {}},
+                ],
+            }
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
+
+    artifact = run_single_engagement(
+        target_url="http://localhost/dvwa",
+        security_level="low",
+        llm_provider="openai_compatible",
+        payload_mode="hybrid",
+    )
+
+    assert artifact["status"] == "error"
+    assert artifact["task_result"] == "INCOMPLETE"
+    assert artifact["incomplete_reason"] == "LLM_ACTIVITY_INCOMPLETE"
+    assert artifact["llm_activity"] == {"started": 2, "completed": 1, "failed": 0, "tokens": 0}
+
+
+def test_terminal_incomplete_run_is_not_reported_as_success(monkeypatch, tmp_path):
+    """A completed graph must preserve its incomplete terminal result."""
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            yield {
+                **state,
+                "iteration_count": 4,
+                "task_result": "INCOMPLETE",
+                "incomplete_reason": "ALL_METHODS_FAILED",
+            }
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
+
+    artifact = run_single_engagement(
+        target_url="http://localhost/dvwa",
+        security_level="low",
+        llm_provider="openai_compatible",
+        enriched_reporting=True,
+        output_dir=str(tmp_path),
+    )
+
+    assert artifact["status"] == "error"
+    assert artifact["task_result"] == "INCOMPLETE"
+    assert artifact["incomplete_reason"] == "ALL_METHODS_FAILED"
+    assert "ALL_METHODS_FAILED" in artifact["error"]
+    failure_path = tmp_path / f"{artifact['execution_id']}.failure.json"
+    assert failure_path.exists()
+    failure = json.loads(failure_path.read_text(encoding="utf-8"))
+    assert failure["final_state"]["task_result"] == "INCOMPLETE"
+    assert failure["final_state"]["incomplete_reason"] == "ALL_METHODS_FAILED"
+
+    event_rows = [
+        json.loads(line)
+        for line in (tmp_path / f"{artifact['execution_id']}.events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    failed = next(row for row in event_rows if row["event_type"] == "run.failed")
+    assert failed["data"] == {"task_result": "INCOMPLETE", "reason": "ALL_METHODS_FAILED"}
+    assert event_rows[-1]["event_type"] == "run.finished"
+    assert event_rows[-1]["data"]["status"] == "error"
+
+
+def test_terminal_incomplete_without_reason_uses_a_stable_reason(monkeypatch, tmp_path):
+    """Incomplete graph output without a reason remains auditable as an error."""
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            yield {**state, "iteration_count": 2, "task_result": "INCOMPLETE"}
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
+
+    artifact = run_single_engagement(
+        target_url="http://localhost/dvwa",
+        security_level="low",
+        llm_provider="openai_compatible",
+        enriched_reporting=True,
+        output_dir=str(tmp_path),
+    )
+
+    assert artifact["status"] == "error"
+    assert artifact["task_result"] == "INCOMPLETE"
+    assert artifact["incomplete_reason"] == "UNSPECIFIED"
+    failure = json.loads(
+        (tmp_path / f"{artifact['execution_id']}.failure.json").read_text(encoding="utf-8")
+    )
+    assert failure["final_state"]["incomplete_reason"] == "UNSPECIFIED"
+
+
+def test_failure_sidecar_is_written_without_rich_reporting(monkeypatch, tmp_path):
+    """Default/error runs retain a compact failure artifact for audit."""
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            yield {**state, "iteration_count": 1, "task_result": "INCOMPLETE", "incomplete_reason": "ALL_METHODS_FAILED"}
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
+
+    artifact = run_single_engagement(
+        target_url="http://localhost/dvwa",
+        security_level="low",
+        llm_provider="gemini",
+        output_dir=str(tmp_path),
+        enriched_reporting=False,
+    )
+
+    failure_path = tmp_path / f"{artifact['execution_id']}.failure.json"
+    assert failure_path.exists()
+    failure = json.loads(failure_path.read_text(encoding="utf-8"))
+    assert failure["final_state"]["task_result"] == "INCOMPLETE"
+    assert failure["final_state"]["incomplete_reason"] == "ALL_METHODS_FAILED"
+    assert failure["final_state"]["llm_activity"]["started"] == 0
+
+
+def test_reason_only_terminal_state_from_invoke_is_not_reported_as_success(monkeypatch):
+    """The runner recognizes scorer-compatible reason-only terminal output."""
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            if False:
+                yield state
+
+        def invoke(self, state, config=None):
+            return {**state, "iteration_count": 3, "incomplete_reason": "ALL_METHODS_FAILED"}
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
+
+    artifact = run_single_engagement(
+        target_url="http://localhost/dvwa",
+        security_level="low",
+        llm_provider="openai_compatible",
+    )
+
+    assert artifact["status"] == "error"
+    assert artifact["task_result"] == "INCOMPLETE"
+    assert artifact["incomplete_reason"] == "ALL_METHODS_FAILED"
+
+
+def test_unknown_terminal_state_is_not_reported_as_success(monkeypatch):
+    """Malformed graph terminal values are normalized to an error."""
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            yield {**state, "iteration_count": 1, "task_result": "FAILED"}
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
+
+    artifact = run_single_engagement(
+        target_url="http://localhost/dvwa",
+        security_level="low",
+        llm_provider="gemini",
+    )
+
+    assert artifact["status"] == "error"
+    assert artifact["task_result"] == "INCOMPLETE"
+    assert artifact["incomplete_reason"] == "INVALID_TASK_RESULT:FAILED"
 
 
 def test_cancelled_before_execution_persists_cancelled_artifact(monkeypatch, tmp_path):

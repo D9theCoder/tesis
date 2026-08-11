@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+from urllib.parse import urlparse
 
 from core.knowledge_graph import AttackKnowledgeGraph
+from foundation.payload_library import PayloadLibrary
 from foundation.payload_ranker import rank_candidates
 
 
@@ -29,6 +32,7 @@ _OUT_OF_SCOPE_MARKERS = (
     "bash -",
     "powershell",
 )
+_CREDENTIAL_PREFIX = re.compile(r"^\s*[^:,;\s]+\s*:\s*[^,;\s]+")
 
 
 def allowed_target_params(method: str) -> set[str]:
@@ -43,7 +47,17 @@ def allowed_target_params(method: str) -> set[str]:
 
 def _is_out_of_scope(payload: str) -> bool:
     lowered = payload.lower()
-    return any(marker in lowered for marker in _OUT_OF_SCOPE_MARKERS)
+    if any(marker in lowered for marker in _OUT_OF_SCOPE_MARKERS):
+        return True
+    stripped = payload.strip()
+    # A backslash is legitimate in SQL syntax (for example an escaped quote),
+    # so only reject it when it forms a UNC target or traversal sequence.
+    if stripped.startswith(("//", "\\\\")):
+        return True
+    if "../" in stripped or "..\\" in stripped or "/.." in stripped:
+        return True
+    parsed = urlparse(stripped)
+    return bool(parsed.scheme and parsed.netloc)
 
 
 def validate_candidate(candidate: dict[str, Any], method: str, profile: dict[str, Any]) -> dict[str, Any]:
@@ -88,10 +102,16 @@ def validate_candidate(candidate: dict[str, Any], method: str, profile: dict[str
             "reason": "out_of_scope_target",
             "candidate_id": candidate.get("candidate_id"),
         }
+    if method.startswith("bf_") and target_param == "credential_pair" and not _CREDENTIAL_PREFIX.match(payload):
+        return {
+            "valid": False,
+            "reason": "invalid_credential_pair",
+            "candidate_id": candidate.get("candidate_id"),
+        }
 
     source = str(candidate.get("source", "llm_generated"))
     source_seed_id = str(candidate.get("source_seed_id", "")).strip()
-    if source != "static_seed" and not source_seed_id:
+    if not source_seed_id:
         return {
             "valid": False,
             "reason": "missing_source_seed_id",
@@ -103,6 +123,27 @@ def validate_candidate(candidate: dict[str, Any], method: str, profile: dict[str
         return {
             "valid": False,
             "reason": "forbidden_mutation_type",
+            "candidate_id": candidate.get("candidate_id"),
+        }
+    if source != "static_seed" and mutation not in set(profile.get("allowed_mutation_types", [])):
+        return {
+            "valid": False,
+            "reason": "mutation_type_not_allowed",
+            "candidate_id": candidate.get("candidate_id"),
+        }
+
+    expected_signal = str(candidate.get("expected_signal", ""))
+    if expected_signal not in set(profile.get("expected_success_signals", [])):
+        return {
+            "valid": False,
+            "reason": "wrong_expected_signal",
+            "candidate_id": candidate.get("candidate_id"),
+        }
+
+    if str(candidate.get("stage", "exploit")) not in {"probe", "exploit", "bypass"}:
+        return {
+            "valid": False,
+            "reason": "invalid_stage",
             "candidate_id": candidate.get("candidate_id"),
         }
 
@@ -126,10 +167,19 @@ def validate_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
     kg = AttackKnowledgeGraph()
     profile = kg.get_payload_profile(method)
     raw_candidates = list(state.get("payload_candidates", {}).get(method, []))
+    canonical_seed_candidates = PayloadLibrary().load_seed_candidates(
+        method,
+        str(state.get("security_level", "low")),
+    )
     static_seed_ids = {
         str(candidate.get("candidate_id"))
-        for candidate in raw_candidates
+        for candidate in canonical_seed_candidates
         if isinstance(candidate, dict) and str(candidate.get("source", "")) == "static_seed" and candidate.get("candidate_id")
+    }
+    canonical_static_payloads = {
+        str(candidate.get("candidate_id")): str(candidate.get("payload_or_logic", ""))
+        for candidate in canonical_seed_candidates
+        if isinstance(candidate, dict) and candidate.get("candidate_id")
     }
     seen_payloads: set[str] = set()
     seen: set[str] = set()
@@ -156,12 +206,21 @@ def validate_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
                 "reason": "duplicate_payload_or_logic",
                 "candidate_id": candidate_id,
             }
-        if result["valid"] and str(candidate.get("source", "llm_generated")) != "static_seed":
+        if result["valid"]:
             seed_id = str(candidate.get("source_seed_id", "")).strip()
             if seed_id not in static_seed_ids:
                 result = {
                     "valid": False,
                     "reason": "unknown_source_seed_id",
+                    "candidate_id": candidate_id,
+                }
+            elif str(candidate.get("source", "llm_generated")) == "static_seed" and (
+                candidate_id != seed_id
+                or payload_value != canonical_static_payloads.get(seed_id)
+            ):
+                result = {
+                    "valid": False,
+                    "reason": "invalid_static_seed_provenance",
                     "candidate_id": candidate_id,
                 }
         if result["valid"]:
@@ -173,7 +232,7 @@ def validate_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
 
     max_total = int(profile.get("max_total_candidates", state.get("candidate_budget", 5)) or 5)
     ranked = rank_candidates(valid, max_total)
-    return {
+    update = {
         "payload_candidates": {method: ranked},
         "payload_validation_results": {method: [*rejected, *[c["validation"] for c in ranked]]},
         "payload_provenance": {
@@ -188,6 +247,17 @@ def validate_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
             for candidate in ranked
         },
     }
+    if not ranked and state.get("target_method") == method:
+        update.update({
+            "next_agent": "scorer",
+            "task_result": "INCOMPLETE",
+            "incomplete_reason": "NO_VALID_PAYLOADS",
+            "fallback_events": [{
+                "event": "target_method.no_valid_payloads",
+                "target_method": method,
+            }],
+        })
+    return update
 
 
 def payload_validator_node(state: dict[str, Any]) -> dict[str, Any]:

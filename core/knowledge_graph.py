@@ -65,8 +65,8 @@ class AttackKnowledgeGraph:
         "ac_idor": ["userId"],
         "ac_vertical_escalation": ["userId"],
         "ac_force_browse": ["path"],
-        "bf_dictionary": ["username", "password"],
-        "bf_spray": ["username", "password"],
+        "bf_dictionary": ["credential_pair"],
+        "bf_spray": ["credential_pair"],
     }
 
     def __init__(self) -> None:
@@ -124,9 +124,20 @@ class AttackKnowledgeGraph:
             ],
             "expected_success_signals": list(expected),
             "target_params": [],
+            "payload_budget": budget,
             "max_generated_candidates": budget,
             "max_total_candidates": budget + len(seed_refs),
             "provenance_required": True,
+            "output_schema": {
+                "required_fields": [
+                    "candidate_id",
+                    "source_seed_id",
+                    "mutation_type",
+                    "payload_or_logic",
+                    "target_param",
+                    "expected_signal",
+                ],
+            },
         }
 
     def _attach_payload_profiles(self) -> None:
@@ -167,12 +178,12 @@ class AttackKnowledgeGraph:
                 expected=["restricted_endpoint_accessible"],
             ),
             "bf_dictionary": self._payload_profile(
-                seed_refs=["bf_dictionary_low", "bf_dictionary_medium"],
+                seed_refs=["bf_dictionary_low", "bf_dictionary_medium", "bf_dictionary_high"],
                 allowed=["credential_ordering", "pacing_strategy", "username_priority"],
                 expected=["valid_login"],
             ),
             "bf_spray": self._payload_profile(
-                seed_refs=["bf_spray_low", "bf_spray_medium"],
+                seed_refs=["bf_spray_low", "bf_spray_medium", "bf_spray_high"],
                 allowed=["password_rotation", "account_ordering", "pacing_strategy"],
                 expected=["valid_login"],
             ),
@@ -256,7 +267,6 @@ class AttackKnowledgeGraph:
             {"source": "bf_dictionary_confirmed", "target": "brute_force_confirmed", "priority": 40},
             {"source": "bf_spray_confirmed", "target": "brute_force_confirmed", "priority": 40},
             # Non-chain outcomes
-            {"source": "sqli_confirmed", "target": "credentials_extracted", "priority": 30},
             {"source": "sqli_confirmed", "target": "data_exfiltrated", "priority": 30},
             {"source": "brute_force_confirmed", "target": "credentials_extracted", "priority": 30},
             {"source": "access_control_confirmed", "target": "data_exfiltrated", "priority": 30},
@@ -278,16 +288,8 @@ class AttackKnowledgeGraph:
                 "priority": 10,
             },
             {
-                "source": "sqli_confirmed",
-                "target": "credentials_extracted",
-                "is_chain": True,
-                "preconditions": ["sqli_confirmed"],
-                "target_agent": "bf_dictionary",
-                "priority": 10,
-            },
-            {
                 "source": "credentials_extracted",
-                "target": "brute_force_confirmed",
+                "target": "bf_dictionary",
                 "is_chain": True,
                 "preconditions": ["credentials_extracted"],
                 "target_agent": "bf_dictionary",
@@ -383,6 +385,8 @@ class AttackKnowledgeGraph:
             "target_params",
             "max_generated_candidates",
             "max_total_candidates",
+            "payload_budget",
+            "output_schema",
             "provenance_required",
         }
         for method in ALL_METHOD_AGENTS:
@@ -438,13 +442,15 @@ class AttackKnowledgeGraph:
 
     def _path_is_viable(self, path: list[str], known_nodes: set[str]) -> bool:
         has_chain_edge = False
+        reachable = set(known_nodes)
         for source, target in zip(path, path[1:]):
             edge = self.graph[source][target]
             if bool(edge.get("is_chain", False)):
                 has_chain_edge = True
             required = set(edge.get("preconditions", []))
-            if not required.issubset(known_nodes):
+            if not required.issubset(reachable):
                 return False
+            reachable.add(target)
         return has_chain_edge
 
     def get_viable_chains(self, confirmed_vulns: list[str], achieved_outcomes: list[str] | None = None, max_paths: int = 5) -> list[list[str]]:

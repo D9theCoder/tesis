@@ -1,9 +1,9 @@
 # =============================================================================
 # TESIS Runtime Configuration
 # =============================================================================
-# This sole configuration document is consumed by the interactive application
-# launched with `python -m tesis run`. Single and matrix overrides are selected
-# in the TUI and are not accepted as command-line flags.
+# This configuration document is consumed by the interactive application and
+# by `python -m tesis run --dry-run --config config.yaml`. Single and matrix
+# overrides are selected in the TUI; dry runs perform only local validation.
 #
 # Environment variables (TESIS_*) may override values at runtime.
 # =============================================================================
@@ -75,14 +75,14 @@ stop_policy: coverage
 coverage_target: 0.70
 
 # -----------------------------------------------------------------------------
-# Stage 8: Technical Retry / Refusal Handling
+# Stage 8: Guardrail Retry / Refusal Handling
 # -----------------------------------------------------------------------------
 # Enable technical retry handling for schema-safe prompt clarification.
 # Refusals are logged and fall back to AKG/static seed behavior.
-evasion:
+guardrail_retry:
   enabled: true
 
-  # Evasion strategy:
+  # Guardrail handling mode:
   #   - reactive  => only trigger evasion after a guardrail refusal is detected
   #   - proactive => always rewrite prompts before sending
   mode: reactive
@@ -158,3 +158,5 @@ models:
     # api_key: ${OPENAI_COMPATIBLE_API_KEY}
     temperature: 1
     timeout: 60
+    # Keep each model-backed experiment call within its configured timeout.
+    max_retries: 0

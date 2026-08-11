@@ -29,6 +29,23 @@ class TestEvasionConfigLoading:
         assert config.evasion_enabled is True
         assert config.evasion_mode == "proactive"
 
+    def test_guardrail_retry_from_yaml_uses_canonical_names(self, tmp_path):
+        """New configuration vocabulary maps to the compatibility runtime fields."""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "target_url: http://localhost/dvwa\n"
+            "guardrail_retry:\n"
+            "  enabled: true\n"
+            "  mode: proactive\n"
+            "  max_retries: 2\n"
+            "  cooldown_threshold: 4\n"
+        )
+        config = load_and_resolve_config(config_path=str(config_path), cli_args={})
+        assert config.evasion_enabled is True
+        assert config.evasion_mode == "proactive"
+        assert config.evasion_max_retries == 2
+        assert config.evasion_cooldown_threshold == 4
+
     def test_evasion_cli_override(self, tmp_path):
         """Verifies evasion cli override behavior."""
         config_path = tmp_path / "config.yaml"

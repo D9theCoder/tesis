@@ -1,0 +1,94 @@
+---
+title: LangGraph - current compiled runtime topology
+config:
+  flowchart:
+    curve: linear
+    htmlLabels: true
+---
+%% Source: core/graph_builder.py::build_framework and its three route functions.
+%% Verified shape: 15 runtime nodes plus START/END. Solid arrows are fixed
+%% StateGraph edges; dotted arrows enumerate actual conditional return domains.
+flowchart TD
+  __start__(("START"))
+  recon["recon<br/>foundation.recon.recon"]
+  orchestrator["orchestrator<br/>agents.orchestrator.orchestrator"]
+  payload_candidate_builder["payload_candidate_builder<br/>static seeds + optional LLM variants"]
+  payload_validator["payload_validator<br/>validate, deduplicate, rank, budget"]
+
+  subgraph METHOD_AGENTS["9 static method-agent nodes - verification runs inside each node, not as a LangGraph node"]
+    direction LR
+    subgraph SQLI_AGENTS["SQL injection"]
+      direction TB
+      sqli_union["sqli_union"]
+      sqli_error["sqli_error"]
+      sqli_boolean_blind["sqli_boolean_blind"]
+      sqli_time_blind["sqli_time_blind"]
+    end
+    subgraph AC_AGENTS["Access control"]
+      direction TB
+      ac_idor["ac_idor"]
+      ac_vertical_escalation["ac_vertical_escalation"]
+      ac_force_browse["ac_force_browse"]
+    end
+    subgraph BF_AGENTS["Brute force"]
+      direction TB
+      bf_dictionary["bf_dictionary"]
+      bf_spray["bf_spray"]
+    end
+  end
+
+  chaining_router["chaining_router<br/>core.chaining_coordinator.chaining_router_node"]
+  scorer["scorer<br/>core.scorer.scorer"]
+  __end__(("END"))
+
+  __start__ --> recon
+  recon --> orchestrator
+
+  orchestrator -.->|"route_from_orchestrator<br/>next_agent: payload builder or any method id"| payload_candidate_builder
+  orchestrator -.->|"route_from_orchestrator<br/>next_agent: scorer or unknown"| scorer
+
+  payload_candidate_builder --> payload_validator
+
+  payload_validator -.->|"selected: sqli_union; candidates nonempty"| sqli_union
+  payload_validator -.->|"selected: sqli_error; candidates nonempty"| sqli_error
+  payload_validator -.->|"selected: sqli_boolean_blind; candidates nonempty"| sqli_boolean_blind
+  payload_validator -.->|"selected: sqli_time_blind; candidates nonempty"| sqli_time_blind
+  payload_validator -.->|"selected: ac_idor; candidates nonempty"| ac_idor
+  payload_validator -.->|"selected: ac_vertical_escalation; candidates nonempty"| ac_vertical_escalation
+  payload_validator -.->|"selected: ac_force_browse; candidates nonempty"| ac_force_browse
+  payload_validator -.->|"selected: bf_dictionary; candidates nonempty"| bf_dictionary
+  payload_validator -.->|"selected: bf_spray; candidates nonempty"| bf_spray
+  payload_validator -.->|"no runnable method; next_agent: scorer"| scorer
+  payload_validator -.->|"otherwise"| chaining_router
+
+  sqli_union --> chaining_router
+  sqli_error --> chaining_router
+  sqli_boolean_blind --> chaining_router
+  sqli_time_blind --> chaining_router
+  ac_idor --> chaining_router
+  ac_vertical_escalation --> chaining_router
+  ac_force_browse --> chaining_router
+  bf_dictionary --> chaining_router
+  bf_spray --> chaining_router
+
+  chaining_router -.->|"route_from_chaining_router<br/>next_agent: any method id"| payload_candidate_builder
+  chaining_router -.->|"route_from_chaining_router<br/>next_agent: orchestrator"| orchestrator
+  chaining_router -.->|"route_from_chaining_router<br/>next_agent: scorer or unknown"| scorer
+
+  scorer --> __end__
+
+  classDef boundary fill:#111827,color:#ffffff,stroke:#111827,stroke-width:2px;
+  classDef discovery fill:#dbeafe,color:#1e3a8a,stroke:#2563eb,stroke-width:2px;
+  classDef control fill:#ede9fe,color:#4c1d95,stroke:#7c3aed,stroke-width:2px;
+  classDef payload fill:#fef9c3,color:#713f12,stroke:#ca8a04,stroke-width:1.5px;
+  classDef method fill:#ecfeff,color:#164e63,stroke:#0891b2,stroke-width:1.5px;
+  classDef routing fill:#ffedd5,color:#7c2d12,stroke:#ea580c,stroke-width:2px;
+  classDef scoring fill:#dcfce7,color:#14532d,stroke:#16a34a,stroke-width:2px;
+
+  class __start__,__end__ boundary;
+  class recon discovery;
+  class orchestrator control;
+  class payload_candidate_builder,payload_validator payload;
+  class sqli_union,sqli_error,sqli_boolean_blind,sqli_time_blind,ac_idor,ac_vertical_escalation,ac_force_browse,bf_dictionary,bf_spray method;
+  class chaining_router routing;
+  class scorer scoring;

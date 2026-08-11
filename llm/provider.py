@@ -53,6 +53,11 @@ def get_llm(provider_name: str, **kwargs):
         constructor_kwargs = dict(kwargs)
         if base_url:
             constructor_kwargs["base_url"] = base_url
+        # A configured timeout should bound one experiment call. LangChain's
+        # default retries can otherwise multiply a 60-second timeout into a
+        # multi-minute stall before the runner records a provider failure.
+        if constructor_kwargs.get("max_retries") is None:
+            constructor_kwargs["max_retries"] = 0
         return ChatOpenAI(
             model=model_name,
             temperature=temperature,
@@ -72,6 +77,10 @@ def get_llm(provider_name: str, **kwargs):
                 "or OPENAI_COMPATIBLE_BASE_URL environment variable."
             )
         kwargs.pop("system_prompt", None)
+        # Keep provider failures bounded by the configured timeout. Callers
+        # that need retry semantics can pass an explicit ``max_retries``.
+        if kwargs.get("max_retries") is None:
+            kwargs["max_retries"] = 0
         return ChatOpenAI(
             model=model_name,
             temperature=temperature,

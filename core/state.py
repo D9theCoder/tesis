@@ -325,15 +325,15 @@ MODULE_TO_KG_NODE: dict[str, str] = {
     "weak_session": "weak_session_confirmed",
     "idor": "idor_confirmed",
     # 3-surface deep-method agents
-    "sqli_union": "sqli_confirmed",
-    "sqli_error": "sqli_confirmed",
-    "sqli_boolean_blind": "sqli_confirmed",
-    "sqli_time_blind": "sqli_confirmed",
-    "ac_idor": "access_control_confirmed",
+    "sqli_union": "sqli_union_confirmed",
+    "sqli_error": "sqli_error_confirmed",
+    "sqli_boolean_blind": "sqli_boolean_blind_confirmed",
+    "sqli_time_blind": "sqli_time_blind_confirmed",
+    "ac_idor": "ac_idor_confirmed",
     "ac_vertical_escalation": "ac_vertical_escalation_confirmed",
-    "ac_force_browse": "access_control_confirmed",
-    "bf_dictionary": "brute_force_confirmed",
-    "bf_spray": "brute_force_confirmed",
+    "ac_force_browse": "ac_force_browse_confirmed",
+    "bf_dictionary": "bf_dictionary_confirmed",
+    "bf_spray": "bf_spray_confirmed",
 }
 
 KG_NODES: list[str] = [

@@ -1,0 +1,137 @@
+---
+title: Attack Knowledge Graph - current NetworkX implementation
+config:
+  layout: elk
+  flowchart:
+    curve: linear
+    htmlLabels: true
+---
+%% Source: core/knowledge_graph.py::AttackKnowledgeGraph
+%% Verified shape: 29 NetworkX nodes, 38 directed edges, 5 chain edges,
+%% and 9 method nodes with payload_profile attributes.
+flowchart LR
+  subgraph ENTRY["Entry"]
+    direction TB
+    unauthenticated(["unauthenticated"])
+  end
+
+  subgraph SURFACES["Surface nodes"]
+    direction TB
+    sqli["sqli"]
+    access_control["access_control"]
+    brute_force["brute_force"]
+  end
+
+  subgraph METHODS["Method nodes with runtime selection metadata"]
+    direction TB
+    subgraph SQLI_METHODS["SQL injection"]
+      direction TB
+      sqli_union["sqli_union<br/>pre: union_select_possible<br/>target: id<br/>payload profile: hybrid; budget 5/8"]
+      sqli_error["sqli_error<br/>pre: error_messages_enabled<br/>target: id<br/>payload profile: hybrid; budget 5/8"]
+      sqli_boolean_blind["sqli_boolean_blind<br/>pre: response_diff_detectable<br/>target: id<br/>payload profile: hybrid; budget 5/8"]
+      sqli_time_blind["sqli_time_blind<br/>pre: response_delay_measurable<br/>target: id<br/>payload profile: hybrid; budget 5/8"]
+    end
+
+    subgraph AC_METHODS["Access control"]
+      direction TB
+      ac_idor["ac_idor<br/>pre: object_ids_enumerable<br/>target: userId<br/>payload profile: hybrid; budget 5/8"]
+      ac_vertical_escalation["ac_vertical_escalation<br/>pre: role_based_access_present<br/>target: userId<br/>payload profile: hybrid; budget 5/8"]
+      ac_force_browse["ac_force_browse<br/>pre: force_browse_endpoints_visible<br/>target: path<br/>payload profile: hybrid; budget 5/8"]
+    end
+
+    subgraph BF_METHODS["Brute force"]
+      direction TB
+      bf_dictionary["bf_dictionary<br/>pre: no_rate_limit<br/>target: credential_pair<br/>payload profile: hybrid; budget 5/8"]
+      bf_spray["bf_spray<br/>pre: no_rate_limit<br/>target: credential_pair<br/>payload profile: hybrid; budget 5/8"]
+    end
+  end
+
+  subgraph METHOD_CONFIRMATIONS["Method-confirmed nodes"]
+    direction TB
+    sqli_union_confirmed["sqli_union_confirmed"]
+    sqli_error_confirmed["sqli_error_confirmed"]
+    sqli_boolean_blind_confirmed["sqli_boolean_blind_confirmed"]
+    sqli_time_blind_confirmed["sqli_time_blind_confirmed"]
+    ac_idor_confirmed["ac_idor_confirmed"]
+    ac_vertical_escalation_confirmed["ac_vertical_escalation_confirmed"]
+    ac_force_browse_confirmed["ac_force_browse_confirmed"]
+    bf_dictionary_confirmed["bf_dictionary_confirmed"]
+    bf_spray_confirmed["bf_spray_confirmed"]
+  end
+
+  subgraph SURFACE_CONFIRMATIONS["Surface-confirmed nodes"]
+    direction TB
+    sqli_confirmed["sqli_confirmed"]
+    access_control_confirmed["access_control_confirmed"]
+    brute_force_confirmed["brute_force_confirmed"]
+  end
+
+  subgraph OUTCOMES["Intermediate and outcome nodes"]
+    direction TB
+    authenticated_session["authenticated_session"]
+    credentials_extracted["credentials_extracted"]
+    admin_session_obtained["admin_session_obtained<br/>HIGH_IMPACT_OUTCOME"]
+    data_exfiltrated["data_exfiltrated<br/>HIGH_IMPACT_OUTCOME"]
+  end
+
+  unauthenticated -->|"priority=100"| sqli
+  unauthenticated -->|"priority=100"| access_control
+  unauthenticated -->|"priority=100"| brute_force
+
+  sqli -->|"priority=100"| sqli_union
+  sqli -->|"priority=100"| sqli_error
+  sqli -->|"priority=100"| sqli_boolean_blind
+  sqli -->|"priority=100"| sqli_time_blind
+  access_control -->|"priority=100"| ac_idor
+  access_control -->|"priority=100"| ac_vertical_escalation
+  access_control -->|"priority=100"| ac_force_browse
+  brute_force -->|"priority=100"| bf_dictionary
+  brute_force -->|"priority=100"| bf_spray
+
+  sqli_union -->|"priority=50"| sqli_union_confirmed
+  sqli_error -->|"priority=50"| sqli_error_confirmed
+  sqli_boolean_blind -->|"priority=50"| sqli_boolean_blind_confirmed
+  sqli_time_blind -->|"priority=50"| sqli_time_blind_confirmed
+  ac_idor -->|"priority=50"| ac_idor_confirmed
+  ac_vertical_escalation -->|"priority=50"| ac_vertical_escalation_confirmed
+  ac_force_browse -->|"priority=50"| ac_force_browse_confirmed
+  bf_dictionary -->|"priority=50"| bf_dictionary_confirmed
+  bf_spray -->|"priority=50"| bf_spray_confirmed
+
+  sqli_union_confirmed -->|"priority=40"| sqli_confirmed
+  sqli_error_confirmed -->|"priority=40"| sqli_confirmed
+  sqli_boolean_blind_confirmed -->|"priority=40"| sqli_confirmed
+  sqli_time_blind_confirmed -->|"priority=40"| sqli_confirmed
+  ac_idor_confirmed -->|"priority=40"| access_control_confirmed
+  ac_vertical_escalation_confirmed -->|"priority=40"| access_control_confirmed
+  ac_force_browse_confirmed -->|"priority=40"| access_control_confirmed
+  bf_dictionary_confirmed -->|"priority=40"| brute_force_confirmed
+  bf_spray_confirmed -->|"priority=40"| brute_force_confirmed
+
+  sqli_confirmed -->|"priority=30"| data_exfiltrated
+  access_control_confirmed -->|"priority=30"| data_exfiltrated
+  brute_force_confirmed -->|"priority=30"| credentials_extracted
+
+  brute_force_confirmed -.->|"CHAIN priority=10<br/>requires: brute_force_confirmed<br/>target_agent: ac_idor"| authenticated_session
+  authenticated_session -.->|"CHAIN priority=10<br/>requires: authenticated_session<br/>target_agent: ac_idor"| ac_idor
+  credentials_extracted -.->|"CHAIN priority=10<br/>requires: credentials_extracted<br/>target_agent: bf_dictionary"| bf_dictionary
+  ac_vertical_escalation_confirmed -.->|"CHAIN priority=10<br/>requires: ac_vertical_escalation_confirmed<br/>target_agent: sqli_union"| admin_session_obtained
+  admin_session_obtained -.->|"CHAIN priority=10<br/>requires: admin_session_obtained<br/>target_agent: sqli_union"| sqli_union
+
+  classDef entry fill:#111827,color:#ffffff,stroke:#111827,stroke-width:2px;
+  classDef surface fill:#dbeafe,color:#1e3a8a,stroke:#2563eb,stroke-width:2px;
+  classDef method fill:#ecfeff,color:#164e63,stroke:#0891b2,stroke-width:1.5px;
+  classDef methodConfirmed fill:#f0fdf4,color:#14532d,stroke:#16a34a,stroke-width:1.5px;
+  classDef surfaceConfirmed fill:#dcfce7,color:#14532d,stroke:#15803d,stroke-width:2px;
+  classDef intermediate fill:#fef9c3,color:#713f12,stroke:#ca8a04,stroke-width:1.5px;
+  classDef outcome fill:#ffedd5,color:#7c2d12,stroke:#ea580c,stroke-width:1.5px;
+  classDef highImpact fill:#fee2e2,color:#7f1d1d,stroke:#dc2626,stroke-width:2.5px;
+
+  class unauthenticated entry;
+  class sqli,access_control,brute_force surface;
+  class sqli_union,sqli_error,sqli_boolean_blind,sqli_time_blind,ac_idor,ac_vertical_escalation,ac_force_browse,bf_dictionary,bf_spray method;
+  class sqli_union_confirmed,sqli_error_confirmed,sqli_boolean_blind_confirmed,sqli_time_blind_confirmed,ac_idor_confirmed,ac_vertical_escalation_confirmed,ac_force_browse_confirmed,bf_dictionary_confirmed,bf_spray_confirmed methodConfirmed;
+  class sqli_confirmed,access_control_confirmed,brute_force_confirmed surfaceConfirmed;
+  class authenticated_session intermediate;
+  class credentials_extracted outcome;
+  class admin_session_obtained,data_exfiltrated highImpact;

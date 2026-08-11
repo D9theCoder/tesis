@@ -66,6 +66,18 @@ def infer_module_name(url: str) -> str:
     return "unknown"
 
 
+def _same_host(url: str, base_url: str) -> bool:
+    """Return whether *url* stays on the configured DVWA host and port."""
+    parsed = urlparse(url)
+    base = urlparse(base_url)
+    return (
+        parsed.scheme in {"http", "https"}
+        and base.scheme in {"http", "https"}
+        and (parsed.hostname or "").lower() == (base.hostname or "").lower()
+        and parsed.port == base.port
+    )
+
+
 # ── Typed record structures ────────────────────────────────────────────
 
 class EndpointRecord(dict):
@@ -139,6 +151,9 @@ def parse_forms(html: str, page_url: str) -> tuple[list[dict], list[dict]]:
         method = (form.get("method") or "get").lower().strip()
         action = form.get("action") or page_url
         endpoint_url = urljoin(page_url, action)
+        if not _same_host(endpoint_url, page_url):
+            logger.warning("recon: discarded out-of-scope form action %s", endpoint_url)
+            continue
 
         params: list[str] = []
         csrf_token: str | None = None
@@ -207,13 +222,20 @@ def extract_nav_links(html: str, base_url: str) -> list[str]:
     links: list[str] = []
 
     for a_tag in soup.select("a[href]"):
-        href = a_tag.get("href", "")
-        # Only include links to DVWA vulnerability module pages
-        if "/vulnerabilities/" in href or "/vulnerabilities/" in str(a_tag.get("href", "")):
-            absolute = urljoin(base_url, href)
-            # Strip query parameters and fragment identifiers to avoid GET side-effects
-            absolute = absolute.split("?")[0].split("#")[0]
-            links.append(absolute)
+        href = str(a_tag.get("href", ""))
+        # DVWA's sidebar uses relative paths such as ``vulnerabilities/sqli/``.
+        # Resolve first so both relative and absolute links are classified by
+        # their normalized path, while containment still applies to the result.
+        absolute = urljoin(base_url, href)
+        if not _same_host(absolute, base_url):
+            logger.warning("recon: discarded out-of-scope navigation link %s", absolute)
+            continue
+        if "/vulnerabilities/" not in urlparse(absolute).path.lower():
+            continue
+
+        # Strip query parameters and fragment identifiers to avoid GET side-effects
+        absolute = absolute.split("?")[0].split("#")[0]
+        links.append(absolute)
 
     # Deduplicate and sort for deterministic ordering
     return sorted(set(links))
@@ -327,11 +349,13 @@ def recon(state: ExploitationState) -> dict[str, Any]:
     server_fingerprint: dict[str, str] = {}
 
     session: DVWASession | None = None
+    login_success = False
+    force_browse_endpoints_visible = False
+    low_priv_session_available = False
 
     try:
         # Step 1: Create session and login
         session = DVWASession(target_url)
-        login_success = False
         try:
             login_success = session.login()
             if not login_success:
@@ -385,6 +409,29 @@ def recon(state: ExploitationState) -> dict[str, Any]:
         all_endpoints = _deduplicate_endpoints(all_endpoints)
         all_vectors = _deduplicate_vectors(all_vectors)
 
+        # Step 6: Capture session-backed observations before releasing the
+        # HTTP client. Probing after ``session.close()`` raises httpx's
+        # ``RuntimeError: Cannot send a request, as the client has been closed``.
+        low_priv_session_available = bool(getattr(session, "is_logged_in", False))
+        try:
+            probe_resp = session.http.get("setup.php")
+            accessible_signals = (
+                "database setup",
+                "create/reset database",
+                "phpinfo()",
+                "view source",
+                "source code",
+            )
+            force_browse_endpoints_visible = bool(
+                probe_resp.status_code == 200
+                and any(
+                    signal in str(getattr(probe_resp, "text", "")).lower()
+                    for signal in accessible_signals
+                )
+            )
+        except (TransportError, RequestTimeoutError, RuntimeError) as exc:
+            logger.warning("recon: force-browse probe failed: %s", exc)
+
     except (TransportError, RequestTimeoutError, ValueError, RuntimeError) as exc:
         logger.error("recon: unexpected error during crawl: %s", exc)
 
@@ -410,40 +457,27 @@ def recon(state: ExploitationState) -> dict[str, Any]:
     # SQLi observations
     observations["error_messages_enabled"] = "sqli" in module_names
     observations["union_select_possible"] = "sqli" in module_names
-    observations["response_diff_detectable"] = "sqli_blind" in module_names or "sqli" in module_names
-    observations["response_delay_measurable"] = "sqli_blind" in module_names or "sqli" in module_names
+    # Blind-method preconditions require discovery of DVWA's dedicated blind
+    # SQLi surface. A generic SQLi form does not establish response-difference
+    # or timing evidence for either blind method.
+    observations["response_diff_detectable"] = "sqli_blind" in module_names
+    observations["response_delay_measurable"] = "sqli_blind" in module_names
 
     # Access control observations
     observations["object_ids_enumerable"] = "idor" in module_names
     # Check specifically for the authbypass endpoint URL pattern
     has_authbypass = any("/vulnerabilities/authbypass/" in str(ep.get("url", "")).lower() for ep in all_endpoints)
     observations["role_based_access_present"] = has_authbypass
-    # Probe a known force-browsable page directly so this observation reflects
-    # actual accessibility instead of a hardcoded conservative default.
-    try:
-        probe_resp = session.http.get("setup.php") if session is not None else None
-        accessible_signals = (
-            "database setup",
-            "create/reset database",
-            "phpinfo()",
-            "view source",
-            "source code",
-        )
-        observations["force_browse_endpoints_visible"] = bool(
-            probe_resp is not None
-            and probe_resp.status_code == 200
-            and any(signal in str(getattr(probe_resp, "text", "")).lower() for signal in accessible_signals)
-        )
-    except (TransportError, RequestTimeoutError):
-        observations["force_browse_endpoints_visible"] = False
+    observations["force_browse_endpoints_visible"] = force_browse_endpoints_visible
 
     # Brute force observations
     observations["no_rate_limit"] = "brute" in module_names
-    observations["low_priv_session_available"] = session is not None and getattr(session, "is_logged_in", False)
+    observations["low_priv_session_available"] = low_priv_session_available
     observations["authenticated_crawl"] = login_success
 
     return {
         "endpoints": all_endpoints,
+        "input_vectors": all_vectors,
         "security_level": requested_level,
         "next_agent": "orchestrator",
         "observations": observations,

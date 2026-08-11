@@ -1,10 +1,8 @@
 """Chaining Coordinator — conditional edge routing for 3-surface architecture.
 
-Design note: chain preconditions are checked against `confirmed_vulns` ONLY,
-not `achieved_outcomes`. This is intentional: outcomes are terminal rewards,
-not stepping-stones for further chains. `get_viable_chains` (reporting) includes
-`achieved_outcomes` for path-preview completeness, but the runtime router does
-not use them to satisfy chain preconditions.
+Chain preconditions are evaluated against both proved vulnerability nodes and
+proved enabling outcomes. Outcomes may unlock a later workflow, but they never
+stand in for confirmation of that later method's vulnerability node.
 """
 
 from __future__ import annotations
@@ -79,7 +77,7 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
     max_iterations = state.get("max_iterations", 30)
     confirmed = set(state.get("confirmed_vulns", []))
     achieved = set(state.get("achieved_outcomes", []))
-    known = confirmed  # chain preconditions must be confirmed_vulns only, not achieved_outcomes
+    known = confirmed | achieved
     current_surface = state.get("current_surface", "sqli")
     # Deduplicate attempted_agents because Annotated[list[str], add]
     # reducer can accumulate duplicates when agents return the full list.
@@ -97,24 +95,38 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
             "reason": "budget_exhausted",
         }
 
+    target_method = state.get("target_method")
+    if target_method and target_method in attempted:
+        return "scorer", {
+            "node": "chaining_router",
+            "iteration": iteration_count,
+            "event": "akg.route.selected",
+            "next_agent": "scorer",
+            "reason": "target_method_complete",
+            "target_method": target_method,
+        }
+
     # Derive surface-level confirmed nodes for chain precondition checks
     confirmed_for_chains = confirmed | _derive_surface_confirmed(confirmed)
+    known_for_chains = known | confirmed_for_chains
 
-    # 1. Check cross-surface chains from confirmed nodes
-    for vuln in sorted(confirmed_for_chains):
-        for edge in kg.get_next_actions(vuln):
-            if edge.get("is_chain") and all(p in known for p in edge.get("preconditions", [])):
-                target_agent = edge.get("target_agent")
-                if target_agent and target_agent not in attempted and target_agent not in blocked:
-                    return target_agent, {
-                        "node": "chaining_router",
-                        "iteration": iteration_count,
-                        "event": "akg.route.selected",
-                        "next_agent": target_agent,
-                        "reason": "chain_ready",
-                        "source": vuln,
-                        "target": edge.get("target"),
-                    }
+    # 1. AKG-guided runs may use cross-surface chains. Both confirmed nodes
+    # and separately proved enabling outcomes can satisfy a precondition.
+    if state.get("experiment_condition", "linear_hybrid") == "akg_guided_hybrid":
+        for node in sorted(known_for_chains):
+            for edge in kg.get_next_actions(node):
+                if edge.get("is_chain") and all(p in known_for_chains for p in edge.get("preconditions", [])):
+                    target_agent = edge.get("target_agent")
+                    if target_agent and target_agent not in attempted and target_agent not in blocked:
+                        return target_agent, {
+                            "node": "chaining_router",
+                            "iteration": iteration_count,
+                            "event": "akg.route.selected",
+                            "next_agent": target_agent,
+                            "reason": "chain_ready",
+                            "source": node,
+                            "target": edge.get("target"),
+                        }
 
     # 2. Critical outcome check — route to scorer immediately if high-impact outcome achieved
     if critical_outcome_achieved(state):
@@ -202,6 +214,21 @@ def chaining_router_node(state: dict) -> dict:
     updates: dict = {"next_agent": next_agent, "telemetry_events": [event]}
     if next_agent in {method for methods in METHODS_BY_SURFACE.values() for method in methods}:
         updates["selected_method"] = next_agent
+    if event.get("reason") == "chain_ready":
+        source = str(event.get("source") or "")
+        target = str(event.get("target") or next_agent)
+        existing_path = list(state.get("akg_path", []))
+        additions = [item for item in (source, target) if item and item not in existing_path]
+        if additions:
+            updates["akg_path"] = additions
+        updates["current_chain"] = [*existing_path, *additions]
+        updates["chain_history"] = [{
+            "chain": [*existing_path, *additions],
+            "status": "routed",
+            "source": source,
+            "target": target,
+            "target_agent": next_agent,
+        }]
     if event.get("reason") == "all_methods_exhausted":
         updates["task_result"] = "INCOMPLETE"
         updates["incomplete_reason"] = event.get("incomplete_reason", "ALL_METHODS_FAILED")

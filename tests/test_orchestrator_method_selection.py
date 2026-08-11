@@ -39,6 +39,59 @@ def test_experiment_condition_changes_deterministic_selection(monkeypatch):
     assert _fallback_next_agent({**base, "experiment_condition": "akg_guided_hybrid"}) == "sqli_time_blind"
 
 
+def test_akg_fallback_does_not_execute_unviable_method(monkeypatch):
+    class FakeKnowledgeGraph:
+        def get_viable_methods(self, surface, observations):
+            return []
+
+    monkeypatch.setattr("agents.orchestrator.AttackKnowledgeGraph", FakeKnowledgeGraph)
+    assert _fallback_next_agent({
+        "current_surface": "sqli",
+        "observations": {},
+        "attempted_agents": [],
+        "blocked_agents": [],
+        "failure_agents": [],
+        "experiment_condition": "akg_guided_hybrid",
+    }) == "scorer"
+
+
+def test_akg_orchestrator_rejects_cross_surface_llm_choice(monkeypatch):
+    class FakeKnowledgeGraph:
+        def get_viable_methods(self, surface, observations):
+            return ["sqli_error"]
+
+    class FakeLLM:
+        def invoke(self, messages):
+            return type("Response", (), {"content": '{"next_agent": "ac_idor"}'})()
+
+    monkeypatch.setattr("agents.orchestrator.AttackKnowledgeGraph", FakeKnowledgeGraph)
+    monkeypatch.setattr("agents.orchestrator.get_llm", lambda *args, **kwargs: FakeLLM())
+    result = orchestrator({
+        "target_url": "http://localhost/dvwa",
+        "security_level": "low",
+        "llm_provider": "gemini",
+        "current_surface": "sqli",
+        "observations": {},
+        "confirmed_vulns": [],
+        "achieved_outcomes": [],
+        "attempted_agents": [],
+        "blocked_agents": [],
+        "failure_agents": [],
+        "scores": {},
+        "iteration_count": 0,
+        "max_iterations": 30,
+        "evasion_enabled": False,
+        "evasion_mode": "reactive",
+        "evasion_max_retries": 3,
+        "evasion_cooldown_threshold": 5,
+        "consecutive_clean_responses": 0,
+        "experiment_condition": "akg_guided_hybrid",
+    })
+
+    assert result["selected_method"] == "sqli_error"
+    assert result["next_agent"] == "payload_candidate_builder"
+
+
 def test_orchestrator_returns_dict():
     """Verifies orchestrator returns dict behavior."""
     state = {

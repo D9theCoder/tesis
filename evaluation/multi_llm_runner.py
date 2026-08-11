@@ -7,7 +7,7 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
-from core.state import SECURITY_LEVELS
+from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS
 from evaluation.metrics import aggregate_runs
 from evaluation.reporter import write_json_report
 from llm.provider import SUPPORTED_PROVIDERS
@@ -15,6 +15,10 @@ from tesis.artifact_repository import config_fingerprint, new_execution_id
 from tesis.runtime_events import CancellationToken, RunEvent, RuntimeEventSink, redact_secrets
 
 from evaluation.runner import run_single_engagement
+
+
+_EXPERIMENT_CONDITIONS = frozenset({"linear_hybrid", "akg_guided_hybrid"})
+_GUARDRAIL_MODES = frozenset({"reactive", "proactive", "disabled"})
 
 
 def _run_single_with_payload_kwargs(kwargs: dict[str, Any]) -> dict:
@@ -243,43 +247,72 @@ def run_provider_matrix(
     execution_id: str | None = None,
     experiment_condition: str = "linear_hybrid",
     target_method: str | None = None,
+    experiment_conditions: list[str] | None = None,
+    method_level_matrix: bool = False,
+    guardrail_configurations: list[tuple[bool, str]] | None = None,
 ) -> list[dict] | tuple[list[dict], dict[str, Any]]:
-    """Handles run provider matrix behavior for this module.
+    """Run a deterministic matrix over all requested DVWA experiment axes.
 
-    Args:
-        target_url: Value used by this function.
-        providers: Value used by this function.
-        security_levels: Value used by this function.
-        surfaces: Value used by this function.
-        payload_modes: Value used by this function.
-        repeats: Value used by this function.
-        max_iterations: Value used by this function.
-        candidate_budget: Value used by this function.
-        stop_policy: Value used by this function.
-        coverage_target: Value used by this function.
-        enriched_reporting: Value used by this function.
-        diagnose: Value used by this function.
-        output_dir: Value used by this function.
-        include_aggregate: Value used by this function.
-        evasion_enabled: Value used by this function.
-        evasion_mode: Value used by this function.
-        evasion_max_retries: Value used by this function.
-        evasion_cooldown_threshold: Value used by this function.
-        live_display: Value used by this function.
-        model_configs: Value used by this function."""
+    By default this preserves the historical provider × surface × level ×
+    payload-mode matrix.  Set ``method_level_matrix=True`` to expand each
+    surface to its supported static methods, and pass the two thesis conditions
+    and guardrail configurations explicitly when executing the full experiment.
+    Every coordinate is recorded in the individual artifact configuration.
+    """
     chosen_providers = sorted(providers or list(SUPPORTED_PROVIDERS))
     chosen_levels = sorted(security_levels or list(SECURITY_LEVELS))
     chosen_surfaces = sorted(surfaces or ["sqli", "access_control", "brute_force"])
     chosen_payload_modes = sorted(payload_modes or ["static_only", "hybrid"])
+    chosen_conditions = sorted({
+        str(condition).strip().lower()
+        for condition in (experiment_conditions or [experiment_condition])
+    })
+    if not chosen_conditions or any(condition not in _EXPERIMENT_CONDITIONS for condition in chosen_conditions):
+        raise ValueError(
+            "experiment_conditions must contain only linear_hybrid or akg_guided_hybrid"
+        )
+    if target_method and method_level_matrix:
+        raise ValueError("target_method and method_level_matrix cannot be used together")
+    if target_method and any(target_method not in METHODS_BY_SURFACE.get(surface, []) for surface in chosen_surfaces):
+        raise ValueError("target_method must be valid for every selected surface")
+
+    requested_guardrails = guardrail_configurations or [(evasion_enabled, evasion_mode)]
+    chosen_guardrails = sorted({
+        (bool(enabled), str(mode).strip().lower())
+        for enabled, mode in requested_guardrails
+    })
+    if not chosen_guardrails or any(mode not in _GUARDRAIL_MODES for _, mode in chosen_guardrails):
+        raise ValueError("guardrail configurations must use reactive, proactive, or disabled mode")
+
+    coordinates: list[dict[str, Any]] = []
+    for provider in chosen_providers:
+        for surface in chosen_surfaces:
+            methods = (
+                list(METHODS_BY_SURFACE[surface])
+                if method_level_matrix
+                else [target_method]
+            )
+            for level in chosen_levels:
+                for payload_mode in chosen_payload_modes:
+                    for condition in chosen_conditions:
+                        for method in methods:
+                            for guardrail_enabled, guardrail_mode in chosen_guardrails:
+                                for repeat_index in range(repeats):
+                                    coordinates.append({
+                                        "provider": provider,
+                                        "surface": surface,
+                                        "security_level": level,
+                                        "payload_mode": payload_mode,
+                                        "experiment_condition": condition,
+                                        "target_method": method,
+                                        "guardrail_retry_enabled": guardrail_enabled,
+                                        "guardrail_handling": guardrail_mode,
+                                        "repeat_index": repeat_index,
+                                    })
+
     cancellation_token = cancellation_token or CancellationToken()
     matrix_execution_id = execution_id or new_execution_id()
-    total_runs = (
-        len(chosen_providers)
-        * len(chosen_levels)
-        * len(chosen_surfaces)
-        * len(chosen_payload_modes)
-        * repeats
-    )
+    total_runs = len(coordinates)
 
     def emit(event_type: str, *, message: str, data: dict[str, Any]) -> None:
         if event_sink is not None:
@@ -292,178 +325,123 @@ def run_provider_matrix(
 
     emit("matrix.started", message="Experiment matrix started", data={"total": total_runs})
 
-    artifacts: list[dict] = []
-    for provider in chosen_providers:
-        if cancellation_token.is_cancelled:
-            emit("matrix.cancelled", message="Matrix cancellation acknowledged", data={
-                "completed": len(artifacts), "total": total_runs,
-            })
-            if include_aggregate:
-                aggregate = _build_matrix_aggregate(artifacts)
-                cancelled_config = {
-                    "target_url": target_url,
-                    "providers": chosen_providers,
-                    "security_levels": chosen_levels,
-                    "surfaces": chosen_surfaces,
-                    "payload_modes": chosen_payload_modes,
-                    "repeats": repeats,
-                    "max_iterations": max_iterations,
-                    "candidate_budget": candidate_budget,
-                    "experiment_condition": experiment_condition,
-                    "target_method": target_method,
-                    "model_configs": redact_secrets(model_configs or {}),
-                }
-                aggregate.update({
-                    "execution_id": matrix_execution_id,
-                    "run_id": "matrix-" + config_fingerprint(cancelled_config).split(":", 1)[-1][:12],
-                    "status": "cancelled",
-                    "config": cancelled_config,
-                    "config_fingerprint": config_fingerprint(cancelled_config),
-                })
-                if output_dir:
-                    write_json_report(Path(output_dir) / f"{matrix_execution_id}.matrix.json", aggregate)
-                return artifacts, aggregate
-            return artifacts
-        if provider not in SUPPORTED_PROVIDERS:
-            for surface in chosen_surfaces:
-                for level in chosen_levels:
-                    for payload_mode in chosen_payload_modes:
-                        for repeat_index in range(repeats):
-                            child_execution_id = new_execution_id()
-                            skipped_config = {
-                                "target_url": target_url,
-                                "provider": provider,
-                                "security_level": level,
-                                "surface": surface,
-                                "payload_mode": payload_mode,
-                                "max_iterations": max_iterations,
-                                "candidate_budget": candidate_budget,
-                                "repeat_index": repeat_index,
-                                "experiment_condition": experiment_condition,
-                                "target_method": target_method,
-                                "evasion_enabled": evasion_enabled,
-                                "evasion_mode": evasion_mode,
-                            }
-                            artifacts.append(
-                                {
-                                    "schema_version": "tui.v1",
-                                    "execution_id": child_execution_id,
-                                    "run_id": f"{provider}-{surface}-{level}-{payload_mode}-{repeat_index}",
-                                    "status": "skipped",
-                                    "config": skipped_config,
-                                    "config_fingerprint": config_fingerprint(skipped_config),
-                                    "timing": {},
-                                    "final_state": {},
-                                    "report": {},
-                                    "error": f"Unsupported provider: {provider}",
-                                }
-                            )
-            continue
+    matrix_config = {
+        "target_url": target_url,
+        "providers": chosen_providers,
+        "security_levels": chosen_levels,
+        "surfaces": chosen_surfaces,
+        "payload_modes": chosen_payload_modes,
+        "experiment_conditions": chosen_conditions,
+        "method_level_matrix": method_level_matrix,
+        "target_method": target_method,
+        "guardrail_configurations": [
+            {"enabled": enabled, "mode": mode}
+            for enabled, mode in chosen_guardrails
+        ],
+        "repeats": repeats,
+        "max_iterations": max_iterations,
+        "candidate_budget": candidate_budget,
+        "model_configs": redact_secrets(model_configs or {}),
+    }
 
-        for surface in chosen_surfaces:
-            for level in chosen_levels:
-                for payload_mode in chosen_payload_modes:
-                    for repeat_index in range(repeats):
-                        if cancellation_token.is_cancelled:
-                            emit("matrix.cancelled", message="Matrix cancellation acknowledged", data={
-                                "completed": len(artifacts), "total": total_runs,
-                            })
-                            if include_aggregate:
-                                aggregate = _build_matrix_aggregate(artifacts)
-                                cancelled_config = {
-                                    "target_url": target_url,
-                                    "providers": chosen_providers,
-                                    "security_levels": chosen_levels,
-                                    "surfaces": chosen_surfaces,
-                                    "payload_modes": chosen_payload_modes,
-                                    "repeats": repeats,
-                                    "max_iterations": max_iterations,
-                                    "candidate_budget": candidate_budget,
-                                    "experiment_condition": experiment_condition,
-                                    "target_method": target_method,
-                                    "model_configs": redact_secrets(model_configs or {}),
-                                }
-                                aggregate.update({
-                                    "execution_id": matrix_execution_id,
-                                    "run_id": "matrix-" + config_fingerprint(cancelled_config).split(":", 1)[-1][:12],
-                                    "status": "cancelled",
-                                    "config": cancelled_config,
-                                    "config_fingerprint": config_fingerprint(cancelled_config),
-                                })
-                                if output_dir:
-                                    write_json_report(Path(output_dir) / f"{matrix_execution_id}.matrix.json", aggregate)
-                                return artifacts, aggregate
-                            return artifacts
-
-                        coordinate = {
-                            "provider": provider,
-                            "surface": surface,
-                            "security_level": level,
-                            "payload_mode": payload_mode,
-                            "repeat_index": repeat_index,
-                        }
-                        emit("matrix.run.started", message="Starting matrix coordinate", data={
-                            **coordinate, "completed": len(artifacts), "total": total_runs,
-                        })
-                        run_kwargs = {
-                                "target_url": target_url,
-                                "security_level": level,
-                                "llm_provider": provider,
-                                "surface": surface,
-                                "payload_mode": payload_mode,
-                                "max_iterations": max_iterations,
-                                "candidate_budget": candidate_budget,
-                                "repeat_index": repeat_index,
-                                "stop_policy": stop_policy,
-                                "coverage_target": coverage_target,
-                                "enriched_reporting": enriched_reporting,
-                                "diagnose": diagnose,
-                                "evasion_enabled": evasion_enabled,
-                                "evasion_mode": evasion_mode,
-                                "evasion_max_retries": evasion_max_retries,
-                                "evasion_cooldown_threshold": evasion_cooldown_threshold,
-                                "output_dir": output_dir,
-                                "live_display": live_display,
-                                "model_config": (model_configs or {}).get(provider),
-                                "event_sink": event_sink,
-                                "cancellation_token": cancellation_token,
-                                "execution_id": new_execution_id(),
-                                "experiment_condition": experiment_condition,
-                                "target_method": target_method,
-                        }
-                        artifact = _run_single_with_payload_kwargs(run_kwargs)
-                        artifacts.append(artifact)
-                        emit("matrix.run.finished", message="Matrix coordinate finished", data={
-                            **coordinate,
-                            "status": artifact.get("status", "unknown"),
-                            "completed": len(artifacts),
-                            "total": total_runs,
-                        })
-
-    if include_aggregate:
+    def finalize_aggregate(status: str) -> tuple[list[dict], dict[str, Any]]:
         aggregate = _build_matrix_aggregate(artifacts)
-        matrix_config = {
-            "target_url": target_url,
-            "providers": chosen_providers,
-            "security_levels": chosen_levels,
-            "surfaces": chosen_surfaces,
-            "payload_modes": chosen_payload_modes,
-            "repeats": repeats,
-            "max_iterations": max_iterations,
-            "candidate_budget": candidate_budget,
-            "experiment_condition": experiment_condition,
-            "target_method": target_method,
-            "model_configs": redact_secrets(model_configs or {}),
-        }
+        # A cancelled matrix must remain cancelled even when a child returned
+        # an error, while a completed matrix cannot be reported successful if
+        # any child failed.  The TUI presents this aggregate status as the
+        # matrix result, so derive it from the authoritative child artifacts.
+        if cancellation_token.is_cancelled or status == "cancelled":
+            status = "cancelled"
+        elif any(str(artifact.get("status", "")).lower() == "error" for artifact in artifacts):
+            status = "error"
         aggregate.update({
             "execution_id": matrix_execution_id,
             "run_id": "matrix-" + config_fingerprint(matrix_config).split(":", 1)[-1][:12],
-            "status": "cancelled" if cancellation_token.is_cancelled else "success",
+            "status": status,
             "config": matrix_config,
             "config_fingerprint": config_fingerprint(matrix_config),
         })
         if output_dir:
             write_json_report(Path(output_dir) / f"{matrix_execution_id}.matrix.json", aggregate)
+        return artifacts, aggregate
+
+    artifacts: list[dict] = []
+    for coordinate in coordinates:
+        if cancellation_token.is_cancelled:
+            emit("matrix.cancelled", message="Matrix cancellation acknowledged", data={
+                "completed": len(artifacts), "total": total_runs,
+            })
+            if include_aggregate:
+                return finalize_aggregate("cancelled")
+            return artifacts
+        provider = str(coordinate["provider"])
+        if provider not in SUPPORTED_PROVIDERS:
+            skipped_config = {
+                "target_url": target_url,
+                **coordinate,
+                "evasion_enabled": coordinate["guardrail_retry_enabled"],
+                "evasion_mode": coordinate["guardrail_handling"],
+                "max_iterations": max_iterations,
+                "candidate_budget": candidate_budget,
+            }
+            artifacts.append({
+                "schema_version": "tui.v1",
+                "execution_id": new_execution_id(),
+                "run_id": (
+                    f"{provider}-{coordinate['surface']}-{coordinate['security_level']}-"
+                    f"{coordinate['payload_mode']}-{coordinate['experiment_condition']}-"
+                    f"{coordinate['target_method'] or 'surface'}-{coordinate['repeat_index']}"
+                ),
+                "status": "skipped",
+                "config": skipped_config,
+                "config_fingerprint": config_fingerprint(skipped_config),
+                "timing": {},
+                "final_state": {},
+                "report": {},
+                "error": f"Unsupported provider: {provider}",
+            })
+            continue
+
+        emit("matrix.run.started", message="Starting matrix coordinate", data={
+            **coordinate, "completed": len(artifacts), "total": total_runs,
+        })
+        run_kwargs = {
+            "target_url": target_url,
+            "security_level": coordinate["security_level"],
+            "llm_provider": provider,
+            "surface": coordinate["surface"],
+            "payload_mode": coordinate["payload_mode"],
+            "max_iterations": max_iterations,
+            "candidate_budget": candidate_budget,
+            "repeat_index": coordinate["repeat_index"],
+            "stop_policy": stop_policy,
+            "coverage_target": coverage_target,
+            "enriched_reporting": enriched_reporting,
+            "diagnose": diagnose,
+            "evasion_enabled": coordinate["guardrail_retry_enabled"],
+            "evasion_mode": coordinate["guardrail_handling"],
+            "evasion_max_retries": evasion_max_retries,
+            "evasion_cooldown_threshold": evasion_cooldown_threshold,
+            "output_dir": output_dir,
+            "live_display": live_display,
+            "model_config": (model_configs or {}).get(provider),
+            "event_sink": event_sink,
+            "cancellation_token": cancellation_token,
+            "execution_id": new_execution_id(),
+            "experiment_condition": coordinate["experiment_condition"],
+            "target_method": coordinate["target_method"],
+        }
+        artifact = _run_single_with_payload_kwargs(run_kwargs)
+        artifacts.append(artifact)
+        emit("matrix.run.finished", message="Matrix coordinate finished", data={
+            **coordinate,
+            "status": artifact.get("status", "unknown"),
+            "completed": len(artifacts),
+            "total": total_runs,
+        })
+
+    if include_aggregate:
+        artifacts, aggregate = finalize_aggregate("cancelled" if cancellation_token.is_cancelled else "success")
         emit("matrix.finished", message="Experiment matrix finished", data=aggregate.get("totals", {}))
         return artifacts, aggregate
     emit("matrix.finished", message="Experiment matrix finished", data={"completed": len(artifacts)})

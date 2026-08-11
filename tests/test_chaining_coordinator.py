@@ -98,8 +98,8 @@ def test_route_after_agent_all_methods_exhausted():
 from core.chaining_coordinator import evaluate_chain_route
 
 
-def test_chain_preconditions_use_confirmed_vulns_only():
-    """Achieved outcomes alone should NOT trigger a chain."""
+def test_proved_enabling_outcome_triggers_akg_chain():
+    """A proved enabling outcome may route its explicitly linked next method."""
     state = {
         "confirmed_vulns": [],
         "achieved_outcomes": ["credentials_extracted"],
@@ -110,18 +110,18 @@ def test_chain_preconditions_use_confirmed_vulns_only():
         "blocked_agents": [],
         "failure_agents": [],
         "observations": {},
+        "experiment_condition": "akg_guided_hybrid",
     }
     next_agent, event = evaluate_chain_route(state)
-    # Should NOT trigger the credentials_extracted -> brute_force_confirmed chain
-    # because confirmed_vulns is empty
-    assert event["reason"] != "chain_ready" or next_agent != "bf_dictionary"
+    assert next_agent == "bf_dictionary"
+    assert event["reason"] == "chain_ready"
 
 
-def test_achieved_outcomes_alone_cannot_trigger_chain():
-    """Verifies achieved outcomes alone cannot trigger chain behavior."""
+def test_authenticated_outcome_triggers_access_control_chain():
+    """An authenticated-session outcome enables the linked IDOR workflow."""
     state = {
         "confirmed_vulns": [],
-        "achieved_outcomes": ["brute_force_confirmed", "credentials_extracted"],
+        "achieved_outcomes": ["authenticated_session"],
         "iteration_count": 1,
         "max_iterations": 30,
         "current_surface": "brute_force",
@@ -129,7 +129,27 @@ def test_achieved_outcomes_alone_cannot_trigger_chain():
         "blocked_agents": [],
         "failure_agents": [],
         "observations": {},
+        "experiment_condition": "akg_guided_hybrid",
     }
     next_agent, event = evaluate_chain_route(state)
-    # achieved_outcomes should not satisfy chain preconditions
-    assert event["reason"] != "chain_ready" or next_agent != "ac_idor"
+    assert next_agent == "ac_idor"
+    assert event["reason"] == "chain_ready"
+
+
+def test_linear_condition_does_not_take_cross_surface_chain():
+    """The baseline condition must not receive AKG-guided chain routing."""
+    state = {
+        "confirmed_vulns": [],
+        "achieved_outcomes": ["credentials_extracted"],
+        "iteration_count": 1,
+        "max_iterations": 30,
+        "current_surface": "sqli",
+        "attempted_agents": [],
+        "blocked_agents": [],
+        "failure_agents": [],
+        "observations": {},
+        "experiment_condition": "linear_hybrid",
+    }
+    next_agent, event = evaluate_chain_route(state)
+    assert next_agent == "orchestrator"
+    assert event["reason"] == "no_chain"

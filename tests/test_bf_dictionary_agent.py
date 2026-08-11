@@ -62,7 +62,8 @@ def test_exploit_finds_credentials(base_state):
         result = bf_dictionary_agent(base_state)
 
     assert result["scores"]["bf_dictionary"] >= 3
-    assert "brute_force_confirmed" in result.get("confirmed_vulns", [])
+    assert "bf_dictionary_confirmed" in result.get("confirmed_vulns", [])
+    assert "authenticated_session" in result.get("achieved_outcomes", [])
     creds = result.get("found_credentials", [])
     assert any(c.get("username") == "admin" for c in creds)
 
@@ -85,7 +86,7 @@ def test_chain_check_triggers_score_four(base_state):
     with patch("agents.brute_force.bf_dictionary_agent.DVWASession", return_value=mock_session):
         result = bf_dictionary_agent(base_state)
 
-    assert result["scores"]["bf_dictionary"] == 4
+    assert result["scores"]["bf_dictionary"] == 3
     # AKG chain: brute_force_confirmed -> ac_idor (target_agent)
     achieved = result.get("achieved_outcomes", [])
     assert len(achieved) > 0

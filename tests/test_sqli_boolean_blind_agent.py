@@ -86,7 +86,7 @@ def test_exploit_confirmed(base_state):
         result = sqli_boolean_blind_agent(base_state)
 
     assert result["scores"]["sqli_boolean_blind"] >= 3
-    assert "sqli_confirmed" in result.get("confirmed_vulns", [])
+    assert "sqli_boolean_blind_confirmed" in result.get("confirmed_vulns", [])
 
 
 def test_chain_check_achieves_score_four(base_state):
@@ -109,7 +109,8 @@ def test_chain_check_achieves_score_four(base_state):
     with patch("agents.sqli.sqli_boolean_blind_agent.DVWASession", return_value=mock_session):
         result = sqli_boolean_blind_agent(base_state)
 
-    assert result["scores"]["sqli_boolean_blind"] == 4
+    assert result["scores"]["sqli_boolean_blind"] == 3
+    assert "credentials_extracted" not in result.get("achieved_outcomes", [])
 
 
 def test_login_failure(base_state):

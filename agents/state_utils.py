@@ -216,6 +216,72 @@ def payload_score_updates(state: dict[str, Any], module_name: str, score: int) -
     return updates
 
 
+def _materialize_request_evidence(
+    state: dict[str, Any],
+    module_name: str,
+    telemetry_events: list[dict],
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Normalize method telemetry into auditable response/timing evidence.
+
+    Method agents emit compact request events rather than copying full response
+    bodies into shared state. This helper fills the endpoint from recon when an
+    event does not provide one and separates timing measurements for artifacts.
+    """
+    fallback_path = _MODULE_ENDPOINT_FRAGMENTS.get(module_name, "")
+    endpoint = module_endpoint(state, module_name, fallback_path) if fallback_path else ""
+    target_url = str(state.get("target_url") or "").rstrip("/")
+    if endpoint.startswith("/") and target_url:
+        endpoint = f"{target_url}{endpoint}"
+
+    response_evidence: list[dict] = []
+    timing_evidence: list[dict] = []
+    normalized_events: list[dict] = []
+    for event in telemetry_events:
+        if not isinstance(event, dict):
+            normalized_events.append(event)
+            continue
+        event_copy = dict(event)
+        payload = event_copy.get("payload")
+        if (
+            event_copy.get("event") not in {"agent.probe.sent", "agent.exploit.sent"}
+            or not isinstance(payload, dict)
+        ):
+            normalized_events.append(event_copy)
+            continue
+
+        payload_copy = dict(payload)
+        event_endpoint = str(payload_copy.get("endpoint") or endpoint or "")
+        if event_endpoint.startswith("/") and target_url:
+            event_endpoint = f"{target_url}{event_endpoint}"
+        payload_copy["endpoint"] = event_endpoint
+        event_copy["payload"] = payload_copy
+        normalized_events.append(event_copy)
+
+        stage = "probe" if event_copy["event"] == "agent.probe.sent" else "exploit"
+        evidence = {
+            "agent_id": str(payload_copy.get("agent_id") or module_name),
+            "stage": stage,
+            "endpoint": payload_copy["endpoint"],
+            "payload": payload_copy.get("payload"),
+            "status_code": payload_copy.get("status_code"),
+        }
+        if "signal_detected" in payload_copy:
+            evidence["signal_detected"] = payload_copy["signal_detected"]
+        if "success" in payload_copy:
+            evidence["success"] = payload_copy["success"]
+        response_evidence.append(evidence)
+
+        if "elapsed_ms" in payload_copy:
+            timing_evidence.append({
+                **evidence,
+                "elapsed_ms": payload_copy.get("elapsed_ms"),
+                "baseline_elapsed_ms": payload_copy.get("baseline_elapsed_ms"),
+                "delay_ms": payload_copy.get("delay_ms"),
+            })
+
+    return normalized_events, response_evidence, timing_evidence
+
+
 def make_update(
     *,
     state: dict[str, Any],
@@ -304,11 +370,33 @@ def make_update(
     if module_name not in attempted:
         update["attempted_agents"] = [module_name]
 
-    # Merge telemetry events from agents.
+    # Merge telemetry events from agents and materialize auditable evidence.
     # telemetry_events uses Annotated[list[dict], add] reducer,
     # so we must return ONLY the new events, not existing + new.
     if telemetry_events:
-        update["telemetry_events"] = list(telemetry_events)
+        normalized_events, response_evidence, timing_evidence = _materialize_request_evidence(
+            state, module_name, list(telemetry_events)
+        )
+        update["telemetry_events"] = normalized_events
+        if response_evidence:
+            update["response_evidence"] = response_evidence
+        if timing_evidence:
+            update["timing_evidence"] = timing_evidence
+
+        # A method invocation with request telemetry is itself a verifier
+        # decision, even when its evidence did not confirm the vulnerability.
+        # Keep an existing confirmed decision when a later fallback invocation
+        # has no new confirmation, but never leave the artifact ambiguous for
+        # a first invocation that produced auditable negative evidence.
+        if confirmed_vulns or not state.get("verifier_decision"):
+            update["verifier_decision"] = {
+                "agent_id": module_name,
+                "decision": "confirmed" if confirmed_vulns else "not_confirmed",
+                "confirmed_vulns": list(confirmed_vulns or []),
+                "score": score,
+                "evidence_count": len(response_evidence),
+                "source": "method_agent_evidence",
+            }
 
     # Track failure agents for fallback loop and adaptation metrics.
     # failure_agents uses Annotated[list[str], add] reducer.
@@ -335,22 +423,29 @@ def make_update(
 def chain_check(confirmed_node: str, state: dict[str, Any]) -> tuple[int, list[str]]:
     """Query AKG for chain edges from a confirmed node.
 
-    Returns (score, achieved_outcomes) where score is 4 if a chain
-    precondition is satisfied, otherwise 0.
+    A ready edge is not itself an achieved outcome. This helper therefore only
+    credits a chain when its target outcome has already been proved in state;
+    the chaining router is responsible for routing the next method.
     """
     from core.knowledge_graph import AttackKnowledgeGraph
 
     achieved: list[str] = []
     score = 0
     kg = AttackKnowledgeGraph()
+    if state.get("experiment_condition", "linear_hybrid") != "akg_guided_hybrid":
+        return score, achieved
+
     confirmed_set = set(state.get("confirmed_vulns", [])) | {confirmed_node}
+    achieved_set = set(state.get("achieved_outcomes", []))
+    known = confirmed_set | achieved_set
 
     for edge in kg.get_next_actions(confirmed_node):
         if not edge.get("is_chain"):
             continue
         preconditions = edge.get("preconditions", [])
-        if all(p in confirmed_set for p in preconditions):
-            achieved.append(edge["target"])
+        target = str(edge["target"])
+        if all(p in known for p in preconditions) and target in achieved_set:
+            achieved.append(target)
             score = 4
 
     return score, achieved

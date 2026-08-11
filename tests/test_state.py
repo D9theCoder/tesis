@@ -522,15 +522,15 @@ class TestMergeDictsReducer:
 class TestModuleToKgNodeMappings:
     """Validate MODULE_TO_KG_NODE maps agents to existing AKG nodes."""
 
-    def test_sqli_boolean_blind_maps_to_sqli_confirmed(self):
-        """Verifies sqli boolean blind maps to sqli confirmed behavior."""
+    def test_sqli_boolean_blind_maps_to_its_method_confirmation(self):
+        """Boolean-blind evidence must retain its method-specific KG node."""
         from core.state import MODULE_TO_KG_NODE
-        assert MODULE_TO_KG_NODE["sqli_boolean_blind"] == "sqli_confirmed"
+        assert MODULE_TO_KG_NODE["sqli_boolean_blind"] == "sqli_boolean_blind_confirmed"
 
-    def test_sqli_time_blind_maps_to_sqli_confirmed(self):
-        """Verifies sqli time blind maps to sqli confirmed behavior."""
+    def test_sqli_time_blind_maps_to_its_method_confirmation(self):
+        """Time-blind evidence must retain its method-specific KG node."""
         from core.state import MODULE_TO_KG_NODE
-        assert MODULE_TO_KG_NODE["sqli_time_blind"] == "sqli_confirmed"
+        assert MODULE_TO_KG_NODE["sqli_time_blind"] == "sqli_time_blind_confirmed"
 
     def test_all_method_agents_map_to_existing_kg_nodes(self):
         """Verifies all method agents map to existing kg nodes behavior."""

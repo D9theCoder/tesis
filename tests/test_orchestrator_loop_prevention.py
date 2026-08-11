@@ -109,6 +109,37 @@ class TestUsedFallbackAccuracy:
         decision_event = [e for e in result["telemetry_events"] if e["event"] == "orchestrator.decision"][0]
         assert decision_event["payload"]["used_fallback"] is True
 
+    def test_provider_exception_marks_fallback_as_incomplete(self):
+        """A deterministic fallback cannot turn a failed model runtime into success."""
+        state = {
+            "iteration_count": 0,
+            "max_iterations": 30,
+            "confirmed_vulns": [],
+            "achieved_outcomes": [],
+            "attempted_agents": [],
+            "blocked_agents": [],
+            "failure_agents": [],
+            "current_surface": "sqli",
+            "observations": {},
+            "scores": {},
+            "consecutive_clean_responses": 0,
+            "llm_provider": "openai_compatible",
+            "security_level": "low",
+            "evasion_enabled": False,
+            "experiment_condition": "akg_guided_hybrid",
+        }
+
+        with patch("agents.orchestrator.get_llm", side_effect=RuntimeError("provider unavailable")):
+            result = orchestrator(state)
+
+        assert result["task_result"] == "INCOMPLETE"
+        assert result["incomplete_reason"] == "LLM_RUNTIME_FAILURE"
+        assert result["fallback_events"] == [{
+            "event": "orchestrator.llm_failure",
+            "error_type": "RuntimeError",
+            "next_agent": "scorer",
+        }]
+
 
 class TestOrchestratorDeduplicatesAttemptedAgents:
     """Verify orchestrator deduplicates attempted_agents before using them."""

@@ -81,7 +81,7 @@ def test_exploit_confirms_unauthorized_access(base_state):
         result = ac_idor_agent(base_state)
 
     assert result["scores"]["ac_idor"] >= 3
-    assert "access_control_confirmed" in result.get("confirmed_vulns", [])
+    assert "ac_idor_confirmed" in result.get("confirmed_vulns", [])
 
 
 def test_chain_check_triggers_score_four(base_state):

@@ -164,6 +164,10 @@ def sqli_union_agent(state: ExploitationState) -> dict[str, Any]:
         telemetry_events.extend(exploit_events)
         score = max(score, exploit_score)
         confirmed_vulns.extend(confirmed)
+        # UNION confirmation requires visible account-like data in the response,
+        # so this is evidence for the enabling outcome as well as the method node.
+        if confirmed_vulns:
+            achieved_outcomes.append("credentials_extracted")
 
         # Stage 3: CHAIN CHECK
         if confirmed_vulns:

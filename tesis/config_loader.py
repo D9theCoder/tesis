@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
+from dotenv import load_dotenv
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from core.state import SECURITY_LEVELS, SURFACES
+from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS, SURFACES
 from llm.provider import SUPPORTED_PROVIDERS
 from tesis.model_config import EngagementConfig, ModelConfig, EVASION_MODES, PAYLOAD_MODES
 from tesis.config_fields import FORM_MATRIX, FORM_SINGLE, validate_config as validate_field_schema
@@ -25,6 +26,7 @@ class ConfigError(ValueError):
 
 _VALID_EVASION_MODES: frozenset[str] = EVASION_MODES
 _VALID_PAYLOAD_MODES: frozenset[str] = PAYLOAD_MODES
+_VALID_EXPERIMENT_CONDITIONS: frozenset[str] = frozenset({"linear_hybrid", "akg_guided_hybrid"})
 
 _ENV_REF_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)}")
 
@@ -184,6 +186,13 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "EVASION_STRATEGY": "evasion_strategy",
         "EVASION_MAX_RETRIES": "evasion_max_retries",
         "EVASION_COOLDOWN_THRESHOLD": "evasion_cooldown_threshold",
+        # Canonical terminology.  Legacy EVASION_* variables remain supported
+        # for existing installations and map through the same runtime fields.
+        "GUARDRAIL_RETRY_ENABLED": "guardrail_retry_enabled",
+        "GUARDRAIL_HANDLING": "guardrail_handling",
+        "GUARDRAIL_RETRY_MODE": "guardrail_handling",
+        "GUARDRAIL_RETRY_MAX": "guardrail_retry_max",
+        "GUARDRAIL_RETRY_COOLDOWN_THRESHOLD": "guardrail_retry_cooldown_threshold",
     }
 
     for key, raw_value in os.environ.items():
@@ -218,12 +227,15 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
             continue
 
         value: Any = raw_value
-        if mapped in {"iterations", "repeats", "evasion_max_retries", "evasion_cooldown_threshold", "candidate_budget"}:
+        if mapped in {
+            "iterations", "repeats", "evasion_max_retries", "evasion_cooldown_threshold",
+            "guardrail_retry_max", "guardrail_retry_cooldown_threshold", "candidate_budget",
+        }:
             try:
                 value = int(raw_value)
             except ValueError as exc:
                 raise ConfigError(f"Invalid integer value for {key}: {raw_value}") from exc
-        elif mapped in {"matrix", "enriched_reporting", "diagnose", "evasion_enabled"}:
+        elif mapped in {"matrix", "enriched_reporting", "diagnose", "evasion_enabled", "guardrail_retry_enabled"}:
             value = _parse_bool(raw_value)
         elif mapped in {"providers", "levels", "surfaces", "payload_modes"}:
             value = _parse_csv(raw_value)
@@ -285,9 +297,13 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         "evasion_strategy": "evasion_strategy",
         "evasion_max_retries": "evasion_max_retries",
         "evasion_cooldown_threshold": "evasion_cooldown_threshold",
+        "guardrail_retry_enabled": "guardrail_retry_enabled",
+        "guardrail_handling": "guardrail_handling",
+        "guardrail_retry_max": "guardrail_retry_max",
+        "guardrail_retry_cooldown_threshold": "guardrail_retry_cooldown_threshold",
     }
 
-    bool_flags = {"matrix", "enriched_reporting", "diagnose", "evasion_enabled"}
+    bool_flags = {"matrix", "enriched_reporting", "diagnose", "evasion_enabled", "guardrail_retry_enabled"}
 
     for key, mapped in key_mapping.items():
         if key not in cli_args:
@@ -440,9 +456,14 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
 
     _validate_surface(config.surface)
     validate_payload_mode(config.payload_mode)
+    if config.experiment_condition not in _VALID_EXPERIMENT_CONDITIONS:
+        raise ConfigError(
+            f"Unsupported experiment condition: {config.experiment_condition}. "
+            f"Must be one of: {', '.join(sorted(_VALID_EXPERIMENT_CONDITIONS))}"
+        )
 
     evasion_mode = str(getattr(config, "evasion_mode", config.evasion_strategy)).strip().lower()
-    if config.evasion_enabled and evasion_mode not in _VALID_EVASION_MODES:
+    if evasion_mode not in _VALID_EVASION_MODES:
         raise ConfigError(
             f"Unsupported evasion mode: {evasion_mode}. "
             f"Must be one of: {', '.join(sorted(_VALID_EVASION_MODES))}"
@@ -465,9 +486,20 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
             _validate_surface(surface)
         for payload_mode in config.payload_modes:
             validate_payload_mode(payload_mode)
+        if config.target_method and any(
+            config.target_method not in METHODS_BY_SURFACE.get(surface, [])
+            for surface in config.surfaces
+        ):
+            raise ConfigError(
+                f"target_method {config.target_method!r} is not available for every configured matrix surface"
+            )
     else:
         validate_provider(config.provider)
         validate_level(config.level)
+        if config.target_method and config.target_method not in METHODS_BY_SURFACE.get(config.surface, []):
+            raise ConfigError(
+                f"target_method {config.target_method!r} is not available for surface {config.surface!r}"
+            )
 
 
 def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) -> EngagementConfig:
@@ -476,7 +508,13 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
     Args:
         config_path: Value used by this function.
         cli_args: Value used by this function."""
-    yaml_cfg = resolve_env_references(load_yaml_config(config_path))
+    # Load secrets from the .env file colocated with config.yaml before model
+    # defaults and ${VAR} references are resolved. Existing process variables
+    # retain precedence so CI/shell overrides remain deterministic.
+    config_file = Path(config_path)
+    load_dotenv(dotenv_path=config_file.with_name(".env"), override=False)
+
+    yaml_cfg = resolve_env_references(load_yaml_config(config_file))
     env_cfg = load_env_overrides(prefix="TESIS_")
     cli_cfg = _extract_cli_overrides(cli_args)
 
@@ -507,28 +545,54 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
     surfaces = [str(s).strip().lower() for s in merged.get("surfaces", [])]
     payload_modes = [str(s).strip().lower() for s in merged.get("payload_modes", [])]
 
-    # Parse nested evasion config block if present
+    # ``guardrail_retry`` / ``guardrail_handling`` are canonical.  The older
+    # ``evasion`` forms are intentionally retained as a final compatibility
+    # fallback for existing configuration files and environment variables.
+    guardrail_cfg = merged.get("guardrail_retry") or {}
     evasion_cfg = merged.get("evasion") or {}
-    evasion_enabled = _coerce_bool(merged.get("evasion_enabled", evasion_cfg.get("enabled", False)))
-    evasion_mode = str(
-        merged.get("evasion_mode")
-        or evasion_cfg.get("mode")
+    if not isinstance(guardrail_cfg, Mapping):
+        raise ConfigError("guardrail_retry must be a mapping")
+    if not isinstance(evasion_cfg, Mapping):
+        raise ConfigError("evasion must be a mapping")
+
+    if "guardrail_retry_enabled" in merged:
+        enabled_value = merged["guardrail_retry_enabled"]
+    elif "enabled" in guardrail_cfg:
+        enabled_value = guardrail_cfg["enabled"]
+    elif "evasion_enabled" in merged:
+        enabled_value = merged["evasion_enabled"]
+    else:
+        enabled_value = evasion_cfg.get("enabled", False)
+    evasion_enabled = _coerce_bool(enabled_value)
+
+    mode_value = (
+        merged.get("guardrail_handling")
+        or guardrail_cfg.get("mode")
+        or merged.get("evasion_mode")
         or merged.get("evasion_strategy")
+        or evasion_cfg.get("mode")
         or evasion_cfg.get("strategy")
         or "reactive"
-    ).strip().lower()
-    evasion_max_retries = int(
-        merged.get("evasion_max_retries")
-        or evasion_cfg.get("max_retries")
+    )
+    evasion_mode = str(mode_value).strip().lower()
+    max_retries_value = (
+        merged.get("guardrail_retry_max")
+        or guardrail_cfg.get("max_retries")
+        or merged.get("evasion_max_retries")
         or merged.get("evasion_attempts_max")
+        or evasion_cfg.get("max_retries")
         or evasion_cfg.get("attempts_max")
         or 3
     )
-    evasion_cooldown_threshold = int(
-        merged.get("evasion_cooldown_threshold")
+    evasion_max_retries = int(max_retries_value)
+    cooldown_value = (
+        merged.get("guardrail_retry_cooldown_threshold")
+        or guardrail_cfg.get("cooldown_threshold")
+        or merged.get("evasion_cooldown_threshold")
         or evasion_cfg.get("cooldown_threshold")
         or 5
     )
+    evasion_cooldown_threshold = int(cooldown_value)
 
     config = EngagementConfig(
         target_url=str(merged.get("target_url", "")).strip(),

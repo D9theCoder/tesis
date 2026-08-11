@@ -35,20 +35,24 @@ def _extract_text(raw_content: Any) -> str:
     return str(raw_content)
 
 
-def _parse_candidates(raw_text: str, method: str) -> list[dict]:
-    """Supports parse candidates behavior for this module."""
+def _parse_candidates(raw_text: str, method: str) -> tuple[list[dict], str]:
+    """Parse generated candidates and retain a machine-auditable parse status."""
     try:
         payload = json.loads(raw_text)
     except json.JSONDecodeError:
         start = raw_text.find("{")
         end = raw_text.rfind("}")
         if start == -1 or end <= start:
-            return []
+            return [], "invalid_json"
         try:
             payload = json.loads(raw_text[start : end + 1])
         except json.JSONDecodeError:
-            return []
-    rows = payload.get("candidates", []) if isinstance(payload, dict) else []
+            return [], "invalid_json"
+    if not isinstance(payload, dict):
+        return [], "invalid_schema"
+    rows = payload.get("candidates")
+    if not isinstance(rows, list):
+        return [], "invalid_schema"
     candidates = []
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
@@ -74,7 +78,9 @@ def _parse_candidates(raw_text: str, method: str) -> list[dict]:
         candidate.setdefault("method", method)
         candidate.setdefault("stage", "exploit")
         candidates.append(candidate)
-    return candidates
+    if not rows:
+        return [], "empty_candidates"
+    return candidates, "ok" if candidates else "invalid_schema"
 
 
 def _build_llm(provider_name: str, model_config: dict[str, Any]):
@@ -117,10 +123,12 @@ def generate_llm_variants(
     except Exception as exc:
         logger.warning("Payload generation failed; falling back to static seeds: %s", exc)
         prompt_event["error"] = f"{type(exc).__name__}: {exc}"
+        prompt_event["fallback_reason"] = "llm_error"
         return [], prompt_event, []
 
     prompt_event["response"] = text
     if is_guardrail_refusal(text):
+        prompt_event["fallback_reason"] = "guardrail_refusal"
         return [], prompt_event, [
             make_guardrail_event(
                 provider=str(state.get("llm_provider", "gemini")),
@@ -128,7 +136,11 @@ def generate_llm_variants(
                 response=text,
             )
         ]
-    return _parse_candidates(text, method)[:budget], prompt_event, []
+    candidates, parse_status = _parse_candidates(text, method)
+    prompt_event["parse_status"] = parse_status
+    if parse_status != "ok":
+        prompt_event["fallback_reason"] = parse_status
+    return candidates[:budget], prompt_event, []
 
 
 def build_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
@@ -150,6 +162,8 @@ def build_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
     generated: list[dict] = []
     prompt_event: dict[str, Any] | None = None
     guardrails: list[dict] = []
+    invalid_json_events: list[dict] = []
+    fallback_events: list[dict] = []
     if mode in {"hybrid", "llm_mutation_only"}:
         generated, prompt_event, guardrails = generate_llm_variants(
             state=state,
@@ -159,12 +173,38 @@ def build_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
             budget=budget,
         )
 
-    candidates = generated if mode == "llm_mutation_only" else [*seed_candidates, *generated]
+    if prompt_event and not generated:
+        fallback_reason = str(prompt_event.get("fallback_reason") or "empty_candidates")
+        fallback_events.append({
+            "event": "payload_generation.static_seed_fallback",
+            "method": method,
+            "payload_mode": mode,
+            "reason": fallback_reason,
+        })
+        if fallback_reason == "invalid_json":
+            invalid_json_events.append({
+                "event": "payload_generation.invalid_json",
+                "method": method,
+                "provider": state.get("llm_provider", "gemini"),
+            })
+
+    # `llm_mutation_only` is a preferred generation mode, not permission to
+    # execute an unvalidated empty workflow.  A provider failure, refusal, or
+    # malformed response uses the documented deterministic static-seed fallback
+    # and records it in the run artifact.
+    candidates = (
+        generated or seed_candidates
+        if mode == "llm_mutation_only"
+        else [*seed_candidates, *generated]
+    )
     return {
         "payload_candidates": {method: candidates},
         "generated_payloads": {method: generated},
         "generation_prompts": [prompt_event] if prompt_event else [],
         "payload_guardrail_activations": guardrails,
+        "guardrail_activations": guardrails,
+        "invalid_json_events": invalid_json_events,
+        "fallback_events": fallback_events,
         "payload_provenance": {
             str(candidate["candidate_id"]): {
                 "source": candidate.get("source", "llm_generated"),

@@ -187,6 +187,58 @@ def _candidate_event_data(state: dict[str, Any], configured_budget: int) -> dict
     }
 
 
+def _llm_activity(events: list[dict[str, Any]]) -> dict[str, int]:
+    """Summarize provider callback activity captured by the production runner."""
+    counts = Counter(str(event.get("event_type") or "") for event in events)
+    return {
+        "started": counts["llm.started"],
+        "completed": counts["llm.completed"],
+        "failed": counts["llm.failed"],
+        "tokens": counts["llm.token"],
+    }
+
+
+def _orchestrator_failure(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the first model/runtime exception hidden by deterministic fallback."""
+    for event in events:
+        if event.get("event_type") != "orchestrator.fallback.applied":
+            continue
+        data = event.get("data")
+        if isinstance(data, dict) and data.get("error_type"):
+            return data
+    return None
+
+
+def _payload_generation_failure(final_state: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a provider-error payload fallback recorded by the graph."""
+    for event in final_state.get("fallback_events", []) or []:
+        if not isinstance(event, dict):
+            continue
+        if (
+            event.get("event") == "payload_generation.static_seed_fallback"
+            and str(event.get("reason", "")).strip().lower() == "llm_error"
+        ):
+            return event
+    return None
+
+
+def _terminal_incomplete_reason(final_state: dict[str, Any]) -> str | None:
+    """Return a normalized terminal failure reason, if one is present."""
+    result = str(final_state.get("task_result") or "").strip().upper()
+    reason = str(final_state.get("incomplete_reason") or "").strip()
+    if result == "SUCCESS":
+        return None
+    if result == "INCOMPLETE":
+        return reason or "UNSPECIFIED"
+    if result:
+        # Unknown terminal values (FAILED, ERROR, or malformed values) must
+        # never fall through to the success branch.
+        return reason or f"INVALID_TASK_RESULT:{result}"
+    if reason:
+        return reason
+    return None
+
+
 def run_single_engagement(
     *,
     target_url: str,
@@ -250,6 +302,13 @@ def run_single_engagement(
     execution_id = execution_id or new_execution_id()
     cancellation_token = cancellation_token or CancellationToken()
     runtime_events: list[dict[str, Any]] = []
+    # Automatic method selection is model-backed even for static payloads;
+    # explicit target_method + static_only is the only intentional zero-call
+    # ablation. Hybrid/mutation modes additionally require payload generation.
+    llm_required = (
+        target_method is None
+        or str(payload_mode).strip().lower() in {"hybrid", "llm_mutation_only"}
+    )
     known_secrets = [
         value for key, value in (model_config or {}).items()
         if "key" in key.lower() or "secret" in key.lower() or "token" in key.lower()
@@ -410,11 +469,166 @@ def run_single_engagement(
             except TypeError:
                 final_state = app.invoke(init_state)
         telemetry.extend_from_state_events(list(final_state.get("telemetry_events", [])))
+        llm_activity = _llm_activity(runtime_events)
+        hidden_failure = _orchestrator_failure(runtime_events)
+        terminal_incomplete_reason = _terminal_incomplete_reason(final_state)
+        payload_generation_failure = _payload_generation_failure(final_state)
+        if hidden_failure is not None:
+            # Deterministic fallback may preserve a partial execution artifact,
+            # but an experiment whose orchestrator model failed is not a
+            # successful experimental run. Mark it explicitly so the TUI and
+            # matrix aggregate cannot report a false positive.
+            final_state = dict(final_state)
+            final_state["task_result"] = "INCOMPLETE"
+            final_state["incomplete_reason"] = "LLM_RUNTIME_FAILURE"
+            error_type = str(hidden_failure.get("error_type") or "LLMError")
+            error = (
+                f"{error_type}: orchestrator model call failed; "
+                "deterministic fallback output was retained for audit only"
+            )
+            status = "error"
+            telemetry.emit(
+                iteration=int(final_state.get("iteration_count", 0) or 0),
+                node="orchestrator",
+                event_type="run.failed",
+                status="error",
+                payload={"error_type": error_type, "reason": "LLM_RUNTIME_FAILURE"},
+            )
+            emit(
+                "run.failed",
+                node="orchestrator",
+                message=error,
+                    data={"error_type": error_type, "reason": "LLM_RUNTIME_FAILURE"},
+            )
+        elif (
+            terminal_incomplete_reason is not None
+            and not llm_activity["failed"]
+            and payload_generation_failure is None
+        ):
+            # The graph completed normally, but its terminal state says the
+            # requested engagement did not achieve a result.  Do not turn a
+            # well-observed failed probe into a misleading successful run.
+            final_state = dict(final_state)
+            final_state["task_result"] = "INCOMPLETE"
+            final_state["incomplete_reason"] = terminal_incomplete_reason
+            error = f"Experiment incomplete: {terminal_incomplete_reason}"
+            status = "error"
+            telemetry.emit(
+                iteration=int(final_state.get("iteration_count", 0) or 0),
+                node="runner",
+                event_type="run.failed",
+                status="error",
+                payload={
+                    "task_result": "INCOMPLETE",
+                    "reason": terminal_incomplete_reason,
+                },
+            )
+            emit(
+                "run.failed",
+                node="runner",
+                message=error,
+                data={
+                    "task_result": "INCOMPLETE",
+                    "reason": terminal_incomplete_reason,
+                },
+            )
+        elif llm_activity["failed"]:
+            # A provider callback failure is authoritative even when a graph
+            # node catches it and continues with a deterministic fallback.
+            # Keeping such a run successful would make a partial experiment
+            # indistinguishable from a completed model-backed run.
+            final_state = dict(final_state)
+            final_state["task_result"] = "INCOMPLETE"
+            final_state["incomplete_reason"] = "LLM_RUNTIME_FAILURE"
+            error = "LLM runtime failure: at least one provider call failed"
+            status = "error"
+            telemetry.emit(
+                iteration=int(final_state.get("iteration_count", 0) or 0),
+                node="runner",
+                event_type="run.failed",
+                status="error",
+                payload={"error_type": "LLM_RUNTIME_FAILURE", "reason": "LLM_RUNTIME_FAILURE"},
+            )
+            emit(
+                "run.failed",
+                node="runner",
+                message=error,
+                data={"error_type": "LLM_RUNTIME_FAILURE", "reason": "LLM_RUNTIME_FAILURE"},
+            )
+        elif payload_generation_failure is not None:
+            # Payload generation currently retains static seeds after a
+            # provider exception.  That fallback is useful for auditability,
+            # but it is not a successful hybrid experiment because the model
+            # requested by the coordinate did not complete its call.
+            final_state = dict(final_state)
+            final_state["task_result"] = "INCOMPLETE"
+            final_state["incomplete_reason"] = "LLM_RUNTIME_FAILURE"
+            error = "LLM runtime failure: payload generation fell back to static seeds"
+            status = "error"
+            telemetry.emit(
+                iteration=int(final_state.get("iteration_count", 0) or 0),
+                node="payload_candidate_builder",
+                event_type="run.failed",
+                status="error",
+                payload={"error_type": "LLM_RUNTIME_FAILURE", "reason": "LLM_RUNTIME_FAILURE"},
+            )
+            emit(
+                "run.failed",
+                node="payload_candidate_builder",
+                message=error,
+                data={"error_type": "LLM_RUNTIME_FAILURE", "reason": "LLM_RUNTIME_FAILURE"},
+            )
+        elif llm_required and llm_activity["started"] == 0:
+            # Automatic selection and hybrid/mutation coordinates are
+            # model-backed by contract. A graph that reaches a terminal state
+            # without a callback is the original false-success failure mode.
+            final_state = dict(final_state)
+            final_state["task_result"] = "INCOMPLETE"
+            final_state["incomplete_reason"] = "LLM_NOT_CALLED"
+            error = "LLM call required by payload mode but no provider call was observed"
+            status = "error"
+            telemetry.emit(
+                iteration=int(final_state.get("iteration_count", 0) or 0),
+                node="runner",
+                event_type="run.failed",
+                status="error",
+                payload={"error_type": "LLM_NOT_CALLED", "reason": "LLM_NOT_CALLED"},
+            )
+            emit(
+                "run.failed",
+                node="runner",
+                message=error,
+                data={"error_type": "LLM_NOT_CALLED", "reason": "LLM_NOT_CALLED"},
+            )
+        elif llm_required and llm_activity["completed"] < llm_activity["started"]:
+            # Every observed provider start must have a matching completion.
+            # A missing completion is incomplete telemetry even when no
+            # explicit failure callback was emitted, and must not be shown as
+            # a successful model-backed run.
+            final_state = dict(final_state)
+            final_state["task_result"] = "INCOMPLETE"
+            final_state["incomplete_reason"] = "LLM_ACTIVITY_INCOMPLETE"
+            error = "LLM provider activity started but did not complete"
+            status = "error"
+            telemetry.emit(
+                iteration=int(final_state.get("iteration_count", 0) or 0),
+                node="runner",
+                event_type="run.failed",
+                status="error",
+                payload={"error_type": "LLM_ACTIVITY_INCOMPLETE", "reason": "LLM_ACTIVITY_INCOMPLETE"},
+            )
+            emit(
+                "run.failed",
+                node="runner",
+                message=error,
+                data={"error_type": "LLM_ACTIVITY_INCOMPLETE", "reason": "LLM_ACTIVITY_INCOMPLETE"},
+            )
+        else:
+            status = "success"
+            error = None
         report = build_score_report(final_state).to_dict()
         if reporter:
             reporter.finalize(report)
-        status = "success"
-        error = None
     except CancellationRequested:
         final_state = final_state or init_state or new_default_state()
         report = build_score_report(final_state).to_dict()
@@ -438,6 +652,8 @@ def run_single_engagement(
             "evasion_mode": evasion_mode,
             "evasion_max_retries": evasion_max_retries,
             "evasion_cooldown_threshold": evasion_cooldown_threshold,
+            "task_result": "INCOMPLETE",
+            "incomplete_reason": "RUNNER_EXCEPTION",
         })
         report = build_score_report(final_state).to_dict()
         status = "error"
@@ -448,6 +664,12 @@ def run_single_engagement(
             event_type="run.failed",
             status="error",
             payload={"error_type": type(exc).__name__},
+        )
+        emit(
+            "run.failed",
+            node="runner",
+            message=f"{type(exc).__name__}: {exc}",
+            data={"error_type": type(exc).__name__},
         )
 
     if reporter:
@@ -484,9 +706,13 @@ def run_single_engagement(
         if isinstance(summary, dict):
             summary["diagnostics"] = diagnostics
 
+    base_dir = Path(output_dir) if output_dir else Path("results") / "runs"
+    # The user-facing sidecar must contain the complete runtime trace,
+    # including provider callbacks. The previous telemetry-only sidecar
+    # omitted llm.started/completed/failed and made real calls impossible
+    # to audit even though they were present in the primary artifact.
+    events = list(runtime_events)
     if enriched_reporting:
-        base_dir = Path(output_dir) if output_dir else Path("results") / "runs"
-        events = telemetry.as_dict_list()
         rich_payload = {
             "schema_version": "stage7.rich.v1",
             "run_id": run_id,
@@ -496,39 +722,58 @@ def run_single_engagement(
                 {
                     "event_type": event.get("event_type"),
                     "hash": stable_sha256(
-                        json.dumps(event.get("payload", {}), sort_keys=True, separators=(",", ":"))
+                        json.dumps(event.get("data", {}), sort_keys=True, separators=(",", ":"))
                     ),
                 }
                 for event in events
                 if isinstance(event, dict)
-                and str(event.get("event_type", "")).startswith("orchestrator")
+                and str(event.get("event_type", "")).startswith(("orchestrator", "llm."))
             ],
             "events_count": len(events),
         }
         try:
             write_events_jsonl(base_dir / f"{execution_id}.events.jsonl", events)
             write_rich_report(base_dir / f"{execution_id}.rich.json", rich_payload)
-            if status == "error":
-                write_failure_artifact(
-                    output_dir=base_dir,
-                    run_id=execution_id,
-                    error=error or "unknown_error",
-                    final_state={
-                        "iteration_count": final_state.get("iteration_count", 0),
-                        "confirmed_vulns": list(final_state.get("confirmed_vulns", [])),
-                        "achieved_outcomes": list(final_state.get("achieved_outcomes", [])),
-                        "evasion_enabled": final_state.get("evasion_enabled", False),
-                        "evasion_mode": final_state.get("evasion_mode", "reactive"),
-                        "evasion_max_retries": final_state.get("evasion_max_retries", 3),
-                        "evasion_cooldown_threshold": final_state.get("evasion_cooldown_threshold", 5),
-                    },
-                    recent_events=events[-20:],
-                )
         except Exception as exc:
             # Sidecar generation must never break primary artifact generation.
             summary = report.get("summary") if isinstance(report, dict) else None
             if isinstance(summary, dict):
                 summary["sidecar_warning"] = f"{type(exc).__name__}: {exc}"
+
+    # Failure evidence is useful even when rich reporting is disabled. Keep
+    # this sidecar independent so a TUI/default run cannot lose the exact
+    # terminal reason and provider activity that caused an error.
+    if status == "error" and (output_dir or enriched_reporting):
+        try:
+            write_failure_artifact(
+                output_dir=base_dir,
+                run_id=execution_id,
+                error=error or "unknown_error",
+                final_state={
+                    "iteration_count": final_state.get("iteration_count", 0),
+                    "task_result": final_state.get("task_result"),
+                    "incomplete_reason": final_state.get("incomplete_reason"),
+                    "provider": llm_provider,
+                    "model": (model_config or {}).get("model_name"),
+                    "payload_mode": payload_mode,
+                    "llm_required": llm_required,
+                    "llm_activity": _llm_activity(events),
+                    "confirmed_vulns": list(final_state.get("confirmed_vulns", [])),
+                    "achieved_outcomes": list(final_state.get("achieved_outcomes", [])),
+                    "fallback_events": list(final_state.get("fallback_events", [])),
+                    "invalid_json_events": list(final_state.get("invalid_json_events", [])),
+                    "containment_events": list(final_state.get("containment_events", [])),
+                    "evasion_enabled": final_state.get("evasion_enabled", False),
+                    "evasion_mode": final_state.get("evasion_mode", "reactive"),
+                    "evasion_max_retries": final_state.get("evasion_max_retries", 3),
+                    "evasion_cooldown_threshold": final_state.get("evasion_cooldown_threshold", 5),
+                },
+                recent_events=events[-20:],
+            )
+        except Exception as exc:
+            summary = report.get("summary") if isinstance(report, dict) else None
+            if isinstance(summary, dict):
+                summary["failure_sidecar_warning"] = f"{type(exc).__name__}: {exc}"
 
     summary = report.get("summary", {}) if isinstance(report, dict) else {}
     method_scores = dict(final_state.get("method_scores", {}))
@@ -539,6 +784,7 @@ def run_single_engagement(
     method_score = method_scores.get(selected_method, 0)
     exploitation_score = exploitation_scores.get(selected_method, 0)
     chain_score = chain_scores.get(selected_method, 0)
+    llm_activity = _llm_activity(runtime_events)
 
     artifact = {
         "schema_version": "tui.v1",
@@ -552,6 +798,10 @@ def run_single_engagement(
         "surface": surface,
         "security_level": security_level,
         "payload_mode": payload_mode,
+        "llm_required": llm_required,
+        "llm_activity": llm_activity,
+        "task_result": final_state.get("task_result"),
+        "incomplete_reason": final_state.get("incomplete_reason"),
         "selected_method": selected_method,
         "viable_methods": list(final_state.get("viable_methods", [])),
         "akg_path": list(final_state.get("akg_path", [])),
@@ -576,6 +826,7 @@ def run_single_engagement(
             "security_level": security_level,
             "surface": surface,
             "payload_mode": payload_mode,
+            "llm_required": llm_required,
             "max_iterations": max_iterations,
             "candidate_budget": candidate_budget,
             "repeat_index": repeat_index,
@@ -593,6 +844,10 @@ def run_single_engagement(
         },
         "final_state": {
             "iteration_count": final_state.get("iteration_count", 0),
+            "task_result": final_state.get("task_result"),
+            "incomplete_reason": final_state.get("incomplete_reason"),
+            "llm_activity": llm_activity,
+            "llm_required": llm_required,
             "confirmed_vulns": list(final_state.get("confirmed_vulns", [])),
             "achieved_outcomes": list(final_state.get("achieved_outcomes", [])),
             "guardrail_activations": list(final_state.get("guardrail_activations", [])),

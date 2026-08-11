@@ -163,7 +163,15 @@ class PayloadLibrary:
         rows.extend(("bypass", payload) for payload in payload_set.bypass.get(normalized_level, []))
 
         candidates: list[dict] = []
-        for index, (stage, payload) in enumerate(rows):
+        seen_payloads: set[str] = set()
+        for stage, payload in rows:
+            # Some DVWA levels intentionally reuse an exploit seed as a
+            # bypass seed. Deduplicate at the source so the validator does
+            # not report a handwritten candidate as a duplicate rejection.
+            if payload in seen_payloads:
+                continue
+            seen_payloads.add(payload)
+            index = len(candidates)
             seed_id = f"{method}_{normalized_level}_{stage}_{index}"
             candidates.append({
                 "candidate_id": seed_id,
