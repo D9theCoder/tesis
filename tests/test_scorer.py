@@ -96,3 +96,23 @@ def test_build_score_report_stage6_metrics_are_computed():
     assert report.summary.method_selection_accuracy == 0.0
     assert report.summary.adaptation_rate > 0.0
     assert report.summary.mean_attempts_to_success > 0.0
+
+
+def test_scorer_preserves_all_dimensions_and_weighted_composite():
+    state = new_default_state()
+    state.update({
+        "selected_method": "sqli_union",
+        "method_scores": {"sqli_union": 3},
+        "exploitation_scores": {"sqli_union": 3},
+        "chain_scores": {"sqli_union": 4},
+        "payload_candidates": {
+            "sqli_union": [{"candidate_id": "candidate-1", "payload_or_logic": "1 UNION SELECT"}],
+        },
+        "payload_scores": {"candidate-1": 3},
+    })
+
+    update = scorer(state)
+
+    assert update["output_scores"]["sqli_union"] == 4
+    assert update["composite_scores"]["sqli_union"] == 3.3
+    assert update["summary"]["output_scores"]["sqli_union"] == 4

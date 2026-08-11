@@ -34,6 +34,9 @@ class EngagementConfig:
     level: str
     surface: str = "sqli"
     payload_mode: str = "static_only"
+    experiment_condition: str = "linear_hybrid"
+    target_method: str | None = None
+    log_verbosity: str = "info"
     candidate_budget: int = 5
     iterations: int = 30
     repeats: int = 1

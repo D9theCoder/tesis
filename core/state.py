@@ -86,6 +86,8 @@ class ExploitationState(TypedDict):
     llm_provider: str
     current_surface: str  # "sqli" | "access_control" | "brute_force"
     payload_mode: str  # "static_only" | "hybrid" | "llm_mutation_only"
+    experiment_condition: str  # "linear_hybrid" | "akg_guided_hybrid"
+    target_method: str | None
 
     # Discovered attack surface
     endpoints: list[dict]
@@ -115,6 +117,8 @@ class ExploitationState(TypedDict):
     method_scores: Annotated[dict[str, int], _merge_scores]
     exploitation_scores: Annotated[dict[str, int], _merge_scores]
     chain_scores: Annotated[dict[str, int], _merge_scores]
+    output_scores: Annotated[dict[str, int], _merge_scores]
+    composite_scores: Annotated[dict[str, float], _merge_scores]
 
     # Chain tracking
     current_chain: list[str]
@@ -125,6 +129,12 @@ class ExploitationState(TypedDict):
 
     # Guardrail monitoring (accumulate)
     guardrail_activations: Annotated[list[dict], add]
+    invalid_json_events: Annotated[list[dict], add]
+    fallback_events: Annotated[list[dict], add]
+    containment_events: Annotated[list[dict], add]
+    response_evidence: Annotated[list[dict], add]
+    timing_evidence: Annotated[list[dict], add]
+    verifier_decision: NotRequired[dict[str, Any] | str | None]
 
     # Evasion state persisted for payload-library bypass tracking
     blocked_patterns: Annotated[list[str], add]
@@ -156,6 +166,7 @@ class ExploitationState(TypedDict):
     # Control flow (overwrite)
     next_agent: str
     selected_method: str | None
+    viable_methods: list[str]
     iteration_count: int
     max_iterations: int
     task_result: str | None  # None | "SUCCESS" | "INCOMPLETE"
@@ -169,6 +180,8 @@ def _default_state_template() -> dict[str, Any]:
         "llm_provider": "gemini",
         "current_surface": "sqli",
         "payload_mode": "static_only",
+        "experiment_condition": "linear_hybrid",
+        "target_method": None,
         "endpoints": [],
         "input_vectors": [],
         "observations": {},
@@ -188,10 +201,18 @@ def _default_state_template() -> dict[str, Any]:
         "method_scores": {},
         "exploitation_scores": {},
         "chain_scores": {},
+        "output_scores": {},
+        "composite_scores": {},
         "current_chain": [],
         "chain_history": [],
         "messages": [],
         "guardrail_activations": [],
+        "invalid_json_events": [],
+        "fallback_events": [],
+        "containment_events": [],
+        "response_evidence": [],
+        "timing_evidence": [],
+        "verifier_decision": None,
         "blocked_patterns": [],
         "successful_bypasses": [],
         "consecutive_clean_responses": 0,
@@ -212,6 +233,7 @@ def _default_state_template() -> dict[str, Any]:
         "fallback_depth": 0,
         "next_agent": "recon",
         "selected_method": None,
+        "viable_methods": [],
         "iteration_count": 0,
         "max_iterations": 30,
         "task_result": None,

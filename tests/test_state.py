@@ -92,6 +92,17 @@ class TestExploitationStateSchema:
         "method_scores",
         "exploitation_scores",
         "chain_scores",
+        "experiment_condition",
+        "target_method",
+        "viable_methods",
+        "invalid_json_events",
+        "fallback_events",
+        "containment_events",
+        "response_evidence",
+        "timing_evidence",
+        "verifier_decision",
+        "output_scores",
+        "composite_scores",
     ]
 
     def test_all_fields_present(self):

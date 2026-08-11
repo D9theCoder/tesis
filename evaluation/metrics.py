@@ -201,4 +201,5 @@ def aggregate_runs(run_artifacts: list[dict]) -> dict:
         "successful_runs": len(completed),
         "error_runs": sum(1 for r in run_artifacts if r.get("status") == "error"),
         "skipped_runs": sum(1 for r in run_artifacts if r.get("status") == "skipped"),
+        "cancelled_runs": sum(1 for r in run_artifacts if r.get("status") == "cancelled"),
     }

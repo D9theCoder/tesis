@@ -97,8 +97,13 @@ def _fallback_next_agent(
     failure_agents = set(state.get("failure_agents", []))
     observations = state.get("observations", {})
 
+    condition = str(state.get("experiment_condition", "linear_hybrid"))
     kg = AttackKnowledgeGraph()
-    viable = kg.get_viable_methods(current_surface, observations)
+    viable = (
+        kg.get_viable_methods(current_surface, observations)
+        if condition == "akg_guided_hybrid"
+        else []
+    )
 
     # Prefer unattempted viable methods that have not previously failed
     for method in viable:
@@ -193,6 +198,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
     if iteration_count >= max_iterations:
         return {
             "next_agent": "scorer",
+            "viable_methods": list(state.get("viable_methods", [])),
             "iteration_count": iteration_count + 1,
             "telemetry_events": [{**telemetry_base, "event": "orchestrator.stop", "reason": "budget_exhausted"}],
         }
@@ -200,18 +206,59 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
     if (set(confirmed_vulns) | set(achieved_outcomes)) & CRITICAL_OUTCOMES:
         return {
             "next_agent": "scorer",
+            "viable_methods": list(state.get("viable_methods", [])),
             "iteration_count": iteration_count + 1,
             "telemetry_events": [{**telemetry_base, "event": "orchestrator.stop", "reason": "critical_outcome"}],
         }
 
     kg = AttackKnowledgeGraph()
     viable_methods = kg.get_viable_methods(current_surface, observations)
+    experiment_condition = str(state.get("experiment_condition", "linear_hybrid"))
+    selection_methods = (
+        viable_methods
+        if experiment_condition == "akg_guided_hybrid"
+        else list(METHODS_BY_SURFACE.get(current_surface, []))
+    )
 
     fallback_agent = _fallback_next_agent(state)
 
+    target_method = state.get("target_method")
+    if target_method:
+        if target_method not in METHODS_BY_SURFACE.get(current_surface, []):
+            return {
+                "next_agent": "scorer",
+                "selected_method": None,
+                "viable_methods": viable_methods,
+                "iteration_count": iteration_count + 1,
+                "fallback_events": [{
+                    "event": "target_method.infeasible",
+                    "target_method": target_method,
+                    "surface": current_surface,
+                }],
+                "telemetry_events": [{
+                    **telemetry_base,
+                    "event": "orchestrator.target_method.infeasible",
+                    "status": "fallback",
+                    "payload": {"target_method": target_method, "surface": current_surface},
+                }],
+            }
+        return {
+            "next_agent": "payload_candidate_builder",
+            "selected_method": target_method,
+            "viable_methods": viable_methods,
+            "method_scores": {target_method: 3 if target_method in viable_methods else 1},
+            "iteration_count": iteration_count + 1,
+            "telemetry_events": [{
+                **telemetry_base,
+                "event": "orchestrator.target_method.selected",
+                "status": "ok",
+                "payload": {"target_method": target_method, "viable": target_method in viable_methods},
+            }],
+        }
+
     base_prompt = build_orchestrator_prompt(
         current_surface=current_surface,
-        viable_methods=viable_methods,
+        viable_methods=selection_methods,
         observations=observations,
         attempted_agents=attempted_agents,
         blocked_agents=blocked_agents,
@@ -328,6 +375,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             return {
                 "next_agent": "payload_candidate_builder" if fallback_agent != "scorer" else "scorer",
                 "selected_method": fallback_agent if fallback_agent != "scorer" else None,
+                "viable_methods": viable_methods,
                 "iteration_count": iteration_count + 1,
                 "guardrail_activations": [make_guardrail_event(
                     provider=state.get("llm_provider", "gemini"),
@@ -362,6 +410,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         return {
             "next_agent": "payload_candidate_builder" if selected_method else next_agent,
             "selected_method": selected_method,
+            "viable_methods": viable_methods,
             "method_scores": {selected_method: method_score} if selected_method else {},
             "iteration_count": iteration_count + 1,
             "telemetry_events": telemetry_events,
@@ -376,6 +425,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         return {
             "next_agent": "payload_candidate_builder" if fallback_agent != "scorer" else "scorer",
             "selected_method": fallback_agent if fallback_agent != "scorer" else None,
+            "viable_methods": viable_methods,
             "iteration_count": iteration_count + 1,
             "telemetry_events": [
                 *telemetry_events,

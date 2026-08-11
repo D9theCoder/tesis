@@ -1,5 +1,30 @@
 # AGENTS.md
 
+# Running the Framework
+
+Run these commands from the repository root. `uv sync` creates or updates the
+project environment from `pyproject.toml` and `uv.lock`:
+
+```bash
+uv sync
+source .venv/bin/activate
+python -m tesis run --dry-run --config config.yaml
+python -m tesis run --config config.yaml
+```
+
+If activation points to an old repository path after the checkout was moved,
+open a fresh shell (or run `deactivate`) and recreate the environment before
+activating it:
+
+```bash
+mv .venv .venv-relocated-backup
+uv sync
+source .venv/bin/activate
+```
+
+The framework entry point is `python -m tesis run`. `main.py` is a separate
+sample LLM-query runner and does not load `config.yaml`.
+
 # AI Implementation Guide
 
 This repository implements an LLM-assisted autonomous penetration testing framework for authorized DVWA sandbox testing.

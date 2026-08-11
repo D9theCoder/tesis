@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import asdict
+from io import StringIO
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
-import yaml
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 from core.state import SECURITY_LEVELS, SURFACES
 from llm.provider import SUPPORTED_PROVIDERS
 from tesis.model_config import EngagementConfig, ModelConfig, EVASION_MODES, PAYLOAD_MODES
+from tesis.config_fields import FORM_MATRIX, FORM_SINGLE, validate_config as validate_field_schema
 
 
 class ConfigError(ValueError):
@@ -23,6 +27,13 @@ _VALID_EVASION_MODES: frozenset[str] = EVASION_MODES
 _VALID_PAYLOAD_MODES: frozenset[str] = PAYLOAD_MODES
 
 _ENV_REF_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)}")
+
+
+def _round_trip_yaml() -> YAML:
+    yaml = YAML(typ="rt")
+    yaml.preserve_quotes = True
+    yaml.indent(mapping=2, sequence=4, offset=2)
+    return yaml
 
 
 def mask_secret(value: str, *, unmasked_tail: int = 4) -> str:
@@ -46,7 +57,10 @@ def load_yaml_config(path: str | Path) -> dict[str, Any]:
     config_path = Path(path)
     if not config_path.exists():
         return {}
-    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    try:
+        raw = _round_trip_yaml().load(config_path.read_text(encoding="utf-8"))
+    except (YAMLError, OSError) as exc:
+        raise ConfigError(f"Invalid YAML in {config_path}: {exc}") from exc
     if raw is None:
         return {}
     if not isinstance(raw, dict):
@@ -62,8 +76,30 @@ def save_yaml_config(path: str | Path, payload: Mapping[str, Any]) -> Path:
         payload: Value used by this function."""
     config_path = Path(path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(yaml.safe_dump(dict(payload), sort_keys=False), encoding="utf-8")
+    stream = StringIO()
+    _round_trip_yaml().dump(payload, stream)
+    config_path.write_text(stream.getvalue(), encoding="utf-8")
     return config_path
+
+
+def parse_yaml_config(raw_text: str) -> dict[str, Any]:
+    """Parse editable YAML without discarding comments or mapping order."""
+    try:
+        raw = _round_trip_yaml().load(raw_text)
+    except YAMLError as exc:
+        raise ConfigError(f"Invalid YAML: {exc}") from exc
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ConfigError("Config document must contain a YAML mapping")
+    return raw
+
+
+def dump_yaml_config(payload: Mapping[str, Any]) -> str:
+    """Serialize a round-trip YAML document for the advanced settings editor."""
+    stream = StringIO()
+    _round_trip_yaml().dump(payload, stream)
+    return stream.getvalue()
 
 
 def _resolve_env_refs(value: Any) -> Any:
@@ -227,9 +263,13 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         "level": "level",
         "surface": "surface",
         "payload_mode": "payload_mode",
+        "experiment_condition": "experiment_condition",
+        "target_method": "target_method",
+        "log_verbosity": "log_verbosity",
         "candidate_budget": "candidate_budget",
         "iterations": "iterations",
         "repeats": "repeats",
+        "matrix": "matrix",
         "output_dir": "output_dir",
         "providers": "providers",
         "levels": "levels",
@@ -496,6 +536,9 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         level=level,
         surface=surface,
         payload_mode=payload_mode,
+        experiment_condition=str(merged.get("experiment_condition") or "linear_hybrid").strip().lower(),
+        target_method=(str(merged.get("target_method")).strip() if merged.get("target_method") else None),
+        log_verbosity=str(merged.get("log_verbosity") or "info").strip().lower(),
         candidate_budget=candidate_budget,
         iterations=int(merged.get("iterations") or merged.get("max_iterations") or merged.get("default_max_iterations") or 30),
         repeats=int(merged.get("repeats", 1)),
@@ -520,4 +563,9 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
     )
 
     _validate_engagement_config(config)
+    form_name = FORM_MATRIX if config.matrix else FORM_SINGLE
+    field_errors = validate_field_schema(asdict(config), form=form_name)
+    if field_errors:
+        details = "; ".join(f"{path}: {message}" for path, message in sorted(field_errors.items()))
+        raise ConfigError(f"Invalid configuration fields: {details}")
     return config

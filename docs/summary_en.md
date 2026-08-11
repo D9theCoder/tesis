@@ -32,10 +32,35 @@ Credential stuffing is also outside the scope because DVWA does not provide a br
 | HTTP client     | httpx 0.28.1                                     | Request and session handling to DVWA                                  |
 | HTML parser     | BeautifulSoup4 4.14.3                            | Parsing forms, parameters, and CSRF token                             |
 | State schema    | TypedDict plus LangGraph reducers                | State sharing across nodes                                            |
-| Configuration   | YAML                                             | Target URL, provider, budget, security level, surface                 |
+| Interface       | Textual 8.x                                      | Keyboard-first setup, live dashboard, validation, and result review   |
+| Configuration   | ruamel.yaml round-trip YAML                      | Typed forms plus comment- and unknown-key-preserving advanced editing |
 | Unit test       | pytest 9.0.3                                     | Framework component validation                                        |
 | Statistics      | SciPy 1.17.1                                     | Mann-Whitney U test if needed                                         |
 | Output          | JSON, Markdown                                   | Run artifacts and experiment reports                                  |
+
+### 2.1 Interactive experiment harness
+
+`python -m tesis run` is the sole entry point and requires an interactive
+terminal. The TUI owns single-run and matrix setup, configuration validation,
+settings, framework validation, live execution, recent results, exports, and
+framework information. The repository-root `config.yaml` is the sole
+configuration document; no headless CLI execution path remains.
+
+Core runtime code is presentation-independent. Runners optionally accept a
+`RuntimeEventSink` and `CancellationToken`, attach normalized LangChain model
+callbacks, and emit lifecycle, graph, payload, verification, safety, scoring,
+failure, and matrix-progress events. Textual consumes these events from a
+daemon thread through a bounded, coalescing UI queue. Trace content is
+centrally redacted and live rendering is bounded, while artifacts retain the
+complete execution log. Cancellation is cooperative at safe graph/matrix
+boundaries and persists the latest state with status `cancelled`; a second
+cancel request closes the TUI without waiting for a blocked operation.
+
+Each physical execution receives a unique `execution_id`; the logical
+experiment coordinate remains `run_id`. A secret-free `config_fingerprint`
+identifies equivalent effective experiment setups while excluding execution
+identity, timestamps, repeat index, and output paths. Historical artifacts are
+read without migration or rewriting.
 
 ## 3. Runtime Architecture
 
@@ -374,6 +399,14 @@ Srun = 0.20 Smethod + 0.20 Spayload + 0.30 Sexploit + 0.10 Schain + 0.20 Soutput
 | `Sexploit` |   0.30 | Exploitation outcome                      |
 | `Schain`   |   0.10 | Chain outcome                             |
 | `Soutput`  |   0.20 | LLM output quality and guardrail handling |
+
+`Soutput` is derived from auditable runtime events for the selected method: 4
+when output completes without invalid JSON, guardrail, fallback, or containment
+events; 3 when deterministic fallback is used; 2 when invalid JSON or a
+guardrail activation occurs; and 0 when containment is violated. The run
+composite uses the selected method score, the best executed accepted-candidate
+payload score for that method, exploitation and chain scores for that method,
+and this output score. Every component remains stored separately.
 
 ### 7.2 Metric List
 

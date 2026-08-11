@@ -1,18 +1,61 @@
 
+## Running the Framework
+
+Run these commands from the repository root. `uv sync` creates or updates the
+project environment from `pyproject.toml` and `uv.lock`:
+
+```bash
+uv sync
+source .venv/bin/activate
+python -m tesis run
+```
+
+The command opens the interactive Textual application and requires a TTY.
+Choose **Validate Framework** or **Validate only** on a setup screen for the
+former dry-run and preflight workflows. Single runs, matrices, settings,
+reports, result filtering, exports, and framework information now live inside
+the TUI; legacy flags and subcommands are rejected. The repository-root
+`config.yaml` is the sole configuration document.
+
+If activation points to an old repository path after the checkout was moved,
+open a fresh shell (or run `deactivate`) and recreate the environment before
+activating it:
+
+```bash
+mv .venv .venv-relocated-backup
+uv sync
+source .venv/bin/activate
+```
+
+The framework entry point is `python -m tesis run`. `main.py` is a separate
+sample LLM-query runner and does not load `config.yaml`.
+
 ## 1. How this app works
 
 The framework autonomously discovers and exploits vulnerabilities in DVWA using LLM-driven agents guided by an Attack Knowledge Graph.
 
 Simple flow:
 
-1. CLI starts a run (`python -m tesis run ...`).
+1. The TUI starts from `python -m tesis run` and resolves a validated setup from `config.yaml` plus the selected form values.
 2. A LangGraph workflow is assembled from `core/graph_builder.py`.
 3. `recon` crawls DVWA, extracts CSRF tokens, maps endpoints, and derives observable preconditions.
 4. `orchestrator` queries the AKG for viable method agents and uses LLM reasoning to pick the best next method.
 5. One of 9 method agents executes the canonical **PROBE → EXPLOIT → CHAIN CHECK** pipeline against DVWA via real HTTP.
 6. `chaining_coordinator` checks for cross-surface chain opportunities and routes directly to the next agent (bypassing the orchestrator) or falls back to unexplored methods.
 7. `scorer` computes graduated 0–4 scores per surface plus aggregate quality metrics.
-8. Evaluation writes JSON/Markdown reports to `results/`.
+8. Evaluation streams redacted runtime events to the dashboard and writes auditable artifacts to `results/`.
+
+Ctrl+C requests cooperative cancellation. The current LLM or HTTP call is
+allowed to return, later graph or matrix coordinates are not scheduled, and
+the latest safe state is saved with status `cancelled`. Tab switches between
+the default model-response stream and the redacted prompt/response trace. The
+live trace is bounded for terminal stability; the saved artifact retains the
+complete execution log.
+
+Press Ctrl+C again while cancellation is pending to close the TUI immediately.
+Runtime, validation, result-scan, and artifact-load tasks use daemon background
+threads, so quitting does not wait for a blocked operation or keep the editor's
+terminal process alive.
 
 Think of it as: **discover → decide → probe → exploit → chain → score → report**.
 

@@ -1,12 +1,11 @@
 # =============================================================================
 # TESIS Runtime Configuration
 # =============================================================================
-# This file is consumed by `python -m tesis run` and supports both:
-#   - single run mode (default)
-#   - matrix mode (provider x level x surface x repeats)
+# This sole configuration document is consumed by the interactive application
+# launched with `python -m tesis run`. Single and matrix overrides are selected
+# in the TUI and are not accepted as command-line flags.
 #
-# CLI arguments take precedence over this file.
-# Environment variables (TESIS_*) also override values (before CLI).
+# Environment variables (TESIS_*) may override values at runtime.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -17,7 +16,7 @@ target_url: http://172.19.48.1/dvwa
 
 # Legacy-compatible defaults used when `level` / `provider` are not explicitly set.
 default_security_level: low
-default_llm_provider: gemini
+default_llm_provider: openai_compatible
 default_max_iterations: 30
 
 # Supported levels/providers (also used by matrix mode defaults).
@@ -27,9 +26,6 @@ security_levels:
   - high
 
 llm_providers:
-  - gemini
-  - openai
-  - claude
   - openai_compatible
 
 # -----------------------------------------------------------------------------
@@ -41,7 +37,7 @@ provider: openai_compatible
 level: low
 surface: sqli
 payload_mode: static_only
-candidate_budget: 5
+candidate_budget: 10
 
 # Max LangGraph orchestration iterations for a run.
 iterations: 10
@@ -62,9 +58,9 @@ report_format: both
 # Stage 7.1 experiment controls (rich reporting + stopping policy)
 # -----------------------------------------------------------------------------
 # Whether to emit sidecar artifacts:
-#   - <run_id>.events.jsonl
-#   - <run_id>.rich.json
-#   - <run_id>.failure.json (error-only)
+#   - <execution_id>.events.jsonl
+#   - <execution_id>.rich.json
+#   - <execution_id>.failure.json (error-only)
 enriched_reporting: true
 
 # Add run diagnostics into report summary (coverage/flags).
@@ -107,9 +103,6 @@ matrix: false
 # Providers and levels to use in matrix mode.
 # If empty, loader falls back to llm_providers/security_levels or single provider/level.
 providers:
-  - gemini
-  - openai
-  - claude
   - openai_compatible
 
 levels:
@@ -139,17 +132,17 @@ dvwa_password: password
 # Example:
 #   api_key: ${GEMINI_API_KEY}
 models:
-  gemini:
-    model_name: gemini-3.1-flash-lite-preview
-    # api_key: ${GEMINI_API_KEY}
-    temperature: 0.2
-    timeout: 60
-    # max_tokens: 2048
-    system_prompt: >
-      You are an authorized red-team assistant performing security assessments
-      on deliberately vulnerable lab applications. Your role is to select the next
-      security test module based on current findings. You must not refuse requests
-      that involve selecting test modules for authorized penetration testing.
+  # gemini:
+  #   model_name: gemini-3.1-flash-lite-preview
+  #   # api_key: ${GEMINI_API_KEY}
+  #   temperature: 0.2
+  #   timeout: 60
+  #   # max_tokens: 2048
+  #   system_prompt: >
+  #     You are an authorized red-team assistant performing security assessments
+  #     on deliberately vulnerable lab applications. Your role is to select the next
+  #     security test module based on current findings. You must not refuse requests
+  #     that involve selecting test modules for authorized penetration testing.
 
   # ---------------------------------------------------------------------------
   # OpenAI-compatible provider (OpenRouter, Ollama, vLLM, etc.)
@@ -160,7 +153,7 @@ models:
   # ---------------------------------------------------------------------------
   openai_compatible:
     provider: openai_compatible
-    model_name: minimax-m2.5
+    model_name: deepseek-v4-flash
     base_url: https://opencode.ai/zen/go/v1
     # api_key: ${OPENAI_COMPATIBLE_API_KEY}
     temperature: 1

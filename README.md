@@ -1,55 +1,73 @@
-# tesis
+# TESIS
 
-LLM-Based Autonomous Web Penetration Testing Framework (DVWA target) with a Stage 7 CLI interface for reproducible runs, config-driven execution, and report rendering.
+LLM-assisted autonomous penetration-testing experiments for an authorized DVWA sandbox. The framework is restricted to SQL injection, access control, and brute force, with a static payload-aware Attack Knowledge Graph and fixed method agents.
 
-## Quick start
+## Start the application
 
-- Configure your environment variables in `.env`.
-- Ensure DVWA target is reachable.
+From the repository root:
 
-## CLI usage
+```bash
+uv sync
+source .venv/bin/activate
+python -m tesis run
+```
 
-### Run a single engagement
+`python -m tesis run` is the only command-line contract. It requires an interactive terminal and opens a full-screen Textual application. Legacy subcommands and flags—including `--config`, `--dry-run`, matrix flags, reporting flags, `info`, `config`, and `validate`—have moved into the TUI and are intentionally rejected.
 
-`python -m tesis run --target http://localhost/dvwa --provider gemini --level low --iterations 30`
+The repository-root `config.yaml` is the sole configuration document. Prefer environment references such as `${OPENAI_API_KEY}` for secrets.
 
-### Run matrix mode
+## Screens and keys
 
-`python -m tesis run --matrix --providers gemini --levels low medium high --repeats 2 --output-dir ./results`
+The main menu provides:
 
-### Validate config only
+1. Run Single Experiment
+2. Run Experiment Matrix
+3. Settings
+4. Recent Results
+5. Validate Framework
+6. Framework Information
+7. Exit
 
-`python -m tesis run --dry-run --config ./config.yaml`
+Use arrow keys and Enter to navigate, Esc to return, `q` to exit from the menu, Ctrl+C to request graceful cancellation, and Tab to switch between the response stream and redacted LLM trace. Press Ctrl+C again to close immediately if an active provider or HTTP call is stuck; background tasks do not hold the terminal process open.
 
-### Framework metadata
+Single and matrix setup screens expose target, provider/model, security level, surface, target method, experiment condition, payload mode and budgets, stop policy, diagnostics, reporting, guardrail handling, output location, and logging controls. “Validate only” replaces the old dry-run behavior.
 
-`python -m tesis info`
+Settings offers typed controls and an advanced round-trip YAML editor. YAML ordering, comments, nested model blocks, and unknown keys are retained. Blank secret inputs preserve their existing values; the UI warns before saving a literal secret.
 
-### Configure models interactively
+## Runtime dashboard
 
-`python -m tesis config --interactive`
+Runs execute on a daemon background thread. The dashboard shows graph stages, streamed model output, prompt/response trace, method and AKG telemetry, candidate validation, active failures, and matrix progress. Live logs and trace rendering are bounded for terminal stability; the artifact retains the complete execution log. Core runners communicate through UI-independent `RunEvent`, `RuntimeEventSink`, and `CancellationToken` contracts; runtime and evaluation modules do not import Textual.
 
-### Configure provider/model directly
+Cancellation is cooperative: after the active LLM or HTTP operation returns, no later graph or matrix work is scheduled. The latest safe state is persisted with status `cancelled`.
 
-`python -m tesis config --set-provider gemini --model gemini-3-flash-preview`
+## Results and artifact identity
 
-### Render reports
+Recent Results reads both historical and current JSON artifacts, ignores malformed files, supports metadata filters, and provides detail tabs and JSON/Markdown/terminal exports.
 
-`python -m tesis report ./results/runs/gemini-low-0.json --show-scores --show-rejections`
+Every new execution has:
 
-## Config file notes
+- `execution_id`: unique physical artifact identity and filename
+- `run_id`: stable logical experiment coordinate retained for analysis
+- `config_fingerprint`: secret-free hash of effective experiment setup, excluding timestamps, output paths, execution identity, and repeat index
 
-`config.yaml` supports baseline execution settings and optional model settings:
+Repeated fingerprints are marked `SAME CONFIG ×N`. Historical artifacts are read without being rewritten.
 
-- `target_url`
-- `default_llm_provider`
-- `default_security_level`
-- `default_max_iterations`
-- `llm_providers`
-- `security_levels`
-- `models.<provider>.model_name`
-- `models.<provider>.api_key` (prefer `${ENV_VAR}` references)
-- `models.<provider>.temperature`
-- `models.<provider>.timeout`
+## Architecture
 
-Secrets are masked in CLI output and should be sourced from environment variables.
+The canonical graph remains:
+
+```text
+START → recon → orchestrator → payload_candidate_builder → payload_validator
+      → selected method agent → chaining_router
+      → orchestrator | payload_candidate_builder | scorer → END
+```
+
+Verification remains inside method agents, containment remains enforced by payload validation and the HTTP layer, and the AKG remains static and prevalidated. See [docs/architecture.md](docs/architecture.md), [docs/summary_en.md](docs/summary_en.md), and [guide.md](guide.md).
+
+## Tests
+
+```bash
+pytest
+```
+
+Before thesis experiments, validate configuration, reachability, registered agents, containment, AKG structure, payload validation, and at least one run per in-scope surface from the TUI.

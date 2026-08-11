@@ -4,6 +4,7 @@ This module verifies current behavior for state handling, routing, payloads,
 LLM adapters, agents, evaluation, or CLI integration without changing runtime
 code."""
 from evaluation.multi_llm_runner import run_provider_matrix
+from tesis.runtime_events import CancellationToken, CollectingEventSink
 
 
 def test_run_provider_matrix_skips_unsupported_provider(monkeypatch):
@@ -219,3 +220,51 @@ def test_run_provider_matrix_evasion_forwarding(monkeypatch):
 
     assert len(captured) == 2
     assert captured == [(True, "proactive"), (True, "proactive")]
+
+
+def test_matrix_cancellation_stops_later_coordinates_and_persists_aggregate(monkeypatch, tmp_path):
+    token = CancellationToken()
+    calls: list[str] = []
+
+    def cancel_first(**kwargs):
+        calls.append(kwargs["security_level"])
+        token.cancel("stop matrix")
+        return {
+            "schema_version": "tui.v1",
+            "execution_id": kwargs["execution_id"],
+            "run_id": "first",
+            "status": "cancelled",
+            "config": {
+                "provider": kwargs["llm_provider"],
+                "surface": kwargs["surface"],
+                "security_level": kwargs["security_level"],
+                "payload_mode": kwargs["payload_mode"],
+            },
+            "timing": {},
+            "final_state": {},
+            "report": {},
+        }
+
+    monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", cancel_first)
+    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["gemini"])
+    sink = CollectingEventSink()
+
+    artifacts, aggregate = run_provider_matrix(
+        target_url="http://localhost/dvwa",
+        providers=["gemini"],
+        security_levels=["low", "medium"],
+        surfaces=["sqli"],
+        payload_modes=["hybrid"],
+        repeats=2,
+        output_dir=str(tmp_path),
+        include_aggregate=True,
+        event_sink=sink,
+        cancellation_token=token,
+    )
+
+    assert len(calls) == 1
+    assert len(artifacts) == 1
+    assert aggregate["status"] == "cancelled"
+    assert aggregate["totals"]["cancelled_runs"] == 1
+    assert (tmp_path / f"{aggregate['execution_id']}.matrix.json").exists()
+    assert any(event.event_type == "matrix.cancelled" for event in sink.events)

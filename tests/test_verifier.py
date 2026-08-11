@@ -95,18 +95,7 @@ class TestVerifierBehavior:
         assert result.ok is True
         assert r"uid=\d+" in result.evidence
 
-    def test_verify_xss_dialog_disabled_via_env(self, monkeypatch):
-        """Verifies verify xss dialog disabled via env behavior."""
+    def test_browser_xss_verification_is_not_in_framework_scope(self):
+        """XSS/browser verification stays outside the fixed thesis scope."""
         v = Verifier()
-        monkeypatch.setenv("ENABLE_BROWSER_VERIFIER", "0")
-        result = v.verify_xss_dialog("http://localhost/dvwa/vulnerabilities/xss_r/")
-        assert result.ok is False
-        assert "browser verifier disabled" in result.evidence
-
-    def test_verify_xss_dialog_invalid_url(self, monkeypatch):
-        """Verifies verify xss dialog invalid url behavior."""
-        v = Verifier()
-        monkeypatch.setenv("ENABLE_BROWSER_VERIFIER", "1")
-        result = v.verify_xss_dialog("not-a-url")
-        assert result.ok is False
-        assert "invalid_url" in result.evidence
+        assert not hasattr(v, "verify_xss_dialog")

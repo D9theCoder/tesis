@@ -33,10 +33,36 @@ Credential stuffing juga berada di luar ruang lingkup karena DVWA tidak menyedia
 | HTTP client | httpx 0.28.1 | Request dan session handling ke DVWA |
 | HTML parser | BeautifulSoup4 4.14.3 | Parsing form, parameter, dan CSRF token |
 | State schema | TypedDict + LangGraph reducers | State sharing antar node |
-| Konfigurasi | YAML | Target URL, provider, budget, level keamanan, surface |
+| Antarmuka | Textual 8.x | Setup berbasis keyboard, dashboard live, validasi, dan review hasil |
+| Konfigurasi | ruamel.yaml round-trip YAML | Form bertipe dan editor lanjutan yang mempertahankan komentar serta unknown key |
 | Unit test | pytest 9.0.3 | Validasi komponen framework |
 | Statistik | SciPy 1.17.1 | Mann-Whitney U test jika dibutuhkan |
 | Output | JSON, Markdown | Artifact run dan laporan eksperimen |
+
+### 2.1 Interactive experiment harness
+
+`python -m tesis run` adalah satu-satunya entry point dan membutuhkan terminal
+interaktif. TUI menangani setup single run dan matrix, validasi konfigurasi,
+settings, validasi framework, eksekusi live, recent results, export, serta
+informasi framework. Dokumen konfigurasi tunggal adalah `config.yaml` pada root
+repository; tidak ada lagi jalur eksekusi CLI headless.
+
+Core runtime tidak bergantung pada presentation layer. Runner menerima
+`RuntimeEventSink` dan `CancellationToken` secara opsional, memasang callback
+model LangChain yang dinormalisasi, lalu mengirim event lifecycle, graph,
+payload, verification, safety, scoring, failure, dan matrix progress. Textual
+mengonsumsi event tersebut dari daemon thread melalui antrean UI bounded yang
+melakukan coalescing. Semua trace direduksi dari secret dan rendering live
+dibatasi, sedangkan artifact tetap menyimpan execution log lengkap.
+Cancellation bekerja secara kooperatif pada batas graph/matrix yang aman dan
+menyimpan state terbaru dengan status `cancelled`; permintaan cancellation
+kedua menutup TUI tanpa menunggu operasi yang tersendat.
+
+Setiap eksekusi fisik memperoleh `execution_id` unik, sedangkan koordinat
+eksperimen logis tetap memakai `run_id`. `config_fingerprint` bebas secret
+menandai setup eksperimen efektif yang sama dengan mengecualikan identity
+eksekusi, timestamp, repeat index, dan output path. Artifact historis dibaca
+tanpa migrasi atau penulisan ulang.
 
 ## 3. Runtime Architecture
 
@@ -375,6 +401,15 @@ Srun = 0.20 Smethod + 0.20 Spayload + 0.30 Sexploit + 0.10 Schain + 0.20 Soutput
 | `Sexploit` | 0.30 | Hasil eksploitasi |
 | `Schain` | 0.10 | Hasil chain |
 | `Soutput` | 0.20 | Kualitas output LLM dan guardrail handling |
+
+`Soutput` diturunkan dari event runtime yang dapat diaudit untuk method yang
+dipilih: 4 jika output selesai tanpa invalid JSON, guardrail, fallback, atau
+containment event; 3 jika deterministic fallback digunakan; 2 jika terjadi
+invalid JSON atau guardrail activation; dan 0 jika containment dilanggar.
+Composite run menggunakan selected method score, payload score terbaik dari
+accepted candidate yang benar-benar dieksekusi untuk method tersebut,
+exploitation score, chain score, dan output score ini. Semua komponen tetap
+disimpan secara terpisah.
 
 ### 7.2 Metric List
 

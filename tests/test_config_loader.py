@@ -7,7 +7,16 @@ from pathlib import Path
 
 import pytest
 
-from tesis.config_loader import ConfigError, _default_api_key, _default_model_name, load_and_resolve_config
+from tesis.config_loader import (
+    ConfigError,
+    _default_api_key,
+    _default_model_name,
+    dump_yaml_config,
+    load_and_resolve_config,
+    load_yaml_config,
+    parse_yaml_config,
+    save_yaml_config,
+)
 
 
 def _write_yaml(path: Path, content: str) -> None:
@@ -52,6 +61,31 @@ security_levels: [low, medium, high]
     assert cfg.provider == "gemini"
     assert cfg.level == "low"
     assert cfg.iterations == 30
+
+
+def test_round_trip_yaml_preserves_comments_order_and_unknown_keys(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    original = """# heading\ntarget_url: http://localhost/dvwa  # inline\nfuture_block:\n  enabled: true\nprovider: gemini\nlevel: low\n"""
+    config_path.write_text(original, encoding="utf-8")
+
+    payload = load_yaml_config(config_path)
+    payload["level"] = "medium"
+    save_yaml_config(config_path, payload)
+    saved = config_path.read_text(encoding="utf-8")
+
+    assert saved.index("target_url:") < saved.index("future_block:") < saved.index("provider:")
+    assert "# heading" in saved
+    assert "# inline" in saved
+    assert "future_block:" in saved
+    assert parse_yaml_config(saved)["future_block"]["enabled"] is True
+    assert "level: medium" in dump_yaml_config(parse_yaml_config(saved))
+
+
+def test_parse_yaml_config_rejects_invalid_or_non_mapping_documents():
+    with pytest.raises(ConfigError, match="Invalid YAML"):
+        parse_yaml_config("key: [unterminated")
+    with pytest.raises(ConfigError, match="mapping"):
+        parse_yaml_config("- one\n- two\n")
 
 
 def test_env_override_target_url(tmp_path, monkeypatch):

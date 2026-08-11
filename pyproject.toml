@@ -17,6 +17,8 @@ dependencies = [
     "networkx>=3.6.1",
     "pyyaml>=6.0.3",
     "rich>=15.0.0",
+    "textual>=6.0.0",
+    "ruamel-yaml>=0.18.0",
     "scipy>=1.17.1",
 ]
 

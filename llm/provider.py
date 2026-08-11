@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 
 SUPPORTED_PROVIDERS = ["gemini", "openai", "claude", "openai_compatible"]
+SAMPLE_QUERY = "What model are you? Reply with your model name only."
 logger = logging.getLogger(__name__)
 
 # NOTE: Callers must load env vars before importing if needed (e.g. via load_dotenv())
@@ -91,6 +92,19 @@ def get_llm(provider_name: str, **kwargs):
         )
     else:
         raise ValueError(f"Unsupported LLM provider: {provider_name}")
+
+
+def invoke_sample_query(provider_name: str, **kwargs) -> dict[str, str]:
+    """Run the standalone provider smoke query used by development tests."""
+    llm = get_llm(provider_name, **kwargs)
+    response = llm.invoke([HumanMessage(content=SAMPLE_QUERY)])
+    model = getattr(llm, "model_name", None) or getattr(llm, "model", "unknown")
+    return {
+        "provider": provider_name,
+        "model": str(model),
+        "query": SAMPLE_QUERY,
+        "response": str(getattr(response, "content", response)),
+    }
 
 
 def get_simulator_llm(simulator_model: str = "gpt-4o-mini", provider: str | None = None, **kwargs):

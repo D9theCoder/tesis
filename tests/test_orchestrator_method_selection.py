@@ -21,6 +21,24 @@ def test_fallback_next_agent_returns_viable_method():
     assert result in {"sqli_error", "sqli_union", "sqli_boolean_blind", "sqli_time_blind", "scorer"}
 
 
+def test_experiment_condition_changes_deterministic_selection(monkeypatch):
+    class FakeKnowledgeGraph:
+        def get_viable_methods(self, surface, observations):
+            return ["sqli_time_blind"]
+
+    monkeypatch.setattr("agents.orchestrator.AttackKnowledgeGraph", FakeKnowledgeGraph)
+    base = {
+        "current_surface": "sqli",
+        "observations": {},
+        "attempted_agents": [],
+        "blocked_agents": [],
+        "failure_agents": [],
+    }
+
+    assert _fallback_next_agent({**base, "experiment_condition": "linear_hybrid"}) == "sqli_union"
+    assert _fallback_next_agent({**base, "experiment_condition": "akg_guided_hybrid"}) == "sqli_time_blind"
+
+
 def test_orchestrator_returns_dict():
     """Verifies orchestrator returns dict behavior."""
     state = {
