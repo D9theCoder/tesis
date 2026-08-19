@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean
-from typing import Any
+from typing import Any, Callable
 
 from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS
 from evaluation.metrics import aggregate_runs
@@ -250,6 +250,7 @@ def run_provider_matrix(
     experiment_conditions: list[str] | None = None,
     method_level_matrix: bool = False,
     guardrail_configurations: list[tuple[bool, str]] | None = None,
+    run_output_dir_factory: Callable[[dict[str, Any], int], str | Path] | None = None,
 ) -> list[dict] | tuple[list[dict], dict[str, Any]]:
     """Run a deterministic matrix over all requested DVWA experiment axes.
 
@@ -375,6 +376,9 @@ def run_provider_matrix(
                 return finalize_aggregate("cancelled")
             return artifacts
         provider = str(coordinate["provider"])
+        coordinate_output_dir = output_dir
+        if run_output_dir_factory is not None:
+            coordinate_output_dir = str(run_output_dir_factory(coordinate, len(artifacts)))
         if provider not in SUPPORTED_PROVIDERS:
             skipped_config = {
                 "target_url": target_url,
@@ -422,7 +426,7 @@ def run_provider_matrix(
             "evasion_mode": coordinate["guardrail_handling"],
             "evasion_max_retries": evasion_max_retries,
             "evasion_cooldown_threshold": evasion_cooldown_threshold,
-            "output_dir": output_dir,
+            "output_dir": coordinate_output_dir,
             "live_display": live_display,
             "model_config": (model_configs or {}).get(provider),
             "event_sink": event_sink,

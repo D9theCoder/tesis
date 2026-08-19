@@ -196,6 +196,7 @@ _SIDECAR_SUFFIXES: Final[tuple[str, ...]] = (
     ".events.json",
     ".failure.json",
     ".rich.json",
+    ".manifest.json",
 )
 
 _MISSING: Final[object] = object()

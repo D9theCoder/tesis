@@ -49,6 +49,7 @@ from core.state import new_default_state
 from evaluation.multi_llm_runner import run_provider_matrix
 from evaluation.runner import run_single_engagement
 from tesis.artifact_repository import ArtifactMetadata, ArtifactRepository
+from tesis.artifact_layout import allocate_artifact_layout
 from tesis.config_loader import (
     ConfigError,
     dump_yaml_config,
@@ -709,7 +710,9 @@ class RuntimeDashboardScreen(BaseTesisScreen):
     def run_experiment(self) -> None:
         logging.getLogger().setLevel(getattr(logging, self.log_verbosity.upper(), logging.INFO))
         sink = CallbackEventSink(self._post_event)
-        output = str(Path(self.config.output_dir) / "runs")
+        layout = None
+        artifacts: list[dict[str, Any]] = []
+        result: Any = {"status": "error", "error": "run did not start"}
         common = {
             "target_url": self.config.target_url,
             "max_iterations": self.config.iterations,
@@ -722,13 +725,17 @@ class RuntimeDashboardScreen(BaseTesisScreen):
             "evasion_mode": self.config.evasion_mode,
             "evasion_max_retries": self.config.evasion_max_retries,
             "evasion_cooldown_threshold": self.config.evasion_cooldown_threshold,
-            "output_dir": output,
             "event_sink": sink,
             "cancellation_token": self.cancel_token,
             "experiment_condition": self.condition,
             "target_method": self.target_method,
         }
         try:
+            layout = allocate_artifact_layout(
+                self.config.output_dir,
+                "matrix" if self.matrix else "single-run",
+            )
+            common["output_dir"] = str(layout.root)
             if self.matrix:
                 artifacts, aggregate = run_provider_matrix(
                     **common,
@@ -738,6 +745,7 @@ class RuntimeDashboardScreen(BaseTesisScreen):
                     payload_modes=self.config.payload_modes,
                     repeats=self.config.repeats,
                     include_aggregate=True,
+                    run_output_dir_factory=layout.child_directory,
                     model_configs={name: dataclasses.asdict(value) for name, value in self.config.models.items()},
                 )
                 result: Any = aggregate
@@ -757,6 +765,26 @@ class RuntimeDashboardScreen(BaseTesisScreen):
                 data={"error_type": type(exc).__name__},
             ))
             result = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+        finally:
+            if layout is not None:
+                manifest_config = dataclasses.asdict(self.config)
+                manifest_config.update({
+                    "experiment_condition": self.condition,
+                    "target_method": self.target_method,
+                })
+                try:
+                    layout.write_manifest(
+                        config=manifest_config,
+                        artifacts=artifacts if self.matrix else ([result] if result else []),
+                        aggregate=result if self.matrix and isinstance(result, dict) else None,
+                        status=str(result.get("status", "unknown")) if isinstance(result, dict) else None,
+                    )
+                except Exception as exc:
+                    self._post_event(RunEvent(
+                        event_type="artifact.manifest.failed",
+                        message=f"{type(exc).__name__}: {exc}",
+                        data={"error_type": type(exc).__name__},
+                    ))
         if not self._tesis_closing:
             self.post_message(DashboardSummary(result))
 
