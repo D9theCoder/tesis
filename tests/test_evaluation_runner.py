@@ -5,8 +5,31 @@ LLM adapters, agents, evaluation, or CLI integration without changing runtime
 code."""
 import json
 
-from evaluation.runner import run_single_engagement
+from evaluation.runner import _llm_activity, run_single_engagement
 from tesis.runtime_events import CancellationToken, CollectingEventSink
+
+
+def test_runtime_activity_does_not_look_like_a_retry():
+    """Runtime and provider callbacks for one call count as one attempt."""
+    events = [
+        {"event_type": "llm.started", "data": {"source": "llm_runtime"}},
+        {"event_type": "llm.started", "data": {"provider": "openai_compatible"}},
+        {
+            "event_type": "llm.failed",
+            "data": {
+                "source": "llm_runtime",
+                "parse_status": "invalid",
+            },
+        },
+        {"event_type": "llm.completed", "data": {"provider": "openai_compatible"}},
+    ]
+
+    assert _llm_activity(events) == {
+        "started": 1,
+        "completed": 1,
+        "failed": 0,
+        "tokens": 0,
+    }
 
 
 def test_run_single_engagement_artifact_shape(monkeypatch):
@@ -465,3 +488,94 @@ def test_cancellation_between_graph_states_keeps_latest_snapshot(monkeypatch):
 
     assert artifact["status"] == "cancelled"
     assert artifact["final_state"]["iteration_count"] == 1
+
+
+def test_runtime_calls_feed_runner_activity_and_effective_runtime_metadata(monkeypatch):
+    """Direct runtime calls remain visible to runner audit telemetry."""
+    from agents.orchestrator import orchestrator
+
+    class Response:
+        content = '{"next_agent":"sqli_union","reason_code":"best_viable"}'
+        usage_metadata = {"input_tokens": 11, "output_tokens": 4}
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+            assert messages  # The runtime still supplies stable system/user messages.
+            return Response()
+
+    client = FakeClient()
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: client)
+
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            del stream_mode, config
+            yield {
+                **state,
+                **orchestrator(state),
+                "iteration_count": 1,
+                "task_result": "SUCCESS",
+            }
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
+
+    artifact = run_single_engagement(
+        target_url="http://localhost/dvwa",
+        security_level="low",
+        llm_provider="openai_compatible",
+        payload_mode="static_only",
+        model_config={"model_name": "base", "api_key": "do-not-store"},
+        llm_role_configs={
+            "orchestrator": {
+                "model_profile": "openai_compatible",
+                "model_name": "planner",
+                "temperature": 0,
+                "max_tokens": 96,
+                "structured_output": "json_prompt",
+            },
+            "payload_generator": {
+                "model_profile": "openai_compatible",
+                "model_name": "mutator",
+                "temperature": 0,
+                "structured_output": "auto",
+            },
+        },
+        llm_cache_scope="run",
+    )
+
+    assert artifact["status"] == "success"
+    assert artifact["llm_activity"] == {"started": 1, "completed": 1, "failed": 0, "tokens": 0}
+    assert client.calls == 1
+    runtime_events = [
+        event for event in artifact["execution_log"]
+        if event["event_type"].startswith("llm.")
+        and event["data"].get("source") == "llm_runtime"
+    ]
+    assert [event["event_type"] for event in runtime_events] == [
+        "llm.started",
+        "llm.completed",
+    ]
+    assert runtime_events[0]["data"]["role"] == "orchestrator"
+    assert runtime_events[0]["data"]["prompt_hash"].startswith("sha256:")
+    assert "prompts" not in runtime_events[0]["data"]
+    assert "response" not in runtime_events[-1]["data"]
+
+    effective = artifact["llm_runtime_config"]
+    assert effective["max_concurrency"] == 1
+    assert effective["cache_scope"] == "run"
+    assert effective["roles"]["orchestrator"] == {
+        "model_profile": "openai_compatible",
+        "provider": "openai_compatible",
+        "model_name": "planner",
+        "temperature": 0,
+        "max_tokens": 96,
+        "structured_output": "json_prompt",
+        "model_fingerprint": effective["roles"]["orchestrator"]["model_fingerprint"],
+    }
+    assert effective["roles"]["payload_generator"]["model_name"] == "mutator"
+    assert "do-not-store" not in json.dumps(effective)
+    assert artifact["config"]["llm_cache_scope"] == "run"
+    assert artifact["config"]["llm_max_concurrency"] == 1

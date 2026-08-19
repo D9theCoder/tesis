@@ -49,6 +49,14 @@ def _signals_for_path(path: str) -> list[str]:
     return _EXPLOIT_SIGNALS
 
 
+def _normalize_probe_path(path: str) -> str:
+    """Keep legacy double-slash path candidates relative to DVWA."""
+    value = str(path or "").strip()
+    if value.startswith("//") and "://" not in value:
+        return value.lstrip("/")
+    return value
+
+
 def _probe_preconditions(
     session: DVWASession, payloads: list[str], already_tried: set[str]
 ) -> tuple[bool, list[str], dict[str, bool], list[dict]]:
@@ -60,6 +68,7 @@ def _probe_preconditions(
     sent_any = False
 
     for path in payloads:
+        path = _normalize_probe_path(path)
         if path in already_tried:
             continue
         sent_any = True
@@ -99,6 +108,7 @@ def _attempt_exploit(
     verifier = Verifier()
 
     for path in payloads:
+        path = _normalize_probe_path(path)
         if path in already_tried:
             continue
         tried.append(path)

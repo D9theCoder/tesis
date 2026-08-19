@@ -26,6 +26,34 @@ class RequestTimeoutError(Exception):
 class ContainmentError(ValueError):
     """Raised when a request or redirect leaves the configured DVWA host."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        url: str | None = None,
+        allowed_host: str | None = None,
+        kind: str = "request",
+    ) -> None:
+        """Keep structured context so callers can persist an audit event.
+
+        ``url``, ``allowed_host``, and ``kind`` remain optional for backwards
+        compatibility with callers that only need an exception message.
+        ``HTTPClient`` always supplies them when it raises this exception.
+        """
+        super().__init__(message)
+        self.url = url
+        self.allowed_host = allowed_host
+        self.kind = kind
+
+    def as_event(self) -> dict[str, str | None]:
+        """Return a JSON-safe containment event for state/artifact logging."""
+        return {
+            "kind": self.kind,
+            "blocked_url": self.url,
+            "allowed_host": self.allowed_host,
+            "reason": str(self),
+        }
+
 
 @dataclass
 class RequestResult:
@@ -96,6 +124,11 @@ class HTTPClient:
         parsed_base = urlparse(self.base_url)
         if not parsed_base.scheme or not parsed_base.hostname:
             raise ValueError(f"Invalid base URL: {base_url}")
+        # Preserve the public containment metadata used by earlier callers.
+        # ``netloc`` intentionally excludes the path (DVWA commonly lives
+        # below /dvwa) and includes an explicitly configured port.
+        self.allowed_host = parsed_base.netloc.lower()
+        self.containment_events: list[dict[str, str | None]] = []
         self._allowed_hostname = parsed_base.hostname.lower()
         self._allowed_port = parsed_base.port
         self._client = httpx.Client(
@@ -188,6 +221,9 @@ class HTTPClient:
         Maps httpx exceptions to typed domain exceptions for cleaner
         handling upstream.
         """
+        # ``get``/``post`` resolve before reaching here, but keeping the check
+        # at this lower boundary protects direct/internal callers as well.
+        self._assert_in_scope(url, kind="request")
         try:
             current_method = method
             current_url = url
@@ -205,7 +241,10 @@ class HTTPClient:
                 location = resp.headers.get("location")
                 if not location:
                     break
-                current_url = self._resolve_url(urljoin(current_url, location))
+                current_url = self._resolve_url(
+                    urljoin(current_url, location),
+                    kind="redirect",
+                )
                 # ``params`` belongs to the original request URL.  Passing
                 # it again on every redirect can re-add the original query
                 # string after a Location header intentionally replaces it.
@@ -238,7 +277,38 @@ class HTTPClient:
 
         return RequestResult(response=resp, elapsed_ms=elapsed_ms)
 
-    def _resolve_url(self, path_or_url: str) -> str:
+    def _is_in_scope(self, url: str) -> bool:
+        """Return whether *url* stays on the configured DVWA host and port."""
+        parsed = urlparse(str(url))
+        if not parsed.hostname:
+            # Relative URLs are resolved by ``_resolve_url`` before this check.
+            return True
+        return (
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname.lower() == self._allowed_hostname
+            and parsed.port == self._allowed_port
+        )
+
+    def _assert_in_scope(self, url: str, *, kind: str = "request") -> None:
+        """Raise and record a structured event for an out-of-scope URL."""
+        if self._is_in_scope(url):
+            return
+        logger.warning(
+            "Containment violation (%s): %s not in %s",
+            kind,
+            url,
+            self.allowed_host,
+        )
+        error = ContainmentError(
+            f"Blocked out-of-scope HTTP target: {url} (allowed host: {self.allowed_host})",
+            url=str(url),
+            allowed_host=self.allowed_host,
+            kind=kind,
+        )
+        self.containment_events.append(error.as_event())
+        raise error
+
+    def _resolve_url(self, path_or_url: str, *, kind: str = "request") -> str:
         """Resolve a relative request and reject any external host.
 
         The framework may navigate same-host DVWA links discovered during recon,
@@ -247,14 +317,5 @@ class HTTPClient:
         """
         raw = str(path_or_url).strip()
         resolved = urljoin(self.base_url, raw if raw.startswith("//") else raw.lstrip("/"))
-        parsed = urlparse(resolved)
-        hostname = (parsed.hostname or "").lower()
-        if (
-            parsed.scheme not in {"http", "https"}
-            or hostname != self._allowed_hostname
-            or parsed.port != self._allowed_port
-        ):
-            raise ContainmentError(
-                f"Blocked out-of-scope HTTP target: {resolved} (allowed host: {self._allowed_hostname})"
-            )
+        self._assert_in_scope(resolved, kind=kind)
         return resolved

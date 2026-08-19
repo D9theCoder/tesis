@@ -57,6 +57,10 @@ report_format: both
 # -----------------------------------------------------------------------------
 # Stage 7.1 experiment controls (rich reporting + stopping policy)
 # -----------------------------------------------------------------------------
+# Default thesis experiment condition. Headless and TUI runs inherit this
+# unless an explicit condition override is supplied.
+experiment_condition: akg_guided_hybrid
+
 # Whether to emit sidecar artifacts:
 #   - <execution_id>.events.jsonl
 #   - <execution_id>.rich.json
@@ -118,6 +122,34 @@ surfaces:
 payload_modes:
   - static_only
   - hybrid
+
+# -----------------------------------------------------------------------------
+# LLM runtime acceleration
+# -----------------------------------------------------------------------------
+# Role settings inherit provider, endpoint, credentials, timeout, and defaults
+# from models.<model_profile>. The role temperature overrides the model default.
+# `auto` uses native structured output when supported and otherwise uses the
+# compact JSON prompt.
+llm_runtime:
+  max_concurrency: 2
+  cache_scope: run
+
+  roles:
+    orchestrator:
+      model_profile: openai_compatible
+      temperature: 0
+      # This profile uses a reasoning-capable model; 256 is the smallest
+      # preflight-validated ceiling that still emits the required tool call.
+      max_tokens: 256
+      structured_output: auto
+
+    payload_generator:
+      model_profile: openai_compatible
+      temperature: 0
+      # The provider can return a valid tool call just above the default
+      # formula ceiling; this explicit role override keeps it from truncating.
+      max_tokens: 768
+      structured_output: auto
 
 # -----------------------------------------------------------------------------
 # Optional DVWA credentials (if your runtime/session manager uses them)

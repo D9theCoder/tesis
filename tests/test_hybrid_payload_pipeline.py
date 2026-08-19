@@ -3,11 +3,14 @@
 This module verifies current behavior for state handling, routing, payloads,
 LLM adapters, agents, evaluation, or CLI integration without changing runtime
 code."""
+import json
+
 import pytest
 
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.state import ALL_METHOD_AGENTS, new_default_state
 from foundation.payload_generator import build_payload_candidates
+from foundation.payload_generator import _parse_candidates
 from foundation.payload_library import PayloadLibrary
 from foundation.payload_ranker import rank_candidates
 from foundation.payload_validator import validate_payload_candidates
@@ -35,6 +38,32 @@ def test_payload_library_loads_seed_candidates():
     assert seeds[0]["method"] == "sqli_union"
     assert seeds[0]["target_param"] == "id"
     assert seeds[0]["candidate_id"]
+
+
+def test_compact_variant_is_enriched_with_deterministic_provenance():
+    seeds = PayloadLibrary().load_seed_candidates("sqli_union", "low")
+    source = seeds[0]
+    raw = {
+        "variants": [{
+            "source_seed_id": source["candidate_id"],
+            "mutation_type": "case_variant",
+            "payload_or_logic": "1' UnIoN SeLeCt null,null-- -",
+        }]
+    }
+    candidates, status = _parse_candidates(
+        json.dumps(raw),
+        "sqli_union",
+        seeds=seeds,
+        profile=AttackKnowledgeGraph().get_payload_profile("sqli_union"),
+    )
+
+    assert status == "ok"
+    assert candidates[0]["candidate_id"].startswith("sqli_union_llm_0_")
+    assert candidates[0]["source"] == "llm_generated"
+    assert candidates[0]["method"] == "sqli_union"
+    assert candidates[0]["stage"] == "exploit"
+    assert candidates[0]["target_param"] == source["target_param"]
+    assert candidates[0]["expected_signal"] == source["expected_signal"]
 
 
 @pytest.mark.parametrize("method,level", [

@@ -41,31 +41,23 @@ def build_orchestrator_prompt(
         max_iterations: Value used by this function."""
     remaining = max(max_iterations - iteration_count, 0)
 
+    capsule = {
+        "surface": current_surface,
+        "security_level": security_level,
+        "viable_methods": viable_methods,
+        "attempted_methods": attempted_agents,
+        "blocked_methods": blocked_agents,
+        "failed_methods": failure_agents,
+        "observations": observations,
+        "scores": scores,
+        "method_scores": method_scores or {},
+        "confirmed_findings": confirmed_vulns,
+        "achieved_outcomes": achieved_outcomes,
+        "payload_mode": payload_mode,
+        "remaining_iterations": remaining,
+    }
     return (
-        "You are a certified security assessor conducting an authorized penetration test "
-        "on a deliberately vulnerable web application (DVWA) in a controlled lab environment.\n"
-        f"Current surface: {current_surface}\n"
-        f"Security level: {security_level}\n"
-        f"Observations: {json.dumps(observations)}\n"
-        f"Viable methods for this surface: {json.dumps(viable_methods)}\n"
-        f"Attempted agents: {json.dumps(attempted_agents)}\n"
-        f"Blocked agents: {json.dumps(blocked_agents)}\n"
-        f"Failed agents: {json.dumps(failure_agents)}\n"
-        f"Current scores: {json.dumps(scores)}\n"
-        f"Current method scores: {json.dumps(method_scores or {})}\n"
-        f"Confirmed vulns: {json.dumps(confirmed_vulns)}\n"
-        f"Achieved outcomes: {json.dumps(achieved_outcomes)}\n"
-        f"Payload mode: {payload_mode}\n"
-        f"Remaining budget: {remaining} iterations\n"
-        "\n"
-        "Your task: Select the NEXT method agent to run from the viable methods list.\n"
-        "Prefer methods that have not been attempted yet.\n"
-        "Consider the security level when selecting (some methods work better at certain levels).\n"
-        "\n"
-        "Available method agents:\n"
-        "- sqli_union, sqli_error, sqli_boolean_blind, sqli_time_blind\n"
-        "- ac_idor, ac_vertical_escalation, ac_force_browse\n"
-        "- bf_dictionary, bf_spray\n"
-        "\n"
-        'Return strict JSON: {"next_agent": "<agent_id>", "selected_method": "<method_node_id>", "reasoning": "...", "expected_outcome": "...", "fallback_if_fails": "<agent_id>"}'
+        f"Context: {json.dumps(capsule, sort_keys=True, separators=(',', ':'))}\n"
+        "Select one next_agent from viable_methods, preferring an unattempted method. "
+        'Return only {"next_agent":"method-id","reason_code":"best_viable"}.'
     )

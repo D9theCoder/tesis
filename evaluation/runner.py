@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import Counter
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -23,6 +24,7 @@ from evaluation.failure_logger import write_failure_artifact
 from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.reporter import write_events_jsonl, write_json_report, write_rich_report
 from evaluation.telemetry import RunTelemetry, stable_sha256
+from llm.runtime import LLMRuntime, RoleSettings, model_fingerprint
 from tesis.artifact_repository import config_fingerprint, new_execution_id
 from tesis.runtime_events import (
     CancellationRequested,
@@ -188,13 +190,72 @@ def _candidate_event_data(state: dict[str, Any], configured_budget: int) -> dict
 
 
 def _llm_activity(events: list[dict[str, Any]]) -> dict[str, int]:
-    """Summarize provider callback activity captured by the production runner."""
+    """Summarize provider/runtime callback activity captured by the runner."""
     counts = Counter(str(event.get("event_type") or "") for event in events)
+    runtime_events = [
+        event
+        for event in events
+        if isinstance(event.get("data"), dict)
+        and event["data"].get("source") == "llm_runtime"
+        and event.get("event_type") in {"llm.started", "llm.completed", "llm.failed"}
+    ]
+    expected_output_failures = sum(
+        1
+        for event in runtime_events
+        if event.get("event_type") == "llm.failed"
+        and str(event["data"].get("parse_status")) in {"invalid", "incomplete"}
+    )
+    if runtime_events:
+        # A runtime lifecycle event and a LangChain callback describe the same
+        # provider call. Prefer the runtime stream as authoritative so one
+        # call is not mistaken for a retry. Invalid/incomplete responses count
+        # as completed attempts for activity accounting, but not as failures.
+        started = sum(event.get("event_type") == "llm.started" for event in runtime_events)
+        completed = sum(event.get("event_type") == "llm.completed" for event in runtime_events)
+        failed = sum(event.get("event_type") == "llm.failed" for event in runtime_events)
+        completed += expected_output_failures
+        failed = max(0, failed - expected_output_failures)
+    else:
+        # Legacy/direct callers may expose only provider callbacks.
+        started = counts["llm.started"]
+        completed = counts["llm.completed"]
+        failed = counts["llm.failed"]
     return {
-        "started": counts["llm.started"],
-        "completed": counts["llm.completed"],
-        "failed": counts["llm.failed"],
+        "started": started,
+        "completed": completed,
+        # Invalid/incomplete structured output is an expected deterministic
+        # fallback path. Provider/network failures remain authoritative.
+        "failed": failed,
         "tokens": counts["llm.token"],
+    }
+
+
+def _effective_llm_runtime_config(
+    context,
+    *,
+    candidate_budget: int,
+) -> dict[str, Any]:
+    """Describe the resolved, non-secret runtime settings for one coordinate."""
+    role_defaults = {
+        "orchestrator": 96,
+        "payload_generator": min(512, 96 + 64 * int(candidate_budget)),
+    }
+    roles: dict[str, dict[str, Any]] = {}
+    for role, default_tokens in role_defaults.items():
+        provider, resolved, settings = context.role_config(role, max_tokens=default_tokens)
+        roles[role] = {
+            "model_profile": settings.model_profile or context.default_provider,
+            "provider": provider,
+            "model_name": resolved.get("model_name"),
+            "temperature": resolved.get("temperature", 0),
+            "max_tokens": int(resolved.get("max_tokens", default_tokens)),
+            "structured_output": settings.structured_output,
+            "model_fingerprint": model_fingerprint({"provider": provider, **resolved}),
+        }
+    return {
+        "max_concurrency": int(context.runtime.max_concurrency),
+        "cache_scope": "run" if context.cache_enabled else "none",
+        "roles": roles,
     }
 
 
@@ -265,6 +326,15 @@ def run_single_engagement(
     execution_id: str | None = None,
     experiment_condition: str = "linear_hybrid",
     target_method: str | None = None,
+    llm_runtime: LLMRuntime | None = None,
+    llm_role_configs: dict[str, RoleSettings | dict[str, Any]] | None = None,
+    model_profiles: dict[str, dict[str, Any]] | None = None,
+    llm_cache_enabled: bool = False,
+    llm_max_concurrency: int = 1,
+    llm_cache: bool | None = None,
+    llm_cache_scope: str | None = None,
+    role_configs: dict[str, RoleSettings | dict[str, Any]] | None = None,
+    llm_runtime_config: dict[str, Any] | None = None,
 ) -> dict:
     """Run one configured DVWA framework engagement and write evaluation artifacts.
 
@@ -302,6 +372,35 @@ def run_single_engagement(
     execution_id = execution_id or new_execution_id()
     cancellation_token = cancellation_token or CancellationToken()
     runtime_events: list[dict[str, Any]] = []
+    del llm_max_concurrency  # Single-run mode is intentionally fixed at one coordinate.
+    if llm_role_configs is None:
+        llm_role_configs = role_configs
+    if llm_runtime_config and not llm_role_configs:
+        raw_roles = llm_runtime_config.get("roles")
+        if isinstance(raw_roles, dict):
+            llm_role_configs = raw_roles
+    if llm_cache is not None:
+        llm_cache_enabled = bool(llm_cache)
+    if llm_cache_scope is not None:
+        llm_cache_enabled = str(llm_cache_scope).strip().lower() == "run"
+    runtime_service = llm_runtime or LLMRuntime(max_concurrency=1)
+    owns_runtime = llm_runtime is None
+    runtime_event_emitter = None
+
+    def forward_runtime_activity(event_type: str, data: dict[str, Any]) -> None:
+        if runtime_event_emitter is not None:
+            runtime_event_emitter(event_type, data)
+
+    runtime_stack = ExitStack()
+    call_context = runtime_stack.enter_context(runtime_service.coordinate(
+        coordinate_id=execution_id,
+        default_provider=llm_provider,
+        default_model_config=model_config or {},
+        model_profiles=model_profiles or {llm_provider: model_config or {}},
+        role_settings=llm_role_configs or {},
+        cache_enabled=llm_cache_enabled,
+        activity_callback=forward_runtime_activity,
+    ))
     # Automatic method selection is model-backed even for static payloads;
     # explicit target_method + static_only is the only intentional zero-call
     # ablation. Hybrid/mutation modes additionally require payload generation.
@@ -348,6 +447,13 @@ def run_single_engagement(
         })
         if event_sink is not None:
             event_sink.emit(event)
+
+    def emit_runtime_activity(event_type: str, data: dict[str, Any]) -> None:
+        # Runtime events contain hashes and timing only; prompts and responses
+        # remain available only through the existing callback/audit path.
+        emit(event_type, data=data)
+
+    runtime_event_emitter = emit_runtime_activity
 
     started_at = _now_iso()
     started_clock = perf_counter()
@@ -672,6 +778,8 @@ def run_single_engagement(
             data={"error_type": type(exc).__name__},
         )
 
+    runtime_stack.close()
+
     if reporter:
         reporter.stop()
 
@@ -785,6 +893,12 @@ def run_single_engagement(
     exploitation_score = exploitation_scores.get(selected_method, 0)
     chain_score = chain_scores.get(selected_method, 0)
     llm_activity = _llm_activity(runtime_events)
+    llm_performance = [dict(row) for row in call_context.records]
+    llm_performance_summary = call_context.performance_summary()
+    effective_llm_runtime_config = _effective_llm_runtime_config(
+        call_context,
+        candidate_budget=candidate_budget,
+    )
 
     artifact = {
         "schema_version": "tui.v1",
@@ -800,6 +914,11 @@ def run_single_engagement(
         "payload_mode": payload_mode,
         "llm_required": llm_required,
         "llm_activity": llm_activity,
+        "llm_performance": llm_performance,
+        "llm_performance_summary": llm_performance_summary,
+        "llm_runtime_config": effective_llm_runtime_config,
+        "llm_max_concurrency": effective_llm_runtime_config["max_concurrency"],
+        "llm_cache_scope": effective_llm_runtime_config["cache_scope"],
         "task_result": final_state.get("task_result"),
         "incomplete_reason": final_state.get("incomplete_reason"),
         "selected_method": selected_method,
@@ -827,6 +946,23 @@ def run_single_engagement(
             "surface": surface,
             "payload_mode": payload_mode,
             "llm_required": llm_required,
+            "llm_cache_enabled": llm_cache_enabled,
+            "llm_cache_scope": effective_llm_runtime_config["cache_scope"],
+            "llm_max_concurrency": effective_llm_runtime_config["max_concurrency"],
+            "llm_runtime": effective_llm_runtime_config,
+            "llm_role_configs": {
+                role: {
+                    key: settings[key]
+                    for key in (
+                        "model_profile",
+                        "model_name",
+                        "temperature",
+                        "max_tokens",
+                        "structured_output",
+                    )
+                }
+                for role, settings in effective_llm_runtime_config["roles"].items()
+            },
             "max_iterations": max_iterations,
             "candidate_budget": candidate_budget,
             "repeat_index": repeat_index,
@@ -848,6 +984,8 @@ def run_single_engagement(
             "incomplete_reason": final_state.get("incomplete_reason"),
             "llm_activity": llm_activity,
             "llm_required": llm_required,
+            "llm_performance": llm_performance,
+            "llm_performance_summary": llm_performance_summary,
             "confirmed_vulns": list(final_state.get("confirmed_vulns", [])),
             "achieved_outcomes": list(final_state.get("achieved_outcomes", [])),
             "guardrail_activations": list(final_state.get("guardrail_activations", [])),
@@ -897,4 +1035,6 @@ def run_single_engagement(
             write_json_report(Path(output_dir) / f"{execution_id}.json", artifact)
         except Exception as exc:
             artifact["artifact_write_warning"] = f"{type(exc).__name__}: {exc}"
+    if owns_runtime:
+        runtime_service.close()
     return artifact

@@ -16,7 +16,17 @@ from ruamel.yaml.error import YAMLError
 
 from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS, SURFACES
 from llm.provider import SUPPORTED_PROVIDERS
-from tesis.model_config import EngagementConfig, ModelConfig, EVASION_MODES, PAYLOAD_MODES
+from tesis.model_config import (
+    EVASION_MODES,
+    LLM_CACHE_SCOPES,
+    LLM_RUNTIME_ROLES,
+    STRUCTURED_OUTPUT_MODES,
+    EngagementConfig,
+    LLMRuntimeConfig,
+    ModelConfig,
+    PAYLOAD_MODES,
+    RoleConfig,
+)
 from tesis.config_fields import FORM_MATRIX, FORM_SINGLE, validate_config as validate_field_schema
 
 
@@ -193,6 +203,16 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "GUARDRAIL_RETRY_MODE": "guardrail_handling",
         "GUARDRAIL_RETRY_MAX": "guardrail_retry_max",
         "GUARDRAIL_RETRY_COOLDOWN_THRESHOLD": "guardrail_retry_cooldown_threshold",
+        # LLM-only runtime controls.  These are intentionally kept separate
+        # from provider model credentials so a run can select role overrides
+        # without changing the shared model profiles.
+        "LLM_MAX_CONCURRENCY": "llm_max_concurrency",
+        "LLM_CACHE": "llm_cache",
+        "LLM_CACHE_SCOPE": "llm_cache_scope",
+        "ORCHESTRATOR_MODEL_PROFILE": "orchestrator_model_profile",
+        "ORCHESTRATOR_MODEL": "orchestrator_model",
+        "PAYLOAD_MODEL_PROFILE": "payload_model_profile",
+        "PAYLOAD_MODEL": "payload_model",
     }
 
     for key, raw_value in os.environ.items():
@@ -230,12 +250,16 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         if mapped in {
             "iterations", "repeats", "evasion_max_retries", "evasion_cooldown_threshold",
             "guardrail_retry_max", "guardrail_retry_cooldown_threshold", "candidate_budget",
+            "llm_max_concurrency",
         }:
             try:
                 value = int(raw_value)
             except ValueError as exc:
                 raise ConfigError(f"Invalid integer value for {key}: {raw_value}") from exc
-        elif mapped in {"matrix", "enriched_reporting", "diagnose", "evasion_enabled", "guardrail_retry_enabled"}:
+        elif mapped in {
+            "matrix", "enriched_reporting", "diagnose", "evasion_enabled",
+            "guardrail_retry_enabled", "llm_cache",
+        }:
             value = _parse_bool(raw_value)
         elif mapped in {"providers", "levels", "surfaces", "payload_modes"}:
             value = _parse_csv(raw_value)
@@ -316,6 +340,54 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(value, list) and not value:
             continue
         overrides[mapped] = value
+
+    # Runtime flags are represented as a nested mapping before the normal
+    # YAML/environment/CLI merge.  This keeps role settings from accidentally
+    # becoming top-level engagement fields and makes CLI precedence explicit.
+    runtime_override: dict[str, Any] = {}
+    raw_runtime = cli_args.get("llm_runtime")
+    if raw_runtime is not None:
+        if not isinstance(raw_runtime, Mapping):
+            raise ConfigError("llm_runtime CLI override must be a mapping")
+        runtime_override = dict(raw_runtime)
+
+    if cli_args.get("llm_max_concurrency") is not None:
+        runtime_override["max_concurrency"] = cli_args["llm_max_concurrency"]
+    if cli_args.get("llm_cache") is not None:
+        # Unlike the historical BooleanOptionalAction fields above, an
+        # explicit --no-llm-cache must override cache_scope: run from YAML.
+        runtime_override["cache_scope"] = "run" if _coerce_bool(cli_args["llm_cache"]) else "none"
+    if cli_args.get("llm_cache_scope") is not None:
+        runtime_override["cache_scope"] = cli_args["llm_cache_scope"]
+
+    role_overrides: dict[str, dict[str, Any]] = {}
+    for role, profile_key, model_key in (
+        ("orchestrator", "orchestrator_model_profile", "orchestrator_model"),
+        ("payload_generator", "payload_model_profile", "payload_model"),
+    ):
+        role_override: dict[str, Any] = {}
+        if cli_args.get(profile_key) is not None:
+            role_override["model_profile"] = cli_args[profile_key]
+        if cli_args.get(model_key) is not None:
+            role_override["model_name"] = cli_args[model_key]
+        if role_override:
+            role_overrides[role] = role_override
+
+    if role_overrides:
+        existing_roles = runtime_override.get("roles")
+        if existing_roles is not None and not isinstance(existing_roles, Mapping):
+            raise ConfigError("llm_runtime.roles CLI override must be a mapping")
+        merged_roles = dict(existing_roles or {})
+        for role, role_override in role_overrides.items():
+            current = merged_roles.get(role)
+            if isinstance(current, Mapping):
+                merged_roles[role] = {**dict(current), **role_override}
+            else:
+                merged_roles[role] = role_override
+        runtime_override["roles"] = merged_roles
+
+    if runtime_override:
+        overrides["llm_runtime"] = runtime_override
 
     return overrides
 
@@ -433,9 +505,185 @@ def _parse_model_configs(raw_models: Mapping[str, Any]) -> dict[str, ModelConfig
     return models
 
 
+def _parse_llm_runtime_config(
+    merged: Mapping[str, Any],
+    *,
+    default_profile: str,
+    candidate_budget: int,
+) -> LLMRuntimeConfig:
+    """Parse LLM-only execution controls while preserving legacy defaults.
+
+    Runtime controls historically did not exist in the YAML contract.  The
+    loader therefore treats an absent block as a safe serial/no-cache runtime,
+    while still resolving both known roles so downstream runners can consume a
+    uniform settings object.
+    """
+
+    raw_runtime = merged.get("llm_runtime", {})
+    if raw_runtime is None:
+        raw_runtime = {}
+    if not isinstance(raw_runtime, Mapping):
+        raise ConfigError("llm_runtime must be a mapping")
+    runtime = dict(raw_runtime)
+
+    # Environment variables are intentionally flat for shell ergonomics.  CLI
+    # overrides already arrive nested via _extract_cli_overrides.  Since env
+    # values are merged after YAML, these flat values take precedence over the
+    # corresponding nested YAML value.
+    if merged.get("llm_max_concurrency") is not None:
+        runtime["max_concurrency"] = merged["llm_max_concurrency"]
+    if merged.get("llm_cache_scope") is not None:
+        runtime["cache_scope"] = merged["llm_cache_scope"]
+    if merged.get("llm_cache") is not None:
+        runtime["cache_scope"] = "run" if _coerce_bool(merged["llm_cache"]) else "none"
+
+    # Flat environment variables for role overrides are folded into the same
+    # nested shape used by YAML and CLI inputs.
+    runtime_roles = runtime.get("roles", {})
+    if runtime_roles is None:
+        runtime_roles = {}
+    if not isinstance(runtime_roles, Mapping):
+        raise ConfigError("llm_runtime.roles must be a mapping")
+    runtime_roles = dict(runtime_roles)
+    for role, profile_key, model_key in (
+        ("orchestrator", "orchestrator_model_profile", "orchestrator_model"),
+        ("payload_generator", "payload_model_profile", "payload_model"),
+    ):
+        role_override: dict[str, Any] = {}
+        if merged.get(profile_key) is not None:
+            role_override["model_profile"] = merged[profile_key]
+        if merged.get(model_key) is not None:
+            role_override["model_name"] = merged[model_key]
+        if not role_override:
+            continue
+        current_role = runtime_roles.get(role)
+        if current_role is not None and not isinstance(current_role, Mapping):
+            raise ConfigError(f"llm_runtime.roles.{role} must be a mapping")
+        runtime_roles[role] = {**dict(current_role or {}), **role_override}
+    runtime["roles"] = runtime_roles
+
+    try:
+        raw_concurrency = runtime.get("max_concurrency", 1)
+        if isinstance(raw_concurrency, bool) or (
+            isinstance(raw_concurrency, float) and not raw_concurrency.is_integer()
+        ):
+            raise ValueError
+        max_concurrency = int(raw_concurrency)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("llm_runtime.max_concurrency must be an integer between 1 and 4") from exc
+
+    raw_cache_scope = runtime.get("cache_scope", runtime.get("cache_enabled", "none"))
+    if isinstance(raw_cache_scope, bool):
+        cache_scope = "run" if raw_cache_scope else "none"
+    elif raw_cache_scope is None:
+        cache_scope = "none"
+    else:
+        cache_scope = str(raw_cache_scope).strip().lower()
+
+    raw_roles = runtime.get("roles", {})
+    if raw_roles is None:
+        raw_roles = {}
+    if not isinstance(raw_roles, Mapping):
+        raise ConfigError("llm_runtime.roles must be a mapping")
+
+    role_names: list[str] = list(LLM_RUNTIME_ROLES)
+    for role_name in raw_roles:
+        normalized_role = str(role_name).strip()
+        if normalized_role and normalized_role not in role_names:
+            role_names.append(normalized_role)
+
+    roles: dict[str, RoleConfig] = {}
+    payload_default_tokens = min(512, 96 + 64 * candidate_budget)
+    for role_name in role_names:
+        raw_role = raw_roles.get(role_name, {})
+        if raw_role is None:
+            raw_role = {}
+        if not isinstance(raw_role, Mapping):
+            raise ConfigError(f"llm_runtime.roles.{role_name} must be a mapping")
+        role = dict(raw_role)
+
+        profile = role.get("model_profile", role.get("profile", default_profile))
+        profile_text = str(profile).strip() if profile is not None else default_profile
+        if not profile_text:
+            profile_text = default_profile
+
+        model_name_raw = role.get("model_name", role.get("model"))
+        model_name = None if model_name_raw is None else str(model_name_raw).strip()
+        if model_name == "":
+            model_name = None
+
+        try:
+            temperature_raw = role.get("temperature", 0.0)
+            if isinstance(temperature_raw, bool):
+                raise ValueError
+            temperature = float(temperature_raw)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"Invalid temperature for LLM role '{role_name}'") from exc
+
+        max_tokens_raw = role.get(
+            "max_tokens",
+            payload_default_tokens if role_name == "payload_generator" else 96,
+        )
+        if max_tokens_raw is None:
+            max_tokens = None
+        else:
+            try:
+                if isinstance(max_tokens_raw, bool) or (
+                    isinstance(max_tokens_raw, float) and not max_tokens_raw.is_integer()
+                ):
+                    raise ValueError
+                max_tokens = int(max_tokens_raw)
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(f"Invalid max_tokens for LLM role '{role_name}'") from exc
+
+        structured_output = str(role.get("structured_output", "auto")).strip().lower()
+        roles[role_name] = RoleConfig(
+            model_profile=profile_text,
+            model_name=model_name,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            structured_output=structured_output,
+        )
+
+    config = LLMRuntimeConfig(
+        max_concurrency=max_concurrency,
+        cache_scope=cache_scope,
+        roles=roles,
+    )
+    _validate_llm_runtime_config(config)
+    return config
+
+
 def _validate_surface(surface: str) -> None:
     if surface not in SURFACES:
         raise ConfigError(f"Unsupported surface: {surface}. Must be one of: {', '.join(SURFACES)}")
+
+
+def _validate_llm_runtime_config(config: LLMRuntimeConfig) -> None:
+    """Validate concurrency, cache, and role decoding controls."""
+
+    if not 1 <= config.max_concurrency <= 4:
+        raise ConfigError("llm_runtime.max_concurrency must be between 1 and 4")
+    if config.cache_scope not in LLM_CACHE_SCOPES:
+        raise ConfigError(
+            f"Unsupported llm_runtime.cache_scope: {config.cache_scope}. "
+            f"Must be one of: {', '.join(sorted(LLM_CACHE_SCOPES))}"
+        )
+    for role_name, role in config.roles.items():
+        if role.model_profile is not None and not str(role.model_profile).strip():
+            raise ConfigError(f"llm_runtime.roles.{role_name}.model_profile must not be empty")
+        if role.model_name is not None and not str(role.model_name).strip():
+            raise ConfigError(f"llm_runtime.roles.{role_name}.model_name must not be empty")
+        if role.temperature < 0:
+            raise ConfigError(f"llm_runtime.roles.{role_name}.temperature must be >= 0")
+        if role.max_tokens is not None and role.max_tokens <= 0:
+            raise ConfigError(f"llm_runtime.roles.{role_name}.max_tokens must be > 0")
+        if role.structured_output not in STRUCTURED_OUTPUT_MODES:
+            raise ConfigError(
+                f"Unsupported structured output mode for LLM role '{role_name}': "
+                f"{role.structured_output}. Must be one of: "
+                f"{', '.join(sorted(STRUCTURED_OUTPUT_MODES))}"
+            )
 
 
 def _validate_engagement_config(config: EngagementConfig) -> None:
@@ -472,6 +720,8 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
         raise ConfigError("evasion_max_retries must be > 0")
     if config.evasion_cooldown_threshold <= 0:
         raise ConfigError("evasion_cooldown_threshold must be > 0")
+
+    _validate_llm_runtime_config(config.llm_runtime)
 
     if config.matrix:
         if not config.providers:
@@ -539,6 +789,14 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
     ).strip().lower()
     payload_mode = str(merged.get("payload_mode") or "static_only").strip().lower()
     candidate_budget = int(merged.get("candidate_budget") or 5)
+    llm_runtime = _parse_llm_runtime_config(
+        merged,
+        default_profile=provider,
+        # Let the existing engagement validator report an invalid candidate
+        # budget using its established error while keeping role token defaults
+        # positive during this preliminary parse.
+        candidate_budget=max(candidate_budget, 1),
+    )
 
     providers = [str(p).strip().lower() for p in merged.get("providers", merged.get("llm_providers", []))]
     levels = [str(l).strip().lower() for l in merged.get("levels", merged.get("security_levels", []))]
@@ -624,6 +882,7 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         evasion_strategy=str(merged.get("evasion_strategy") or evasion_mode).strip().lower(),
         evasion_attempts_max=int(merged.get("evasion_attempts_max", evasion_max_retries)),
         models=_parse_model_configs(merged.get("models", {})),
+        llm_runtime=llm_runtime,
     )
 
     _validate_engagement_config(config)

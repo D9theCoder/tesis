@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import json
 import logging
 import tempfile
 from collections import deque
+from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -138,6 +140,264 @@ def _coalesce_dashboard_events(events: list[RunEvent]) -> list[RunEvent]:
 def _model_dict(config: EngagementConfig, provider: str) -> dict[str, Any]:
     model = config.models.get(provider)
     return dataclasses.asdict(model) if model else {}
+
+
+LLM_RUNTIME_ROLES = ("orchestrator", "payload_generator")
+LLM_CACHE_SCOPE_CHOICES = (("Disabled", "none"), ("Run-local", "run"))
+LLM_STRUCTURED_OUTPUT_CHOICES = (
+    ("Automatic", "auto"),
+    ("Native JSON schema", "native"),
+    ("JSON prompt", "json_prompt"),
+)
+
+
+def _object_mapping(value: Any) -> dict[str, Any]:
+    """Return a shallow mapping for a typed or YAML-shaped config object."""
+
+    if isinstance(value, Mapping):
+        return dict(value)
+    if dataclasses.is_dataclass(value):
+        try:
+            return dataclasses.asdict(value)
+        except TypeError:
+            return {}
+    if value is None:
+        return {}
+    result: dict[str, Any] = {}
+    for name in (
+        "max_concurrency",
+        "cache_scope",
+        "roles",
+        "model_profile",
+        "model_name",
+        "temperature",
+        "max_tokens",
+        "structured_output",
+    ):
+        if hasattr(value, name):
+            result[name] = getattr(value, name)
+    return result
+
+
+def _config_value(value: Any, key: str, default: Any = None) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(key, default)
+    return getattr(value, key, default)
+
+
+def _runtime_values(config: EngagementConfig) -> dict[str, Any]:
+    """Normalize the optional typed LLM runtime block for UI consumers.
+
+    EngagementConfig is intentionally allowed to evolve from a plain mapping
+    to typed runtime/role dataclasses.  Keeping this conversion in the TUI
+    avoids coupling screens to one representation and leaves old configs with
+    the documented sequential/no-cache defaults.
+    """
+
+    runtime = getattr(config, "llm_runtime", None)
+    raw_runtime = _object_mapping(runtime)
+    raw_scope = raw_runtime.get("cache_scope")
+    if raw_scope is None:
+        raw_scope = "run" if bool(raw_runtime.get("cache_enabled", False)) else "none"
+    scope = str(raw_scope or "none").strip().lower()
+    if scope not in {choice[1] for choice in LLM_CACHE_SCOPE_CHOICES}:
+        scope = "none"
+    try:
+        max_concurrency = int(raw_runtime.get("max_concurrency", 1))
+    except (TypeError, ValueError):
+        max_concurrency = 1
+    roles_value = raw_runtime.get("roles") or {}
+    roles: dict[str, dict[str, Any]] = {}
+    for role in LLM_RUNTIME_ROLES:
+        raw_role = _object_mapping(
+            roles_value.get(role) if isinstance(roles_value, Mapping) else getattr(roles_value, role, None)
+        )
+        roles[role] = {
+            "model_profile": raw_role.get("model_profile"),
+            "model_name": raw_role.get("model_name"),
+            "temperature": raw_role.get("temperature", 0.0),
+            "max_tokens": raw_role.get("max_tokens"),
+            "structured_output": raw_role.get("structured_output", "auto"),
+        }
+    return {
+        "max_concurrency": max_concurrency,
+        "cache_scope": scope,
+        "roles": roles,
+    }
+
+
+def _effective_role_model(
+    config: EngagementConfig,
+    role: str,
+    runtime_values: Mapping[str, Any] | None = None,
+) -> str:
+    """Format one role's effective profile/model without exposing secrets."""
+
+    runtime = dict(runtime_values or _runtime_values(config))
+    role_values = runtime["roles"].get(role, {})
+    profile = str(role_values.get("model_profile") or "").strip()
+    if not profile:
+        profile = str(getattr(config, "provider", "") or "").strip() or "default"
+        if bool(getattr(config, "matrix", False)):
+            profile = "per-coordinate:" + profile
+    lookup_profile = profile.split(":", 1)[-1] if profile.startswith("per-coordinate:") else profile
+    model_name = str(role_values.get("model_name") or "").strip()
+    if not model_name and lookup_profile:
+        model_name = str(_model_dict(config, lookup_profile).get("model_name") or "").strip()
+    return f"{profile}/{model_name or 'default'}"
+
+
+def _llm_runtime_summary(
+    config: EngagementConfig,
+    runtime_values: Mapping[str, Any] | None = None,
+) -> str:
+    runtime = dict(runtime_values or _runtime_values(config))
+    return (
+        f"LLM orchestrator={_effective_role_model(config, 'orchestrator', runtime)}  "
+        f"payload_generator={_effective_role_model(config, 'payload_generator', runtime)}  "
+        f"cache={runtime['cache_scope']}  concurrency={runtime['max_concurrency']}"
+    )
+
+
+def _runtime_role_configs(config: EngagementConfig) -> dict[str, dict[str, Any]]:
+    """Return serializable role settings suitable for runner kwargs."""
+
+    return {
+        role: dict(values)
+        for role, values in _runtime_values(config)["roles"].items()
+    }
+
+
+def _model_configs(config: EngagementConfig) -> dict[str, dict[str, Any]]:
+    """Return all provider profiles as plain mappings for runner boundaries."""
+
+    return {
+        name: dataclasses.asdict(value)
+        for name, value in config.models.items()
+    }
+
+
+def _llm_runtime_kwargs(config: EngagementConfig) -> dict[str, Any]:
+    """Build runtime kwargs while retaining names used by direct callers."""
+
+    runtime = _runtime_values(config)
+    role_configs = _runtime_role_configs(config)
+    runtime_config = {
+        "max_concurrency": runtime["max_concurrency"],
+        "cache_scope": runtime["cache_scope"],
+        "roles": role_configs,
+    }
+    return {
+        "llm_max_concurrency": runtime["max_concurrency"],
+        "llm_cache_scope": runtime["cache_scope"],
+        "llm_cache": runtime["cache_scope"] != "none",
+        "llm_cache_enabled": runtime["cache_scope"] != "none",
+        "role_configs": role_configs,
+        "llm_role_configs": role_configs,
+        "llm_runtime_config": runtime_config,
+    }
+
+
+def _set_config_value(container: Any, key: str, value: Any) -> None:
+    if isinstance(container, Mapping):
+        container[key] = value
+    else:
+        setattr(container, key, value)
+
+
+def _apply_runtime_values(config: EngagementConfig, values: Mapping[str, Any]) -> None:
+    """Apply typed-form controls to a resolved EngagementConfig in place."""
+
+    runtime = getattr(config, "llm_runtime", None)
+    if runtime is None:
+        runtime = {"max_concurrency": 1, "cache_scope": "none", "roles": {}}
+        _set_config_value(config, "llm_runtime", runtime)
+    _set_config_value(runtime, "max_concurrency", int(values["max_concurrency"]))
+    _set_config_value(runtime, "cache_scope", str(values["cache_scope"]))
+    roles = _config_value(runtime, "roles")
+    if roles is None:
+        roles = {}
+        _set_config_value(runtime, "roles", roles)
+    for role in LLM_RUNTIME_ROLES:
+        role_values = dict(values.get("roles", {}).get(role, {}))
+        role_config = (
+            roles.get(role) if isinstance(roles, Mapping) else getattr(roles, role, None)
+        )
+        if role_config is None:
+            role_config = {}
+            if isinstance(roles, Mapping):
+                roles[role] = role_config
+            else:
+                setattr(roles, role, role_config)
+        for key, value in role_values.items():
+            if isinstance(role_config, Mapping):
+                if value is None or value == "":
+                    role_config.pop(key, None)
+                else:
+                    role_config[key] = value
+            else:
+                setattr(role_config, key, value)
+
+
+def _runtime_form_values(screen: Screen, *, prefix: str = "") -> dict[str, Any]:
+    """Read runtime controls from either RunSetupScreen or SettingsScreen."""
+
+    def input_value(name: str) -> str:
+        return screen.query_one(f"#{prefix}{name}", Input).value.strip()
+
+    def select_value(name: str, default: str) -> str:
+        return _select_value(screen, f"#{prefix}{name}", default)
+
+    max_concurrency = int(input_value("llm-max-concurrency") or "1")
+    if not 1 <= max_concurrency <= 4:
+        raise ValueError("llm max concurrency must be between 1 and 4")
+    cache_scope = select_value("llm-cache-scope", "none")
+    roles: dict[str, dict[str, Any]] = {}
+    for role, stem in (("orchestrator", "orchestrator"), ("payload_generator", "payload")):
+        roles[role] = {
+            "model_profile": input_value(f"{stem}-model-profile") or None,
+            "model_name": input_value(f"{stem}-model") or None,
+        }
+    return {
+        "max_concurrency": max_concurrency,
+        "cache_scope": cache_scope,
+        "roles": roles,
+    }
+
+
+def _runtime_cli_overrides(values: Mapping[str, Any]) -> dict[str, Any]:
+    """Expose the same names as headless flags for config-loader versions."""
+
+    result: dict[str, Any] = {
+        "llm_max_concurrency": values["max_concurrency"],
+        "llm_cache_scope": values["cache_scope"],
+        "llm_cache": values["cache_scope"] != "none",
+    }
+    roles = values.get("roles", {})
+    for role, stem in (("orchestrator", "orchestrator"), ("payload_generator", "payload")):
+        role_values = roles.get(role, {})
+        if role_values.get("model_profile"):
+            result[f"{stem}_model_profile"] = role_values["model_profile"]
+        if role_values.get("model_name"):
+            result[f"{stem}_model"] = role_values["model_name"]
+    return result
+
+
+def _invoke_runner(runner: Any, kwargs: dict[str, Any]) -> Any:
+    """Call old/new runners without breaking legacy direct signatures."""
+
+    try:
+        signature = inspect.signature(runner)
+    except (TypeError, ValueError):
+        return runner(**kwargs)
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()):
+        return runner(**kwargs)
+    accepted = {
+        key: value
+        for key, value in kwargs.items()
+        if key in signature.parameters
+    }
+    return runner(**accepted)
 
 
 def _select_value(screen: Screen, selector: str, default: str) -> str:
@@ -316,6 +576,21 @@ class RunSetupScreen(BaseTesisScreen):
                     yield Label("Payload mode")
                     yield Select(((v, v) for v in PAYLOAD_MODE_CHOICES), id="payload-mode")
 
+            yield Label("LLM RUNTIME", classes="section-title")
+            with Grid(classes="form-grid"):
+                yield Label("LLM max concurrency")
+                yield Input("1", type="integer", id="llm-max-concurrency")
+                yield Label("LLM cache scope")
+                yield Select(LLM_CACHE_SCOPE_CHOICES, id="llm-cache-scope")
+                yield Label("Orchestrator model profile")
+                yield Input(id="orchestrator-model-profile")
+                yield Label("Orchestrator model")
+                yield Input(id="orchestrator-model")
+                yield Label("Payload model profile")
+                yield Input(id="payload-model-profile")
+                yield Label("Payload model")
+                yield Input(id="payload-model")
+
             yield Label("BUDGET & POLICY", classes="section-title")
             with Grid(classes="form-grid"):
                 yield Label("Candidate budget")
@@ -336,6 +611,7 @@ class RunSetupScreen(BaseTesisScreen):
                 yield Checkbox("Enriched reporting", id="enriched")
                 yield Checkbox("Diagnostics", id="diagnose")
                 yield Checkbox("Guardrail handling enabled", id="guardrail-enabled")
+            yield Static("", id="setup-summary")
             yield Static("", id="setup-status")
             with Horizontal(classes="actions"):
                 yield Button("Validate only", id="validate-only")
@@ -363,6 +639,13 @@ class RunSetupScreen(BaseTesisScreen):
         self.query_one("#condition", Select).value = cfg.experiment_condition
         self.query_one("#target-method", Select).value = cfg.target_method or ""
         self.query_one("#verbosity", Select).value = cfg.log_verbosity
+        runtime = _runtime_values(cfg)
+        self.query_one("#llm-max-concurrency", Input).value = str(runtime["max_concurrency"])
+        self.query_one("#llm-cache-scope", Select).value = runtime["cache_scope"]
+        for role, stem in (("orchestrator", "orchestrator"), ("payload_generator", "payload")):
+            role_values = runtime["roles"][role]
+            self.query_one(f"#{stem}-model-profile", Input).value = str(role_values.get("model_profile") or "")
+            self.query_one(f"#{stem}-model", Input).value = str(role_values.get("model_name") or "")
         if self.matrix:
             self.query_one("#repeats", Input).value = str(cfg.repeats)
             self._fill_selection("#providers", PROVIDER_CHOICES, cfg.providers)
@@ -376,6 +659,16 @@ class RunSetupScreen(BaseTesisScreen):
             self.query_one("#level", Select).value = cfg.level
             self.query_one("#surface", Select).value = cfg.surface
             self.query_one("#payload-mode", Select).value = cfg.payload_mode
+        self._update_runtime_summary(cfg)
+
+    def _update_runtime_summary(
+        self,
+        config: EngagementConfig,
+        runtime_values: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.query_one("#setup-summary", Static).update(
+            _llm_runtime_summary(config, runtime_values)
+        )
 
     def _fill_selection(self, selector: str, choices: Any, selected: list[str]) -> None:
         widget = self.query_one(selector, SelectionList)
@@ -399,6 +692,21 @@ class RunSetupScreen(BaseTesisScreen):
             total *= count
         self.query_one("#run-total", Static).update(f"{total} runs")
 
+    @on(Input.Changed, "#llm-max-concurrency")
+    @on(Input.Changed, "#orchestrator-model-profile")
+    @on(Input.Changed, "#orchestrator-model")
+    @on(Input.Changed, "#payload-model-profile")
+    @on(Input.Changed, "#payload-model")
+    @on(Select.Changed, "#llm-cache-scope")
+    def update_runtime_preview(self) -> None:
+        if not self.is_mounted or self.config is None:
+            return
+        try:
+            values = _runtime_form_values(self)
+        except (NoMatches, ValueError):
+            return
+        self._update_runtime_summary(self.config, values)
+
     def resolved_config(self) -> EngagementConfig:
         cli_args: dict[str, Any] = {
             "target": self.query_one("#target", Input).value,
@@ -412,6 +720,8 @@ class RunSetupScreen(BaseTesisScreen):
             "evasion_enabled": str(self.query_one("#guardrail-enabled", Checkbox).value).lower(),
             "evasion_mode": _select_value(self, "#guardrail-mode", "reactive"),
         }
+        runtime_values = _runtime_form_values(self)
+        cli_args.update(_runtime_cli_overrides(runtime_values))
         if self.matrix:
             cli_args.update({
                 "matrix": True,
@@ -428,7 +738,22 @@ class RunSetupScreen(BaseTesisScreen):
                 "surface": _select_value(self, "#surface", "sqli"),
                 "payload_mode": _select_value(self, "#payload-mode", "hybrid"),
             })
-        return load_and_resolve_config(config_path=str(CONFIG_PATH), cli_args=cli_args)
+        config = load_and_resolve_config(config_path=str(CONFIG_PATH), cli_args=cli_args)
+        _apply_runtime_values(config, runtime_values)
+        if not self.matrix:
+            model_name = self.query_one("#model", Input).value.strip()
+            if model_name:
+                if config.provider in config.models:
+                    config.models[config.provider].model_name = model_name
+                else:
+                    config.models[config.provider] = ModelConfig(
+                        provider=config.provider,
+                        api_key="",
+                        model_name=model_name,
+                    )
+        self.config = config
+        self._update_runtime_summary(config)
+        return config
 
     @on(Button.Pressed, "#validate-only")
     def validate_only(self) -> None:
@@ -438,6 +763,7 @@ class RunSetupScreen(BaseTesisScreen):
             if self.matrix:
                 total = f" ({len(cfg.providers) * len(cfg.levels) * len(cfg.surfaces) * len(cfg.payload_modes) * cfg.repeats} runs)"
             self.query_one("#setup-status", Static).update(f"✓ Configuration valid{total}")
+            self._update_runtime_summary(cfg)
         except (ConfigError, ValueError) as exc:
             self.query_one("#setup-status", Static).update(f"✗ {exc}")
 
@@ -461,6 +787,7 @@ class RunSetupScreen(BaseTesisScreen):
                         api_key="",
                         model_name=model_name,
                     )
+        self._update_runtime_summary(cfg)
         verbosity = _select_value(self, "#verbosity", "info")
         self.app.push_screen(RuntimeDashboardScreen(
             cfg,
@@ -570,7 +897,8 @@ class RuntimeDashboardScreen(BaseTesisScreen):
         model = _model_dict(self.config, self.config.provider).get("model_name", "default")
         self.header_context = (
             f"{self.config.target_url}  │  {self.config.provider}/{model}  │  "
-            f"{self.condition}  │  {self.config.surface}/{self.target_method or 'auto'}  │  {self.config.level}"
+            f"{self.condition}  │  {self.config.surface}/{self.target_method or 'auto'}  │  {self.config.level}  │  "
+            f"{_llm_runtime_summary(self.config)}"
         )
         self._update_header()
         self.set_interval(1.0, self._update_header)
@@ -730,6 +1058,7 @@ class RuntimeDashboardScreen(BaseTesisScreen):
             "experiment_condition": self.condition,
             "target_method": self.target_method,
         }
+        common.update(_llm_runtime_kwargs(self.config))
         try:
             layout = allocate_artifact_layout(
                 self.config.output_dir,
@@ -737,27 +1066,30 @@ class RuntimeDashboardScreen(BaseTesisScreen):
             )
             common["output_dir"] = str(layout.root)
             if self.matrix:
-                artifacts, aggregate = run_provider_matrix(
+                matrix_kwargs = {
                     **common,
-                    providers=self.config.providers,
-                    security_levels=self.config.levels,
-                    surfaces=self.config.surfaces,
-                    payload_modes=self.config.payload_modes,
-                    repeats=self.config.repeats,
-                    include_aggregate=True,
-                    run_output_dir_factory=layout.child_directory,
-                    model_configs={name: dataclasses.asdict(value) for name, value in self.config.models.items()},
-                )
+                    "providers": self.config.providers,
+                    "security_levels": self.config.levels,
+                    "surfaces": self.config.surfaces,
+                    "payload_modes": self.config.payload_modes,
+                    "repeats": self.config.repeats,
+                    "include_aggregate": True,
+                    "run_output_dir_factory": layout.child_directory,
+                    "model_configs": _model_configs(self.config),
+                }
+                artifacts, aggregate = _invoke_runner(run_provider_matrix, matrix_kwargs)
                 result: Any = aggregate
             else:
-                result = run_single_engagement(
+                single_kwargs = {
                     **common,
-                    security_level=self.config.level,
-                    llm_provider=self.config.provider,
-                    surface=self.config.surface,
-                    payload_mode=self.config.payload_mode,
-                    model_config=_model_dict(self.config, self.config.provider),
-                )
+                    "security_level": self.config.level,
+                    "llm_provider": self.config.provider,
+                    "surface": self.config.surface,
+                    "payload_mode": self.config.payload_mode,
+                    "model_config": _model_dict(self.config, self.config.provider),
+                    "model_profiles": _model_configs(self.config),
+                }
+                result = _invoke_runner(run_single_engagement, single_kwargs)
         except Exception as exc:
             self._post_event(RunEvent(
                 event_type="run.failed",
@@ -1042,6 +1374,32 @@ class SettingsScreen(BaseTesisScreen):
                             yield Checkbox("Enriched reporting", id="settings-enriched")
                             yield Checkbox("Diagnostics", id="settings-diagnose")
                             yield Checkbox("Guardrail handling", id="settings-guardrail-enabled")
+                        yield Label("LLM RUNTIME", classes="section-title")
+                        with Grid(classes="form-grid"):
+                            yield Label("LLM max concurrency")
+                            yield Input("1", type="integer", id="settings-llm-max-concurrency")
+                            yield Label("LLM cache scope")
+                            yield Select(LLM_CACHE_SCOPE_CHOICES, id="settings-llm-cache-scope")
+                            yield Label("Orchestrator model profile")
+                            yield Input(id="settings-orchestrator-model-profile")
+                            yield Label("Orchestrator model")
+                            yield Input(id="settings-orchestrator-model")
+                            yield Label("Orchestrator temperature")
+                            yield Input(type="number", id="settings-orchestrator-temperature")
+                            yield Label("Orchestrator max tokens")
+                            yield Input(type="integer", id="settings-orchestrator-max-tokens")
+                            yield Label("Orchestrator structured output")
+                            yield Select(LLM_STRUCTURED_OUTPUT_CHOICES, id="settings-orchestrator-structured-output")
+                            yield Label("Payload model profile")
+                            yield Input(id="settings-payload-model-profile")
+                            yield Label("Payload model")
+                            yield Input(id="settings-payload-model")
+                            yield Label("Payload temperature")
+                            yield Input(type="number", id="settings-payload-temperature")
+                            yield Label("Payload max tokens")
+                            yield Input(type="integer", id="settings-payload-max-tokens")
+                            yield Label("Payload structured output")
+                            yield Select(LLM_STRUCTURED_OUTPUT_CHOICES, id="settings-payload-structured-output")
                 with TabPane("Advanced YAML", id="raw-settings"):
                     yield TextArea(language="yaml", id="yaml-editor")
             yield Static("", id="settings-status")
@@ -1089,6 +1447,21 @@ class SettingsScreen(BaseTesisScreen):
             self.query_one("#settings-temperature", Input).value = str(model_values.get("temperature", 0.0))
             self.query_one("#settings-timeout", Input).value = str(model_values.get("timeout", 60))
             self.query_one("#settings-api-key", Input).value = ""
+            runtime = _runtime_values(resolved)
+            self.query_one("#settings-llm-max-concurrency", Input).value = str(runtime["max_concurrency"])
+            self.query_one("#settings-llm-cache-scope", Select).value = runtime["cache_scope"]
+            for role, stem in (("orchestrator", "orchestrator"), ("payload_generator", "payload")):
+                role_values = runtime["roles"][role]
+                self.query_one(f"#settings-{stem}-model-profile", Input).value = str(role_values.get("model_profile") or "")
+                self.query_one(f"#settings-{stem}-model", Input).value = str(role_values.get("model_name") or "")
+                self.query_one(f"#settings-{stem}-temperature", Input).value = str(role_values.get("temperature", 0.0))
+                max_tokens = role_values.get("max_tokens")
+                self.query_one(f"#settings-{stem}-max-tokens", Input).value = "" if max_tokens is None else str(max_tokens)
+                structured_output = str(role_values.get("structured_output") or "auto")
+                self.query_one(f"#settings-{stem}-structured-output", Select).value = (
+                    structured_output if structured_output in {choice[1] for choice in LLM_STRUCTURED_OUTPUT_CHOICES}
+                    else "auto"
+                )
             self.query_one("#settings-status", Static).update("Loaded config.yaml")
         except (OSError, ConfigError) as exc:
             self.query_one("#settings-status", Static).update(f"✗ {exc}")
@@ -1149,6 +1522,45 @@ class SettingsScreen(BaseTesisScreen):
                 models.setdefault(provider, {}).pop("base_url", None)
             if literal_secret:
                 models.setdefault(provider, {})["api_key"] = literal_secret
+
+            runtime_payload = payload.setdefault("llm_runtime", {})
+            if not isinstance(runtime_payload, Mapping):
+                raise ConfigError("llm_runtime must be a mapping")
+            max_concurrency = int(self.query_one("#settings-llm-max-concurrency", Input).value)
+            if not 1 <= max_concurrency <= 4:
+                raise ConfigError("llm max concurrency must be between 1 and 4")
+            runtime_payload["max_concurrency"] = max_concurrency
+            runtime_payload["cache_scope"] = _select_value(
+                self, "#settings-llm-cache-scope", "none"
+            )
+            roles_payload = runtime_payload.setdefault("roles", {})
+            if not isinstance(roles_payload, Mapping):
+                raise ConfigError("llm_runtime.roles must be a mapping")
+            for role, stem in (("orchestrator", "orchestrator"), ("payload_generator", "payload")):
+                role_payload = roles_payload.setdefault(role, {})
+                if not isinstance(role_payload, Mapping):
+                    raise ConfigError(f"llm_runtime.roles.{role} must be a mapping")
+                profile = self.query_one(f"#settings-{stem}-model-profile", Input).value.strip()
+                model_override = self.query_one(f"#settings-{stem}-model", Input).value.strip()
+                temperature = float(self.query_one(f"#settings-{stem}-temperature", Input).value)
+                max_tokens_value = self.query_one(f"#settings-{stem}-max-tokens", Input).value.strip()
+                structured_output = _select_value(
+                    self, f"#settings-{stem}-structured-output", "auto"
+                )
+                if profile:
+                    role_payload["model_profile"] = profile
+                else:
+                    role_payload.pop("model_profile", None)
+                if model_override:
+                    role_payload["model_name"] = model_override
+                else:
+                    role_payload.pop("model_name", None)
+                role_payload["temperature"] = temperature
+                if max_tokens_value:
+                    role_payload["max_tokens"] = int(max_tokens_value)
+                else:
+                    role_payload.pop("max_tokens", None)
+                role_payload["structured_output"] = structured_output
 
             if _contains_literal_secret(payload) and not self.literal_warning_acknowledged:
                 self.literal_warning_acknowledged = True
@@ -1716,6 +2128,7 @@ class TesisApp(App[None]):
     .inline-form Input { width: 10; margin: 0 2; }
     .checks Checkbox { margin-right: 2; }
     .actions Button { margin-right: 1; }
+    #setup-summary { min-height: 2; color: #9de9f5; }
     #setup-status, #settings-status, #results-status, #export-status { min-height: 2; color: #e6c66b; }
     #settings-shell TabbedContent { height: 1fr; }
     #yaml-editor { height: 1fr; border: round #1c6073; }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from tesis import tui
+from tesis.model_config import EngagementConfig, ModelConfig
 from tesis.runtime_events import RunEvent
 
 
@@ -37,6 +38,88 @@ def test_matrix_screen_calculates_total_and_uses_compact_layout():
             assert app.screen.matrix
             assert "18 runs" in str(app.screen.query_one("#run-total").render())
             assert app.screen.has_class("compact")
+
+    asyncio.run(scenario())
+
+
+def test_run_setup_round_trips_llm_runtime_controls(monkeypatch):
+    config = EngagementConfig(
+        target_url="http://localhost/dvwa",
+        provider="openai_compatible",
+        level="low",
+        models={
+            "openai_compatible": ModelConfig(
+                "openai_compatible", "", "baseline-model"
+            ),
+        },
+    )
+    config.llm_runtime = {
+        "max_concurrency": 2,
+        "cache_scope": "run",
+        "roles": {
+            "orchestrator": {"model_profile": "orchestrator-profile", "model_name": "orch-model"},
+            "payload_generator": {"model_profile": "payload-profile", "model_name": "payload-model"},
+        },
+    }
+    monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kwargs: config)
+
+    async def scenario() -> None:
+        app = tui.TesisApp()
+        async with app.run_test(size=(120, 44)) as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            setup = app.screen
+            assert isinstance(setup, tui.RunSetupScreen)
+            assert setup.query_one("#llm-max-concurrency").value == "2"
+            assert setup.query_one("#llm-cache-scope").value == "run"
+            assert "orchestrator-profile/orch-model" in str(
+                setup.query_one("#setup-summary").render()
+            )
+
+            setup.query_one("#llm-max-concurrency").value = "1"
+            setup.query_one("#llm-cache-scope").value = "none"
+            setup.query_one("#orchestrator-model-profile").value = "new-orch-profile"
+            setup.query_one("#orchestrator-model").value = "new-orch-model"
+            resolved = setup.resolved_config()
+            assert resolved.llm_runtime["max_concurrency"] == 1
+            assert resolved.llm_runtime["cache_scope"] == "none"
+            assert resolved.llm_runtime["roles"]["orchestrator"]["model_profile"] == "new-orch-profile"
+            assert resolved.llm_runtime["roles"]["orchestrator"]["model_name"] == "new-orch-model"
+
+    asyncio.run(scenario())
+
+
+def test_settings_saves_llm_runtime_controls(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "target_url: http://localhost/dvwa\nprovider: gemini\nlevel: low\n"
+        "models:\n  gemini:\n    model_name: baseline-model\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tui, "CONFIG_PATH", config_path)
+
+    async def scenario() -> None:
+        app = tui.TesisApp()
+        async with app.run_test(size=(120, 44)) as pilot:
+            await pilot.pause()
+            await pilot.press("down", "down", "enter")
+            await pilot.pause()
+            settings = app.screen
+            assert isinstance(settings, tui.SettingsScreen)
+            settings.query_one("#settings-llm-max-concurrency").value = "2"
+            settings.query_one("#settings-llm-cache-scope").value = "run"
+            settings.query_one("#settings-orchestrator-model-profile").value = "orch-profile"
+            settings.query_one("#settings-orchestrator-model").value = "orch-model"
+            settings.query_one("#settings-payload-model-profile").value = "payload-profile"
+            settings.query_one("#settings-payload-model").value = "payload-model"
+            settings.query_one("#settings-save").press()
+            await pilot.pause()
+            saved = config_path.read_text(encoding="utf-8")
+            assert "max_concurrency: 2" in saved
+            assert "cache_scope: run" in saved
+            assert "model_profile: orch-profile" in saved
+            assert "model_name: payload-model" in saved
 
     asyncio.run(scenario())
 

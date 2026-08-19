@@ -64,6 +64,16 @@ def test_headless_flags_are_forwarded_without_opening_tui(monkeypatch):
     assert captured == [["--headless", "--mode", "matrix"]]
 
 
+def test_headless_keyboard_interrupt_is_reported_as_cancelled(monkeypatch, capsys):
+    def interrupting_run(**_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("tesis.headless.run_headless", interrupting_run)
+
+    assert cli.main(["run", "--headless", "--mode", "single"]) == cli.EXIT_OK
+    assert "cancelled" in capsys.readouterr().err.lower()
+
+
 def test_headless_override_parser_maps_csv_coordinates():
     namespace = cli._headless_parser().parse_args([
         "--headless",

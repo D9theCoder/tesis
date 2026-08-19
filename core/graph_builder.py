@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from functools import wraps
 
 from langgraph.graph import END, START, StateGraph
 
@@ -21,6 +22,7 @@ from core.state import ExploitationState
 from foundation.payload_generator import payload_candidate_builder_node
 from foundation.payload_validator import payload_validator_node
 from foundation.recon import recon
+from llm.runtime import serialized_dvwa_node
 
 
 RUNTIME_AGENT_NODE_NAMES: tuple[str, ...] = (
@@ -46,6 +48,16 @@ RUNTIME_AGENT_HANDLERS = {
     "bf_dictionary": bf_dictionary_agent,
     "bf_spray": bf_spray_agent,
 }
+
+
+def _serialized_http_handler(handler):
+    """Wrap a complete recon/method node in the matrix-wide DVWA gate."""
+    @wraps(handler)
+    def wrapped(state):
+        with serialized_dvwa_node():
+            return handler(state)
+
+    return wrapped
 
 
 def route_from_orchestrator(state: ExploitationState) -> str:
@@ -116,14 +128,14 @@ def build_framework(llm_provider: str = "gemini", surface: str = "sqli"):
     # which is imported by graph_builder.
     from core.scorer import scorer
     graph = StateGraph(ExploitationState)
-    graph.add_node("recon", recon)
+    graph.add_node("recon", _serialized_http_handler(recon))
     graph.add_node("orchestrator", orchestrator)
     graph.add_node("payload_candidate_builder", payload_candidate_builder_node)
     graph.add_node("payload_validator", payload_validator_node)
     graph.add_node("chaining_router", chaining_router_node)
     graph.add_node("scorer", scorer)
     for name in RUNTIME_AGENT_NODE_NAMES:
-        graph.add_node(name, RUNTIME_AGENT_HANDLERS[name])
+        graph.add_node(name, _serialized_http_handler(RUNTIME_AGENT_HANDLERS[name]))
         graph.add_edge(name, "chaining_router")
     graph.add_edge(START, "recon")
     graph.add_edge("recon", "orchestrator")

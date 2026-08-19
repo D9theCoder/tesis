@@ -49,3 +49,35 @@ def test_headless_single_run_allocates_dated_layout(monkeypatch, tmp_path: Path)
     manifest = json.loads((root / "experiment.manifest.json").read_text(encoding="utf-8"))
     assert manifest["mode"] == "single-run"
     assert manifest["runs"][0]["artifact"] == "exec-test.json"
+
+
+def test_headless_keyboard_interrupt_persists_cancelled_matrix(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "target_url: http://localhost/dvwa\n"
+        "provider: gemini\n"
+        "level: low\n"
+        "matrix: true\n"
+        "providers: [gemini]\n"
+        "levels: [low]\n"
+        "surfaces: [sqli]\n"
+        "payload_modes: [hybrid]\n"
+        "repeats: 1\n"
+        f"output_dir: {tmp_path / 'results'}\n",
+        encoding="utf-8",
+    )
+
+    def interrupting_matrix(**_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("tesis.headless.run_provider_matrix", interrupting_matrix)
+
+    code, result, root = run_headless(config_path=str(config_path), cli_args={})
+
+    assert code == 0
+    assert result["status"] == "cancelled"
+    aggregate_path = root / f"{result['execution_id']}.matrix.json"
+    assert aggregate_path.exists()
+    manifest = json.loads((root / "experiment.manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "cancelled"
+    assert manifest["aggregate"]["artifact"] == aggregate_path.name

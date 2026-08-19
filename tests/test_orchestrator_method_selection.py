@@ -109,17 +109,16 @@ def test_akg_orchestrator_rejects_cross_surface_llm_choice(monkeypatch):
 
 
 def test_akg_orchestrator_does_not_route_cross_surface_choice_when_none_viable(monkeypatch):
-    """A cross-surface model choice must not become an executable method."""
+    """No viable AKG method stops cleanly without an LLM selection call."""
     class FakeKnowledgeGraph:
         def get_viable_methods(self, surface, observations):
             return []
 
-    class FakeLLM:
-        def invoke(self, messages):
-            return type("Response", (), {"content": '{"next_agent": "ac_force_browse", "selected_method": "ac_force_browse"}'})()
-
     monkeypatch.setattr("agents.orchestrator.AttackKnowledgeGraph", FakeKnowledgeGraph)
-    monkeypatch.setattr("agents.orchestrator.get_llm", lambda *args, **kwargs: FakeLLM())
+    monkeypatch.setattr(
+        "agents.orchestrator.get_llm",
+        lambda *args, **kwargs: pytest.fail("orchestrator LLM must not be called"),
+    )
     result = orchestrator({
         "target_url": "http://localhost/dvwa",
         "security_level": "high",
@@ -145,8 +144,21 @@ def test_akg_orchestrator_does_not_route_cross_surface_choice_when_none_viable(m
     assert result["viable_methods"] == []
     assert result["selected_method"] is None
     assert result["next_agent"] == "scorer"
-    decision = next(event for event in result["telemetry_events"] if event["event"] == "orchestrator.decision")
-    assert decision["payload"] == {"next_agent": "scorer", "used_fallback": True}
+    assert result["task_result"] == "INCOMPLETE"
+    assert result["incomplete_reason"] == "NO_VIABLE_METHODS"
+    assert result["messages"] == []
+    assert result["fallback_events"] == [{
+        "event": "orchestrator.no_viable_methods",
+        "surface": "sqli",
+        "security_level": "high",
+    }]
+    assert result["telemetry_events"] == [{
+        "node": "orchestrator",
+        "iteration": 0,
+        "event": "orchestrator.no_viable_methods",
+        "status": "incomplete",
+        "payload": {"surface": "sqli"},
+    }]
 
 
 def test_akg_viable_methods_are_filtered_to_active_surface(monkeypatch):

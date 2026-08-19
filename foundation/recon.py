@@ -20,7 +20,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from core.state import ExploitationState, SECURITY_LEVELS
-from foundation.http_client import TransportError, RequestTimeoutError
+from foundation.http_client import ContainmentError, TransportError, RequestTimeoutError
 from foundation.session_manager import DVWASession
 
 logger = logging.getLogger(__name__)
@@ -132,7 +132,52 @@ class InputVectorRecord(dict):
 
 # ── Form parsing ──────────────────────────────────────────────────────
 
-def parse_forms(html: str, page_url: str) -> tuple[list[dict], list[dict]]:
+def _recon_containment_event(
+    blocked_url: str,
+    base_url: str,
+    *,
+    kind: str,
+    reason: str,
+) -> dict[str, str | None]:
+    """Build a bounded event for a recon target discarded before HTTP."""
+    return {
+        "kind": kind,
+        "blocked_url": blocked_url,
+        "allowed_host": (urlparse(base_url).netloc or None),
+        "reason": reason,
+    }
+
+
+def _append_containment_event(
+    events: list[dict],
+    event_or_error: dict | ContainmentError,
+) -> None:
+    """Append one containment event without duplicating client-side records."""
+    event = (
+        event_or_error.as_event()
+        if isinstance(event_or_error, ContainmentError)
+        else dict(event_or_error)
+    )
+    if event not in events:
+        events.append(event)
+
+
+def _collect_client_containment_events(session: DVWASession | None, events: list[dict]) -> None:
+    """Copy HTTP-client containment records into the recon state update."""
+    client = getattr(session, "http", None) if session is not None else None
+    client_events = getattr(client, "containment_events", ())
+    if isinstance(client_events, (list, tuple)):
+        for event in client_events:
+            if isinstance(event, dict):
+                _append_containment_event(events, event)
+
+
+def parse_forms(
+    html: str,
+    page_url: str,
+    *,
+    containment_events: list[dict] | None = None,
+) -> tuple[list[dict], list[dict]]:
     """Parse all forms from an HTML page into normalized endpoint and vector records.
 
     Args:
@@ -153,6 +198,15 @@ def parse_forms(html: str, page_url: str) -> tuple[list[dict], list[dict]]:
         endpoint_url = urljoin(page_url, action)
         if not _same_host(endpoint_url, page_url):
             logger.warning("recon: discarded out-of-scope form action %s", endpoint_url)
+            if containment_events is not None:
+                containment_events.append(
+                    _recon_containment_event(
+                        endpoint_url,
+                        page_url,
+                        kind="form",
+                        reason="form action outside allowed DVWA scope",
+                    )
+                )
             continue
 
         params: list[str] = []
@@ -206,7 +260,12 @@ def parse_forms(html: str, page_url: str) -> tuple[list[dict], list[dict]]:
 
 # ── Navigation link extraction ──────────────────────────────────────────
 
-def extract_nav_links(html: str, base_url: str) -> list[str]:
+def extract_nav_links(
+    html: str,
+    base_url: str,
+    *,
+    containment_events: list[dict] | None = None,
+) -> list[str]:
     """Extract and normalize DVWA navigation links from the sidebar/menu.
 
     Focuses on links under ``/vulnerabilities/`` to find module pages.
@@ -229,6 +288,15 @@ def extract_nav_links(html: str, base_url: str) -> list[str]:
         absolute = urljoin(base_url, href)
         if not _same_host(absolute, base_url):
             logger.warning("recon: discarded out-of-scope navigation link %s", absolute)
+            if containment_events is not None:
+                containment_events.append(
+                    _recon_containment_event(
+                        absolute,
+                        base_url,
+                        kind="navigation",
+                        reason="navigation link outside allowed DVWA scope",
+                    )
+                )
             continue
         if "/vulnerabilities/" not in urlparse(absolute).path.lower():
             continue
@@ -346,6 +414,7 @@ def recon(state: ExploitationState) -> dict[str, Any]:
 
     all_endpoints: list[dict] = []
     all_vectors: list[dict] = []
+    containment_events: list[dict] = []
     server_fingerprint: dict[str, str] = {}
 
     session: DVWASession | None = None
@@ -360,12 +429,18 @@ def recon(state: ExploitationState) -> dict[str, Any]:
             login_success = session.login()
             if not login_success:
                 logger.warning("recon: login failed — proceeding with unauthenticated crawl")
+        except ContainmentError as exc:
+            _append_containment_event(containment_events, exc)
+            logger.error("recon: login request violated containment: %s", exc)
         except (TransportError, RequestTimeoutError) as exc:
             logger.error("recon: login request failed: %s", exc)
 
         # Step 2: Set/detect security level
         try:
             session.set_security_level(requested_level)
+        except ContainmentError as exc:
+            _append_containment_event(containment_events, exc)
+            logger.error("recon: security-level request violated containment: %s", exc)
         except ValueError:
             logger.warning("recon: invalid security level %r — defaulting to 'low'", requested_level)
             session.set_security_level("low")
@@ -379,11 +454,19 @@ def recon(state: ExploitationState) -> dict[str, Any]:
         # Also fingerprint server from response headers (AGENTS.md step 1d)
         try:
             index_result = session.http.get("index.php")
-            nav_links = extract_nav_links(index_result.text, session.http.base_url)
+            nav_links = extract_nav_links(
+                index_result.text,
+                session.http.base_url,
+                containment_events=containment_events,
+            )
             # Step 1d: fingerprint server technology from headers
             server_fingerprint = fingerprint_server(dict(index_result.headers))
             if server_fingerprint:
                 logger.info("recon: server fingerprint: %s", server_fingerprint)
+        except ContainmentError as exc:
+            _append_containment_event(containment_events, exc)
+            logger.error("recon: index-page request violated containment: %s", exc)
+            nav_links = []
         except (TransportError, RequestTimeoutError) as exc:
             logger.error("recon: failed to fetch index page: %s", exc)
             nav_links = []
@@ -399,9 +482,16 @@ def recon(state: ExploitationState) -> dict[str, Any]:
 
             try:
                 result = session.http.get(module_url)
-                page_endpoints, page_vectors = parse_forms(result.text, module_url)
+                page_endpoints, page_vectors = parse_forms(
+                    result.text,
+                    module_url,
+                    containment_events=containment_events,
+                )
                 all_endpoints.extend(page_endpoints)
                 all_vectors.extend(page_vectors)
+            except ContainmentError as exc:
+                _append_containment_event(containment_events, exc)
+                logger.warning("recon: request for %s violated containment: %s", module_url, exc)
             except (TransportError, RequestTimeoutError) as exc:
                 logger.warning("recon: failed to fetch %s: %s", module_url, exc)
 
@@ -429,9 +519,15 @@ def recon(state: ExploitationState) -> dict[str, Any]:
                     for signal in accessible_signals
                 )
             )
+        except ContainmentError as exc:
+            _append_containment_event(containment_events, exc)
+            logger.warning("recon: force-browse probe violated containment: %s", exc)
         except (TransportError, RequestTimeoutError, RuntimeError) as exc:
             logger.warning("recon: force-browse probe failed: %s", exc)
 
+    except ContainmentError as exc:
+        _append_containment_event(containment_events, exc)
+        logger.error("recon: unexpected containment violation during crawl: %s", exc)
     except (TransportError, RequestTimeoutError, ValueError, RuntimeError) as exc:
         logger.error("recon: unexpected error during crawl: %s", exc)
 
@@ -442,6 +538,7 @@ def recon(state: ExploitationState) -> dict[str, Any]:
                 session.close()
             except (RuntimeError, OSError) as exc:
                 logger.warning("recon: failed to close session cleanly: %s", exc)
+            _collect_client_containment_events(session, containment_events)
 
     logger.info(
         "recon: discovered %d endpoints and %d input vectors at security level %r",
@@ -481,6 +578,7 @@ def recon(state: ExploitationState) -> dict[str, Any]:
         "security_level": requested_level,
         "next_agent": "orchestrator",
         "observations": observations,
+        "containment_events": containment_events,
     }
 
 

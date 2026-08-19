@@ -120,7 +120,9 @@ class TestUsedFallbackAccuracy:
             "blocked_agents": [],
             "failure_agents": [],
             "current_surface": "sqli",
-            "observations": {},
+            # Keep one method viable so the provider exception path is
+            # exercised; an empty AKG viable set now intentionally skips LLM.
+            "observations": {"union_select_possible": True},
             "scores": {},
             "consecutive_clean_responses": 0,
             "llm_provider": "openai_compatible",
@@ -137,7 +139,7 @@ class TestUsedFallbackAccuracy:
         assert result["fallback_events"] == [{
             "event": "orchestrator.llm_failure",
             "error_type": "RuntimeError",
-            "next_agent": "scorer",
+            "next_agent": "sqli_union",
         }]
 
 

@@ -102,6 +102,18 @@ def _csv_values(raw: str) -> list[str]:
     return [part.strip() for part in str(raw).split(",") if part.strip()]
 
 
+def _llm_concurrency(raw: str) -> int:
+    """Parse the bounded LLM-only concurrency CLI value."""
+
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("LLM concurrency must be an integer from 1 to 4") from exc
+    if not 1 <= value <= 4:
+        raise argparse.ArgumentTypeError("LLM concurrency must be from 1 to 4")
+    return value
+
+
 def _headless_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m tesis run --headless",
@@ -122,6 +134,18 @@ def _headless_parser() -> argparse.ArgumentParser:
     parser.add_argument("--condition", "--experiment-condition", dest="experiment_condition")
     parser.add_argument("--target-method")
     parser.add_argument("--model")
+    parser.add_argument("--llm-max-concurrency", type=_llm_concurrency)
+    parser.add_argument(
+        "--llm-cache",
+        dest="llm_cache",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Reuse successful validated LLM responses within this run.",
+    )
+    parser.add_argument("--orchestrator-model-profile")
+    parser.add_argument("--orchestrator-model")
+    parser.add_argument("--payload-model-profile")
+    parser.add_argument("--payload-model")
     parser.add_argument("--repeats", type=int)
     parser.add_argument("--candidate-budget", type=int)
     parser.add_argument("--iterations", type=int)
@@ -160,7 +184,8 @@ def _headless_overrides(namespace: argparse.Namespace) -> dict[str, object]:
         "target_method", "repeats", "candidate_budget", "iterations", "stop_policy",
         "coverage_target", "output_dir", "format", "log_verbosity", "providers", "levels",
         "surfaces", "payload_modes", "enriched_reporting", "diagnose",
-        "guardrail_retry_enabled", "guardrail_handling",
+        "guardrail_retry_enabled", "guardrail_handling", "llm_max_concurrency", "llm_cache",
+        "orchestrator_model_profile", "orchestrator_model", "payload_model_profile", "payload_model",
     ):
         value = values.get(key)
         if value is not None:
@@ -200,6 +225,9 @@ def _headless_run(arguments: list[str]) -> int:
             cli_args=_headless_overrides(namespace),
             model_name=namespace.model,
         )
+    except KeyboardInterrupt:
+        print("TESIS headless run cancelled", file=sys.stderr)
+        return EXIT_OK
     except (ConfigError, ValueError, OSError) as exc:
         print(f"TESIS headless run failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return EXIT_RUNTIME_ERROR

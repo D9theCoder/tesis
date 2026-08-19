@@ -7,13 +7,18 @@ import logging
 import hashlib
 from typing import Any
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from core.knowledge_graph import AttackKnowledgeGraph
 from foundation.payload_library import PayloadLibrary
 from llm.guardrail_monitor import is_guardrail_refusal, make_guardrail_event
 from llm.prompts.payload_generation_prompt import build_payload_generation_prompt
 from llm.provider import get_llm
+from llm.runtime import (
+    LLMOutputError,
+    PAYLOAD_SCHEMA_VERSION,
+    current_call_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +28,34 @@ _VALID_MODES = {"static_only", "hybrid", "llm_mutation_only"}
 # malformed or truncated output is handled by the existing static-seed
 # fallback and is recorded in the artifact.
 _DEFAULT_MUTATION_MAX_TOKENS = 256
+_PAYLOAD_SYSTEM_MESSAGE = (
+    "You generate constrained payload variants only for an authorized DVWA sandbox. "
+    "Stay within the selected method, preserve seed provenance, never introduce external "
+    f"targets, and follow JSON schema {PAYLOAD_SCHEMA_VERSION}."
+)
+_PAYLOAD_SCHEMA = {
+    "title": "dvwa_payload_variants",
+    "description": "Constrained variants of supplied DVWA payload seeds.",
+    "type": "object",
+    "properties": {
+        "variants": {
+            "type": "array",
+            "maxItems": 1,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "source_seed_id": {"type": "string"},
+                    "mutation_type": {"type": "string"},
+                    "payload_or_logic": {"type": "string"},
+                },
+                "required": ["source_seed_id", "mutation_type", "payload_or_logic"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["variants"],
+    "additionalProperties": False,
+}
 
 
 def _extract_text(raw_content: Any) -> str:
@@ -40,7 +73,48 @@ def _extract_text(raw_content: Any) -> str:
     return str(raw_content)
 
 
-def _parse_candidates(raw_text: str, method: str) -> tuple[list[dict], str]:
+def _validate_variants_payload(
+    payload: dict[str, Any],
+    *,
+    seeds: list[dict],
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    rows = payload.get("variants", payload.get("candidates"))
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("variants must be a non-empty list")
+    seed_ids = {
+        str(seed.get("source_seed_id") or seed.get("candidate_id"))
+        for seed in seeds
+    }
+    allowed = set(str(value) for value in profile.get("allowed_mutation_types", []))
+    normalized: list[dict[str, str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("each variant must be an object")
+        source_seed_id = str(row.get("source_seed_id") or "")
+        mutation_type = str(row.get("mutation_type") or "")
+        payload_or_logic = row.get("payload_or_logic")
+        if source_seed_id not in seed_ids:
+            raise ValueError("variant references an unknown source seed")
+        if mutation_type not in allowed:
+            raise ValueError("variant uses a disallowed mutation type")
+        if not isinstance(payload_or_logic, str) or not payload_or_logic:
+            raise ValueError("variant payload_or_logic must be a non-empty string")
+        normalized.append({
+            "source_seed_id": source_seed_id,
+            "mutation_type": mutation_type,
+            "payload_or_logic": payload_or_logic,
+        })
+    return {"variants": normalized}
+
+
+def _parse_candidates(
+    raw_text: str,
+    method: str,
+    *,
+    seeds: list[dict] | None = None,
+    profile: dict[str, Any] | None = None,
+) -> tuple[list[dict], str]:
     """Parse generated candidates and retain a machine-auditable parse status."""
     try:
         payload = json.loads(raw_text)
@@ -55,7 +129,7 @@ def _parse_candidates(raw_text: str, method: str) -> tuple[list[dict], str]:
             return [], "invalid_json"
     if not isinstance(payload, dict):
         return [], "invalid_schema"
-    rows = payload.get("candidates")
+    rows = payload.get("variants", payload.get("candidates"))
     if not isinstance(rows, list):
         return [], "invalid_schema"
     candidates = []
@@ -63,6 +137,14 @@ def _parse_candidates(raw_text: str, method: str) -> tuple[list[dict], str]:
         if not isinstance(row, dict):
             continue
         candidate = dict(row)
+        seed = next(
+            (
+                item for item in (seeds or [])
+                if str(item.get("source_seed_id") or item.get("candidate_id"))
+                == str(candidate.get("source_seed_id") or "")
+            ),
+            {},
+        )
         digest_src = json.dumps(
             {
                 "index": index,
@@ -82,6 +164,9 @@ def _parse_candidates(raw_text: str, method: str) -> tuple[list[dict], str]:
         candidate.setdefault("source", "llm_generated")
         candidate.setdefault("method", method)
         candidate.setdefault("stage", "exploit")
+        candidate["target_param"] = seed.get("target_param") or candidate.get("target_param")
+        candidate["expected_signal"] = seed.get("expected_signal") or candidate.get("expected_signal")
+        candidate.setdefault("rationale", "constrained model mutation")
         candidates.append(candidate)
     if not rows:
         return [], "empty_candidates"
@@ -109,24 +194,68 @@ def generate_llm_variants(
     budget: int,
 ) -> tuple[list[dict], dict[str, Any] | None, list[dict]]:
     """Generates constrained LLM payload variants from AKG-linked seed candidates."""
+    # Keep the provider request deliberately small.  ``budget`` remains the
+    # execution candidate budget, while one model-produced variant is enough
+    # to exercise constrained mutation; static seeds still supply coverage.
+    model_budget = min(1, budget)
     prompt = build_payload_generation_prompt(
         method=method,
         security_level=str(state.get("security_level", "low")),
         observations=dict(state.get("observations", {})),
         static_seeds=seeds,
         payload_profile=profile,
-        candidate_budget=budget,
+        candidate_budget=model_budget,
     )
     prompt_event = {
         "method": method,
         "provider": state.get("llm_provider", "gemini"),
         "prompt": prompt,
         "candidate_budget": budget,
+        "model_candidate_budget": model_budget,
     }
     try:
-        llm = _build_llm(str(state.get("llm_provider", "gemini")), dict(state.get("model_config", {})))
-        response = llm.invoke([HumanMessage(content=prompt)])
-        text = _extract_text(getattr(response, "content", ""))
+        context = current_call_context()
+        if context is not None:
+            max_tokens = min(512, 96 + 64 * budget)
+            result = context.runtime.invoke(
+                context=context,
+                role="payload_generator",
+                system_message=_PAYLOAD_SYSTEM_MESSAGE,
+                user_message=prompt,
+                schema=_PAYLOAD_SCHEMA,
+                schema_version=PAYLOAD_SCHEMA_VERSION,
+                validator=lambda value: _validate_variants_payload(
+                    value, seeds=seeds, profile=profile
+                ),
+                max_tokens=max_tokens,
+            )
+            text = result.text
+            parsed_payload = result.parsed
+            prompt_event["performance"] = result.performance
+        else:
+            llm = _build_llm(str(state.get("llm_provider", "gemini")), dict(state.get("model_config", {})))
+            response = llm.invoke([
+                SystemMessage(content=_PAYLOAD_SYSTEM_MESSAGE),
+                HumanMessage(content=prompt),
+            ])
+            text = _extract_text(getattr(response, "content", ""))
+            parsed_payload = None
+    except LLMOutputError as exc:
+        text = exc.text
+        prompt_event["performance"] = exc.performance
+        prompt_event["response"] = text
+        if is_guardrail_refusal(text):
+            prompt_event["fallback_reason"] = "guardrail_refusal"
+            return [], prompt_event, [make_guardrail_event(
+                provider=str(state.get("llm_provider", "gemini")),
+                context="payload_generation",
+                response=text,
+            )]
+        runtime_status = str(exc.performance.get("parse_status") or "invalid")
+        parse_status = "incomplete_response" if runtime_status == "incomplete" else "invalid_json"
+        prompt_event["parse_status"] = parse_status
+        prompt_event["fallback_reason"] = parse_status
+        return [], prompt_event, []
     except Exception as exc:
         logger.warning("Payload generation failed; falling back to static seeds: %s", exc)
         prompt_event["error"] = f"{type(exc).__name__}: {exc}"
@@ -143,7 +272,11 @@ def generate_llm_variants(
                 response=text,
             )
         ]
-    candidates, parse_status = _parse_candidates(text, method)
+    if parsed_payload is not None:
+        text = json.dumps(parsed_payload, sort_keys=True, separators=(",", ":"))
+    candidates, parse_status = _parse_candidates(
+        text, method, seeds=seeds, profile=profile
+    )
     prompt_event["parse_status"] = parse_status
     if parse_status != "ok":
         prompt_event["fallback_reason"] = parse_status

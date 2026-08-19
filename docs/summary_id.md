@@ -153,9 +153,311 @@ Semua model diuji dengan konfigurasi yang sama:
 - payload seeds sama
 - validator sama
 - candidate budget sama
-- prompt template sama
+- task tesis dan schema contract sama (dengan capsule ringkas per role)
 - scoring rubric sama
 - jumlah repetisi sama
+
+### 3.6 Akselerasi Runtime LLM
+
+Latency model dikurangi tanpa mengubah kondisi tesis atau berbagi pengetahuan
+adaptif antar koordinat matrix. Konfigurasi repository mengaktifkan paling
+banyak dua operasi LLM yang berjalan bersamaan dan cache yang hanya berlaku
+untuk satu run:
+
+```yaml
+llm_runtime:
+  max_concurrency: 2
+  cache_scope: run
+  roles:
+    orchestrator:
+      model_profile: openai_compatible
+      temperature: 0
+      max_tokens: 256  # hasil preflight provider; profil non-reasoning dapat memakai 96
+      structured_output: auto
+    payload_generator:
+      model_profile: openai_compatible
+      temperature: 0
+      max_tokens: 768  # batas eksplisit gateway untuk satu varian
+      structured_output: auto
+```
+
+Setiap role mewarisi provider, endpoint, credentials, timeout, dan model
+default dari `models.<model_profile>`. `model_name` pada level role dapat
+digunakan sebagai override. Jika tidak diatur eksplisit, batas token
+payload-generator adalah `min(512, 96 + 64 * candidate_budget)`. Kontrol
+headless dan TUI dapat mengubah profile/model role, kebijakan cache, dan
+concurrency LLM, tetapi concurrency efektif dibatasi 1--4; single run selalu
+menggunakan concurrency efektif satu.
+
+Runtime mengirim system message yang stabil berisi otorisasi DVWA, aturan
+containment, instruksi role, dan schema version. Setiap koordinat hanya
+menerima capsule ringkas yang lokal terhadap koordinat tersebut. Orchestrator
+menerima surface, security level, method viable/attempted/blocked/failed,
+observations, score, confirmed findings, outcomes, payload mode, dan sisa
+iterasi. Payload generator menerima selected method, security level,
+observations yang berlaku, static seeds terpilih, batas mutasi, expected
+signals, dan candidate budget. Full conversation history, raw HTTP body dan
+trace, credentials yang ditemukan saat eksekusi, wording refusal sebelumnya,
+serta data dari koordinat lain tidak dikirim ulang. Field `messages` yang
+lama boleh dipertahankan untuk audit, tetapi tidak otomatis menjadi context
+model.
+
+Output orchestrator hanya berupa keputusan terstruktur berikut; expected
+outcome dan fallback diturunkan secara deterministik:
+
+```json
+{"next_agent":"sqli_union","reason_code":"best_viable"}
+```
+
+Payload generator hanya mengembalikan variant yang dibatasi:
+
+```json
+{
+  "variants": [
+    {
+      "source_seed_id": "seed-id",
+      "mutation_type": "case_variant",
+      "payload_or_logic": "value"
+    }
+  ]
+}
+```
+
+Candidate ID, source, method, stage, target parameter, expected signal, dan
+provenance diisi secara deterministik setelah parsing dan validasi. Pada
+`structured_output: auto`, preflight framework mencatat dukungan JSON Schema
+native per role/profile dan menggunakannya bila tersedia; jika tidak,
+framework memakai compact JSON prompt. Output invalid, incomplete, atau
+gagal validasi schema langsung dicatat lalu fallback ke static seeds; tidak
+ada repair loop tanpa batas. Hanya refusal aktual yang mengaktifkan
+guardrail. Capsule context atau cache hit tidak dihitung sebagai guardrail
+check.
+
+Satu runtime service berscope matrix memiliki client pool terbatas yang dikunci
+oleh role dan fingerprint konfigurasi model yang sudah direduksi. Call
+melakukan lease client agar koneksi provider dapat digunakan kembali tanpa
+menganggap satu client provider aman dipakai bersamaan. Context lokal
+koordinat memiliki cache dan telemetry sendiri dan tidak pernah dipakai ulang
+oleh koordinat lain. Hanya response yang sukses dan valid terhadap schema yang
+di-cache. Cache key memuat role, model fingerprint, schema version, pesan
+system/user canonical, batas token, dan decoding settings sehingga perubahan
+schema atau prompt membatalkan entry lama. Cache hanya berlaku dalam run yang
+sama dan tidak memindahkan outcome adaptif atau payload history antar
+koordinat.
+
+Worker matrix hanya boleh overlap pada bagian LLM sampai `llm_max_concurrency`.
+Node reconnaissance dan method-agent lengkap memakai satu HTTP semaphore
+matrix-wide, sehingga request DVWA, timing evidence, dan rate-limit signal
+tetap serial. Operasi orchestrator dan payload generation berada di luar gate
+HTTP dan boleh overlap. Direktori serta index koordinat dialokasikan sebelum
+worker dimulai; hasil dikembalikan ke urutan koordinat canonical dan event
+sink yang diserialisasi mencegah state TUI rusak. Saat cancellation, submission
+baru dihentikan, operasi LLM/HTTP aktif dibiarkan mencapai safe boundary, lalu
+artifact selesai maupun dibatalkan disimpan.
+
+Setiap call mempertahankan `llm_activity` dan menambahkan record performance
+per role yang bebas secret: prompt hash, role, model fingerprint, cache
+hit/miss, queue wait, durasi call, structured-output mode, parse status, serta
+token usage provider bila tersedia. Telemetry agregat memuat waktu per role,
+cache-hit rate, invalid-output rate, dan peak concurrency LLM/DVWA node. Raw
+prompt dan secret tidak disimpan dalam performance summary.
+
+### 3.7 Catatan Perubahan Arsitektur: Sebelum dan Sesudah
+
+Subbagian ini mencatat delta implementasi yang diperkenalkan oleh runtime yang
+dipercepat. Perubahan ini adalah perubahan arsitektur eksekusi dan
+observability, bukan perubahan terhadap faktor eksperimen tesis. Scope DVWA,
+AKG, registry method, payload seeds, validator, rubric scoring, security level,
+payload mode, kondisi, dan kebijakan repetisi tetap sama.
+
+#### 3.7.1 Topologi eksekusi dan batas concurrency
+
+Sebelum perubahan runtime, matrix menjalankan coordinate secara serial. Client
+provider diperoleh pada batas pemanggilan agent, dan arsitektur belum
+membedakan bagian coordinate yang aman untuk overlap dari bagian yang harus
+menjaga timing dan session evidence DVWA. Dalam praktiknya seluruh coordinate
+menjadi satu unit serial:
+
+```text
+coordinate 1: recon -> orchestrator -> payload -> method -> scoring
+coordinate 2: recon -> orchestrator -> payload -> method -> scoring
+coordinate 3: recon -> orchestrator -> payload -> method -> scoring
+```
+
+Sesudah perubahan, satu `LLMRuntime` berscope matrix memiliki kontrol
+concurrency. Worker coordinate boleh overlap hanya ketika menunggu atau
+menjalankan operasi LLM, dengan batas efektif `llm_max_concurrency` (2 pada
+konfigurasi repository). Reconnaissance dan seluruh node method-agent dibungkus
+oleh satu HTTP semaphore berukuran 1:
+
+```text
+matrix workers (maksimum dua)
+  coordinate A: [orchestrator/payload LLM] ----┐
+  coordinate B: [orchestrator/payload LLM] ----┤ boleh overlap
+                                               │
+  coordinate A: [recon atau method HTTP] ------┤ HTTP gate = 1
+  coordinate B: [recon atau method HTTP] ------┘ menunggu
+```
+
+Batas ini dibuat secara sengaja. Latency LLM diparalelkan, tetapi simultaneous
+request ke DVWA tidak digunakan sebagai evidence tesis. Request SQLi timing,
+brute force, cookie, security-level state, rate-limit signal, dan klasifikasi
+timing tetap serial. Single-coordinate run memakai service yang sama dengan
+concurrency efektif satu. Full-coordinate concurrency didokumentasikan
+terpisah sebagai feasibility study dan tidak diaktifkan untuk evidence tesis.
+
+#### 3.7.2 Kepemilikan client model dan isolasi coordinate
+
+Sebelum perubahan, setiap call orchestrator atau payload-generation dapat
+membuat atau memperoleh client provider pada batas node. Belum ada pool matrix-
+wide yang mengidentifikasi pemisahan role dan konfigurasi model yang tidak
+kompatibel, serta belum ada cache response run-local yang dapat diaudit per
+coordinate.
+
+Sesudah perubahan, `llm/runtime.py` menyediakan service matrix-wide dengan
+client pool terbatas. Pool dikunci oleh `(role, redacted model-configuration
+fingerprint)`:
+
+* orchestrator dan payload generator tidak berbagi setting model yang tidak
+  kompatibel;
+* client di-lease lalu dikembalikan sehingga koneksi dapat digunakan kembali
+  tanpa menganggap client provider aman untuk thread secara bersamaan;
+* fingerprint membedakan konfigurasi tanpa menyimpan API key atau secret;
+* setiap coordinate memiliki context, cache, call sequence, dan performance
+  record sendiri.
+
+Cache sengaja berscope coordinate dan run. Entry hanya dibuat setelah response
+lulus parsing JSON dan validasi schema. Cache key memuat role, model
+fingerprint, schema version, pesan system/user canonical, batas token,
+temperature, dan setting structured-output. Dengan demikian perubahan prompt
+atau schema membatalkan entry lama, sedangkan adaptive outcome dan payload
+history tidak dapat bocor antar-coordinate. Cache hit terlihat di telemetry,
+tetapi tidak mengirim request provider baru dan tidak menjalankan guardrail
+check baru.
+
+#### 3.7.3 Context dan output contract
+
+Kontrak model lama mengekspos response yang lebih besar dan kurang stabil.
+Response orchestrator dapat berisi selected method, reasoning summary,
+fallback plan, score, dan update AKG. Payload generation dapat mengembalikan
+candidate object verbose dengan metadata yang sebenarnya dapat dihitung oleh
+harness. Parsing bergantung pada free-form text sehingga invalid JSON sering
+terjadi.
+
+Kontrak baru memisahkan keputusan model dari data yang ditentukan secara
+deterministik oleh harness:
+
+| Concern | Sebelum | Sesudah |
+| --- | --- | --- |
+| Input orchestrator | State luas dan legacy message context dapat direplay | Capsule ringkas berisi surface, level, method viable/attempted/blocked/failed dari AKG, observations, scores, findings, outcomes, payload mode, dan sisa iterasi |
+| Input payload | Context method dan context generation yang lebih besar | Selected method, level, observations yang berlaku, static seeds terpilih, batas mutasi, expected signals, dan budget |
+| Output orchestrator | Selection dan planning free-form/verbose | `{"next_agent":"...","reason_code":"..."}` |
+| Output payload | Candidate object besar dengan metadata dari model | Satu variant terbatas berisi `source_seed_id`, `mutation_type`, dan `payload_or_logic` |
+| Metadata turunan | Sebagian diberikan oleh model | Candidate ID, method, stage, target parameter, expected signal, fallback, score, dan provenance diisi harness |
+| Reuse context | Conversation/history dapat mempengaruhi call berikutnya | Capsule lokal coordinate; history penuh, raw HTTP body, credential, wording refusal, dan outcome coordinate lain dikeluarkan |
+
+Native structured output dipilih saat preflight jika didukung. Jalur
+OpenAI-compatible memakai function calling; provider lain memakai JSON Schema.
+Jika `structured_output` bernilai `auto` dan gateway menolak native structured
+output, runtime mencatat capability lalu memakai satu compact JSON prompt
+fallback. Validator lokal tetap menjadi otoritas pada kedua jalur.
+
+#### 3.7.4 Klasifikasi failure dan perilaku fallback
+
+Jalur lama memperlakukan beberapa failure berbeda sebagai variasi dari “model
+tidak menghasilkan JSON yang dapat dipakai”. Jalur baru mempertahankan
+perbedaannya pada state dan artifact:
+
+| Kondisi | Sebelum | Sesudah |
+| --- | --- | --- |
+| JSON malformed | Loose parsing atau response dibuang; penyebab sulit dipisahkan | `parse_status=invalid`, optional `invalid_json_events`, fallback deterministic per role, dan tidak masuk cache |
+| Output terpotong/batas token | Dapat dianggap malformed JSON biasa | `parse_status=incomplete`; tidak masuk cache dan langsung fallback |
+| Method tidak diizinkan | Model dapat menyebut method unavailable atau cross-surface sebelum route final | Dynamic allowed-method schema dan allow-list lokal; nama tersebut tidak executable dan pilihan deterministic dicatat di `fallback_events` |
+| Payload gagal validasi | Candidate invalid dapat mengurangi candidate set tanpa provenance lengkap | Static seeds tetap tersedia, generated candidate invalid ditolak sebelum eksekusi, dan alasan validation/provenance disimpan |
+| Failure provider/network | Fallback dapat membuat partial run terlihat sukses | `LLM_RUNTIME_FAILURE` dicatat; fallback hanya dipertahankan untuk audit dan runner menandai run incomplete/error |
+| Tidak ada method viable di AKG | Orchestrator masih dapat dipanggil dan mengembalikan nilai mustahil sehingga terminal result ambigu | Automatic AKG-guided selection melewati LLM, route ke `scorer`, dan mencatat `NO_VIABLE_METHODS` |
+
+Tidak ada repair loop tanpa batas untuk output malformed atau incomplete.
+Orchestrator memakai fallback method yang dibatasi AKG atau scorer; payload
+generator memakai static seeds. Static fallback tidak pernah dianggap sebagai
+bukti bahwa call model berhasil. Payload validator dan layer HTTP containment
+tetap wajib setelah fallback apa pun.
+
+#### 3.7.5 Penanganan guardrail/refusal
+
+Sebelum perubahan, penanganan refusal dan parsing output berada dalam jalur
+model yang lebih besar, sehingga refusal, malformed JSON, dan provider
+exception dapat dilaporkan terlalu mirip. Sesudah perubahan, guardrail hanya
+aktif untuk response refusal aktual. Capsule context, cache hit, invalid JSON,
+schema failure, dan timeout tidak dihitung sebagai guardrail activation.
+
+Untuk refusal orchestrator dalam reactive mode, runtime:
+
+1. mencatat check refusal dan event guardrail;
+2. melakukan retry terbatas yang hanya merestrukturisasi klarifikasi scope
+   DVWA terotorisasi jika dikonfigurasi;
+3. mencatat apakah retry berhasil atau budget retry habis; dan
+4. memakai fallback yang dibatasi AKG atau scorer jika refusal tetap terjadi.
+
+Jalur retry tidak memakai jailbreak, deception, roleplay, prompt injection, atau
+adaptasi target eksternal. Refusal tidak memasukkan fallback method ke
+`blocked_agents`, karena refusal adalah kondisi response model, bukan evidence
+method. Refusal pada payload generation langsung membuang generated variant,
+mencatat `payload_guardrail_activations`, dan memakai static seeds.
+
+#### 3.7.6 Delta artifact dan observability
+
+Artifact lama sudah menyimpan metadata eksperimen inti, final state, execution
+evidence, dan coarse LLM activity. Namun, informasi role-level untuk
+menjelaskan latency, cache, structured-output capability, dan concurrency belum
+selalu tersedia. Artifact baru menambahkan lapisan audit berikut:
+
+| Lapisan artifact | Sebelum | Sesudah |
+| --- | --- | --- |
+| Identitas run | Metadata run dan final state | Run ID plus execution ID, config fingerprint, condition, repeat, dan effective runtime config |
+| Aktivitas provider | Informasi started/completed/failure yang coarse | Lifecycle record direkonsiliasi dengan runtime sehingga satu call tidak dihitung dua kali |
+| Performance per call | Evidence terbatas atau spesifik provider | Role, provider, model fingerprint, prompt hash, cache hit, queue wait, durasi, structured-output mode, parse status, dan token usage |
+| Kualitas output | Field invalid JSON/fallback ada tetapi klasifikasinya belum seragam | Evidence terpisah untuk invalid, incomplete, provider-error, refusal, fallback, dan no-viable-method |
+| Audit payload | Candidate dan execution evidence | Generated candidate, hasil validation accepted/rejected, provenance deterministik, source seed, mutation, target parameter, dan expected signal |
+| Concurrency | Peak LLM/DVWA node tidak tersedia per artifact | Peak LLM concurrency, peak DVWA-node concurrency, waktu per role, cache-hit rate, dan invalid-output rate |
+| Failure audit | Artifact utama dapat menjadi satu-satunya record | Error artifact memuat terminal reason, recent events, provider activity, fallback events, dan containment events |
+| Agregasi matrix | Total eksperimen dalam urutan runner | Urutan coordinate canonical plus aggregate audit totals dan summary performance per role |
+
+Performance summary memakai hash dan fingerprint yang sudah direduksi, bukan
+raw prompt atau secret. Execution log dan optional JSONL sidecar tetap tersedia
+untuk audit event-level, sedangkan coordinate yang dibatalkan disimpan dengan
+reason `CANCELLED`, bukan dihilangkan diam-diam.
+
+#### 3.7.7 Urutan deterministik dan cancellation
+
+Eksekusi serial sebelumnya membuat urutan artifact menjadi implisit. Runner
+concurrent sekarang melakukan preallocation directory dan index coordinate
+sebelum worker dikirim. Worker boleh selesai out-of-order, tetapi setiap hasil
+ditulis kembali ke posisi coordinate asal sehingga aggregate tetap canonical.
+Adapter event sink yang diserialisasi mencegah state TUI atau urutan event
+rusak akibat worker bersamaan.
+
+Saat cancellation diminta, runner berhenti mengirim coordinate baru,
+membiarkan operasi LLM aktif dan HTTP serial mencapai safe boundary, lalu
+menyimpan artifact yang selesai maupun yang dibatalkan. Evidence parsial tetap
+tersedia dan coordinate yang dibatalkan tidak dianggap sebagai eksperimen
+sukses.
+
+#### 3.7.8 Invariant tesis yang tetap dipertahankan
+
+Perubahan sebelum/sesudah ini hanya ditujukan untuk latency dan auditability.
+Perubahan ini tidak:
+
+* menambah vulnerability surface atau dynamic method agent;
+* mengubah AKG static, precondition, atau chain semantics;
+* membagikan adaptive observation, payload history, atau confirmed outcome antar-coordinate;
+* mengeksekusi payload yang belum divalidasi;
+* menjalankan request timing-sensitive DVWA secara bersamaan pada satu instance;
+* mengubah definisi kondisi `linear_hybrid` dan `akg_guided_hybrid`; atau
+* mengubah dimensi scoring dan kebutuhan manual-scoring evidence.
+
+Dengan demikian, implementasi mengubah runtime envelope di sekitar workflow
+tesis, tetapi causal factor eksperimen dan aturan evidence tetap konstan.
 
 ## 4. AKG Technical Model
 
@@ -253,32 +555,52 @@ Orchestrator menerima:
 - security level
 - observations
 - viable methods dari AKG
-- attempted agents
-- failure agents
-- blocked agents
+- attempted methods
+- failed methods
+- blocked methods
+- current scores
+- confirmed findings
+- achieved outcomes
+- payload mode
 - remaining iteration budget
 
-Output orchestrator:
+LLM hanya melihat capsule orchestrator yang ringkas dan mengembalikan:
 
-```text
-selected_method
-reasoning_summary
-fallback_plan
-akg_path update
-method_score candidate
+```json
+{"next_agent":"sqli_union","reason_code":"best_viable"}
 ```
 
-Jika output LLM tidak valid, sistem melakukan retry terbatas atau fallback berbasis AKG.
+`selected_method`, expected outcome, fallback plan, pembaruan AKG path, dan
+score diturunkan secara deterministik. Output invalid dicatat dan memakai
+jalur fallback static/AKG pada section 3.6.
 
 ### 5.3 Payload Candidate Builder
 
-Builder mengambil static seeds dari `payload_library`, lalu membuat variasi LLM jika mode hybrid aktif.
+Builder mengambil static seeds dari `payload_library`, lalu membuat variasi
+LLM jika mode hybrid aktif. LLM hanya menerima selected method, security
+level, observations yang berlaku, seeds terpilih, batas mutasi, expected
+signals, dan candidate budget.
 
-Output kandidat wajib memiliki metadata:
+Output kandidat dari LLM dibatasi menjadi:
+
+```json
+{
+  "variants": [
+    {
+      "source_seed_id": "seed-id",
+      "mutation_type": "case_variant",
+      "payload_or_logic": "value"
+    }
+  ]
+}
+```
+
+Builder memperkaya setiap variant yang diterima secara deterministik dengan:
 
 ```text
 candidate_id
 method
+stage
 payload_value or action_value
 target_param
 source
@@ -392,6 +714,32 @@ Setiap skenario dijalankan minimal tiga kali. Repetisi digunakan untuk mengukur:
 - variasi token cost
 - consistency score
 
+### 6.4 Acceptance Runtime dan Feasibility Concurrency
+
+Akselerasi runtime diterapkan sama pada `linear_hybrid` dan
+`akg_guided_hybrid`: condition, surface, level, payload mode, method coverage,
+repeat count, validator, scoring, dan aturan containment tidak berubah.
+Re-run matrix yang diotorisasi dengan 18 koordinat harus mempertahankan
+koordinat yang sama dan melaporkan peak LLM concurrency paling tinggi 2 serta
+peak DVWA-node concurrency tepat 1 pada setiap artifact. Acceptance juga
+mensyaratkan invalid-JSON rate payload paling tinggi 5%, tidak ada containment
+failure atau kebocoran state antar koordinat, tidak ada kenaikan dari baseline
+guardrail count nol, pengurangan total LLM wall time minimal 30%, serta
+telemetry role/cache/performance yang lengkap. Jika threshold invalid JSON
+terlampaui, role generator tersebut ditolak untuk eksperimen utama.
+
+Full-coordinate concurrency adalah feasibility study terpisah dan tidak
+diaktifkan untuk evidence tesis. Bandingkan lebih dulu eksekusi serial dengan
+dua worker untuk method non-timing pada instance DVWA yang ada. Concurrency
+SQLi timing dan brute-force hanya boleh diuji pada replica DVWA yang terisolasi;
+request timing-sensitive bersamaan pada satu instance tidak pernah menjadi
+evidence. Opsi masa depan `matrix_max_concurrency` hanya boleh diaktifkan jika
+hasil tiga repetisi menunjukkan tidak ada cookie/security-level leakage,
+confirmed findings dan terminal status tetap sama, timing classification tetap
+sama, drift P95 latency non-delay di bawah 10%, serta tidak ada rate-limit atau
+containment event baru. Sebelum semua gate terpenuhi, HTTP serialization dan
+penjadwalan berbasis replica tetap menjadi kebijakan.
+
 ## 7. Evaluation Metrics
 
 ### 7.1 Composite Score
@@ -439,6 +787,11 @@ disimpan secara terpisah.
 | `consistency_score` | Stabilitas hasil antar repetisi |
 | `attempts_to_success` | Jumlah attempt sampai success |
 | `token_cost_per_success` | Estimasi biaya token per exploit berhasil |
+| `llm_role_time` | Total wall time LLM berdasarkan role |
+| `llm_cache_hit_rate` | Rasio cache hit lokal koordinat |
+| `llm_invalid_output_rate` | Rasio response terstruktur yang invalid/incomplete |
+| `peak_llm_concurrency` | Maksimum operasi LLM yang overlap |
+| `peak_dvwa_node_concurrency` | Maksimum overlap node recon/method HTTP |
 
 ## 8. Validation Protocol
 
@@ -464,7 +817,10 @@ Preliminary validation sebelum eksperimen utama:
 
 ## 9. Guardrail Handling
 
-Framework menggunakan retry dan validation gate untuk menangani output invalid atau refusal. Framework tidak menggunakan jailbreak, roleplay deception, atau adversarial prompt injection.
+Framework menggunakan validation gate untuk menangani structured output atau
+refusal. Framework tidak menggunakan jailbreak, roleplay deception, atau
+adversarial prompt injection. Native structured output dipilih saat preflight
+jika didukung; jika tidak, compact JSON prompt digunakan.
 
 Alur:
 
@@ -473,8 +829,8 @@ LLM call
   -> guardrail check
   -> JSON/schema validation
       -> valid: continue
-      -> invalid: retry structure-only clarification
-      -> refusal: log guardrail activation and fallback
+      -> invalid/incomplete: catat invalid output dan gunakan static seeds
+      -> refusal: catat guardrail activation dan gunakan deterministic fallback
 ```
 
 Fallback yang diperbolehkan:
@@ -493,7 +849,7 @@ Fallback yang diperbolehkan:
 | Payload | Invalid schema, duplicate, wrong method, out of scope | Reject sebelum eksekusi |
 | AKG | No viable method, incomplete payload profile | Stop terkontrol atau fallback valid |
 | LangGraph | Node failure, route invalid, iteration limit | State tetap disimpan, routing ke chaining router atau scorer |
-| LLM | Refusal, invalid JSON, API timeout, empty output | Retry terbatas, guardrail log, fallback |
+| LLM | Refusal, invalid JSON, API timeout, empty output | Catat event, gunakan static/AKG fallback, tanpa repair loop tanpa batas |
 | Execution | No success signal, unstable evidence | Catat partial atau failure berdasarkan verifier |
 
 ## 11. Artifact Schema
@@ -535,6 +891,9 @@ fallback_events
 attempts_to_success
 token_usage
 token_cost
+llm_activity
+llm_performance
+llm_runtime_telemetry
 config
 final_state
 error

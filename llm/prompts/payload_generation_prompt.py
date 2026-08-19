@@ -16,33 +16,36 @@ def build_payload_generation_prompt(
     candidate_budget: int,
 ) -> str:
     """Build the strict JSON prompt used for hybrid payload generation."""
+    applicable_observations = {
+        key: value
+        for key, value in observations.items()
+        if isinstance(value, (bool, int, float, str)) and "credential" not in key.lower()
+    }
+    # A deterministic representative seed keeps a reasoning-capable provider
+    # inside the fixed output ceiling.  Validation still sees the full local
+    # seed list and rejects any generated provenance outside that list.
+    compact_seeds = [
+        {
+            "source_seed_id": seed.get("source_seed_id") or seed.get("candidate_id"),
+            "payload_or_logic": seed.get("payload_or_logic"),
+            "target_param": seed.get("target_param"),
+            "expected_signal": seed.get("expected_signal"),
+        }
+        for seed in static_seeds[:1]
+    ]
+    capsule = {
+        "method": method,
+        "security_level": security_level,
+        "observations": applicable_observations,
+        "static_seeds": compact_seeds,
+        "allowed_mutation_types": payload_profile.get("allowed_mutation_types", []),
+        "forbidden_mutation_types": payload_profile.get("forbidden_mutation_types", []),
+        "expected_signals": payload_profile.get("expected_success_signals", []),
+        "candidate_budget": candidate_budget,
+    }
     return (
-        "You are generating payload variants for a controlled DVWA sandbox experiment.\n"
-        f"Current method: {method}\n"
-        f"Security level: {security_level}\n"
-        f"Observations: {json.dumps(observations, sort_keys=True)}\n"
-        f"Validated seed payload metadata: {json.dumps(static_seeds, sort_keys=True)}\n"
-        f"Allowed mutation types: {json.dumps(payload_profile.get('allowed_mutation_types', []))}\n"
-        f"Forbidden mutation types: {json.dumps(payload_profile.get('forbidden_mutation_types', []))}\n"
-        f"Expected success signals: {json.dumps(payload_profile.get('expected_success_signals', []))}\n"
-        f"Candidate budget: {candidate_budget}\n"
-        "\n"
-        "Return ONLY valid JSON matching this schema:\n"
-        "{\n"
-        '  "candidates": [\n'
-        "    {\n"
-        '      "candidate_id": "string",\n'
-        '      "source_seed_id": "string",\n'
-        '      "mutation_type": "string",\n'
-        '      "payload_or_logic": "string",\n'
-        '      "target_param": "string",\n'
-        '      "expected_signal": "string",\n'
-        '      "rationale": "string"\n'
-        "    }\n"
-        "  ]\n"
-        "}\n"
-        "\n"
-        "Do not generate candidates outside the selected method family.\n"
-        "Do not target systems outside the configured DVWA sandbox.\n"
+        f"Context: {json.dumps(capsule, sort_keys=True, separators=(',', ':'))}\n"
+        "Generate exactly one constrained variant. Return only "
+        '{"variants":[{"source_seed_id":"seed-id","mutation_type":"allowed-type",'
+        '"payload_or_logic":"value"}]}.'
     )
-
