@@ -33,6 +33,7 @@ def test_get_llm_openai(monkeypatch):
     assert isinstance(llm, ChatOpenAI)
     assert llm.model_name == "gpt-4o-mini"
     assert llm.max_retries == 0
+    assert llm.max_tokens == provider_module.DEFAULT_MAX_OUTPUT_TOKENS
 
 
 def test_get_llm_openai_compatible_base_url(monkeypatch):
@@ -56,6 +57,7 @@ def test_get_llm_openai_compatible_with_base_url(monkeypatch):
     assert llm.model_name == "llama3.2"
     assert llm.openai_api_base == "http://localhost:11434/v1"
     assert llm.max_retries == 0
+    assert llm.max_tokens == provider_module.DEFAULT_MAX_OUTPUT_TOKENS
 
 
 def test_typed_model_config_preserves_provider_timeout():

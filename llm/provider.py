@@ -13,6 +13,12 @@ from langchain_core.messages import HumanMessage
 
 SUPPORTED_PROVIDERS = ["gemini", "openai", "claude", "openai_compatible"]
 SAMPLE_QUERY = "What model are you? Reply with your model name only."
+# Provider APIs treat an omitted output limit as unbounded.  That is unsafe for
+# streamed experiment calls: a model can keep the HTTP response open long
+# enough to outlive the runner's per-request read timeout.  Callers may still
+# override this explicitly through ``max_tokens`` (or ``max_output_tokens``
+# where the provider uses that spelling).
+DEFAULT_MAX_OUTPUT_TOKENS = 512
 logger = logging.getLogger(__name__)
 
 # NOTE: Callers must load env vars before importing if needed (e.g. via load_dotenv())
@@ -51,6 +57,8 @@ def get_llm(provider_name: str, **kwargs):
         base_url = kwargs.pop("base_url", None)
         kwargs.pop("system_prompt", None)
         constructor_kwargs = dict(kwargs)
+        if constructor_kwargs.get("max_tokens") is None:
+            constructor_kwargs["max_tokens"] = DEFAULT_MAX_OUTPUT_TOKENS
         if base_url:
             constructor_kwargs["base_url"] = base_url
         # A configured timeout should bound one experiment call. LangChain's
@@ -77,6 +85,8 @@ def get_llm(provider_name: str, **kwargs):
                 "or OPENAI_COMPATIBLE_BASE_URL environment variable."
             )
         kwargs.pop("system_prompt", None)
+        if kwargs.get("max_tokens") is None:
+            kwargs["max_tokens"] = DEFAULT_MAX_OUTPUT_TOKENS
         # Keep provider failures bounded by the configured timeout. Callers
         # that need retry semantics can pass an explicit ``max_retries``.
         if kwargs.get("max_retries") is None:

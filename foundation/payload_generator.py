@@ -18,6 +18,11 @@ from llm.provider import get_llm
 logger = logging.getLogger(__name__)
 
 _VALID_MODES = {"static_only", "hybrid", "llm_mutation_only"}
+# Payload mutation is a structured JSON response.  Keep its streamed model
+# call bounded even when a provider configuration leaves max_tokens unset;
+# malformed or truncated output is handled by the existing static-seed
+# fallback and is recorded in the artifact.
+_DEFAULT_MUTATION_MAX_TOKENS = 256
 
 
 def _extract_text(raw_content: Any) -> str:
@@ -89,8 +94,10 @@ def _build_llm(provider_name: str, model_config: dict[str, Any]):
         extra = kwargs.pop("extra", {})
         if isinstance(extra, dict):
             kwargs.update(extra)
+        if kwargs.get("max_tokens") is None:
+            kwargs["max_tokens"] = _DEFAULT_MUTATION_MAX_TOKENS
         return get_llm(provider_name, **kwargs)
-    return get_llm(provider_name)
+    return get_llm(provider_name, max_tokens=_DEFAULT_MUTATION_MAX_TOKENS)
 
 
 def generate_llm_variants(

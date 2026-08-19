@@ -24,6 +24,21 @@ def _get_kg() -> AttackKnowledgeGraph:
 HIGH_IMPACT_OUTCOMES = set(AttackKnowledgeGraph.HIGH_IMPACT_OUTCOMES)
 
 
+def confirmed_success_achieved(state: dict) -> bool:
+    """Return whether the run has at least one confirmed vulnerability node.
+
+    ``confirmed_vulns`` contains verifier-backed vulnerability confirmations,
+    while ``achieved_outcomes`` contains follow-up outcomes that may enable a
+    chain.  Keep these concepts separate: an enabling outcome such as
+    ``authenticated_session`` must not turn an otherwise unsuccessful run into
+    a confirmed exploit.
+    """
+    return any(
+        isinstance(node, str) and node.strip()
+        for node in state.get("confirmed_vulns", [])
+    )
+
+
 def critical_outcome_achieved(state: dict) -> bool:
     """Checks whether achieved outcomes contain a high-impact terminal condition."""
     achieved = set(state.get("achieved_outcomes", []))
@@ -157,6 +172,15 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
                 "next_agent": next_method,
                 "reason": "fallback_next_method",
             }
+        if confirmed_success_achieved(state):
+            return "scorer", {
+                "node": "chaining_router",
+                "iteration": iteration_count,
+                "event": "akg.route.selected",
+                "next_agent": "scorer",
+                "reason": "confirmed_success",
+                "task_result": "SUCCESS",
+            }
         return "scorer", {
             "node": "chaining_router",
             "iteration": iteration_count,
@@ -172,6 +196,15 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
     attempted_set = set(attempted)
     blocked_set = set(blocked)
     if all_methods and all_methods.issubset(attempted_set | blocked_set):
+        if confirmed_success_achieved(state):
+            return "scorer", {
+                "node": "chaining_router",
+                "iteration": iteration_count,
+                "event": "akg.route.selected",
+                "next_agent": "scorer",
+                "reason": "confirmed_success",
+                "task_result": "SUCCESS",
+            }
         return "scorer", {
             "node": "chaining_router",
             "iteration": iteration_count,
@@ -232,4 +265,11 @@ def chaining_router_node(state: dict) -> dict:
     if event.get("reason") == "all_methods_exhausted":
         updates["task_result"] = "INCOMPLETE"
         updates["incomplete_reason"] = event.get("incomplete_reason", "ALL_METHODS_FAILED")
+    elif event.get("reason") == "confirmed_success":
+        # A confirmed finding remains a successful run even when a later
+        # cross-surface chain was attempted but could not continue.  Clear a
+        # stale incomplete marker from the exhausted-surface path so scorer and
+        # the persisted artifact agree with the verifier-backed finding.
+        updates["task_result"] = "SUCCESS"
+        updates["incomplete_reason"] = None
     return updates

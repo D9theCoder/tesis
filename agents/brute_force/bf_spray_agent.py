@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import re
 import time as time_mod
+from collections.abc import Mapping
+from math import isfinite
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
@@ -19,6 +21,23 @@ AGENT_ID = "bf_spray"
 MODULE_PATH = "/vulnerabilities/brute/"
 _PROBE_OBSERVATION_KEY = "no_rate_limit"
 _CREDENTIAL_PREFIX = re.compile(r"^\s*([^:,;\s]+)\s*:\s*([^,;\s]+)")
+
+_RATE_LIMIT_STATUS = 429
+_RATE_LIMIT_LATENCY_RATIO = 3.0
+_RATE_LIMIT_BODY_MARKERS = (
+    "too many requests",
+    "rate limit exceeded",
+    "rate-limit exceeded",
+    "rate limited",
+    "request limit exceeded",
+    "too many login attempts",
+    "too many failed attempts",
+    "login attempts exceeded",
+    "account temporarily locked",
+    "temporarily blocked",
+    "slow down",
+    "try again later",
+)
 
 _SUCCESS_SIGNALS = [
     "welcome to the password protected area",
@@ -45,6 +64,66 @@ def _credential_params(username: str, password: str, user_token: str | None) -> 
     return params
 
 
+def _response_indicates_rate_limit(response: Any) -> bool:
+    """Return whether a response contains an explicit throttling signal.
+
+    Response latency is intentionally not used as an absolute threshold. A
+    slow DVWA instance (notably at medium security) can take multiple seconds
+    for every request without imposing a rate limit. HTTP status, headers, and
+    response text are direct server-side signals and are therefore preferred.
+    """
+    try:
+        if int(getattr(response, "status_code", 0)) == _RATE_LIMIT_STATUS:
+            return True
+    except (TypeError, ValueError):
+        pass
+
+    headers = getattr(response, "headers", None)
+    if isinstance(headers, Mapping):
+        for name, value in headers.items():
+            normalized_name = str(name).lower()
+            if normalized_name == "retry-after" and str(value).strip():
+                return True
+            if (
+                normalized_name in {"x-ratelimit-remaining", "x-rate-limit-remaining"}
+                and str(value).strip() == "0"
+            ):
+                return True
+
+    body = getattr(response, "text", "")
+    if not isinstance(body, str):
+        return False
+    normalized_body = " ".join(body.lower().split())
+    return any(marker in normalized_body for marker in _RATE_LIMIT_BODY_MARKERS)
+
+
+def _request_elapsed_seconds(response: Any, started_at: float) -> float:
+    """Get transport timing when available, otherwise use a monotonic sample."""
+    elapsed_ms = getattr(response, "elapsed_ms", None)
+    if isinstance(elapsed_ms, (int, float)) and isfinite(float(elapsed_ms)):
+        return max(float(elapsed_ms) / 1000.0, 0.0)
+    return max(time_mod.monotonic() - started_at, 0.0)
+
+
+def _latency_indicates_rate_limit(elapsed_seconds: list[float]) -> bool:
+    """Detect a relative slowdown after the first probe request.
+
+    This is only a secondary signal for deployments that throttle by delaying
+    responses without returning a status/header/body marker. The first probe
+    establishes the local baseline; uniformly slow responses consequently do
+    not trigger the check.
+    """
+    if len(elapsed_seconds) < 2:
+        return False
+    baseline = elapsed_seconds[0]
+    if baseline <= 0:
+        return False
+    return all(
+        elapsed >= baseline * _RATE_LIMIT_LATENCY_RATIO
+        for elapsed in elapsed_seconds[1:]
+    )
+
+
 def _probe_preconditions(
     session: DVWASession,
     payloads: list[str],
@@ -63,29 +142,38 @@ def _probe_preconditions(
     tried: list[str] = []
     events: list[dict] = []
     sent_any = False
-    sent_count = 0
+    response_elapsed: list[float] = []
+    rate_limit_detected = False
 
     # Use the provided payloads when present so callers control the probe set.
     # Fall back to dedicated rate-test credentials only when no payloads exist.
     rate_test_credentials = list(payloads) or ["rate_test:test", "probe:probe"]
-    probe_start = time_mod.monotonic()
     for cred in rate_test_credentials:
         if cred in already_tried:
             continue
         sent_any = True
         tried.append(cred)
-        sent_count += 1
         username, password = _parse_credential(cred)
+        request_started = time_mod.monotonic()
         try:
             resp = session.get(
                 MODULE_PATH,
                 params=_credential_params(username, password, user_token),
             )
-            events.append(probe_event(AGENT_ID, cred, resp.status_code, True))
+            elapsed_seconds = _request_elapsed_seconds(resp, request_started)
+            response_elapsed.append(elapsed_seconds)
+            response_rate_limited = _response_indicates_rate_limit(resp)
+            rate_limit_detected = rate_limit_detected or response_rate_limited
+            events.append(probe_event(
+                AGENT_ID,
+                cred,
+                resp.status_code,
+                not response_rate_limited,
+                elapsed_ms=elapsed_seconds * 1000,
+            ))
         except Exception as exc:
             logger.warning("[%s] PROBE request failed: %s", AGENT_ID, exc)
             events.append(probe_event(AGENT_ID, cred, None, False))
-    probe_elapsed = time_mod.monotonic() - probe_start
 
     if not sent_any:
         if cached_precondition is not None:
@@ -93,10 +181,7 @@ def _probe_preconditions(
             return bool(cached_precondition), tried, observations, events
         return True, tried, {}, events  # Assume no rate limit if already probed
 
-    # Normalize by request count to avoid false negatives on large probe sets
-    per_request_elapsed = probe_elapsed / max(sent_count, 1)
-    per_request_threshold = 0.7  # seconds per request
-    if per_request_elapsed > per_request_threshold:
+    if rate_limit_detected or _latency_indicates_rate_limit(response_elapsed):
         observations[_PROBE_OBSERVATION_KEY] = False
         return False, tried, observations, events
 

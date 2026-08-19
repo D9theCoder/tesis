@@ -9,7 +9,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage
 
 from core.knowledge_graph import AttackKnowledgeGraph
-from core.state import ALL_METHOD_AGENTS, METHODS_BY_SURFACE
+from core.state import METHODS_BY_SURFACE
 from llm.guardrail_monitor import is_guardrail_refusal, make_guardrail_event
 from llm.prompts.orchestrator_prompt import build_orchestrator_prompt
 from llm.provider import get_llm
@@ -75,6 +75,21 @@ def _clip_text(text: str, limit: int = 1200) -> str:
     return text[:limit] + "...<truncated>"
 
 
+def _canonical_surface_methods(surface: Any) -> list[str]:
+    """Return the canonical method allow-list for one configured surface."""
+    if not isinstance(surface, str):
+        return []
+    return list(METHODS_BY_SURFACE.get(surface, []))
+
+
+def _filter_surface_methods(surface: Any, methods: Any) -> list[str]:
+    """Keep only canonical method IDs belonging to ``surface``."""
+    allowed = set(_canonical_surface_methods(surface))
+    if not isinstance(methods, (list, tuple, set)):
+        return []
+    return [method for method in methods if isinstance(method, str) and method in allowed]
+
+
 def _sanitize_prompt_seed(text: str) -> str:
     replacements = {
         "exploitation workflow": "security assessment workflow",
@@ -92,6 +107,7 @@ def _fallback_next_agent(
 ) -> str:
     """Choose a deterministic next method agent without relying on LLM."""
     current_surface = state.get("current_surface", "sqli")
+    surface_methods = _canonical_surface_methods(current_surface)
     attempted = set(state.get("attempted_agents", []))
     blocked = set(state.get("blocked_agents", []))
     failure_agents = set(state.get("failure_agents", []))
@@ -99,15 +115,16 @@ def _fallback_next_agent(
 
     condition = str(state.get("experiment_condition", "linear_hybrid"))
     kg = AttackKnowledgeGraph()
-    viable = (
+    viable = _filter_surface_methods(
+        current_surface,
         kg.get_viable_methods(current_surface, observations)
         if condition == "akg_guided_hybrid"
-        else []
+        else [],
     )
 
     # In AKG-guided runs, only methods whose prerequisites were observed may
     # execute. Linear runs intentionally retain the deterministic surface order.
-    candidates = viable if condition == "akg_guided_hybrid" else METHODS_BY_SURFACE.get(current_surface, [])
+    candidates = viable if condition == "akg_guided_hybrid" else surface_methods
     for method in candidates:
         if method not in attempted and method not in blocked and method not in failure_agents:
             return method
@@ -208,20 +225,29 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "telemetry_events": [{**telemetry_base, "event": "orchestrator.stop", "reason": "critical_outcome"}],
         }
 
+    surface_methods = _canonical_surface_methods(current_surface)
     kg = AttackKnowledgeGraph()
-    viable_methods = kg.get_viable_methods(current_surface, observations)
+    viable_methods = _filter_surface_methods(
+        current_surface,
+        kg.get_viable_methods(current_surface, observations),
+    )
     experiment_condition = str(state.get("experiment_condition", "linear_hybrid"))
     selection_methods = (
         viable_methods
         if experiment_condition == "akg_guided_hybrid"
-        else list(METHODS_BY_SURFACE.get(current_surface, []))
+        else surface_methods
     )
 
     fallback_agent = _fallback_next_agent(state)
+    if fallback_agent != "scorer" and fallback_agent not in selection_methods:
+        # Keep fallback routing inside the same AKG/canonical selection set as
+        # parsed model output.  A scorer stop is preferable to crossing into a
+        # different vulnerability surface.
+        fallback_agent = "scorer"
 
     target_method = state.get("target_method")
     if target_method:
-        if target_method not in METHODS_BY_SURFACE.get(current_surface, []):
+        if target_method not in surface_methods:
             return {
                 "next_agent": "scorer",
                 "selected_method": None,
@@ -392,8 +418,8 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         allowed_agents = set(selection_methods) | {"scorer"}
         next_agent = candidate if candidate in allowed_agents else fallback_agent
         used_fallback = not parse_ok or candidate != next_agent
-        selected_method = next_agent if next_agent in ALL_METHOD_AGENTS else None
-        method_score = 3 if selected_method in viable_methods else (1 if selected_method in METHODS_BY_SURFACE.get(current_surface, []) else 0)
+        selected_method = next_agent if next_agent in surface_methods else None
+        method_score = 3 if selected_method in viable_methods else (1 if selected_method in surface_methods else 0)
 
         # Update consecutive_clean_responses
         new_clean_count = consecutive_clean + 1 if not evasion_triggered else 0
