@@ -41,11 +41,13 @@ Credential stuffing juga berada di luar ruang lingkup karena DVWA tidak menyedia
 
 ### 2.1 Interactive experiment harness
 
-`python -m tesis run` adalah satu-satunya entry point dan membutuhkan terminal
-interaktif. TUI menangani setup single run dan matrix, validasi konfigurasi,
-settings, validasi framework, eksekusi live, recent results, export, serta
-informasi framework. Dokumen konfigurasi tunggal adalah `config.yaml` pada root
-repository; tidak ada lagi jalur eksekusi CLI headless.
+`python -m tesis run` adalah satu-satunya entry point. Tanpa flag tambahan,
+perintah ini membuka TUI interaktif yang menangani setup single run dan matrix,
+validasi konfigurasi, settings, validasi framework, eksekusi live, recent
+results, export, serta informasi framework. Untuk automasi atau LLM yang
+mengendalikan terminal, `python -m tesis run --headless --mode single|matrix`
+menerima flag koordinat eksplisit dan memakai runner yang sama. `config.yaml`
+di root repository tetap menjadi dokumen konfigurasi default.
 
 Core runtime tidak bergantung pada presentation layer. Runner menerima
 `RuntimeEventSink` dan `CancellationToken` secara opsional, memasang callback
@@ -62,7 +64,11 @@ Setiap eksekusi fisik memperoleh `execution_id` unik, sedangkan koordinat
 eksperimen logis tetap memakai `run_id`. `config_fingerprint` bebas secret
 menandai setup eksperimen efektif yang sama dengan mengecualikan identity
 eksekusi, timestamp, repeat index, dan output path. Artifact historis dibaca
-tanpa migrasi atau penulisan ulang.
+tanpa migrasi atau penulisan ulang. Run baru ditempatkan di bawah
+`results/runs` sebagai direktori `single-run-YYYY-MM-DD` atau
+`matrix-YYYY-MM-DD`; benturan pada hari yang sama mendapat suffix angka.
+Direktori matrix berisi folder anak dengan nomor urut dan koordinat serta
+`experiment.manifest.json`, sedangkan artifact flat lama tetap utuh.
 
 ## 3. Runtime Architecture
 

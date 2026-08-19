@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -96,21 +98,144 @@ def _parse_dry_run(arguments: list[str]) -> str | None:
     return None
 
 
+def _csv_values(raw: str) -> list[str]:
+    return [part.strip() for part in str(raw).split(",") if part.strip()]
+
+
+def _headless_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m tesis run --headless",
+        description="Run a single DVWA experiment or matrix without opening the TUI.",
+    )
+    parser.add_argument("--headless", "--non-interactive", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--mode", choices=("single", "matrix"))
+    parser.add_argument("--target")
+    parser.add_argument("--provider")
+    parser.add_argument("--providers", type=_csv_values)
+    parser.add_argument("--level")
+    parser.add_argument("--levels", type=_csv_values)
+    parser.add_argument("--surface")
+    parser.add_argument("--surfaces", type=_csv_values)
+    parser.add_argument("--payload-mode")
+    parser.add_argument("--payload-modes", type=_csv_values)
+    parser.add_argument("--condition", "--experiment-condition", dest="experiment_condition")
+    parser.add_argument("--target-method")
+    parser.add_argument("--model")
+    parser.add_argument("--repeats", type=int)
+    parser.add_argument("--candidate-budget", type=int)
+    parser.add_argument("--iterations", type=int)
+    parser.add_argument("--stop-policy", choices=("impact", "coverage"))
+    parser.add_argument("--coverage-target", type=float)
+    parser.add_argument("--output-dir")
+    parser.add_argument("--format", choices=("json", "markdown", "both"))
+    parser.add_argument("--verbosity", dest="log_verbosity", choices=("debug", "info", "warning", "error"))
+    parser.add_argument("--enriched-reporting", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--diagnose", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument(
+        "--guardrail-enabled",
+        dest="guardrail_retry_enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    parser.add_argument(
+        "--guardrail-mode",
+        dest="guardrail_handling",
+        choices=("reactive", "proactive", "disabled"),
+    )
+    parser.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Print a compact machine-readable result summary.",
+    )
+    return parser
+
+
+def _headless_overrides(namespace: argparse.Namespace) -> dict[str, object]:
+    values = vars(namespace)
+    overrides: dict[str, object] = {}
+    for key in (
+        "target", "provider", "level", "surface", "payload_mode", "experiment_condition",
+        "target_method", "repeats", "candidate_budget", "iterations", "stop_policy",
+        "coverage_target", "output_dir", "format", "log_verbosity", "providers", "levels",
+        "surfaces", "payload_modes", "enriched_reporting", "diagnose",
+        "guardrail_retry_enabled", "guardrail_handling",
+    ):
+        value = values.get(key)
+        if value is not None:
+            overrides[key] = value
+    if values.get("mode") is not None:
+        overrides["matrix"] = values["mode"] == "matrix"
+    if values.get("payload_mode") is not None and values.get("mode") == "matrix":
+        overrides["payload_modes"] = [values["payload_mode"]]
+    return overrides
+
+
+def _headless_summary(result: dict[str, object], artifact_root: Path) -> dict[str, object]:
+    summary: dict[str, object] = {
+        "status": result.get("status", "unknown"),
+        "artifact_dir": str(artifact_root),
+        "manifest": str(artifact_root / "experiment.manifest.json"),
+    }
+    for key in ("execution_id", "run_id", "error", "matrix", "totals"):
+        if key in result:
+            summary[key] = result[key]
+    return summary
+
+
+def _headless_run(arguments: list[str]) -> int:
+    parser = _headless_parser()
+    try:
+        namespace = parser.parse_args(arguments)
+    except SystemExit as exc:
+        return int(exc.code)
+
+    from tesis.config_loader import ConfigError
+    from tesis.headless import run_headless
+
+    try:
+        exit_code, result, artifact_root = run_headless(
+            config_path=namespace.config,
+            cli_args=_headless_overrides(namespace),
+            model_name=namespace.model,
+        )
+    except (ConfigError, ValueError, OSError) as exc:
+        print(f"TESIS headless run failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME_ERROR
+
+    summary = _headless_summary(result, artifact_root)
+    if namespace.json_output:
+        print(json.dumps(summary, sort_keys=True))
+    else:
+        mode = "matrix" if namespace.mode == "matrix" or "totals" in result else "single run"
+        print(f"TESIS {mode} {summary['status']}; artifacts: {summary['artifact_dir']}")
+        if result.get("totals"):
+            print(json.dumps(result["totals"], sort_keys=True))
+    return exit_code
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Launch the TUI or run deterministic preflight validation.
+    """Launch the TUI, deterministic preflight, or headless experiment runner.
 
     ``python -m tesis run`` remains the interactive interface.  The documented
     ``python -m tesis run --dry-run --config config.yaml`` form is intentionally
-    headless and performs no HTTP or model-provider calls.
+    safe and performs no HTTP or model-provider calls.  Add ``--headless`` plus
+    explicit coordinate flags for automation or LLM-driven terminal execution.
     """
     arguments = list(sys.argv[1:] if argv is None else argv)
     dry_run_config = _parse_dry_run(arguments)
     if dry_run_config is not None:
         return _dry_run(dry_run_config)
+    if arguments and arguments[0] == "run" and (
+        "--headless" in arguments or "--non-interactive" in arguments
+    ):
+        return _headless_run(arguments[1:])
     if arguments != ["run"]:
         print(
             "Usage: python -m tesis run\n"
-            "       python -m tesis run --dry-run [--config config.yaml]",
+            "       python -m tesis run --dry-run [--config config.yaml]\n"
+            "       python -m tesis run --headless --mode single|matrix [options]",
             file=sys.stderr,
         )
         return EXIT_USAGE_ERROR

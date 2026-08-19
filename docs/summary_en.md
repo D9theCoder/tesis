@@ -40,11 +40,13 @@ Credential stuffing is also outside the scope because DVWA does not provide a br
 
 ### 2.1 Interactive experiment harness
 
-`python -m tesis run` is the sole entry point and requires an interactive
-terminal. The TUI owns single-run and matrix setup, configuration validation,
-settings, framework validation, live execution, recent results, exports, and
-framework information. The repository-root `config.yaml` is the sole
-configuration document; no headless CLI execution path remains.
+`python -m tesis run` is the sole entry point. Without additional flags it
+opens the interactive TUI, which owns single-run and matrix setup,
+configuration validation, settings, framework validation, live execution,
+recent results, exports, and framework information. For automation or an LLM
+driving a terminal, `python -m tesis run --headless --mode single|matrix`
+accepts explicit coordinate flags and uses the same runners. The repository
+root `config.yaml` remains the default configuration document.
 
 Core runtime code is presentation-independent. Runners optionally accept a
 `RuntimeEventSink` and `CancellationToken`, attach normalized LangChain model
@@ -60,7 +62,11 @@ Each physical execution receives a unique `execution_id`; the logical
 experiment coordinate remains `run_id`. A secret-free `config_fingerprint`
 identifies equivalent effective experiment setups while excluding execution
 identity, timestamps, repeat index, and output paths. Historical artifacts are
-read without migration or rewriting.
+read without migration or rewriting. New runs are allocated below
+`results/runs` as `single-run-YYYY-MM-DD` or `matrix-YYYY-MM-DD` directories;
+same-day collisions receive a numeric suffix. Matrix directories contain
+sequence-and-coordinate child folders plus `experiment.manifest.json`, while
+legacy flat artifacts remain untouched.
 
 ## 3. Runtime Architecture
 

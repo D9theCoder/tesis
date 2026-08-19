@@ -2,9 +2,24 @@
 
 ## Entry point and screens
 
-`python -m tesis run` starts `TesisApp`. The launcher rejects all additional
-flags and subcommands and rejects non-interactive stdin/stdout. The app reads
-only the repository-root `config.yaml`.
+`python -m tesis run` starts `TesisApp`. For automation, the same entry point
+accepts `--headless` and coordinate flags, for example
+`python -m tesis run --headless --mode matrix --condition akg_guided_hybrid`.
+Headless execution uses the same runners and artifact schema without opening
+Textual; network-backed runs should be pointed at an authorized DVWA sandbox.
+The app and headless layer read the repository-root `config.yaml` by default.
+
+Useful automation flags include `--condition`, `--target-method`,
+`--providers`, `--levels`, `--surfaces`, `--payload-modes`, `--repeats`,
+`--candidate-budget`, `--iterations`, `--output-dir`, and `--json`. Lists are
+comma-separated, so the thesis matrix can be launched as:
+
+```bash
+python -m tesis run --headless --mode matrix \
+  --condition akg_guided_hybrid --providers openai_compatible \
+  --levels low,medium,high --surfaces sqli,access_control,brute_force \
+  --payload-modes hybrid,llm_mutation_only --repeats 1 --json
+```
 
 ```text
 Main menu
@@ -86,7 +101,13 @@ fingerprint groups; malformed files are ignored individually.
 - `config_fingerprint` hashes canonical effective setup after removing secrets,
   timestamps, execution identity, repeat index, and output paths.
 
-No historical artifact is rewritten.
+New TUI and headless executions are allocated below `results/runs` using a
+collision-safe dated directory: `single-run-YYYY-MM-DD` for one run and
+`matrix-YYYY-MM-DD` for a matrix. A same-day collision adds `-2`, `-3`, and so
+on. Matrix children use sequence plus coordinate names such as
+`run-001-openai_compatible-sqli-low-hybrid`, and each experiment directory
+contains an `experiment.manifest.json` index. Existing flat artifacts are left
+untouched and remain discoverable recursively.
 
 ## Preserved security and research architecture
 

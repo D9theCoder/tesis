@@ -13,9 +13,19 @@ python -m tesis run
 The command opens the interactive Textual application and requires a TTY.
 Choose **Validate Framework** or **Validate only** on a setup screen for the
 former dry-run and preflight workflows. Single runs, matrices, settings,
-reports, result filtering, exports, and framework information now live inside
-the TUI; legacy flags and subcommands are rejected. The repository-root
-`config.yaml` is the sole configuration document.
+reports, result filtering, exports, and framework information live inside the
+TUI. For automation or LLM-driven terminal execution, use the headless layer
+with explicit flags:
+
+```bash
+python -m tesis run --headless --mode single --surface sqli \
+  --payload-mode hybrid --condition akg_guided_hybrid --json
+```
+
+Matrix axes accept comma-separated lists (`--providers`, `--levels`,
+`--surfaces`, and `--payload-modes`). Both interfaces use the repository-root
+`config.yaml` as the default configuration document and share the same
+artifact layout.
 
 If activation points to an old repository path after the checkout was moved,
 open a fresh shell (or run `deactivate`) and recreate the environment before

@@ -49,3 +49,40 @@ def test_unsupported_subcommands_and_flags_are_rejected(capsys):
     error = capsys.readouterr().err
     assert "python -m tesis run" in error
     assert "--dry-run" in error
+
+
+def test_headless_flags_are_forwarded_without_opening_tui(monkeypatch):
+    captured: list[list[str]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_headless_run",
+        lambda arguments: captured.append(arguments) or cli.EXIT_OK,
+    )
+
+    assert cli.main(["run", "--headless", "--mode", "matrix"]) == cli.EXIT_OK
+    assert captured == [["--headless", "--mode", "matrix"]]
+
+
+def test_headless_override_parser_maps_csv_coordinates():
+    namespace = cli._headless_parser().parse_args([
+        "--headless",
+        "--mode",
+        "matrix",
+        "--providers",
+        "openai_compatible",
+        "--levels",
+        "low,high",
+        "--payload-modes",
+        "hybrid,llm_mutation_only",
+        "--condition",
+        "akg_guided_hybrid",
+    ])
+
+    assert cli._headless_overrides(namespace) == {
+        "providers": ["openai_compatible"],
+        "levels": ["low", "high"],
+        "payload_modes": ["hybrid", "llm_mutation_only"],
+        "experiment_condition": "akg_guided_hybrid",
+        "matrix": True,
+    }

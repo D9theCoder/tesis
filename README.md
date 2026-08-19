@@ -12,7 +12,20 @@ source .venv/bin/activate
 python -m tesis run
 ```
 
-`python -m tesis run` is the only command-line contract. It requires an interactive terminal and opens a full-screen Textual application. Legacy subcommands and flags—including `--config`, `--dry-run`, matrix flags, reporting flags, `info`, `config`, and `validate`—have moved into the TUI and are intentionally rejected.
+`python -m tesis run` opens the full-screen Textual application when used
+without additional flags. Automation can use the same entry point with
+`--headless`, for example:
+
+```bash
+python -m tesis run --headless --mode matrix \
+  --condition akg_guided_hybrid --providers openai_compatible \
+  --levels low,medium,high --surfaces sqli,access_control,brute_force \
+  --payload-modes hybrid,llm_mutation_only --repeats 1 --json
+```
+
+The headless layer uses the same runners and writes the same auditable
+artifacts without requiring a TTY. The repository-root `config.yaml` remains
+the default configuration document.
 
 The repository-root `config.yaml` is the sole configuration document. Prefer environment references such as `${OPENAI_API_KEY}` for secrets.
 
@@ -51,6 +64,12 @@ Every new execution has:
 - `config_fingerprint`: secret-free hash of effective experiment setup, excluding timestamps, output paths, execution identity, and repeat index
 
 Repeated fingerprints are marked `SAME CONFIG ×N`. Historical artifacts are read without being rewritten.
+
+New TUI and headless runs are grouped under `results/runs` as
+`single-run-YYYY-MM-DD` or `matrix-YYYY-MM-DD` directories. Matrix folders
+contain one coordinate folder per run and an `experiment.manifest.json` index;
+same-day collisions receive a numeric suffix. Existing flat artifacts remain
+untouched.
 
 ## Architecture
 
