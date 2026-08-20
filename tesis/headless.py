@@ -10,11 +10,22 @@ from typing import Any
 from evaluation.multi_llm_runner import run_provider_matrix
 from evaluation.reporter import write_json_report
 from evaluation.runner import run_single_engagement
+from core.knowledge_graph import AttackKnowledgeGraph
 from tesis.artifact_layout import allocate_artifact_layout
-from tesis.artifact_repository import new_execution_id
+from tesis.artifact_repository import config_fingerprint, new_execution_id
 from tesis.config_loader import load_and_resolve_config
+from tesis.live_runtime import (
+    RuntimeDescriptor,
+    RuntimeDescriptorHeartbeatSink,
+    akg_snapshot,
+    build_runtime_descriptor,
+    safe_target_scope,
+    write_descriptor,
+    write_terminal_descriptor,
+)
 from tesis.model_config import EngagementConfig, ModelConfig
 from tesis.runtime_events import CancellationToken
+from tesis.runtime_journal import JSONLJournalSink, MultiplexingRuntimeEventSink
 from llm.runtime import LLMRuntime
 
 
@@ -89,10 +100,15 @@ def _call_runner(function: Any, kwargs: dict[str, Any]) -> Any:
     return function(**supported)
 
 
-def _cancelled_result(config: EngagementConfig, *, reason: str) -> dict[str, Any]:
+def _cancelled_result(
+    config: EngagementConfig,
+    *,
+    reason: str,
+    execution_id: str | None = None,
+) -> dict[str, Any]:
     """Build a minimal auditable artifact when Ctrl-C interrupts a runner."""
 
-    execution_id = new_execution_id()
+    execution_id = execution_id or new_execution_id()
     if config.matrix:
         total_runs = (
             len(config.providers)
@@ -168,6 +184,45 @@ def _cancelled_result(config: EngagementConfig, *, reason: str) -> dict[str, Any
     }
 
 
+def _descriptor_coordinates(config: EngagementConfig) -> dict[str, Any]:
+    """Build safe, secret-free coordinate metadata for a run descriptor."""
+
+    model = config.models.get(config.provider)
+    model_name = model.model_name if model is not None else None
+    return {
+        "mode": "matrix" if config.matrix else "single-run",
+        "provider": config.provider,
+        "model": model_name,
+        "surface": config.surface,
+        "security_level": config.level,
+        "payload_mode": config.payload_mode,
+        "experiment_condition": config.experiment_condition,
+        "target_method": config.target_method,
+        "target_url": safe_target_scope(config.target_url),
+        "candidate_budget": config.candidate_budget,
+        "max_iterations": config.iterations,
+    }
+
+
+def _terminal_status_for_result(result: dict[str, Any]) -> str:
+    """Map a runner result/exception into a terminal descriptor status."""
+
+    status = str(result.get("status", "unknown")).lower()
+    if status in {"success", "complete", "completed", "finished"}:
+        return "finished"
+    if status == "cancelled":
+        return "cancelled"
+    if status in {"error", "failed"}:
+        return "failed"
+    return "failed"
+
+
+def _export_akg_snapshot(root: Path) -> Path:
+    """Write the deterministic read-only AKG snapshot for frontend fallback."""
+
+    return write_json_report(root / "akg.snapshot.json", akg_snapshot(AttackKnowledgeGraph()))
+
+
 def run_headless(
     *,
     config_path: str,
@@ -193,8 +248,10 @@ def run_headless(
         "matrix" if config.matrix else "single-run",
     )
     cancellation_token = CancellationToken()
+    execution_id = new_execution_id()
     common = _common_kwargs(config, output_dir=layout.root)
     common["cancellation_token"] = cancellation_token
+    common["execution_id"] = execution_id
     # The matrix runner owns one runtime across all coordinates.  A single run
     # uses the same service abstraction with an effective concurrency of one so
     # direct and headless execution have identical lifecycle semantics.
@@ -204,7 +261,33 @@ def run_headless(
     common["llm_runtime"] = runtime_service
     artifacts: list[dict[str, Any]] = []
     result: dict[str, Any] = {"status": "error", "error": "run did not start"}
+    descriptor: RuntimeDescriptor | None = None
+    heartbeat_sink: RuntimeDescriptorHeartbeatSink | None = None
+    journal_sink: JSONLJournalSink | None = None
     try:
+        # Live observation: wire a redacted journal into the runner event sink
+        # and publish an atomic "active" descriptor before invoking a runner.
+        known_secrets = [model.api_key for model in config.models.values() if model.api_key]
+        journal_sink = JSONLJournalSink(
+            layout.root / "runtime.events.jsonl",
+            known_secrets=known_secrets,
+        )
+        descriptor = build_runtime_descriptor(
+            mode="matrix" if config.matrix else "single-run",
+            experiment_dir=layout.root,
+            execution_id=execution_id,
+            config_fingerprint=config_fingerprint(dataclasses.asdict(config)),
+            coordinates=_descriptor_coordinates(config),
+        )
+        write_descriptor(descriptor)
+        heartbeat_sink = RuntimeDescriptorHeartbeatSink(descriptor)
+        common["event_sink"] = MultiplexingRuntimeEventSink(journal_sink, heartbeat_sink)
+        # The same physical execution ID is passed to the runner so the
+        # descriptor, journal events, and primary artifact are discoverable
+        # under one identity.
+        common["execution_id"] = descriptor.execution_id
+        _export_akg_snapshot(layout.root)
+
         if config.matrix:
             matrix_kwargs = {
                 **common,
@@ -233,7 +316,11 @@ def run_headless(
             result = _call_runner(run_single_engagement, single_kwargs)
     except KeyboardInterrupt:
         cancellation_token.cancel("keyboard interrupt")
-        result = _cancelled_result(config, reason="keyboard interrupt")
+        result = _cancelled_result(
+            config,
+            reason="keyboard interrupt",
+            execution_id=execution_id,
+        )
         artifacts = []
     except Exception as exc:
         result = {
@@ -242,6 +329,33 @@ def run_headless(
         }
     finally:
         runtime_service.close()
+        # Always land in a terminal state, even when runner/provider setup fails.
+        if descriptor is not None:
+            try:
+                descriptor_source = heartbeat_sink.descriptor if heartbeat_sink else descriptor
+                terminal_descriptor = dataclasses.replace(
+                    descriptor_source,
+                    # Matrix child artifacts have their own execution IDs.
+                    # The parent descriptor always retains the preallocated
+                    # matrix execution ID.
+                    execution_id=descriptor_source.execution_id or result.get("execution_id"),
+                    run_id=(
+                        result.get("run_id")
+                        if not config.matrix
+                        else descriptor_source.run_id
+                    ) or descriptor_source.run_id,
+                )
+                write_terminal_descriptor(
+                    terminal_descriptor,
+                    _terminal_status_for_result(result),
+                )
+            except Exception as exc:
+                result.setdefault("runtime_descriptor_error", f"{type(exc).__name__}: {exc}")
+        if journal_sink is not None:
+            try:
+                journal_sink.close()
+            except Exception as exc:
+                result.setdefault("runtime_journal_error", f"{type(exc).__name__}: {exc}")
         if isinstance(result, dict) and str(result.get("status", "")).lower() == "cancelled":
             execution_id = result.get("execution_id")
             if execution_id:

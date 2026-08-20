@@ -47,11 +47,26 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 from core.graph_builder import RUNTIME_AGENT_HANDLERS, RUNTIME_AGENT_NODE_NAMES
+from core.knowledge_graph import AttackKnowledgeGraph
 from core.state import new_default_state
 from evaluation.multi_llm_runner import run_provider_matrix
 from evaluation.runner import run_single_engagement
-from tesis.artifact_repository import ArtifactMetadata, ArtifactRepository
+from tesis.artifact_repository import (
+    ArtifactMetadata,
+    ArtifactRepository,
+    config_fingerprint,
+    new_execution_id,
+)
 from tesis.artifact_layout import allocate_artifact_layout
+from tesis.live_runtime import (
+    RuntimeDescriptor,
+    RuntimeDescriptorHeartbeatSink,
+    akg_snapshot,
+    build_runtime_descriptor,
+    safe_target_scope,
+    write_descriptor,
+    write_terminal_descriptor,
+)
 from tesis.config_loader import (
     ConfigError,
     dump_yaml_config,
@@ -71,6 +86,7 @@ from tesis.config_fields import (
 )
 from tesis.model_config import EngagementConfig, ModelConfig
 from tesis.runtime_events import CallbackEventSink, CancellationToken, RunEvent, redact_secrets
+from tesis.runtime_journal import JSONLJournalSink, MultiplexingRuntimeEventSink
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -381,6 +397,49 @@ def _runtime_cli_overrides(values: Mapping[str, Any]) -> dict[str, Any]:
         if role_values.get("model_name"):
             result[f"{stem}_model"] = role_values["model_name"]
     return result
+
+
+def _tui_descriptor_coordinates(config: EngagementConfig, *, condition: str, target_method: str | None) -> dict[str, Any]:
+    """Build safe, secret-free coordinate metadata for a run descriptor."""
+
+    model = getattr(config, "models", {}).get(config.provider)
+    model_name = getattr(model, "model_name", None) if model is not None else None
+    return {
+        "mode": "matrix" if config.matrix else "single-run",
+        "provider": config.provider,
+        "model": model_name,
+        "surface": config.surface,
+        "security_level": config.level,
+        "payload_mode": config.payload_mode,
+        "experiment_condition": condition,
+        "target_method": target_method,
+        "target_url": safe_target_scope(config.target_url),
+        "candidate_budget": config.candidate_budget,
+        "max_iterations": config.iterations,
+    }
+
+
+def _tui_terminal_status_for_result(result: Any) -> str:
+    """Map a TUI runner result/exception into a terminal descriptor status."""
+
+    if not isinstance(result, dict):
+        return "failed"
+    status = str(result.get("status", "unknown")).lower()
+    if status in {"success", "complete", "completed", "finished"}:
+        return "finished"
+    if status == "cancelled":
+        return "cancelled"
+    if status in {"error", "failed"}:
+        return "failed"
+    return "failed"
+
+
+def _export_akg_snapshot(root: Path) -> Path:
+    """Write the deterministic read-only AKG snapshot for frontend fallback."""
+
+    from evaluation.reporter import write_json_report
+
+    return write_json_report(root / "akg.snapshot.json", akg_snapshot(AttackKnowledgeGraph()))
 
 
 def _invoke_runner(runner: Any, kwargs: dict[str, Any]) -> Any:
@@ -857,6 +916,8 @@ class RuntimeDashboardScreen(BaseTesisScreen):
         self._trace_dirty = False
         self._tesis_closing = False
         self._runtime_thread: Thread | None = None
+        self._runtime_descriptor: RuntimeDescriptor | None = None
+        self._runtime_heartbeat_sink: RuntimeDescriptorHeartbeatSink | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -1059,12 +1120,48 @@ class RuntimeDashboardScreen(BaseTesisScreen):
             "target_method": self.target_method,
         }
         common.update(_llm_runtime_kwargs(self.config))
+        descriptor: RuntimeDescriptor | None = None
+        heartbeat_sink: RuntimeDescriptorHeartbeatSink | None = None
+        journal_sink: JSONLJournalSink | None = None
         try:
             layout = allocate_artifact_layout(
                 self.config.output_dir,
                 "matrix" if self.matrix else "single-run",
             )
             common["output_dir"] = str(layout.root)
+            # Preserve the existing dashboard callback while also feeding the
+            # redacted journal sink, so both receive each event exactly once.
+            journal_sink = JSONLJournalSink(
+                layout.root / "runtime.events.jsonl",
+                known_secrets=self.known_secrets,
+            )
+            common["event_sink"] = MultiplexingRuntimeEventSink(sink, journal_sink)
+            descriptor = build_runtime_descriptor(
+                mode="matrix" if self.matrix else "single-run",
+                experiment_dir=layout.root,
+                execution_id=new_execution_id(),
+                config_fingerprint=config_fingerprint(
+                    {**dataclasses.asdict(self.config),
+                     "experiment_condition": self.condition,
+                     "target_method": self.target_method}
+                ),
+                coordinates=_tui_descriptor_coordinates(
+                    self.config,
+                    condition=self.condition,
+                    target_method=self.target_method,
+                ),
+            )
+            write_descriptor(descriptor)
+            self._runtime_descriptor = descriptor
+            common["execution_id"] = descriptor.execution_id
+            heartbeat_sink = RuntimeDescriptorHeartbeatSink(descriptor)
+            self._runtime_heartbeat_sink = heartbeat_sink
+            common["event_sink"] = MultiplexingRuntimeEventSink(
+                sink,
+                journal_sink,
+                heartbeat_sink,
+            )
+            _export_akg_snapshot(layout.root)
             if self.matrix:
                 matrix_kwargs = {
                     **common,
@@ -1091,13 +1188,51 @@ class RuntimeDashboardScreen(BaseTesisScreen):
                 }
                 result = _invoke_runner(run_single_engagement, single_kwargs)
         except Exception as exc:
-            self._post_event(RunEvent(
+            descriptor_source = heartbeat_sink.descriptor if heartbeat_sink else descriptor
+            failure_event = RunEvent(
                 event_type="run.failed",
+                execution_id=descriptor_source.execution_id if descriptor_source else None,
+                run_id=descriptor_source.run_id if descriptor_source else None,
                 message=f"{type(exc).__name__}: {exc}",
                 data={"error_type": type(exc).__name__},
-            ))
+            )
+            event_sink = common.get("event_sink", sink)
+            event_sink.emit(failure_event)
             result = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
         finally:
+            # Always publish a terminal descriptor, even if runner or provider
+            # setup failed, and safely release the journal.
+            if descriptor is not None:
+                try:
+                    descriptor_source = heartbeat_sink.descriptor if heartbeat_sink else descriptor
+                    final_descriptor = dataclasses.replace(
+                        descriptor_source,
+                        execution_id=descriptor_source.execution_id,
+                        run_id=(
+                            result.get("run_id")
+                            if isinstance(result, dict) and not self.matrix
+                            else descriptor_source.run_id
+                        ) or descriptor_source.run_id,
+                    )
+                    write_terminal_descriptor(
+                        final_descriptor,
+                        _tui_terminal_status_for_result(result),
+                    )
+                except Exception as exc:
+                    self._post_event(RunEvent(
+                        event_type="runtime.descriptor.failed",
+                        message=f"{type(exc).__name__}: {exc}",
+                        data={"error_type": type(exc).__name__},
+                    ))
+            if journal_sink is not None:
+                try:
+                    journal_sink.close()
+                except Exception as exc:
+                    self._post_event(RunEvent(
+                        event_type="runtime.journal.failed",
+                        message=f"{type(exc).__name__}: {exc}",
+                        data={"error_type": type(exc).__name__},
+                    ))
             if layout is not None:
                 manifest_config = dataclasses.asdict(self.config)
                 manifest_config.update({
@@ -1283,8 +1418,20 @@ class RuntimeDashboardScreen(BaseTesisScreen):
             self.app.exit()
 
     def prepare_shutdown(self) -> None:
-        """Cancel work and release buffers without joining the runtime thread."""
+        """Cancel work, publish terminal observation state, and release UI buffers."""
         self.cancel_token.cancel("TUI closed")
+        try:
+            if self._runtime_heartbeat_sink is not None:
+                self._runtime_heartbeat_sink.terminate("cancelled")
+            elif self._runtime_descriptor is not None and not self._runtime_descriptor.is_terminal:
+                self._runtime_descriptor = write_terminal_descriptor(
+                    self._runtime_descriptor,
+                    "cancelled",
+                )
+        except OSError:
+            # Shutdown remains prompt even if the descriptor filesystem is no
+            # longer writable. Normal runner finalization gets another chance.
+            pass
         with self._event_lock:
             self._tesis_closing = True
             self._pending_events.clear()

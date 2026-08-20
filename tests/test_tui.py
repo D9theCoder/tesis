@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
 from tesis import tui
 from tesis.model_config import EngagementConfig, ModelConfig
@@ -190,6 +192,65 @@ def test_settings_masks_literal_secret_in_raw_editor(tmp_path, monkeypatch):
     asyncio.run(scenario())
 
 
+def _dashboard_config(tmp_path: Path) -> EngagementConfig:
+    return EngagementConfig(
+        target_url="http://localhost/dvwa",
+        provider="gemini",
+        level="low",
+        output_dir=str(tmp_path / "results"),
+        models={"gemini": ModelConfig("gemini", "provider-secret-key", "test-model")},
+    )
+
+
+def test_tui_run_experiment_multiplexes_journal_writes_descriptor_and_akg(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = _dashboard_config(tmp_path)
+    screen = tui.RuntimeDashboardScreen(
+        config,
+        matrix=False,
+        condition="linear_hybrid",
+        target_method=None,
+    )
+    emitted: list[RunEvent] = []
+    monkeypatch.setattr(screen, "_post_event", emitted.append)
+    monkeypatch.setattr(screen, "_tesis_closing", True)
+
+    def fake_single(**kwargs):
+        execution_id = kwargs["execution_id"]
+        sink = kwargs["event_sink"]
+        sink.emit(RunEvent("run.started", execution_id=execution_id, run_id="run-t", data={"n": 1}))
+        sink.emit(RunEvent("graph.node.started", data={"node": "sqli"}))
+        return {"execution_id": execution_id, "run_id": "run-t", "status": "success", "config": {}}
+
+    monkeypatch.setattr(tui, "run_single_engagement", fake_single)
+
+    screen.run_experiment()
+
+    runs_root = Path(tmp_path) / "results" / "runs"
+    run_dir = max(runs_root.iterdir(), key=lambda p: p.stat().st_ctime)
+
+    # Terminal descriptor carries result identity.
+    desc = json.loads((run_dir / "runtime.json").read_text(encoding="utf-8"))
+    assert desc["status"] == "finished"
+    assert desc["execution_id"]
+    assert desc["run_id"] == "run-t"
+
+    # Journal contains each event once; UI callback received them too.
+    journal_text = (run_dir / "runtime.events.jsonl").read_text(encoding="utf-8")
+    assert "run.started" in journal_text
+    assert "graph.node.started" in journal_text
+    assert "provider-secret-key" not in journal_text
+    assert [event.event_type for event in emitted] == ["run.started", "graph.node.started"]
+
+    # Deterministic AKG snapshot exported for frontend fallback.
+    akg_path = run_dir / "akg.snapshot.json"
+    assert akg_path.exists()
+    akg = json.loads(akg_path.read_text(encoding="utf-8"))
+    assert akg["schema_version"] == "akg-snapshot.v1"
+    assert len(akg["nodes"]) == akg["node_count"]
+
+
 def test_dashboard_stream_and_tab_trace_toggle(monkeypatch):
     monkeypatch.setattr(tui.RuntimeDashboardScreen, "run_experiment", lambda self: None)
 
@@ -204,6 +265,8 @@ def test_dashboard_stream_and_tab_trace_toggle(monkeypatch):
             await pilot.pause()
             await pilot.pause()
             assert isinstance(app.screen, tui.RuntimeDashboardScreen)
+            assert app.screen._runtime_thread is not None
+            assert app.screen._runtime_thread.daemon is True
             app.screen.post_message(tui.DashboardEvent(
                 RunEvent(event_type="llm.token", message="hello", data={"streaming": True})
             ))
