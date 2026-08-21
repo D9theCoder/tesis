@@ -27,6 +27,20 @@ The headless layer uses the same runners and writes the same auditable
 artifacts without requiring a TTY. The repository-root `config.yaml` remains
 the default configuration document.
 
+When multiple entries exist under `models`, select one for both LLM roles at
+runtime without editing the YAML:
+
+```bash
+python -m tesis run --headless --mode matrix --model-profile openai \
+  --providers openai --levels low --surfaces sqli \
+  --payload-modes static_only --repeats 1
+```
+
+Role-specific `--orchestrator-model-profile` and
+`--payload-model-profile` flags remain available when the two roles should use
+different profiles. `TESIS_MODEL_PROFILE` is the equivalent environment
+override.
+
 The repository-root `config.yaml` is the sole configuration document. Prefer environment references such as `${OPENAI_API_KEY}` for secrets.
 
 ## Screens and keys

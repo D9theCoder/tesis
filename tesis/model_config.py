@@ -112,6 +112,11 @@ class EngagementConfig:
     # existing positional EngagementConfig callers retain their ordering.
     llm_runtime: LLMRuntimeConfig = field(default_factory=LLMRuntimeConfig)
 
+    # Optional run-time profile selector.  When set by a CLI/TUI override, the
+    # selected profile is applied to both standard LLM roles unless a more
+    # specific role-level override is supplied.
+    model_profile: str | None = None
+
     @property
     def llm_max_concurrency(self) -> int:
         """Compatibility accessor used by execution runners."""

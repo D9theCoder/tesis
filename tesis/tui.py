@@ -158,6 +158,15 @@ def _model_dict(config: EngagementConfig, provider: str) -> dict[str, Any]:
     return dataclasses.asdict(model) if model else {}
 
 
+def _model_profile_choices(config: EngagementConfig) -> tuple[tuple[str, str], ...]:
+    """Return configured model profiles for runtime selectors."""
+
+    profiles = tuple(str(name) for name in getattr(config, "models", {}) if str(name).strip())
+    if not profiles and getattr(config, "provider", None):
+        profiles = (str(config.provider),)
+    return tuple((profile, profile) for profile in profiles)
+
+
 LLM_RUNTIME_ROLES = ("orchestrator", "payload_generator")
 LLM_CACHE_SCOPE_CHOICES = (("Disabled", "none"), ("Run-local", "run"))
 LLM_STRUCTURED_OUTPUT_CHOICES = (
@@ -235,9 +244,18 @@ def _runtime_values(config: EngagementConfig) -> dict[str, Any]:
             "max_tokens": raw_role.get("max_tokens"),
             "structured_output": raw_role.get("structured_output", "auto"),
         }
+    selected_profile = _config_value(config, "model_profile")
+    if selected_profile is None or not str(selected_profile).strip():
+        role_profiles = {
+            str(values.get("model_profile") or "").strip()
+            for values in roles.values()
+            if str(values.get("model_profile") or "").strip()
+        }
+        selected_profile = next(iter(role_profiles)) if len(role_profiles) == 1 else None
     return {
         "max_concurrency": max_concurrency,
         "cache_scope": scope,
+        "model_profile": str(selected_profile).strip() if selected_profile else None,
         "roles": roles,
     }
 
@@ -253,7 +271,11 @@ def _effective_role_model(
     role_values = runtime["roles"].get(role, {})
     profile = str(role_values.get("model_profile") or "").strip()
     if not profile:
-        profile = str(getattr(config, "provider", "") or "").strip() or "default"
+        profile = (
+            str(runtime.get("model_profile") or "").strip()
+            or str(getattr(config, "provider", "") or "").strip()
+            or "default"
+        )
         if bool(getattr(config, "matrix", False)):
             profile = "per-coordinate:" + profile
     lookup_profile = profile.split(":", 1)[-1] if profile.startswith("per-coordinate:") else profile
@@ -330,6 +352,8 @@ def _apply_runtime_values(config: EngagementConfig, values: Mapping[str, Any]) -
         _set_config_value(config, "llm_runtime", runtime)
     _set_config_value(runtime, "max_concurrency", int(values["max_concurrency"]))
     _set_config_value(runtime, "cache_scope", str(values["cache_scope"]))
+    selected_profile = values.get("model_profile")
+    _set_config_value(config, "model_profile", str(selected_profile).strip() if selected_profile else None)
     roles = _config_value(runtime, "roles")
     if roles is None:
         roles = {}
@@ -368,6 +392,7 @@ def _runtime_form_values(screen: Screen, *, prefix: str = "") -> dict[str, Any]:
     if not 1 <= max_concurrency <= 4:
         raise ValueError("llm max concurrency must be between 1 and 4")
     cache_scope = select_value("llm-cache-scope", "none")
+    model_profile = select_value("model-profile", "")
     roles: dict[str, dict[str, Any]] = {}
     for role, stem in (("orchestrator", "orchestrator"), ("payload_generator", "payload")):
         roles[role] = {
@@ -377,6 +402,7 @@ def _runtime_form_values(screen: Screen, *, prefix: str = "") -> dict[str, Any]:
     return {
         "max_concurrency": max_concurrency,
         "cache_scope": cache_scope,
+        "model_profile": model_profile or None,
         "roles": roles,
     }
 
@@ -389,6 +415,8 @@ def _runtime_cli_overrides(values: Mapping[str, Any]) -> dict[str, Any]:
         "llm_cache_scope": values["cache_scope"],
         "llm_cache": values["cache_scope"] != "none",
     }
+    if values.get("model_profile"):
+        result["model_profile"] = values["model_profile"]
     roles = values.get("roles", {})
     for role, stem in (("orchestrator", "orchestrator"), ("payload_generator", "payload")):
         role_values = roles.get(role, {})
@@ -641,6 +669,8 @@ class RunSetupScreen(BaseTesisScreen):
                 yield Input("1", type="integer", id="llm-max-concurrency")
                 yield Label("LLM cache scope")
                 yield Select(LLM_CACHE_SCOPE_CHOICES, id="llm-cache-scope")
+                yield Label("Model profile (both roles)")
+                yield Select((), id="model-profile", allow_blank=True)
                 yield Label("Orchestrator model profile")
                 yield Input(id="orchestrator-model-profile")
                 yield Label("Orchestrator model")
@@ -701,6 +731,11 @@ class RunSetupScreen(BaseTesisScreen):
         runtime = _runtime_values(cfg)
         self.query_one("#llm-max-concurrency", Input).value = str(runtime["max_concurrency"])
         self.query_one("#llm-cache-scope", Select).value = runtime["cache_scope"]
+        profile_select = self.query_one("#model-profile", Select)
+        profile_select.set_options(_model_profile_choices(cfg))
+        selected_profile = runtime.get("model_profile")
+        if selected_profile in {value for _, value in _model_profile_choices(cfg)}:
+            profile_select.value = selected_profile
         for role, stem in (("orchestrator", "orchestrator"), ("payload_generator", "payload")):
             role_values = runtime["roles"][role]
             self.query_one(f"#{stem}-model-profile", Input).value = str(role_values.get("model_profile") or "")
@@ -752,6 +787,7 @@ class RunSetupScreen(BaseTesisScreen):
         self.query_one("#run-total", Static).update(f"{total} runs")
 
     @on(Input.Changed, "#llm-max-concurrency")
+    @on(Select.Changed, "#model-profile")
     @on(Input.Changed, "#orchestrator-model-profile")
     @on(Input.Changed, "#orchestrator-model")
     @on(Input.Changed, "#payload-model-profile")
@@ -765,6 +801,20 @@ class RunSetupScreen(BaseTesisScreen):
         except (NoMatches, ValueError):
             return
         self._update_runtime_summary(self.config, values)
+
+    @on(Select.Changed, "#model-profile")
+    def model_profile_changed(self, event: Select.Changed) -> None:
+        """Apply one selected profile to both standard runtime roles."""
+
+        if not self.is_mounted or event.value is Select.BLANK:
+            return
+        profile = str(event.value)
+        for stem in ("orchestrator", "payload"):
+            self.query_one(f"#{stem}-model-profile", Input).value = profile
+        if not self.matrix and self.config is not None:
+            model = self.config.models.get(profile)
+            if model is not None:
+                self.query_one("#model", Input).value = model.model_name
 
     def resolved_config(self) -> EngagementConfig:
         cli_args: dict[str, Any] = {
@@ -802,10 +852,11 @@ class RunSetupScreen(BaseTesisScreen):
         if not self.matrix:
             model_name = self.query_one("#model", Input).value.strip()
             if model_name:
-                if config.provider in config.models:
-                    config.models[config.provider].model_name = model_name
+                selected_profile = runtime_values.get("model_profile") or config.provider
+                if selected_profile in config.models:
+                    config.models[selected_profile].model_name = model_name
                 else:
-                    config.models[config.provider] = ModelConfig(
+                    config.models[selected_profile] = ModelConfig(
                         provider=config.provider,
                         api_key="",
                         model_name=model_name,

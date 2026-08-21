@@ -209,6 +209,7 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "LLM_MAX_CONCURRENCY": "llm_max_concurrency",
         "LLM_CACHE": "llm_cache",
         "LLM_CACHE_SCOPE": "llm_cache_scope",
+        "MODEL_PROFILE": "model_profile",
         "ORCHESTRATOR_MODEL_PROFILE": "orchestrator_model_profile",
         "ORCHESTRATOR_MODEL": "orchestrator_model",
         "PAYLOAD_MODEL_PROFILE": "payload_model_profile",
@@ -220,7 +221,14 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
             continue
 
         suffix = key[len(prefix):]
-        if suffix.startswith("MODEL_"):
+        if suffix == "MODEL_PROFILE":
+            overrides["model_profile"] = raw_value
+            runtime = overrides.setdefault("llm_runtime", {})
+            roles = runtime.setdefault("roles", {})
+            for role in ("orchestrator", "payload_generator"):
+                roles[role] = {"model_profile": raw_value}
+            continue
+        if suffix.startswith("MODEL_") and suffix != "MODEL_PROFILE":
             remainder = suffix[len("MODEL_"):]
             matched_provider = None
             for candidate in sorted(SUPPORTED_PROVIDERS, key=len, reverse=True):
@@ -299,6 +307,7 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         "level": "level",
         "surface": "surface",
         "payload_mode": "payload_mode",
+        "model_profile": "model_profile",
         "experiment_condition": "experiment_condition",
         "target_method": "target_method",
         "log_verbosity": "log_verbosity",
@@ -361,6 +370,13 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         runtime_override["cache_scope"] = cli_args["llm_cache_scope"]
 
     role_overrides: dict[str, dict[str, Any]] = {}
+    selected_profile = cli_args.get("model_profile")
+    if selected_profile is not None and str(selected_profile).strip():
+        # A global runtime selection is the convenient path for switching the
+        # whole run. Explicit role flags below remain more specific and win.
+        for role in ("orchestrator", "payload_generator"):
+            role_overrides[role] = {"model_profile": str(selected_profile).strip()}
+
     for role, profile_key, model_key in (
         ("orchestrator", "orchestrator_model_profile", "orchestrator_model"),
         ("payload_generator", "payload_model_profile", "payload_model"),
@@ -723,6 +739,15 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
 
     _validate_llm_runtime_config(config.llm_runtime)
 
+    if config.model_profile:
+        available_profiles = sorted(config.models)
+        if config.model_profile not in config.models:
+            available = ", ".join(available_profiles) or "none"
+            raise ConfigError(
+                f"Unknown model profile: {config.model_profile}. "
+                f"Available profiles: {available}"
+            )
+
     if config.matrix:
         if not config.providers:
             raise ConfigError("matrix mode requires at least one provider")
@@ -788,10 +813,16 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         or "sqli"
     ).strip().lower()
     payload_mode = str(merged.get("payload_mode") or "static_only").strip().lower()
+    raw_model_profile = merged.get("model_profile")
+    model_profile = (
+        str(raw_model_profile).strip()
+        if raw_model_profile is not None and str(raw_model_profile).strip()
+        else None
+    )
     candidate_budget = int(merged.get("candidate_budget") or 5)
     llm_runtime = _parse_llm_runtime_config(
         merged,
-        default_profile=provider,
+        default_profile=model_profile or provider,
         # Let the existing engagement validator report an invalid candidate
         # budget using its established error while keeping role token defaults
         # positive during this preliminary parse.
@@ -883,6 +914,7 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         evasion_attempts_max=int(merged.get("evasion_attempts_max", evasion_max_retries)),
         models=_parse_model_configs(merged.get("models", {})),
         llm_runtime=llm_runtime,
+        model_profile=model_profile,
     )
 
     _validate_engagement_config(config)

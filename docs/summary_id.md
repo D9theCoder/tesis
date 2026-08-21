@@ -170,12 +170,10 @@ llm_runtime:
   cache_scope: run
   roles:
     orchestrator:
-      model_profile: openai_compatible
       temperature: 0
       max_tokens: 256  # hasil preflight provider; profil non-reasoning dapat memakai 96
       structured_output: auto
     payload_generator:
-      model_profile: openai_compatible
       temperature: 0
       max_tokens: 768  # batas eksplisit gateway untuk satu varian
       structured_output: auto
@@ -185,8 +183,10 @@ Setiap role mewarisi provider, endpoint, credentials, timeout, dan model
 default dari `models.<model_profile>`. `model_name` pada level role dapat
 digunakan sebagai override. Jika tidak diatur eksplisit, batas token
 payload-generator adalah `min(512, 96 + 64 * candidate_budget)`. Kontrol
-headless dan TUI dapat mengubah profile/model role, kebijakan cache, dan
-concurrency LLM, tetapi concurrency efektif dibatasi 1--4; single run selalu
+headless `--model-profile PROFILE`/`TESIS_MODEL_PROFILE` dan selector pada
+run-setup TUI dapat menerapkan satu profile ke kedua role tanpa mengubah YAML.
+Kontrol role-specific tetap dapat mengubah profile orchestrator atau payload
+secara terpisah. Concurrency efektif dibatasi 1--4; single run selalu
 menggunakan concurrency efektif satu.
 
 Runtime mengirim system message yang stabil berisi otorisasi DVWA, aturan

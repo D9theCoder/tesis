@@ -167,12 +167,10 @@ llm_runtime:
   cache_scope: run
   roles:
     orchestrator:
-      model_profile: openai_compatible
       temperature: 0
       max_tokens: 256  # provider-preflight value; non-reasoning profiles may use 96
       structured_output: auto
     payload_generator:
-      model_profile: openai_compatible
       temperature: 0
       max_tokens: 768  # explicit gateway-compatible ceiling for one variant
       structured_output: auto
@@ -182,9 +180,11 @@ Each role inherits its provider, endpoint, credentials, timeout, and default
 model from `models.<model_profile>`. An optional role-level `model_name` may
 override that model. The payload-generator token limit defaults to
 `min(512, 96 + 64 * candidate_budget)` when it is not explicitly set. The
-headless and TUI controls may override role profiles/models, cache policy, and
-LLM concurrency, but the effective concurrency is bounded to 1--4; single-run
-execution uses an effective concurrency of one.
+headless `--model-profile PROFILE`/`TESIS_MODEL_PROFILE` and the TUI run-setup
+selector can apply one named profile to both roles without editing the YAML.
+The role-specific controls may still override the orchestrator or payload
+profile independently. Effective concurrency remains bounded to 1--4;
+single-run execution uses an effective concurrency of one.
 
 The runtime sends a stable system message containing DVWA authorization and
 containment rules, role instructions, and the schema version. A coordinate

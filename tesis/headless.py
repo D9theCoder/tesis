@@ -233,9 +233,10 @@ def run_headless(
 
     config = load_and_resolve_config(config_path=config_path, cli_args=cli_args)
     if model_name:
-        existing = config.models.get(config.provider)
+        profile = config.model_profile or config.provider
+        existing = config.models.get(profile)
         if existing is None:
-            config.models[config.provider] = ModelConfig(
+            config.models[profile] = ModelConfig(
                 provider=config.provider,
                 api_key="",
                 model_name=model_name,

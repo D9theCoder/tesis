@@ -131,6 +131,10 @@ def _headless_parser() -> argparse.ArgumentParser:
     parser.add_argument("--surfaces", type=_csv_values)
     parser.add_argument("--payload-mode")
     parser.add_argument("--payload-modes", type=_csv_values)
+    parser.add_argument(
+        "--model-profile",
+        help="Select one configured model profile for both orchestrator and payload roles.",
+    )
     parser.add_argument("--condition", "--experiment-condition", dest="experiment_condition")
     parser.add_argument("--target-method")
     parser.add_argument("--model")
@@ -180,7 +184,8 @@ def _headless_overrides(namespace: argparse.Namespace) -> dict[str, object]:
     values = vars(namespace)
     overrides: dict[str, object] = {}
     for key in (
-        "target", "provider", "level", "surface", "payload_mode", "experiment_condition",
+        "target", "provider", "level", "surface", "payload_mode", "model_profile",
+        "experiment_condition",
         "target_method", "repeats", "candidate_budget", "iterations", "stop_policy",
         "coverage_target", "output_dir", "format", "log_verbosity", "providers", "levels",
         "surfaces", "payload_modes", "enriched_reporting", "diagnose",

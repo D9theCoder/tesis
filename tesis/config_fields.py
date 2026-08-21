@@ -155,6 +155,17 @@ def _methods_for_config(config: Mapping[str, Any] | None = None) -> tuple[str, .
     return method_choices(str(surface) if surface else None)
 
 
+def _model_profile_choices(config: Mapping[str, Any] | None = None) -> tuple[str, ...]:
+    """Resolve selectable named model profiles from a resolved config."""
+
+    if not isinstance(config, Mapping):
+        return ()
+    models = config.get("models")
+    if not isinstance(models, Mapping):
+        return ()
+    return tuple(str(name) for name in models if str(name).strip())
+
+
 def _matrix_methods_for_config(config: Mapping[str, Any] | None = None) -> tuple[str, ...]:
     """Resolve the union of methods selected by matrix surfaces."""
 
@@ -461,6 +472,17 @@ TARGET_METHOD = _field(
     forms=_SINGLE_FORMS,
     normalize="lower",
     description="Optional explicit method for method-level evaluation.",
+)
+MODEL_PROFILE = _field(
+    "model_profile",
+    label="Model profile",
+    category=FieldCategory.MODEL.value,
+    value_type=str,
+    kind="select",
+    choices=_model_profile_choices,
+    allow_none=True,
+    forms=_COMMON_FORMS,
+    description="Optional run-time profile applied to both standard LLM roles.",
 )
 CANDIDATE_BUDGET = _field(
     "candidate_budget",
@@ -888,6 +910,7 @@ TARGET_FIELDS: tuple[FieldSpec, ...] = (TARGET_URL,)
 SINGLE_RUN_FIELDS: tuple[FieldSpec, ...] = (
     TARGET_URL,
     PROVIDER,
+    MODEL_PROFILE,
     SECURITY_LEVEL,
     SURFACE,
     PAYLOAD_MODE,
@@ -911,6 +934,7 @@ SINGLE_RUN_FIELDS: tuple[FieldSpec, ...] = (
 MATRIX_FIELDS: tuple[FieldSpec, ...] = (
     TARGET_URL,
     MATRIX,
+    MODEL_PROFILE,
     PROVIDERS,
     LEVELS,
     SURFACES,
@@ -1611,6 +1635,7 @@ __all__ = [
     "METHODS_CHOICES",
     "MODEL_API_KEY",
     "MODEL_FIELDS",
+    "MODEL_PROFILE",
     "MODEL_NAME",
     "MODEL_PROVIDER",
     "OUTPUT_DIR",

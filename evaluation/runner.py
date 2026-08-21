@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import Counter
+from collections.abc import Mapping
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -408,9 +409,19 @@ def run_single_engagement(
         target_method is None
         or str(payload_mode).strip().lower() in {"hybrid", "llm_mutation_only"}
     )
+    configured_profiles: list[Mapping[str, Any]] = []
+    if isinstance(model_config, Mapping):
+        configured_profiles.append(model_config)
+    for profile in (model_profiles or {}).values():
+        if isinstance(profile, Mapping):
+            configured_profiles.append(profile)
     known_secrets = [
-        value for key, value in (model_config or {}).items()
-        if "key" in key.lower() or "secret" in key.lower() or "token" in key.lower()
+        value
+        for profile in configured_profiles
+        for key, value in profile.items()
+        if "key" in str(key).lower()
+        or "secret" in str(key).lower()
+        or "token" in str(key).lower()
     ]
 
     def emit(
@@ -899,6 +910,12 @@ def run_single_engagement(
         call_context,
         candidate_budget=candidate_budget,
     )
+    effective_profiles = {
+        str(settings.get("model_profile") or "").strip()
+        for settings in effective_llm_runtime_config["roles"].values()
+        if str(settings.get("model_profile") or "").strip()
+    }
+    selected_model_profile = next(iter(effective_profiles)) if len(effective_profiles) == 1 else None
 
     artifact = {
         "schema_version": "tui.v1",
@@ -909,6 +926,7 @@ def run_single_engagement(
         "target_method": target_method,
         "provider": llm_provider,
         "model": (model_config or {}).get("model_name"),
+        "model_profile": selected_model_profile,
         "surface": surface,
         "security_level": security_level,
         "payload_mode": payload_mode,
@@ -941,6 +959,7 @@ def run_single_engagement(
             "target_url": target_url,
             "provider": llm_provider,
             "model": (model_config or {}).get("model_name"),
+            "model_profile": selected_model_profile,
             "model_config": redact_secrets(model_config or {}),
             "security_level": security_level,
             "surface": surface,

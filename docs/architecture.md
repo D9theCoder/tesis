@@ -11,8 +11,8 @@ The app and headless layer read the repository-root `config.yaml` by default.
 
 Useful automation flags include `--condition`, `--target-method`,
 `--providers`, `--levels`, `--surfaces`, `--payload-modes`, `--repeats`,
-`--candidate-budget`, `--iterations`, `--output-dir`, and `--json`. Lists are
-comma-separated, so the thesis matrix can be launched as:
+`--candidate-budget`, `--iterations`, `--model-profile`, `--output-dir`, and
+`--json`. Lists are comma-separated, so the thesis matrix can be launched as:
 
 ```bash
 python -m tesis run --headless --mode matrix \
@@ -88,6 +88,12 @@ model blocks, and unknown keys survive typed edits. Advanced YAML is parsed and
 fully validated before replacement of `config.yaml`. Blank secret controls do
 not overwrite existing values, environment references remain supported, and a
 literal secret requires an explicit warning acknowledgement.
+
+When multiple named profiles exist under `models`, headless runs can select
+one profile for both standard LLM roles with `--model-profile PROFILE`; the
+same override is available as `TESIS_MODEL_PROFILE`. TUI run setup exposes the
+same selector. Role-specific profile flags remain available for deliberately
+different orchestrator and payload-generator models.
 
 ## Artifact service and identity
 

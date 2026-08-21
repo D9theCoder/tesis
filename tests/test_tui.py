@@ -38,7 +38,7 @@ def test_matrix_screen_calculates_total_and_uses_compact_layout():
             await pilot.pause()
             assert isinstance(app.screen, tui.RunSetupScreen)
             assert app.screen.matrix
-            assert "18 runs" in str(app.screen.query_one("#run-total").render())
+            assert "36 runs" in str(app.screen.query_one("#run-total").render())
             assert app.screen.has_class("compact")
 
     asyncio.run(scenario())
@@ -88,6 +88,48 @@ def test_run_setup_round_trips_llm_runtime_controls(monkeypatch):
             assert resolved.llm_runtime["cache_scope"] == "none"
             assert resolved.llm_runtime["roles"]["orchestrator"]["model_profile"] == "new-orch-profile"
             assert resolved.llm_runtime["roles"]["orchestrator"]["model_name"] == "new-orch-model"
+
+    asyncio.run(scenario())
+
+
+def test_run_setup_global_model_profile_switches_both_roles(monkeypatch):
+    config = EngagementConfig(
+        target_url="http://localhost/dvwa",
+        provider="openai",
+        level="low",
+        models={
+            "openai": ModelConfig("openai", "", "muse-model"),
+            "openai_compatible": ModelConfig(
+                "openai_compatible", "", "deepseek-model"
+            ),
+        },
+    )
+    config.llm_runtime = {
+        "max_concurrency": 1,
+        "cache_scope": "none",
+        "roles": {
+            "orchestrator": {"model_profile": "openai"},
+            "payload_generator": {"model_profile": "openai"},
+        },
+    }
+    monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kwargs: config)
+
+    async def scenario() -> None:
+        app = tui.TesisApp()
+        async with app.run_test(size=(120, 44)) as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            setup = app.screen
+            assert isinstance(setup, tui.RunSetupScreen)
+            assert setup.query_one("#model-profile").value == "openai"
+
+            setup.query_one("#model-profile").value = "openai_compatible"
+            await pilot.pause()
+
+            assert setup.query_one("#orchestrator-model-profile").value == "openai_compatible"
+            assert setup.query_one("#payload-model-profile").value == "openai_compatible"
+            assert setup.query_one("#model").value == "deepseek-model"
 
     asyncio.run(scenario())
 
