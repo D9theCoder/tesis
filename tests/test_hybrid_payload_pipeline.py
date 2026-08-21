@@ -14,7 +14,7 @@ from foundation.payload_generator import _filter_execution_ready_variants, _pars
 from foundation.payload_library import PayloadLibrary
 from foundation.payload_ranker import rank_candidates
 from foundation.payload_validator import validate_payload_candidates
-from agents.state_utils import candidate_payloads_for_stage, payload_score_updates
+from agents.state_utils import candidate_payloads_for_stage, make_update, payload_score_updates
 from llm.prompts.payload_generation_prompt import build_payload_generation_prompt
 
 
@@ -589,6 +589,30 @@ def test_payload_score_updates_only_attempted_candidates():
     updates = payload_score_updates(state, "sqli_union", 3)
     assert updates["seed-1"] == 3
     assert "seed-2" not in updates
+
+
+def test_make_update_scores_current_invocation_candidates():
+    """The first method invocation must score payloads in the returned update."""
+    state = {
+        **new_default_state(),
+        "payload_candidates": {
+            "sqli_union": [
+                {
+                    "candidate_id": "current-1",
+                    "payload_or_logic": "1' UNION SELECT user,password FROM users-- -",
+                }
+            ]
+        },
+    }
+
+    update = make_update(
+        state=state,
+        module_name="sqli_union",
+        score=3,
+        tried_payloads=["1' UNION SELECT user,password FROM users-- -"],
+    )
+
+    assert update["payload_scores"] == {"current-1": 3}
 
 
 def test_rank_candidates_seed_first_and_budgeted():

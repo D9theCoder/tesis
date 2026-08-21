@@ -240,12 +240,25 @@ def candidate_payloads_for_stage(
     return []
 
 
-def payload_score_updates(state: dict[str, Any], module_name: str, score: int) -> dict[str, int]:
-    """Assign payload-quality scores only to candidates that were actually tried."""
+def payload_score_updates(
+    state: dict[str, Any],
+    module_name: str,
+    score: int,
+    tried_payloads: list[str] | None = None,
+) -> dict[str, int]:
+    """Assign payload-quality scores only to candidates that were actually tried.
+
+    ``make_update`` receives the method invocation's payloads before the
+    LangGraph reducer merges them into shared state. Accept that current
+    invocation explicitly so the first method call is scored in artifacts.
+    """
     updates = dict(state.get("payload_scores", {}))
     tried_payloads = {
         str(payload)
-        for payload in state.get("tried_payloads", {}).get(module_name, [])
+        for payload in [
+            *state.get("tried_payloads", {}).get(module_name, []),
+            *(tried_payloads or []),
+        ]
         if payload is not None
     }
     for candidate in state.get("payload_candidates", {}).get(module_name, []):
@@ -368,7 +381,12 @@ def make_update(
         "scores": merge_scores(state, module_name, score),
         "exploitation_scores": merge_score_map(state, "exploitation_scores", module_name, min(score, 3)),
         "chain_scores": merge_score_map(state, "chain_scores", module_name, 4 if score >= 4 else 0),
-        "payload_scores": payload_score_updates(state, module_name, min(score, 4)),
+        "payload_scores": payload_score_updates(
+            state,
+            module_name,
+            min(score, 4),
+            tried_payloads=tried_payloads,
+        ),
         "tried_payloads": merge_tried_payloads(state, module_name, tried_payloads),
         "iteration_count": state.get("iteration_count", 0) + 1,
         "next_agent": next_agent,

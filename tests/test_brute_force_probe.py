@@ -154,3 +154,26 @@ def test_slow_probe_does_not_skip_exploit_stage(module, agent, agent_id):
         (call.kwargs.get("params") or {}).get("username") == "admin"
         for call in session.get.call_args_list
     )
+
+
+@pytest.mark.parametrize("module", PROBE_MODULES, ids=["dictionary", "spray"])
+def test_invalid_credentials_are_not_reported_as_exploit_success(module):
+    """Brute-force telemetry success must represent semantic login confirmation."""
+    session = MagicMock()
+    session.get.return_value = _response(
+        text="Username and/or password incorrect.",
+        elapsed_ms=20.0,
+    )
+
+    score, _tried, confirmed, events, _credentials, boundary = module._attempt_exploit(
+        session,
+        ["admin:wrong"],
+        set(),
+        "low",
+    )
+
+    assert score == 0
+    assert confirmed == []
+    assert boundary is False
+    assert [event["payload"]["success"] for event in events] == [False]
+    assert [event["status"] for event in events] == ["failed"]

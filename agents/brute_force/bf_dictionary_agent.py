@@ -284,11 +284,15 @@ def _attempt_exploit(
                 user_token,
             )
             for resp in responses:
+                semantic_success = (
+                    not _response_indicates_csrf_token_error(resp)
+                    and verifier.contains_any(resp.text, _SUCCESS_SIGNALS).ok
+                )
                 events.append(exploit_event(
                     AGENT_ID,
                     payload,
                     resp.status_code,
-                    not _response_indicates_csrf_token_error(resp),
+                    semantic_success,
                 ))
             resp = responses[-1]
 
