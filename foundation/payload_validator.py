@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from core.knowledge_graph import AttackKnowledgeGraph
 from foundation.payload_library import PayloadLibrary
@@ -33,6 +34,10 @@ _OUT_OF_SCOPE_MARKERS = (
     "powershell",
 )
 _CREDENTIAL_PREFIX = re.compile(r"^\s*[^:,;\s]+\s*:\s*[^,;\s]+")
+_SQL_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_BENCHMARK_CALL = re.compile(r"\bbenchmark\s*\(", re.IGNORECASE)
+_SLEEP_CALL = re.compile(r"\bsleep\s*\(\s*([^,)]*)", re.IGNORECASE)
+_MAX_SAFE_DELAY_SECONDS = 5.0
 
 
 def allowed_target_params(method: str) -> set[str]:
@@ -58,6 +63,37 @@ def _is_out_of_scope(payload: str) -> bool:
         return True
     parsed = urlparse(stripped)
     return bool(parsed.scheme and parsed.netloc)
+
+
+def _unsafe_resource_reason(payload: str) -> str | None:
+    """Reject delay mutations that can consume unbounded target resources.
+
+    Model mutations can insert SQL block comments or percent-encode function
+    names.  Normalize those representations before inspecting delay calls so
+    that the validator remains a hard boundary before the HTTP client.  A
+    SLEEP call is accepted only when its first argument is a finite decimal
+    value within the bounded delay used by the handwritten DVWA seeds; opaque
+    expressions are rejected conservatively.
+    """
+    normalized = payload
+    for _ in range(2):
+        decoded = unquote(normalized)
+        if decoded == normalized:
+            break
+        normalized = decoded
+    normalized = _SQL_BLOCK_COMMENT.sub("", normalized)
+
+    if _BENCHMARK_CALL.search(normalized):
+        return "unsafe_resource_cost"
+
+    for match in _SLEEP_CALL.finditer(normalized):
+        try:
+            seconds = float(match.group(1).strip())
+        except (TypeError, ValueError):
+            return "unsafe_resource_cost"
+        if not math.isfinite(seconds) or not 0 <= seconds <= _MAX_SAFE_DELAY_SECONDS:
+            return "unsafe_resource_cost"
+    return None
 
 
 def validate_candidate(candidate: dict[str, Any], method: str, profile: dict[str, Any]) -> dict[str, Any]:
@@ -96,6 +132,13 @@ def validate_candidate(candidate: dict[str, Any], method: str, profile: dict[str
     payload = str(candidate.get("payload_or_logic", ""))
     if not payload.strip():
         return {"valid": False, "reason": "empty_payload", "candidate_id": candidate.get("candidate_id")}
+    unsafe_resource_reason = _unsafe_resource_reason(payload)
+    if unsafe_resource_reason:
+        return {
+            "valid": False,
+            "reason": unsafe_resource_reason,
+            "candidate_id": candidate.get("candidate_id"),
+        }
     if _is_out_of_scope(payload):
         return {
             "valid": False,
@@ -181,54 +224,74 @@ def validate_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
         for candidate in canonical_seed_candidates
         if isinstance(candidate, dict) and candidate.get("candidate_id")
     }
-    seen_payloads: set[str] = set()
-    seen: set[str] = set()
-    valid: list[dict] = []
-    rejected: list[dict] = []
+    def _collect_candidates(candidates: list[dict]) -> tuple[list[dict], list[dict]]:
+        seen_payloads: set[str] = set()
+        seen: set[str] = set()
+        valid: list[dict] = []
+        rejected: list[dict] = []
 
-    for candidate in raw_candidates:
-        candidate = dict(candidate)
-        candidate.setdefault("method", method)
-        candidate_id = str(candidate.get("candidate_id", ""))
-        if not candidate_id or candidate_id in seen:
-            rejected.append({
-                "candidate_id": candidate_id or None,
-                "valid": False,
-                "reason": "duplicate_or_missing_candidate_id",
-            })
-            continue
-        seen.add(candidate_id)
-        result = validate_candidate(candidate, method, profile)
-        payload_value = str(candidate.get("payload_or_logic", ""))
-        if result["valid"] and payload_value in seen_payloads:
-            result = {
-                "valid": False,
-                "reason": "duplicate_payload_or_logic",
-                "candidate_id": candidate_id,
-            }
-        if result["valid"]:
-            seed_id = str(candidate.get("source_seed_id", "")).strip()
-            if seed_id not in static_seed_ids:
+        for raw_candidate in candidates:
+            candidate = dict(raw_candidate)
+            candidate.setdefault("method", method)
+            candidate_id = str(candidate.get("candidate_id", ""))
+            if not candidate_id or candidate_id in seen:
+                rejected.append({
+                    "candidate_id": candidate_id or None,
+                    "valid": False,
+                    "reason": "duplicate_or_missing_candidate_id",
+                })
+                continue
+            seen.add(candidate_id)
+            result = validate_candidate(candidate, method, profile)
+            payload_value = str(candidate.get("payload_or_logic", ""))
+            if result["valid"] and payload_value in seen_payloads:
                 result = {
                     "valid": False,
-                    "reason": "unknown_source_seed_id",
+                    "reason": "duplicate_payload_or_logic",
                     "candidate_id": candidate_id,
                 }
-            elif str(candidate.get("source", "llm_generated")) == "static_seed" and (
-                candidate_id != seed_id
-                or payload_value != canonical_static_payloads.get(seed_id)
-            ):
-                result = {
-                    "valid": False,
-                    "reason": "invalid_static_seed_provenance",
-                    "candidate_id": candidate_id,
-                }
-        if result["valid"]:
-            seen_payloads.add(payload_value)
-            candidate["validation"] = result
-            valid.append(candidate)
-        else:
-            rejected.append(result)
+            if result["valid"]:
+                seed_id = str(candidate.get("source_seed_id", "")).strip()
+                if seed_id not in static_seed_ids:
+                    result = {
+                        "valid": False,
+                        "reason": "unknown_source_seed_id",
+                        "candidate_id": candidate_id,
+                    }
+                elif str(candidate.get("source", "llm_generated")) == "static_seed" and (
+                    candidate_id != seed_id
+                    or payload_value != canonical_static_payloads.get(seed_id)
+                ):
+                    result = {
+                        "valid": False,
+                        "reason": "invalid_static_seed_provenance",
+                        "candidate_id": candidate_id,
+                    }
+            if result["valid"]:
+                seen_payloads.add(payload_value)
+                candidate["validation"] = result
+                valid.append(candidate)
+            else:
+                rejected.append(result)
+        return valid, rejected
+
+    valid, rejected = _collect_candidates(raw_candidates)
+    generated_attempted = (
+        str(state.get("payload_mode", "static_only")).strip().lower()
+        in {"hybrid", "llm_mutation_only"}
+        and any(
+            str(candidate.get("source", "llm_generated")) != "static_seed"
+            for candidate in raw_candidates
+            if isinstance(candidate, dict)
+        )
+    )
+    fallback_used = False
+    if not valid and generated_attempted:
+        fallback_valid, fallback_rejected = _collect_candidates(canonical_seed_candidates)
+        if fallback_valid:
+            valid = fallback_valid
+            rejected.extend(fallback_rejected)
+            fallback_used = True
 
     max_total = int(profile.get("max_total_candidates", state.get("candidate_budget", 5)) or 5)
     ranked = rank_candidates(valid, max_total)
@@ -247,6 +310,13 @@ def validate_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
             for candidate in ranked
         },
     }
+    if fallback_used:
+        update["fallback_events"] = [{
+            "event": "payload_validation.static_seed_fallback",
+            "method": method,
+            "payload_mode": str(state.get("payload_mode", "static_only")),
+            "reason": "no_valid_generated_candidates",
+        }]
     if not ranked and state.get("target_method") == method:
         update.update({
             "next_agent": "scorer",

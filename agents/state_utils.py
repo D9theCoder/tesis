@@ -38,6 +38,39 @@ def already_tried_payloads(state: dict[str, Any], module_name: str) -> set[str]:
     return {str(payload) for payload in module_payloads}
 
 
+def validated_candidate_ids(state: dict[str, Any], module_name: str) -> set[str] | None:
+    """Return validated candidate IDs, or ``None`` before validation runs.
+
+    The graph keeps candidate history for auditability. Once validation results
+    exist, only candidates with an explicit ``valid`` result may enter an agent
+    queue; an empty set is meaningful and blocks execution of rejected rows.
+    """
+    results = state.get("payload_validation_results", {}).get(module_name)
+    if not isinstance(results, list) or not results:
+        return None
+    return {
+        str(result.get("candidate_id"))
+        for result in results
+        if isinstance(result, dict)
+        and result.get("valid") is True
+        and result.get("candidate_id") is not None
+    }
+
+
+def validated_payload_candidates(state: dict[str, Any], module_name: str) -> list[dict]:
+    """Return the executable candidate queue after validation filtering."""
+    candidates = state.get("payload_candidates", {}).get(module_name, [])
+    valid_ids = validated_candidate_ids(state, module_name)
+    if valid_ids is None:
+        return [candidate for candidate in candidates if isinstance(candidate, dict)]
+    return [
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, dict)
+        and str(candidate.get("candidate_id")) in valid_ids
+    ]
+
+
 def append_error_marker(target: list[str], context: str, exc: Exception) -> None:
     """Append a deterministic error marker for observability in state output."""
     target.append(f"{context}:{type(exc).__name__}")
@@ -170,13 +203,16 @@ def candidate_payloads_for_stage(
     security_level: str,
     stage: str,
 ) -> list[str]:
-    """Return candidate-queue payloads for a stage, with static fallback.
+    """Return executable candidate payloads for a stage.
 
-    The fallback preserves direct unit-test and legacy call behavior, while the
-    LangGraph runtime now supplies `payload_candidates` through builder and
-    validator nodes before dispatching method agents.
+    Before validation, canonical static seeds preserve direct unit-test and
+    legacy call behavior. Once validation has run, an empty valid-ID set is a
+    hard stop: rejected candidate history must not be revived by a method
+    agent's local fallback. If another stage has a valid candidate, canonical
+    seeds may still supply the missing probe/exploit stage.
     """
-    candidates = state.get("payload_candidates", {}).get(module_name, [])
+    candidates = validated_payload_candidates(state, module_name)
+    valid_ids = validated_candidate_ids(state, module_name)
     allowed_stages = {stage}
     if stage == "exploit":
         allowed_stages.add("bypass")
@@ -189,6 +225,9 @@ def candidate_payloads_for_stage(
     ]
     if selected:
         return selected
+
+    if valid_ids is not None and not valid_ids:
+        return []
 
     payload_set = PayloadLibrary().get(module_name, security_level)
     if stage == "probe":

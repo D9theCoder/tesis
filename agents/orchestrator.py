@@ -251,12 +251,19 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
     }
     telemetry_events: list[dict[str, Any]] = []
 
-    if iteration_count >= max_iterations:
+    if iteration_count >= max_iterations and not confirmed_vulns and not achieved_outcomes:
         return {
             "next_agent": "scorer",
             "viable_methods": list(state.get("viable_methods", [])),
             "iteration_count": iteration_count + 1,
-            "telemetry_events": [{**telemetry_base, "event": "orchestrator.stop", "reason": "budget_exhausted"}],
+            "task_result": "INCOMPLETE",
+            "incomplete_reason": "ITERATION_LIMIT",
+            "telemetry_events": [{
+                **telemetry_base,
+                "event": "orchestrator.stop",
+                "status": "incomplete",
+                "payload": {"reason": "ITERATION_LIMIT"},
+            }],
         }
 
     if (set(confirmed_vulns) | set(achieved_outcomes)) & CRITICAL_OUTCOMES:
@@ -528,6 +535,33 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         # Update consecutive_clean_responses
         new_clean_count = consecutive_clean + 1 if not evasion_triggered else 0
 
+        terminal_fields: dict[str, str] = {}
+        if next_agent == "scorer" and not confirmed_vulns and not achieved_outcomes:
+            # A method that raised during execution is necessarily an attempted
+            # method, even if the agent could only persist it in
+            # ``failure_agents`` before returning control to the router.
+            attempted_or_blocked = (
+                set(attempted_agents)
+                | set(blocked_agents)
+                | set(failure_agents)
+            )
+            if selection_methods and set(selection_methods).issubset(attempted_or_blocked):
+                terminal_reason = "ALL_METHODS_FAILED"
+            elif iteration_count + 1 >= max_iterations:
+                terminal_reason = "ITERATION_LIMIT"
+            else:
+                terminal_reason = "MODEL_STOPPED_WITHOUT_FINDING"
+            terminal_fields = {
+                "task_result": "INCOMPLETE",
+                "incomplete_reason": terminal_reason,
+            }
+            telemetry_events.append({
+                **telemetry_base,
+                "event": "orchestrator.stop",
+                "status": "incomplete",
+                "payload": {"reason": terminal_reason},
+            })
+
         telemetry_events.append({
             **telemetry_base,
             "event": "orchestrator.decision",
@@ -555,6 +589,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "consecutive_clean_responses": new_clean_count,
             "evasion_attempts": state.get("evasion_attempts", 0) + (retries_used if evasion_triggered else 0),
             "successful_evasions": state.get("successful_evasions", 0) + (1 if evasion_success else 0),
+            **terminal_fields,
         }
     except Exception as exc:
         # Harness node — crashing the graph is worse than logging a fallback.

@@ -29,6 +29,7 @@ def _make_response(status_code=200, text="Incorrect"):
     resp = MagicMock()
     resp.status_code = status_code
     resp.text = text
+    resp.elapsed_ms = 0.0
     return resp
 
 

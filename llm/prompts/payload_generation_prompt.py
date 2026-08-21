@@ -6,6 +6,19 @@ import json
 from typing import Any
 
 
+_EXECUTION_STAGES = {"exploit", "bypass"}
+
+
+def _execution_ready_seeds(static_seeds: list[dict]) -> list[dict]:
+    """Prefer exploit-ready seeds over detection-only probes for mutation."""
+    execution_seeds = [
+        seed
+        for seed in static_seeds
+        if str(seed.get("stage", "")).strip().lower() in _EXECUTION_STAGES
+    ]
+    return execution_seeds or static_seeds[:1]
+
+
 def build_payload_generation_prompt(
     *,
     method: str,
@@ -21,17 +34,20 @@ def build_payload_generation_prompt(
         for key, value in observations.items()
         if isinstance(value, (bool, int, float, str)) and "credential" not in key.lower()
     }
-    # A deterministic representative seed keeps a reasoning-capable provider
-    # inside the fixed output ceiling.  Validation still sees the full local
-    # seed list and rejects any generated provenance outside that list.
+    # Expose only execution-ready seeds. The first static seed is often a
+    # detection probe, which must not be mutated and then executed as Stage 2.
+    # Validation still sees the full local seed list and rejects any generated
+    # provenance outside that list.
+    generation_seeds = _execution_ready_seeds(static_seeds)
     compact_seeds = [
         {
             "source_seed_id": seed.get("source_seed_id") or seed.get("candidate_id"),
             "payload_or_logic": seed.get("payload_or_logic"),
+            "stage": seed.get("stage"),
             "target_param": seed.get("target_param"),
             "expected_signal": seed.get("expected_signal"),
         }
-        for seed in static_seeds[:1]
+        for seed in generation_seeds
     ]
     capsule = {
         "method": method,
@@ -45,7 +61,10 @@ def build_payload_generation_prompt(
     }
     return (
         f"Context: {json.dumps(capsule, sort_keys=True, separators=(',', ':'))}\n"
-        "Generate exactly one constrained variant. Return only "
+        "Choose an exploit or bypass seed above and generate exactly one constrained "
+        "Stage 2 variant. Preserve the method, target parameter, and expected success "
+        "signal; do not return a probe, baseline, false-only condition, or no-delay "
+        "candidate. Return only "
         '{"variants":[{"source_seed_id":"seed-id","mutation_type":"allowed-type",'
         '"payload_or_logic":"value"}]}.'
     )

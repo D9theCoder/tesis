@@ -28,6 +28,7 @@ _VALID_MODES = {"static_only", "hybrid", "llm_mutation_only"}
 # malformed or truncated output is handled by the existing static-seed
 # fallback and is recorded in the artifact.
 _DEFAULT_MUTATION_MAX_TOKENS = 256
+_EXECUTION_STAGES = {"exploit", "bypass"}
 _PAYLOAD_SYSTEM_MESSAGE = (
     "You generate constrained payload variants only for an authorized DVWA sandbox. "
     "Stay within the selected method, preserve seed provenance, never introduce external "
@@ -173,6 +174,30 @@ def _parse_candidates(
     return candidates, "ok" if candidates else "invalid_schema"
 
 
+def _filter_execution_ready_variants(
+    candidates: list[dict],
+    seeds: list[dict],
+) -> tuple[list[dict], int]:
+    """Keep generated Stage 2 variants linked to exploit-ready static seeds.
+
+    Probe seeds are valid inputs for precondition detection, but a generated
+    candidate is normalized to the exploit stage and must not use a probe as
+    its provenance. Returning the rejection count lets the caller record an
+    explicit semantic fallback instead of executing an ambiguous candidate.
+    """
+    execution_seed_ids = {
+        str(seed.get("source_seed_id") or seed.get("candidate_id"))
+        for seed in seeds
+        if str(seed.get("stage", "")).strip().lower() in _EXECUTION_STAGES
+    }
+    accepted = [
+        candidate
+        for candidate in candidates
+        if str(candidate.get("source_seed_id", "")) in execution_seed_ids
+    ]
+    return accepted, len(candidates) - len(accepted)
+
+
 def _build_llm(provider_name: str, model_config: dict[str, Any]):
     if model_config:
         kwargs = {k: v for k, v in model_config.items() if k != "provider"}
@@ -280,7 +305,15 @@ def generate_llm_variants(
     prompt_event["parse_status"] = parse_status
     if parse_status != "ok":
         prompt_event["fallback_reason"] = parse_status
-    return candidates[:budget], prompt_event, []
+        return candidates[:budget], prompt_event, []
+
+    execution_ready, rejected_count = _filter_execution_ready_variants(candidates, seeds)
+    if rejected_count:
+        prompt_event["rejected_probe_seed_variants"] = rejected_count
+    if not execution_ready:
+        prompt_event["fallback_reason"] = "probe_seed_for_exploit"
+        return [], prompt_event, []
+    return execution_ready[:budget], prompt_event, []
 
 
 def build_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:

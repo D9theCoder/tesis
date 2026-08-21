@@ -291,7 +291,7 @@ def bf_spray_agent(state: ExploitationState) -> dict[str, Any]:
         observations: dict[str, bool] = {}
 
         # Stage 1: PROBE
-        probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe") or ["rate_test:test", "probe:probe"]
+        probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe")
         cached_no_rate_limit = state.get("observations", {}).get(_PROBE_OBSERVATION_KEY)
         probe_ok, tried, probe_obs, probe_events = _probe_preconditions(
             session,
@@ -315,9 +315,7 @@ def bf_spray_agent(state: ExploitationState) -> dict[str, Any]:
         score = max(score, 1)
 
         # Stage 2: EXPLOIT
-        all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit") or [
-            "admin:password", "gordonb:abc123", "pablo:letmein", "1337:charley"
-        ]
+        all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit")
 
         exploit_score, tried, confirmed, exploit_events, creds, captcha_boundary = _attempt_exploit(
             session,

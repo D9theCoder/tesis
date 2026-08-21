@@ -10,11 +10,12 @@ import pytest
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.state import ALL_METHOD_AGENTS, new_default_state
 from foundation.payload_generator import build_payload_candidates
-from foundation.payload_generator import _parse_candidates
+from foundation.payload_generator import _filter_execution_ready_variants, _parse_candidates
 from foundation.payload_library import PayloadLibrary
 from foundation.payload_ranker import rank_candidates
 from foundation.payload_validator import validate_payload_candidates
-from agents.state_utils import payload_score_updates
+from agents.state_utils import candidate_payloads_for_stage, payload_score_updates
+from llm.prompts.payload_generation_prompt import build_payload_generation_prompt
 
 
 def test_all_methods_have_payload_profiles():
@@ -76,6 +77,231 @@ def test_payload_library_deduplicates_reused_level_seeds(method, level):
     seeds = PayloadLibrary().load_seed_candidates(method, level)
     payloads = [candidate["payload_or_logic"] for candidate in seeds]
     assert len(payloads) == len(set(payloads))
+
+
+def test_payload_generation_prompt_exposes_execution_ready_seeds():
+    """Mutation prompts must not present a detection probe as the exploit seed."""
+    seeds = PayloadLibrary().load_seed_candidates("sqli_union", "medium")
+    prompt = build_payload_generation_prompt(
+        method="sqli_union",
+        security_level="medium",
+        observations={},
+        static_seeds=seeds,
+        payload_profile=AttackKnowledgeGraph().get_payload_profile("sqli_union"),
+        candidate_budget=1,
+    )
+    capsule = json.loads(prompt.split("Context: ", 1)[1].split("\n", 1)[0])
+    compact_seeds = capsule["static_seeds"]
+
+    assert compact_seeds
+    assert all(seed["stage"] in {"exploit", "bypass"} for seed in compact_seeds)
+    assert "sqli_union_medium_probe_0" not in {
+        seed["source_seed_id"] for seed in compact_seeds
+    }
+
+
+def test_generated_probe_seed_is_rejected_from_exploit_execution():
+    """Probe provenance cannot silently become an executable exploit variant."""
+    seeds = PayloadLibrary().load_seed_candidates("sqli_union", "medium")
+    probe_seed = next(seed for seed in seeds if seed["stage"] == "probe")
+    exploit_seed = next(seed for seed in seeds if seed["stage"] in {"exploit", "bypass"})
+    candidates = [
+        {"source_seed_id": probe_seed["candidate_id"]},
+        {"source_seed_id": exploit_seed["candidate_id"]},
+    ]
+
+    accepted, rejected_count = _filter_execution_ready_variants(candidates, seeds)
+
+    assert accepted == [candidates[1]]
+    assert rejected_count == 1
+
+
+def test_rejected_generated_candidate_falls_back_to_static_seeds():
+    """An invalid generated candidate must not leave the method without a safe queue."""
+    seed = next(
+        candidate
+        for candidate in PayloadLibrary().load_seed_candidates("ac_force_browse", "low")
+        if candidate["stage"] == "exploit"
+    )
+    generated = {
+        **seed,
+        "candidate_id": "generated-out-of-scope",
+        "source": "llm_generated",
+        "mutation_type": "path_normalization",
+        "payload_or_logic": "vulnerabilities/../security.php",
+    }
+    update = validate_payload_candidates({
+        **new_default_state(),
+        "selected_method": "ac_force_browse",
+        "payload_mode": "llm_mutation_only",
+        "security_level": "low",
+        "payload_candidates": {"ac_force_browse": [generated]},
+    })
+
+    assert any(
+        row["reason"] == "out_of_scope_target"
+        for row in update["payload_validation_results"]["ac_force_browse"]
+    )
+    assert update["payload_candidates"]["ac_force_browse"]
+    assert all(
+        candidate["source"] == "static_seed"
+        for candidate in update["payload_candidates"]["ac_force_browse"]
+    )
+    assert update["fallback_events"][0]["event"] == "payload_validation.static_seed_fallback"
+
+
+def test_unbounded_time_mutation_is_rejected_and_falls_back_to_static():
+    """CPU-heavy BENCHMARK variants must not reach the DVWA HTTP client."""
+    seed = next(
+        candidate
+        for candidate in PayloadLibrary().load_seed_candidates("sqli_time_blind", "low")
+        if candidate["stage"] == "exploit"
+    )
+    generated = {
+        **seed,
+        "candidate_id": "generated-benchmark",
+        "source": "llm_generated",
+        "mutation_type": "delay_function_variant",
+        "payload_or_logic": "1' AND BENCHMARK(5000000,SHA1('test'))-- -",
+    }
+    update = validate_payload_candidates({
+        **new_default_state(),
+        "selected_method": "sqli_time_blind",
+        "payload_mode": "llm_mutation_only",
+        "security_level": "low",
+        "payload_candidates": {"sqli_time_blind": [generated]},
+    })
+
+    assert any(
+        row["reason"] == "unsafe_resource_cost"
+        for row in update["payload_validation_results"]["sqli_time_blind"]
+    )
+    assert update["fallback_events"][0]["reason"] == "no_valid_generated_candidates"
+    assert all(
+        candidate["source"] == "static_seed"
+        for candidate in update["payload_candidates"]["sqli_time_blind"]
+    )
+
+
+@pytest.mark.parametrize("payload", [
+    "1 AND BENCHMARK/**/(5000000,SHA1('test'))",
+    "1 AND SLEEP/**/(100)#",
+    "1 AND SLEEP(0x100)#",
+    "1 AND SLEEP(1e3)#",
+    "1 AND %2553LEEP(100)#",
+])
+def test_obfuscated_or_opaque_delay_mutations_never_enter_http_queue(payload):
+    """Delay-function obfuscation cannot bypass pre-HTTP validation."""
+    seed = next(
+        candidate
+        for candidate in PayloadLibrary().load_seed_candidates("sqli_time_blind", "low")
+        if candidate["stage"] == "exploit"
+    )
+    generated = {
+        **seed,
+        "candidate_id": "generated-unsafe-delay",
+        "source": "llm_generated",
+        "mutation_type": "delay_function_variant",
+        "payload_or_logic": payload,
+    }
+    state = {
+        **new_default_state(),
+        "selected_method": "sqli_time_blind",
+        "payload_mode": "llm_mutation_only",
+        "security_level": "low",
+        "payload_candidates": {"sqli_time_blind": [generated]},
+    }
+
+    update = validate_payload_candidates(state)
+
+    assert any(
+        row["candidate_id"] == generated["candidate_id"]
+        and row["reason"] == "unsafe_resource_cost"
+        for row in update["payload_validation_results"]["sqli_time_blind"]
+    )
+    assert payload not in candidate_payloads_for_stage(
+        update, "sqli_time_blind", "low", "exploit"
+    )
+
+
+@pytest.mark.parametrize("security_level", ["low", "medium", "high"])
+def test_bounded_time_blind_static_seeds_remain_executable(security_level):
+    """The bounded handwritten SLEEP(3) seeds remain valid at every level."""
+    seeds = PayloadLibrary().load_seed_candidates("sqli_time_blind", security_level)
+    state = {
+        **new_default_state(),
+        "selected_method": "sqli_time_blind",
+        "payload_mode": "llm_mutation_only",
+        "security_level": security_level,
+        "payload_candidates": {"sqli_time_blind": seeds},
+    }
+
+    update = validate_payload_candidates(state)
+    valid_payloads = {
+        candidate["payload_or_logic"]
+        for candidate in update["payload_candidates"]["sqli_time_blind"]
+    }
+    probe_queue = candidate_payloads_for_stage(
+        update, "sqli_time_blind", security_level, "probe"
+    )
+    exploit_queue = candidate_payloads_for_stage(
+        update, "sqli_time_blind", security_level, "exploit"
+    )
+
+    assert valid_payloads
+    assert "1' AND SLEEP(3)-- -" in probe_queue
+    assert any("SLEEP(3)" in payload for payload in exploit_queue)
+    assert not any(
+        row.get("reason") == "unsafe_resource_cost"
+        for row in update["payload_validation_results"]["sqli_time_blind"]
+        if row.get("valid") is not True
+    )
+
+
+def test_method_queue_uses_only_validated_candidate_ids():
+    """Accumulated rejected candidates remain audit data, never execution data."""
+    seed = PayloadLibrary().load_seed_candidates("sqli_union", "low")[0]
+    safe = {
+        **seed,
+        "candidate_id": "safe-candidate",
+        "stage": "exploit",
+        "payload_or_logic": "1 UNION SELECT user,password FROM users-- -",
+    }
+    blocked = {**safe, "candidate_id": "blocked-candidate", "payload_or_logic": "//external.invalid"}
+    state = {
+        **new_default_state(),
+        "payload_candidates": {"sqli_union": [blocked, safe]},
+        "payload_validation_results": {
+            "sqli_union": [
+                {"candidate_id": "blocked-candidate", "valid": False, "reason": "out_of_scope_target"},
+                {"candidate_id": "safe-candidate", "valid": True, "reason": "ok"},
+            ],
+        },
+    }
+
+    assert candidate_payloads_for_stage(state, "sqli_union", "low", "exploit") == [
+        safe["payload_or_logic"]
+    ]
+
+
+def test_method_queue_stays_empty_after_all_candidates_are_rejected():
+    """A completed validation pass cannot revive rejected history via static fallback."""
+    seed = PayloadLibrary().load_seed_candidates("sqli_union", "low")[0]
+    blocked = {**seed, "candidate_id": "blocked-candidate", "payload_or_logic": "//external.invalid"}
+    state = {
+        **new_default_state(),
+        "payload_candidates": {"sqli_union": [blocked]},
+        "payload_validation_results": {
+            "sqli_union": [{
+                "candidate_id": "blocked-candidate",
+                "valid": False,
+                "reason": "out_of_scope_target",
+            }],
+        },
+    }
+
+    assert candidate_payloads_for_stage(state, "sqli_union", "low", "probe") == []
+    assert candidate_payloads_for_stage(state, "sqli_union", "low", "exploit") == []
 
 
 def test_static_only_candidate_builder_does_not_generate_llm_candidates():
@@ -271,10 +497,16 @@ def test_validator_rejects_unlisted_generated_mutation_type():
 
     update = validate_payload_candidates(state)
 
-    assert update["payload_candidates"]["sqli_union"] == []
-    assert update["payload_validation_results"]["sqli_union"] == [
-        {"valid": False, "reason": "mutation_type_not_allowed", "candidate_id": "generated-unsupported-mutation"}
-    ]
+    assert any(
+        row["reason"] == "mutation_type_not_allowed"
+        for row in update["payload_validation_results"]["sqli_union"]
+    )
+    assert update["payload_candidates"]["sqli_union"]
+    assert all(
+        candidate["source"] == "static_seed"
+        for candidate in update["payload_candidates"]["sqli_union"]
+    )
+    assert update["fallback_events"][0]["event"] == "payload_validation.static_seed_fallback"
 
 
 @pytest.mark.parametrize("external_value", ["//example.invalid/escape", "../../setup.php", "..\\\\setup.php"])

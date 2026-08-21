@@ -199,6 +199,16 @@ earlier refusal wording, and data from other coordinates are not replayed.
 Existing `messages` fields may remain for audit compatibility, but they are not
 an automatic model context.
 
+Mutation generation is stage-aware. For `hybrid` and
+`llm_mutation_only`, the prompt exposes static seeds with an execution-ready
+stage (`exploit` or `bypass`), together with their stage, target parameter, and
+expected signal. Detection-only `probe` seeds remain in the local seed catalog
+for method-agent preconditions but are not mutation sources for Stage 2. A
+generated variant linked to a probe seed is rejected by the builder; if no
+execution-ready variant remains, the run records the deterministic static-seed
+fallback. `static_only` does not
+invoke this LLM mutation path and continues to use the static seed queue.
+
 The orchestrator returns only the following structured decision; expected
 outcome and fallback are derived deterministically:
 
@@ -343,9 +353,9 @@ The new contract separates model judgment from deterministic harness data:
 | Concern | Before | After |
 | --- | --- | --- |
 | Orchestrator input | Broad state and legacy message context could be replayed | Compact capsule containing surface, level, AKG-viable/attempted/blocked/failed methods, observations, scores, findings, outcomes, payload mode, and remaining iterations |
-| Payload input | Method context plus larger candidate-generation context | Selected method, level, applicable observations, selected static seeds, mutation constraints, expected signals, and budget |
+| Payload input | Method context plus larger candidate-generation context | Selected method, level, applicable observations, execution-ready static seeds with stage, mutation constraints, expected signals, and budget |
 | Orchestrator output | Verbose/free-form selection and planning fields | `{"next_agent":"...","reason_code":"..."}` |
-| Payload output | Larger candidate objects and model-supplied metadata | One constrained variant with `source_seed_id`, `mutation_type`, and `payload_or_logic` |
+| Payload output | Larger candidate objects and model-supplied metadata | One constrained Stage 2 variant with `source_seed_id`, `mutation_type`, and `payload_or_logic`; probe-seed provenance is rejected |
 | Derived metadata | Partly supplied by the model | Candidate ID, method, stage, target parameter, expected signal, fallback, score, and provenance are filled by the harness |
 | Context reuse | Conversation/history could influence later calls | Coordinate-local capsules; full history, raw HTTP bodies, credentials, refusal wording, and other-coordinate outcomes are excluded |
 
@@ -366,9 +376,12 @@ state and artifacts:
 | Malformed JSON | Loose parsing or discarded response; cause was difficult to separate from other failures | `parse_status=invalid`, optional `invalid_json_events`, deterministic role-specific fallback, and no cache insertion |
 | Truncated/length-limited output | Could be mistaken for ordinary malformed JSON | `parse_status=incomplete`; no cache insertion and immediate fallback |
 | Disallowed method | A model could name an unavailable or cross-surface method before the final route check | Dynamic allowed-method schema plus local allow-list; the name is never executable, and `fallback_events` records the deterministic choice |
-| Payload validation failure | Invalid model candidates could reduce the usable candidate set without a complete provenance trail | Static seeds remain available, invalid generated candidates are rejected before execution, and provenance/validation reasons are stored |
+| Probe seed used for Stage 2 mutation | A detection probe could be mutated and treated as an exploit candidate | The prompt exposes only `exploit`/`bypass` seeds, stage is explicit, and probe-derived variants trigger a recorded static-seed fallback |
+| Payload validation failure | Invalid model candidates could reduce the usable candidate set without a complete provenance trail | Validation results are authoritative for execution: invalid generated candidates remain audit history but cannot enter the method queue; static seeds are used when no generated candidate is valid, and provenance/validation reasons are stored |
+| Unsafe resource-cost mutation | A model could submit an unbounded delay or CPU-heavy SQL mutation and consume the target/request timeout budget | `BENCHMARK(...)` and delay mutations above the bounded safety threshold are rejected before HTTP execution with `unsafe_resource_cost`; the generated payload is never silently treated as a successful exploit |
 | Provider/network failure | A fallback could make a partial run appear successful | `LLM_RUNTIME_FAILURE` is recorded; fallback output is retained only for audit and the runner marks the run incomplete/error |
 | No AKG-viable method | The orchestrator could still be called and return an impossible value, producing an ambiguous terminal result | Automatic AKG-guided selection skips the LLM call, routes to `scorer`, and records `NO_VIABLE_METHODS` |
+| Method exhausted without confirmation | A scorer stop after an HTTP request could be reported only as `UNSPECIFIED` | If all AKG-viable methods were attempted or blocked without a confirmed vulnerability or enabling outcome, the orchestrator records `task_result=INCOMPLETE` and `incomplete_reason=ALL_METHODS_FAILED`; an HTTP 2xx is transport evidence, not semantic confirmation |
 
 There is no unbounded repair loop for malformed or incomplete output. The
 orchestrator uses an AKG-constrained deterministic method fallback or scorer;
@@ -453,6 +466,21 @@ It does not:
 The implementation therefore changes the runtime envelope around the thesis
 workflow while keeping the experiment’s causal factors and evidence rules
 constant.
+
+#### 3.7.9 Stage-aware payload mutation: no AKG or LangGraph topology change
+
+The mutation-only remediation refines the payload-generation and execution
+contracts but does not change the framework architecture. The AKG remains
+static, predefined, pre-validated, and payload-aware; no AKG node, edge,
+precondition, payload profile, or chain semantic was added or removed. The
+LangGraph topology also remains unchanged:
+`recon -> orchestrator -> payload_candidate_builder -> payload_validator ->
+method agent -> chaining_router -> scorer/END`, with the existing conditional
+routes and state reducers. The prompt and builder expose only execution-ready
+seeds; the validator rejects unsafe or out-of-scope variants, and the routing
+and method-queue helpers treat only explicit `valid` validation results as
+executable. Accumulated candidate history is retained for audit, but rejected
+history cannot be dispatched to a method agent.
 
 ## 4. AKG Technical Model
 
@@ -571,10 +599,14 @@ static/AKG fallback path described in section 3.6.
 
 ### 5.3 Payload Candidate Builder
 
-The builder takes static seeds from `payload_library`, then creates LLM
-variants if hybrid mode is active. The LLM receives only the selected method,
-security level, applicable observations, selected seeds, mutation constraints,
-expected signals, and candidate budget.
+The builder loads the full static seed catalog from `payload_library`, then
+creates LLM variants if `hybrid` or `llm_mutation_only` is active. The mutation
+prompt exposes only execution-ready `exploit`/`bypass` seeds and labels their
+stage, target parameter, and expected signal. Probe seeds remain available for
+Stage 1 method-agent preconditions but are not valid mutation sources for Stage
+2. The LLM receives only the selected method, security level, applicable
+observations, selected execution-ready seeds, mutation constraints, expected
+signals, and candidate budget.
 
 The LLM candidate output is limited to:
 
@@ -612,6 +644,11 @@ static_seed
 llm_mutated
 llm_generated
 ```
+
+For `static_only`, the builder bypasses LLM generation and preserves the
+static-seed path. For generated modes, a variant linked to a probe seed is
+discarded before it can become an execution candidate; if that leaves no
+execution-ready variant, the deterministic static-seed fallback is recorded.
 
 ### 5.4 Payload Validator
 

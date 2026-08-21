@@ -169,7 +169,7 @@ def ac_idor_agent(state: ExploitationState) -> dict[str, Any]:
         observations: dict[str, bool] = {}
 
         # Stage 1: PROBE
-        probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe") or ["2", "3", "4"]
+        probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe")
         probe_ok, tried, probe_obs, probe_events = _probe_preconditions(
             session, probe_payloads, already_tried
         )
@@ -188,7 +188,7 @@ def ac_idor_agent(state: ExploitationState) -> dict[str, Any]:
         score = max(score, 1)
 
         # Stage 2: EXPLOIT
-        all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit") or ["5", "6"]
+        all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit")
 
         exploit_score, tried, confirmed, exploit_events = _attempt_exploit(
             session, all_exploit, already_tried | set(all_tried)

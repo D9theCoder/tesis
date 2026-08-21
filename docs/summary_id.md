@@ -202,6 +202,16 @@ serta data dari koordinat lain tidak dikirim ulang. Field `messages` yang
 lama boleh dipertahankan untuk audit, tetapi tidak otomatis menjadi context
 model.
 
+Mutation generation bersifat stage-aware. Untuk mode `hybrid` dan
+`llm_mutation_only`, prompt hanya menampilkan static seed dengan stage yang
+siap dieksekusi (`exploit` atau `bypass`), termasuk stage, target parameter, dan
+expected signal. Seed `probe` yang hanya dipakai untuk deteksi tetap berada di
+catalog seed lokal untuk precondition method agent, tetapi bukan sumber mutasi
+Stage 2. Variant yang merujuk seed `probe` ditolak oleh builder; jika tidak ada
+variant siap eksekusi yang tersisa, fallback static-seed deterministik dicatat
+dalam run. Mode `static_only` tidak memanggil
+jalur LLM mutation ini dan tetap memakai queue static seed.
+
 Output orchestrator hanya berupa keputusan terstruktur berikut; expected
 outcome dan fallback diturunkan secara deterministik:
 
@@ -350,9 +360,9 @@ deterministik oleh harness:
 | Concern | Sebelum | Sesudah |
 | --- | --- | --- |
 | Input orchestrator | State luas dan legacy message context dapat direplay | Capsule ringkas berisi surface, level, method viable/attempted/blocked/failed dari AKG, observations, scores, findings, outcomes, payload mode, dan sisa iterasi |
-| Input payload | Context method dan context generation yang lebih besar | Selected method, level, observations yang berlaku, static seeds terpilih, batas mutasi, expected signals, dan budget |
+| Input payload | Context method dan context generation yang lebih besar | Selected method, level, observations yang berlaku, static seed siap eksekusi beserta stage, batas mutasi, expected signals, dan budget |
 | Output orchestrator | Selection dan planning free-form/verbose | `{"next_agent":"...","reason_code":"..."}` |
-| Output payload | Candidate object besar dengan metadata dari model | Satu variant terbatas berisi `source_seed_id`, `mutation_type`, dan `payload_or_logic` |
+| Output payload | Candidate object besar dengan metadata dari model | Satu variant Stage 2 terbatas berisi `source_seed_id`, `mutation_type`, dan `payload_or_logic`; provenance dari seed `probe` ditolak |
 | Metadata turunan | Sebagian diberikan oleh model | Candidate ID, method, stage, target parameter, expected signal, fallback, score, dan provenance diisi harness |
 | Reuse context | Conversation/history dapat mempengaruhi call berikutnya | Capsule lokal coordinate; history penuh, raw HTTP body, credential, wording refusal, dan outcome coordinate lain dikeluarkan |
 
@@ -373,9 +383,12 @@ perbedaannya pada state dan artifact:
 | JSON malformed | Loose parsing atau response dibuang; penyebab sulit dipisahkan | `parse_status=invalid`, optional `invalid_json_events`, fallback deterministic per role, dan tidak masuk cache |
 | Output terpotong/batas token | Dapat dianggap malformed JSON biasa | `parse_status=incomplete`; tidak masuk cache dan langsung fallback |
 | Method tidak diizinkan | Model dapat menyebut method unavailable atau cross-surface sebelum route final | Dynamic allowed-method schema dan allow-list lokal; nama tersebut tidak executable dan pilihan deterministic dicatat di `fallback_events` |
-| Payload gagal validasi | Candidate invalid dapat mengurangi candidate set tanpa provenance lengkap | Static seeds tetap tersedia, generated candidate invalid ditolak sebelum eksekusi, dan alasan validation/provenance disimpan |
+| Seed `probe` dipakai untuk mutasi Stage 2 | Detection probe dapat dimutasi lalu diperlakukan sebagai candidate exploit | Prompt hanya menampilkan seed `exploit`/`bypass`, stage dibuat eksplisit, dan variant dari seed `probe` memicu fallback static-seed yang tercatat |
+| Payload gagal validasi | Candidate invalid dapat mengurangi candidate set tanpa provenance lengkap | Hasil validation menjadi otoritas eksekusi: generated candidate invalid tetap menjadi audit history tetapi tidak dapat masuk queue method; static seeds dipakai jika tidak ada generated candidate yang valid, dan alasan validation/provenance disimpan |
+| Mutation dengan biaya resource tidak aman | Model dapat mengirim delay tak terbatas atau mutation SQL yang berat CPU dan menghabiskan budget timeout target/request | `BENCHMARK(...)` dan mutation delay di atas threshold keselamatan diblokir sebelum HTTP dengan `unsafe_resource_cost`; generated payload tidak pernah dianggap sebagai exploit sukses secara diam-diam |
 | Failure provider/network | Fallback dapat membuat partial run terlihat sukses | `LLM_RUNTIME_FAILURE` dicatat; fallback hanya dipertahankan untuk audit dan runner menandai run incomplete/error |
 | Tidak ada method viable di AKG | Orchestrator masih dapat dipanggil dan mengembalikan nilai mustahil sehingga terminal result ambigu | Automatic AKG-guided selection melewati LLM, route ke `scorer`, dan mencatat `NO_VIABLE_METHODS` |
+| Method habis tanpa confirmation | Stop pada scorer setelah HTTP request dapat hanya dilaporkan sebagai `UNSPECIFIED` | Jika semua method viable dari AKG sudah dicoba atau diblokir tanpa vulnerability atau enabling outcome yang terkonfirmasi, orchestrator mencatat `task_result=INCOMPLETE` dan `incomplete_reason=ALL_METHODS_FAILED`; HTTP 2xx adalah evidence transport, bukan confirmation semantic |
 
 Tidak ada repair loop tanpa batas untuk output malformed atau incomplete.
 Orchestrator memakai fallback method yang dibatasi AKG atau scorer; payload
@@ -458,6 +471,20 @@ Perubahan ini tidak:
 
 Dengan demikian, implementasi mengubah runtime envelope di sekitar workflow
 tesis, tetapi causal factor eksperimen dan aturan evidence tetap konstan.
+
+#### 3.7.9 Mutation payload stage-aware: tidak ada perubahan topologi AKG atau LangGraph
+
+Remediasi mutation-only memperbaiki kontrak payload generation dan eksekusi,
+tetapi tidak mengubah arsitektur framework. AKG tetap static, predefined,
+pre-validated, dan payload-aware; tidak ada node, edge, precondition, payload
+profile, atau chain semantic AKG yang ditambah atau dihapus. Topologi LangGraph
+juga tetap sama: `recon -> orchestrator -> payload_candidate_builder ->
+payload_validator -> method agent -> chaining_router -> scorer/END`, termasuk
+conditional route dan state reducer yang sudah ada. Prompt dan builder hanya
+menampilkan seed yang siap dieksekusi; validator menolak variant unsafe atau
+out-of-scope; routing dan helper queue method hanya menganggap hasil validation
+`valid` sebagai executable. Candidate history yang terakumulasi tetap tersedia
+untuk audit, tetapi history yang ditolak tidak dapat dikirim ke method agent.
 
 ## 4. AKG Technical Model
 
@@ -576,10 +603,14 @@ jalur fallback static/AKG pada section 3.6.
 
 ### 5.3 Payload Candidate Builder
 
-Builder mengambil static seeds dari `payload_library`, lalu membuat variasi
-LLM jika mode hybrid aktif. LLM hanya menerima selected method, security
-level, observations yang berlaku, seeds terpilih, batas mutasi, expected
-signals, dan candidate budget.
+Builder memuat seluruh catalog static seed dari `payload_library`, lalu membuat
+variasi LLM jika mode `hybrid` atau `llm_mutation_only` aktif. Prompt mutation
+hanya menampilkan seed `exploit`/`bypass` yang siap dieksekusi dan memberi label
+stage, target parameter, serta expected signal. Seed `probe` tetap tersedia
+untuk precondition Stage 1 pada method agent, tetapi bukan sumber mutasi Stage
+2. LLM hanya menerima selected method, security level, observations yang
+berlaku, seed siap eksekusi, batas mutasi, expected signals, dan candidate
+budget.
 
 Output kandidat dari LLM dibatasi menjadi:
 
@@ -617,6 +648,11 @@ static_seed
 llm_mutated
 llm_generated
 ```
+
+Untuk `static_only`, builder melewati LLM generation dan mempertahankan jalur
+static seed. Untuk mode generated, variant yang merujuk seed `probe` dibuang
+sebelum menjadi candidate eksekusi; jika tidak ada variant siap eksekusi yang
+tersisa, fallback static-seed deterministik dicatat.
 
 ### 5.4 Payload Validator
 

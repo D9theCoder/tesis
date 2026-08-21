@@ -17,6 +17,7 @@ from agents.access_control.ac_vertical_escalation_agent import ac_vertical_escal
 from agents.access_control.ac_force_browse_agent import ac_force_browse_agent
 from agents.brute_force.bf_dictionary_agent import bf_dictionary_agent
 from agents.brute_force.bf_spray_agent import bf_spray_agent
+from agents.state_utils import validated_payload_candidates
 from core.chaining_coordinator import chaining_router_node
 from core.state import ExploitationState
 from foundation.payload_generator import payload_candidate_builder_node
@@ -87,7 +88,7 @@ def route_from_payload_validator(state: ExploitationState) -> str:
         Method node name or `chaining_router` when no method can run."""
     selected = state.get("selected_method") or state.get("next_agent")
     if selected in RUNTIME_AGENT_NODE_NAMES:
-        candidates = state.get("payload_candidates", {}).get(selected, [])
+        candidates = validated_payload_candidates(state, selected)
         if candidates:
             return selected
     if state.get("next_agent") == "scorer":
