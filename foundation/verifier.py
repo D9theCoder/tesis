@@ -38,8 +38,13 @@ class Verifier:
     """Evidence-oriented verification for exploitation results."""
 
     def contains_any(self, body: str, signals: list[str]) -> VerificationResult:
-        """Check whether ``body`` contains any text signal (case-insensitive)."""
-        # Truncate large responses to prevent memory issues
+        """Check whether ``body`` contains any text signal case-insensitively.
+
+        Responses are bounded before matching, so truncated medium-level
+        error envelopes can still be audited without retaining oversized
+        bodies.
+        """
+        # Truncate large responses to prevent memory issues.
         max_body_size = 1_048_576  # 1 MB
         if len(body) > max_body_size:
             body = body[:max_body_size]

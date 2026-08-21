@@ -192,7 +192,10 @@ def candidate_payloads_for_stage(
 
     payload_set = PayloadLibrary().get(module_name, security_level)
     if stage == "probe":
-        return list(payload_set.probe)
+        return [
+            *payload_set.probe,
+            *payload_set.probe_by_level.get(security_level, []),
+        ]
     if stage == "exploit":
         return list(payload_set.exploit) + list(payload_set.bypass.get(security_level, []))
     return []

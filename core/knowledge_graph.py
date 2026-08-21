@@ -143,22 +143,43 @@ class AttackKnowledgeGraph:
     def _attach_payload_profiles(self) -> None:
         profiles = {
             "sqli_union": self._payload_profile(
-                seed_refs=["sqli_union_low", "sqli_union_medium", "sqli_union_high"],
+                seed_refs=[
+                    "sqli_union_low",
+                    "sqli_union_medium",
+                    "sqli_union_high",
+                    "sqli_union_medium_bypass_5",
+                    "sqli_union_medium_bypass_6",
+                ],
                 allowed=["column_count", "comment_style", "encoding", "quote_strategy"],
                 expected=["union_result_visible", "data_extraction_evidence"],
             ),
             "sqli_error": self._payload_profile(
-                seed_refs=["sqli_error_low", "sqli_error_medium", "sqli_error_high"],
+                seed_refs=[
+                    "sqli_error_low",
+                    "sqli_error_medium",
+                    "sqli_error_high",
+                    "sqli_error_medium_bypass_6",
+                ],
                 allowed=["error_function_variant", "encoding", "quote_strategy"],
                 expected=["database_error_leakage", "schema_evidence"],
             ),
             "sqli_boolean_blind": self._payload_profile(
-                seed_refs=["sqli_boolean_low", "sqli_boolean_medium", "sqli_boolean_high"],
+                seed_refs=[
+                    "sqli_boolean_low",
+                    "sqli_boolean_medium",
+                    "sqli_boolean_high",
+                    "sqli_boolean_blind_medium_bypass_5",
+                ],
                 allowed=["predicate_variant", "operator_variant", "encoding"],
                 expected=["true_false_response_delta"],
             ),
             "sqli_time_blind": self._payload_profile(
-                seed_refs=["sqli_time_low", "sqli_time_medium", "sqli_time_high"],
+                seed_refs=[
+                    "sqli_time_low",
+                    "sqli_time_medium",
+                    "sqli_time_high",
+                    "sqli_time_blind_medium_bypass_4",
+                ],
                 allowed=["delay_function_variant", "threshold_value", "predicate_variant"],
                 expected=["measurable_delay"],
             ),
