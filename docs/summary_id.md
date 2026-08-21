@@ -486,6 +486,31 @@ out-of-scope; routing dan helper queue method hanya menganggap hasil validation
 `valid` sebagai executable. Candidate history yang terakumulasi tetap tersedia
 untuk audit, tetapi history yang ditolak tidak dapat dikirim ke method agent.
 
+#### 3.7.10 Rekonsiliasi transport DVWA untuk security level high
+
+Jalur acceptance high yang memakai static-only memiliki dua penyesuaian
+transport DVWA yang deterministik. Saat reconnaissance terautentikasi,
+framework mencari `session-input.php` pada halaman SQLi high dan mendaftarkan
+endpoint POST yang tetap berada dalam scope, dengan parameter `id`. Method
+agent SQLi pada level high kemudian melakukan POST candidate ke endpoint
+session-input tersebut dan me-reload halaman SQLi normal sebelum response
+diserahkan kepada verifier. Jalur request SQLi low dan medium tetap sama.
+Profile union high juga mempertahankan dua bentuk komentar MySQL `-- -` dan `#`
+sebagai static fallback seed.
+
+Untuk probe dan eksploitasi brute-force high, setiap request credential
+mengambil `user_token` baru. Response yang memuat `CSRF token is incorrect`
+memicu satu retry terbatas dengan token baru untuk credential yang sama. Random
+sleep DVWA high tidak dianggap sebagai sinyal rate-limit berbasis perbandingan
+latency; marker throttle eksplisit pada status, header, dan body tetap menjadi
+otoritas. CAPTCHA solving tetap di luar scope.
+
+Perubahan ini adalah perubahan HTTP/session dan evidence handling yang dibatasi
+oleh security level dan diuji pada coordinate acceptance `static_only`. Tidak
+ada node, edge, precondition, payload profile, atau method agent AKG baru, dan
+topologi LangGraph maupun batas verifier tidak berubah. Generasi payload
+mutation-only tidak diubah oleh rekonsiliasi ini.
+
 ## 4. AKG Technical Model
 
 ### 4.1 Node Types

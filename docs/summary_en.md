@@ -482,6 +482,30 @@ and method-queue helpers treat only explicit `valid` validation results as
 executable. Accumulated candidate history is retained for audit, but rejected
 history cannot be dispatched to a method agent.
 
+#### 3.7.10 High-security DVWA transport reconciliation
+
+The static-only high-level acceptance path includes two deterministic DVWA
+transport accommodations. During authenticated reconnaissance, the framework
+looks for `session-input.php` in the high SQLi page and registers the contained
+POST endpoint with its `id` parameter. High SQLi method agents then POST the
+candidate to that session-input endpoint and reload the normal SQLi page before
+passing the response to the verifier. Low and medium SQLi request paths remain
+unchanged. A high-level union profile also retains both `-- -` and `#` MySQL
+comment forms as static fallback seeds.
+
+For high brute-force probing and exploitation, each credential request fetches
+a fresh `user_token`. A response containing `CSRF token is incorrect` triggers
+one bounded fresh-token retry for that same credential. DVWA high-level random
+sleep is not treated as a relative-latency rate-limit signal; explicit status,
+header, and body throttle markers remain authoritative. CAPTCHA solving remains
+out of scope.
+
+These are level-scoped HTTP/session and evidence-handling changes exercised by
+the `static_only` acceptance coordinate. They do not add AKG nodes, edges,
+preconditions, payload profiles, or method agents, and they do not change the
+LangGraph topology or the verifier boundary. Mutation-only payload generation
+was not changed by this reconciliation.
+
 ## 4. AKG Technical Model
 
 ### 4.1 Node Types

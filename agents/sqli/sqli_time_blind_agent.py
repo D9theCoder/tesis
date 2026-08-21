@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 AGENT_ID = "sqli_time_blind"
 MODULE_PATH = "/vulnerabilities/sqli_blind/"
+SESSION_INPUT_PATH = "/vulnerabilities/sqli/session-input.php"
+HIGH_RESULT_PATH = "/vulnerabilities/sqli/"
 _PROBE_OBSERVATION_KEY = "response_delay_measurable"
 
 TIME_THRESHOLD_MEDIUM = 1.8  # seconds — medium DVWA timing has lower jitter margin
@@ -23,11 +25,19 @@ TIME_THRESHOLD_HIGH = 2.5  # seconds — retain the strict high-level threshold
 TIME_THRESHOLD = TIME_THRESHOLD_HIGH  # Backward-compatible high-level alias
 
 
+def _request_high_via_session(session: DVWASession, payload: str):
+    """Store a high-level payload, then reload the page that renders results."""
+    session.post(SESSION_INPUT_PATH, data={"id": payload})
+    return session.get(HIGH_RESULT_PATH)
+
+
 def _request(session: DVWASession, security_level: str, payload: str):
     """Submit a SQLi form using the method exposed by the DVWA level."""
     request_data = {"id": payload, "Submit": "Submit"}
     if security_level == "medium":
         return session.post(MODULE_PATH, data=request_data)
+    if security_level == "high":
+        return _request_high_via_session(session, payload)
     return session.get(MODULE_PATH, params=request_data)
 
 

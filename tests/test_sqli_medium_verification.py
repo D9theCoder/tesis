@@ -118,8 +118,13 @@ def test_boolean_medium_single_true_confirms_but_high_requires_two(
     candidates.append(next(seed for seed in seeds if seed["stage"] == "exploit"))
     session = _make_session()
 
+    current_payload = {"value": ""}
+
     def mock_get(_path, params=None, data=None):
-        payload = str((params or data or {}).get("id", ""))
+        payload_data = params or data or {}
+        if "id" in payload_data:
+            current_payload["value"] = str(payload_data["id"])
+        payload = current_payload["value"]
         if "1=1" in payload or "1=2" not in payload:
             return _make_response("User ID exists in the database")
         return _make_response("User ID is missing from the database")
@@ -133,7 +138,7 @@ def test_boolean_medium_single_true_confirms_but_high_requires_two(
 
     assert result["scores"]["sqli_boolean_blind"] == expected_score
     assert ("sqli_boolean_blind_confirmed" in result.get("confirmed_vulns", [])) is confirmed
-    assert (session.post.call_count > 0) is (security_level == "medium")
+    assert (session.post.call_count > 0) is (security_level in {"medium", "high"})
 
 
 def _time_monotonic_values(delay: float) -> list[float]:
@@ -181,7 +186,7 @@ def test_time_medium_threshold_and_single_delay_are_level_scoped(
     else:
         assert result["scores"]["sqli_time_blind"] < 3
         assert "sqli_time_blind_confirmed" not in result.get("confirmed_vulns", [])
-    assert (session.post.call_count > 0) is (security_level == "medium")
+    assert (session.post.call_count > 0) is (security_level in {"medium", "high"})
 
 
 def test_medium_bypass_seeds_do_not_enter_high_candidates():

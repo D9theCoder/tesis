@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 AGENT_ID = "sqli_error"
 MODULE_PATH = "/vulnerabilities/sqli/"
+SESSION_INPUT_PATH = "/vulnerabilities/sqli/session-input.php"
+HIGH_RESULT_PATH = "/vulnerabilities/sqli/"
 _PROBE_OBSERVATION_KEY = "error_messages_enabled"
 
 # MySQL/DVWA error patterns that confirm SQL error injection is possible
@@ -44,11 +46,19 @@ _EXPLOIT_SIGNALS = [
 ]
 
 
+def _request_high_via_session(session: DVWASession, payload: str):
+    """Store a high-level payload, then reload the page that renders results."""
+    session.post(SESSION_INPUT_PATH, data={"id": payload})
+    return session.get(HIGH_RESULT_PATH)
+
+
 def _request(session: DVWASession, security_level: str, payload: str):
     """Submit a SQLi form using the method exposed by the DVWA level."""
     request_data = {"id": payload, "Submit": "Submit"}
     if security_level == "medium":
         return session.post(MODULE_PATH, data=request_data)
+    if security_level == "high":
+        return _request_high_via_session(session, payload)
     return session.get(MODULE_PATH, params=request_data)
 
 

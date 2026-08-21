@@ -258,6 +258,78 @@ def parse_forms(
     return endpoints, vectors
 
 
+_SQLI_SESSION_INPUT_FILENAME = "session-input.php"
+
+
+def _discover_sqli_session_input(
+    session: DVWASession,
+    page_url: str,
+    page_body: str,
+    *,
+    containment_events: list[dict] | None = None,
+) -> dict | None:
+    """Discover DVWA's high-security SQLi session-input endpoint.
+
+    DVWA exposes the high-security SQLi handler from JavaScript/pop-up markup
+    on the regular SQLi page rather than as the page's form action.  The
+    marker is therefore treated as the deterministic discovery signal.  A
+    same-host GET health check is made before returning the normalized POST
+    endpoint used by the method agents.
+
+    The health check is best effort: a transport failure does not erase an
+    endpoint discovered from the authenticated, contained SQLi page.  A
+    containment failure does prevent registration and is recorded through the
+    existing recon containment-event path.
+    """
+    if _SQLI_SESSION_INPUT_FILENAME not in str(page_body).casefold():
+        return None
+
+    base_url = str(getattr(getattr(session, "http", None), "base_url", ""))
+    endpoint_url = urljoin(
+        f"{base_url.rstrip('/')}/",
+        f"vulnerabilities/sqli/{_SQLI_SESSION_INPUT_FILENAME}",
+    )
+
+    # The endpoint is derived from the discovered page, but still validate it
+    # explicitly before the client sees it so recon preserves its own
+    # containment boundary as well as the HTTP client's boundary.
+    if not _same_host(endpoint_url, base_url):
+        logger.warning("recon: discarded out-of-scope SQLi session-input endpoint %s", endpoint_url)
+        if containment_events is not None:
+            containment_events.append(
+                _recon_containment_event(
+                    endpoint_url,
+                    base_url,
+                    kind="endpoint",
+                    reason="SQLi session-input endpoint outside allowed DVWA scope",
+                )
+            )
+        return None
+
+    try:
+        health_result = session.http.get(endpoint_url)
+        logger.debug(
+            "recon: discovered SQLi session-input endpoint %s from %s (health status %s)",
+            endpoint_url,
+            page_url,
+            getattr(health_result, "status_code", "unknown"),
+        )
+    except ContainmentError as exc:
+        if containment_events is not None:
+            _append_containment_event(containment_events, exc)
+        logger.warning("recon: SQLi session-input health check violated containment: %s", exc)
+        return None
+    except (TransportError, RequestTimeoutError, RuntimeError) as exc:
+        logger.warning("recon: SQLi session-input health check failed: %s", exc)
+
+    return EndpointRecord(
+        url=endpoint_url,
+        method="post",
+        params=["id"],
+        module_name="sqli",
+    )
+
+
 # ── Navigation link extraction ──────────────────────────────────────────
 
 def extract_nav_links(
@@ -482,6 +554,7 @@ def recon(state: ExploitationState) -> dict[str, Any]:
 
             try:
                 result = session.http.get(module_url)
+                normalized_page_url = module_url.split("?", 1)[0].split("#", 1)[0]
                 page_endpoints, page_vectors = parse_forms(
                     result.text,
                     module_url,
@@ -489,6 +562,20 @@ def recon(state: ExploitationState) -> dict[str, Any]:
                 )
                 all_endpoints.extend(page_endpoints)
                 all_vectors.extend(page_vectors)
+
+                # High-security SQLi keeps the executable handler behind a
+                # JavaScript/pop-up reference.  Discover that contained POST
+                # endpoint from the already fetched page; low and medium use
+                # the existing form-derived endpoint set unchanged.
+                if requested_level == "high" and infer_module_name(normalized_page_url) == "sqli":
+                    session_input_endpoint = _discover_sqli_session_input(
+                        session,
+                        normalized_page_url,
+                        result.text,
+                        containment_events=containment_events,
+                    )
+                    if session_input_endpoint is not None:
+                        all_endpoints.append(session_input_endpoint)
             except ContainmentError as exc:
                 _append_containment_event(containment_events, exc)
                 logger.warning("recon: request for %s violated containment: %s", module_url, exc)

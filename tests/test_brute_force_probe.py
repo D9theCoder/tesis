@@ -81,6 +81,37 @@ def test_relative_latency_increase_remains_rate_limit_signal(module):
     assert observations["no_rate_limit"] is False
 
 
+@pytest.mark.parametrize("module", PROBE_MODULES, ids=["dictionary", "spray"])
+def test_high_random_latency_is_not_classified_as_rate_limited(module):
+    """High DVWA random sleep must not prevent the exploit stage."""
+    session = MagicMock()
+    session.get.side_effect = [
+        _response(
+            text='<input name="user_token" value="token-a">',
+            elapsed_ms=100.0,
+        ),
+        _response(elapsed_ms=100.0),
+        _response(
+            text='<input name="user_token" value="token-b">',
+            elapsed_ms=400.0,
+        ),
+        _response(elapsed_ms=400.0),
+    ]
+    session._extract_user_token.side_effect = lambda html: (
+        html.split('value="', 1)[1].split('"', 1)[0]
+    )
+
+    probe_ok, _tried, observations, _events = module._probe_preconditions(
+        session,
+        ["rate_test:test", "probe:probe"],
+        set(),
+        security_level="high",
+    )
+
+    assert probe_ok is True
+    assert observations["no_rate_limit"] is True
+
+
 @pytest.mark.parametrize(
     ("module", "agent", "agent_id"),
     (
