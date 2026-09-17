@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterator, Mapping
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from llm.diagnostics import enrich_provider_exception, provider_error_details
 from llm.provider import get_llm
 
 
@@ -56,6 +57,86 @@ def _finish_reason(response: Any) -> str:
     return str(metadata.get("finish_reason") or "").strip().lower()
 
 
+def _incomplete_reason(response: Any) -> str | None:
+    """Return an explicit provider completion-limit reason, if reported."""
+    finish_reason = _finish_reason(response)
+    if finish_reason in {"length", "max_tokens", "max_output_tokens", "content_filter"}:
+        return finish_reason
+
+    metadata = getattr(response, "response_metadata", {})
+    additional = getattr(response, "additional_kwargs", {})
+    sources = [
+        source
+        for source in (metadata, additional, response if isinstance(response, Mapping) else None)
+        if isinstance(source, Mapping)
+    ]
+    for source in sources:
+        status = str(source.get("status") or "").strip().lower()
+        details = source.get("incomplete_details")
+        reason = details.get("reason") if isinstance(details, Mapping) else None
+        if status == "incomplete":
+            return str(reason or "provider_reported_incomplete").strip().lower()
+
+    status = str(getattr(response, "status", "") or "").strip().lower()
+    details = getattr(response, "incomplete_details", None)
+    reason = details.get("reason") if isinstance(details, Mapping) else getattr(details, "reason", None)
+    if status == "incomplete":
+        return str(reason or "provider_reported_incomplete").strip().lower()
+    return None
+
+
+def _response_text(content: Any) -> str:
+    """Normalize chat and Responses API content blocks to plain text."""
+    if not isinstance(content, list):
+        return str(content)
+    text_blocks: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            text_blocks.append(item)
+            continue
+        if not isinstance(item, Mapping):
+            continue
+        block_type = str(item.get("type") or "").strip().lower()
+        if block_type and block_type not in {"text", "output_text"}:
+            continue
+        text = item.get("text")
+        if isinstance(text, str):
+            text_blocks.append(text)
+        elif isinstance(text, Mapping) and isinstance(text.get("value"), str):
+            text_blocks.append(text["value"])
+    return "\n".join(text_blocks)
+
+
+def _reasoning_token_evidence(usage: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return explicit provider-reported reasoning tokens, when available."""
+    candidates = (
+        ("reasoning_tokens",),
+        ("reasoning",),
+        ("output_token_details", "reasoning"),
+        ("output_token_details", "reasoning_tokens"),
+        ("completion_tokens_details", "reasoning_tokens"),
+    )
+    for path in candidates:
+        value: Any = usage
+        for key in path:
+            if not isinstance(value, Mapping) or key not in value:
+                break
+            value = value[key]
+        else:
+            if isinstance(value, bool):
+                continue
+            try:
+                tokens = int(value)
+            except (TypeError, ValueError):
+                continue
+            if tokens >= 0:
+                return {
+                    "tokens": tokens,
+                    "source": "provider_usage." + ".".join(path),
+                }
+    return None
+
+
 def model_fingerprint(config: Mapping[str, Any]) -> str:
     """Return a non-reversible fingerprint without exposing model credentials."""
     safe: dict[str, Any] = {}
@@ -78,6 +159,7 @@ class RoleSettings:
     model_name: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
+    reasoning_effort: str | None = None
     structured_output: str = "auto"
 
 
@@ -128,6 +210,8 @@ class CoordinateCallContext:
             base["model_name"] = settings.model_name
         if settings.temperature is not None:
             base["temperature"] = settings.temperature
+        if settings.reasoning_effort is not None:
+            base["reasoning_effort"] = settings.reasoning_effort
         resolved_tokens = settings.max_tokens if settings.max_tokens is not None else max_tokens
         if resolved_tokens is not None:
             base["max_tokens"] = int(resolved_tokens)
@@ -157,7 +241,9 @@ class CoordinateCallContext:
         data = {
             "source": "llm_runtime",
             "provider": record.get("provider"),
+            "model": record.get("model"),
             "role": record.get("role"),
+            "coordinate_id": record.get("coordinate_id"),
             "call_id": call_id,
             "prompt_hash": record.get("prompt_hash"),
             "model_fingerprint": record.get("model_fingerprint"),
@@ -166,11 +252,28 @@ class CoordinateCallContext:
             "call_duration_ms": int(record.get("call_duration_ms", 0) or 0),
             "structured_output_mode": record.get("structured_output_mode"),
             "parse_status": record.get("parse_status"),
+            "reasoning_effort_requested": record.get("reasoning_effort_requested"),
         }
         if event_type == "llm.completed":
             data["provider_usage"] = dict(record.get("provider_usage") or {})
+            if record.get("reasoning_token_evidence") is not None:
+                data["reasoning_token_evidence"] = dict(record["reasoning_token_evidence"])
         elif event_type == "llm.failed":
             data["error_type"] = record.get("error_type")
+            if record.get("provider_usage"):
+                data["provider_usage"] = dict(record["provider_usage"])
+            if record.get("reasoning_token_evidence") is not None:
+                data["reasoning_token_evidence"] = dict(record["reasoning_token_evidence"])
+            for key in (
+                "status_code",
+                "request_id",
+                "cause_type",
+                "error_message",
+                "incomplete_reason",
+                "remediation",
+            ):
+                if record.get(key) is not None:
+                    data[key] = record[key]
         try:
             callback(event_type, data)
         except Exception:
@@ -331,7 +434,21 @@ class LLMRuntime:
 
     @staticmethod
     def _structured_output_unsupported(exc: BaseException) -> bool:
+        status_code = getattr(exc, "status_code", None)
+        if status_code is None:
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        try:
+            normalized_status = int(status_code) if status_code is not None else None
+        except (TypeError, ValueError):
+            normalized_status = None
+        if normalized_status is not None and normalized_status not in {400, 404, 422}:
+            return False
         text = str(exc).lower()
+        if any(marker in text for marker in (
+            "api key", "authentication", "unauthorized", "forbidden", "rate limit",
+            "timeout", "connection", "dns", "name resolution",
+        )):
+            return False
         return any(marker in text for marker in (
             "response_format", "json_schema", "structured output", "structured_output",
             "tool_choice", "function_calling",
@@ -392,6 +509,8 @@ class LLMRuntime:
     ) -> LLMCallResult:
         provider, config, settings = context.role_config(role, max_tokens=max_tokens)
         pool, fingerprint = self._pool(role, provider, config)
+        model = str(config.get("model_name") or config.get("model") or "unknown")
+        reasoning_effort = config.get("reasoning_effort")
         call_id = context.next_call_id(role)
         prompt_hash = "sha256:" + hashlib.sha256(
             _canonical({"system": system_message, "user": user_message}).encode("utf-8")
@@ -405,12 +524,15 @@ class LLMRuntime:
             "max_tokens": max_tokens,
             "temperature": config.get("temperature", 0),
             "structured_output": settings.structured_output,
+            "reasoning_effort": reasoning_effort,
         }).encode("utf-8")).hexdigest()
         base_record = {
             "prompt_hash": prompt_hash,
             "role": role,
             "provider": provider,
+            "model": model,
             "call_id": call_id,
+            "coordinate_id": context.coordinate_id,
             "model_fingerprint": fingerprint,
             "cache_hit": False,
             "queue_wait_ms": 0,
@@ -418,6 +540,8 @@ class LLMRuntime:
             "structured_output_mode": "json_prompt",
             "parse_status": "pending",
             "provider_usage": {},
+            "reasoning_effort_requested": reasoning_effort,
+            "reasoning_token_evidence": None,
         }
         if context.cache_enabled and cache_key in context.cache:
             text, parsed = context.cache[cache_key]
@@ -446,6 +570,8 @@ class LLMRuntime:
         text = ""
         mode = "json_prompt"
         output_incomplete = False
+        incomplete_reason: str | None = None
+        structured_output_fallback: dict[str, Any] | None = None
         try:
             capability_key = (role, fingerprint)
             native_allowed = settings.structured_output in {"auto", "native"}
@@ -493,6 +619,13 @@ class LLMRuntime:
                                 settings.structured_output == "auto"
                                 and self._structured_output_unsupported(exc)
                             ):
+                                structured_output_fallback = provider_error_details(
+                                    exc,
+                                    provider=provider,
+                                    model=model,
+                                    role=role,
+                                    coordinate_id=context.coordinate_id,
+                                )
                                 self._capabilities[capability_key] = False
                                 native_supported = False
                                 mode = "json_prompt_fallback"
@@ -503,11 +636,12 @@ class LLMRuntime:
                             SystemMessage(content=system_message),
                             HumanMessage(content=user_message),
                         ])
-                        output_incomplete = _finish_reason(response) in {
-                            "length", "max_tokens", "content_filter",
-                        }
+                        incomplete_reason = _incomplete_reason(response)
+                        output_incomplete = incomplete_reason is not None
                         content = getattr(response, "content", response)
-                        text = str(content)
+                        text = _response_text(content)
+                        if output_incomplete:
+                            raise ValueError("provider reported incomplete output")
                         parsed_raw = json.loads(text)
                         if not isinstance(parsed_raw, dict):
                             raise ValueError("structured output must be a JSON object")
@@ -518,16 +652,17 @@ class LLMRuntime:
                         parsed_raw = response.get("parsed") if isinstance(response, Mapping) else response
                         if raw is not None:
                             raw_content = getattr(raw, "content", "")
-                            text = str(raw_content) if raw_content is not None else ""
+                            text = _response_text(raw_content) if raw_content is not None else ""
+                            incomplete_reason = _incomplete_reason(raw)
+                            output_incomplete = incomplete_reason is not None
                             if not isinstance(parsed_raw, Mapping):
                                 parsed_raw = _tool_call_arguments(raw)
                             if not text and not isinstance(parsed_raw, Mapping):
                                 refusal = getattr(raw, "additional_kwargs", {}).get("refusal")
                                 if refusal:
                                     text = str(refusal)
-                                output_incomplete = _finish_reason(raw) in {
-                                    "length", "max_tokens", "content_filter",
-                                }
+                        if output_incomplete:
+                            raise ValueError("native structured output was truncated")
                         if not isinstance(parsed_raw, Mapping):
                             message = (
                                 "native structured output was truncated"
@@ -543,18 +678,12 @@ class LLMRuntime:
                         SystemMessage(content=system_message),
                         HumanMessage(content=user_message),
                     ])
-                    output_incomplete = _finish_reason(response) in {
-                        "length", "max_tokens", "content_filter",
-                    }
+                    incomplete_reason = _incomplete_reason(response)
+                    output_incomplete = incomplete_reason is not None
                     content = getattr(response, "content", response)
-                    if isinstance(content, list):
-                        text = "\n".join(
-                            item if isinstance(item, str) else str(item.get("text", ""))
-                            for item in content
-                            if isinstance(item, (str, Mapping))
-                        )
-                    else:
-                        text = str(content)
+                    text = _response_text(content)
+                    if output_incomplete:
+                        raise ValueError("provider reported incomplete output")
                     parsed_raw = json.loads(text)
                     if not isinstance(parsed_raw, dict):
                         raise ValueError("structured output must be a JSON object")
@@ -563,6 +692,19 @@ class LLMRuntime:
                 duration_ms = int((perf_counter() - started_at) * 1000)
         except Exception as exc:
             incomplete = output_incomplete or type(exc).__name__ == "LengthFinishReasonError"
+            failure_usage_source = (
+                response.get("raw") if isinstance(response, Mapping) else response
+            )
+            failure_usage = self._usage(failure_usage_source)
+            diagnostic = None
+            if not text and not incomplete:
+                diagnostic = provider_error_details(
+                    exc,
+                    provider=provider,
+                    model=model,
+                    role=role,
+                    coordinate_id=context.coordinate_id,
+                )
             record = {
                 **base_record,
                 "queue_wait_ms": int((acquired_at - queued_at) * 1000),
@@ -572,25 +714,56 @@ class LLMRuntime:
                     "incomplete" if incomplete else "invalid" if text else "provider_error"
                 ),
                 "error_type": type(exc).__name__,
+                "provider_usage": failure_usage,
+                "reasoning_token_evidence": _reasoning_token_evidence(failure_usage),
             }
+            if incomplete:
+                reason = incomplete_reason or "provider_output_limit"
+                record["incomplete_reason"] = reason
+                record["remediation"] = (
+                    "Increase max_tokens/max_output_tokens for this role or reduce the "
+                    "requested structured response size, then retry the coordinate."
+                )
+            if structured_output_fallback is not None:
+                record["structured_output_fallback"] = structured_output_fallback
+            if diagnostic is not None:
+                record.update({
+                    "status_code": diagnostic.get("status_code"),
+                    "request_id": diagnostic.get("request_id"),
+                    "cause_type": diagnostic.get("cause_type"),
+                    "error_message": diagnostic["message"],
+                    "remediation": diagnostic["remediation"],
+                })
             context.append_record(record)
             context.emit_activity("llm.failed", call_id=call_id, record=record)
             if text or incomplete:
-                raise LLMOutputError(str(exc), text=text, performance=record) from exc
+                message = str(exc)
+                if incomplete:
+                    message = (
+                        f"LLM response was incomplete ({record['incomplete_reason']}). "
+                        f"{record['remediation']} Cause: {type(exc).__name__}: {exc}"
+                    )
+                raise LLMOutputError(message, text=text, performance=record) from exc
+            if diagnostic is not None:
+                enrich_provider_exception(exc, diagnostic)
             raise
         finally:
             with self._counter_lock:
                 self._active_llm -= 1
             self._llm_slots.release()
 
+        provider_usage = self._usage(usage_source)
         record = {
             **base_record,
             "queue_wait_ms": int((acquired_at - queued_at) * 1000),
             "call_duration_ms": duration_ms,
             "structured_output_mode": mode,
             "parse_status": "ok",
-            "provider_usage": self._usage(usage_source),
+            "provider_usage": provider_usage,
+            "reasoning_token_evidence": _reasoning_token_evidence(provider_usage),
         }
+        if structured_output_fallback is not None:
+            record["structured_output_fallback"] = structured_output_fallback
         context.append_record(record)
         if context.cache_enabled:
             context.cache[cache_key] = (text, dict(parsed))

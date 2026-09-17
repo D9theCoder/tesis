@@ -6,7 +6,7 @@ import copy
 import os
 import logging
 from typing import TYPE_CHECKING
-from typing import Any
+from typing import Any, Mapping
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
@@ -19,6 +19,7 @@ SAMPLE_QUERY = "What model are you? Reply with your model name only."
 # override this explicitly through ``max_tokens`` (or ``max_output_tokens``
 # where the provider uses that spelling).
 DEFAULT_MAX_OUTPUT_TOKENS = 512
+REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 logger = logging.getLogger(__name__)
 
 # NOTE: Callers must load env vars before importing if needed (e.g. via load_dotenv())
@@ -27,12 +28,63 @@ if TYPE_CHECKING:
     from tesis.model_config import ModelConfig
 
 
+def validate_reasoning_effort(value: Any) -> str | None:
+    """Validate our portable control without assuming model capabilities."""
+    if value is None or value == "":
+        return None
+    effort = str(value).strip().lower()
+    if effort not in REASONING_EFFORTS:
+        raise ValueError(f"reasoning_effort must be one of {', '.join(REASONING_EFFORTS)} or null")
+    return effort
+
+
+def _reasoning_kwargs(provider: str, kwargs: dict[str, Any]) -> None:
+    effort = validate_reasoning_effort(kwargs.pop("reasoning_effort", None))
+    if effort is None:
+        return
+    if provider not in {"openai", "openai_compatible"}:
+        raise ValueError(
+            f"reasoning_effort={effort!r} is not mapped for provider '{provider}'. "
+            "Use null (provider default) and configure native thinking parameters in models.<profile>.extra, "
+            "or select an OpenAI-compatible reasoning model."
+        )
+
+    # One canonical provider field owns an explicit effort. Legacy fields in
+    # model_kwargs/extra_body are removed because the OpenAI SDK merges those
+    # mappings into the request after typed fields and could otherwise override
+    # the selected effort or reintroduce an incompatible temperature.
+    legacy_reasoning = kwargs.pop("reasoning", None)
+    for container_name in ("model_kwargs", "extra_body"):
+        if container_name not in kwargs:
+            continue
+        container = dict(kwargs.get(container_name) or {})
+        for key in ("reasoning", "reasoning_effort", "temperature"):
+            container.pop(key, None)
+        kwargs[container_name] = container
+
+    if kwargs.get("use_responses_api"):
+        reasoning = dict(legacy_reasoning) if isinstance(legacy_reasoning, Mapping) else {}
+        reasoning["effort"] = effort
+        kwargs["reasoning"] = reasoning
+    else:
+        kwargs["reasoning_effort"] = effort
+
+    # Reasoning families commonly reject sampling controls. Omit temperature
+    # from both the typed request and the raw/legacy mappings above.
+    kwargs["temperature"] = None
+
+
 def get_llm(provider_name: str, **kwargs):
     """Returns llm for framework callers.
 
     Args:
         provider_name: Value used by this function."""
     normalized_provider = provider_name.strip().lower()
+    _reasoning_kwargs(normalized_provider, kwargs)
+    if normalized_provider in {"openai", "openai_compatible", "claude"}:
+        output_tokens = kwargs.pop("max_output_tokens", None)
+        if output_tokens is not None and kwargs.get("max_tokens") is None:
+            kwargs["max_tokens"] = output_tokens
 
     if normalized_provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
@@ -176,10 +228,14 @@ def get_llm_from_model_config(config: "ModelConfig", **kwargs):
 
     if "temperature" not in merged_kwargs:
         merged_kwargs["temperature"] = config.temperature
+    if "reasoning_effort" not in kwargs and config.reasoning_effort is not None:
+        merged_kwargs["reasoning_effort"] = config.reasoning_effort
     if "request_timeout" not in merged_kwargs and "timeout" not in merged_kwargs:
         merged_kwargs["request_timeout"] = config.timeout
-    if config.max_tokens is not None and "max_output_tokens" not in merged_kwargs:
-        merged_kwargs["max_output_tokens"] = config.max_tokens
+    if config.max_tokens is not None and not any(
+        key in merged_kwargs for key in ("max_tokens", "max_output_tokens")
+    ):
+        merged_kwargs["max_tokens"] = config.max_tokens
     if config.base_url:
         merged_kwargs.setdefault("base_url", config.base_url)
     if "system_prompt" in config.extra:
