@@ -33,6 +33,17 @@ class Transition:
     priority: int = 100
 
 
+class AKGValidationError(ValueError):
+    """A static AKG invariant failed, with context and a repair hint."""
+
+    def __init__(self, message: str, *, invariant: str, repair: str) -> None:
+        self.invariant = invariant
+        self.repair = repair
+        super().__init__(
+            f"AKG validation failed [{invariant}]: {message}. Repair: {repair}"
+        )
+
+
 class AttackKnowledgeGraph:
     """Represents the static payload-aware Attack Knowledge Graph.
 
@@ -358,24 +369,50 @@ class AttackKnowledgeGraph:
             if not bool(meta.get("is_chain", False)):
                 continue
             if "preconditions" not in meta:
-                raise ValueError(f"Chain edge {source}->{target} missing preconditions")
+                raise AKGValidationError(
+                    f"Chain edge {source}->{target} missing preconditions",
+                    invariant="chain_metadata",
+                    repair=(
+                        "add preconditions=[...] to this transition in "
+                        "AttackKnowledgeGraph._build_graph"
+                    ),
+                )
             preconditions = meta.get("preconditions")
             if not isinstance(preconditions, list) or not all(isinstance(item, str) for item in preconditions):
-                raise ValueError(f"Chain edge {source}->{target} has invalid preconditions")
+                raise AKGValidationError(
+                    f"Chain edge {source}->{target} has invalid preconditions",
+                    invariant="chain_metadata",
+                    repair="use a list of AKG node IDs for the edge preconditions",
+                )
             if not meta.get("target_agent"):
-                raise ValueError(f"Chain edge {source}->{target} missing target_agent")
+                raise AKGValidationError(
+                    f"Chain edge {source}->{target} missing target_agent",
+                    invariant="chain_metadata",
+                    repair="set target_agent to an in-scope static method agent",
+                )
 
     def _validate_preconditions_known(self) -> None:
         allowed = set(self.graph.nodes)
         for source, target, meta in self.graph.edges(data=True):
             for required in meta.get("preconditions", []):
                 if required not in allowed:
-                    raise ValueError(f"Edge {source}->{target} has unknown precondition: {required}")
+                    raise AKGValidationError(
+                        f"Edge {source}->{target} has unknown precondition: {required}",
+                        invariant="known_preconditions",
+                        repair=(
+                            f"add node {required!r} to the static AKG or correct the "
+                            f"precondition on edge {source}->{target}"
+                        ),
+                    )
 
     def _validate_high_impact_nodes_exist(self) -> None:
         missing = [node for node in self.HIGH_IMPACT_OUTCOMES if node not in self.graph]
         if missing:
-            raise ValueError(f"Missing high-impact outcomes in graph: {missing}")
+            raise AKGValidationError(
+                f"Missing high-impact outcomes in graph: {missing}",
+                invariant="required_outcomes",
+                repair="restore the missing outcome nodes in AttackKnowledgeGraph._build_graph",
+            )
 
     def _validate_agent_kg_node_mappings(self) -> None:
         """Validate that every MODULE_TO_KG_NODE value for method agents
@@ -391,9 +428,14 @@ class AttackKnowledgeGraph:
             if kg_node is None:
                 continue  # unknown agents are not validated here
             if kg_node not in graph_nodes:
-                raise ValueError(
+                raise AKGValidationError(
                     f"MODULE_TO_KG_NODE[{agent!r}] maps to {kg_node!r} "
-                    f"which does not exist in the AKG graph"
+                    f"which does not exist in the AKG graph",
+                    invariant="agent_node_mapping",
+                    repair=(
+                        "align core.state.MODULE_TO_KG_NODE with a confirmed node "
+                        "defined by AttackKnowledgeGraph._build_graph"
+                    ),
                 )
 
     def _validate_payload_profiles(self) -> None:
@@ -411,14 +453,32 @@ class AttackKnowledgeGraph:
             "provenance_required",
         }
         for method in ALL_METHOD_AGENTS:
+            if method not in self.graph:
+                raise AKGValidationError(
+                    f"Method node {method} is missing from the graph",
+                    invariant="payload_profiles",
+                    repair="restore the method node and attach its payload profile",
+                )
             profile = self.graph.nodes[method].get("payload_profile")
             if not isinstance(profile, dict):
-                raise ValueError(f"Method node {method} missing payload_profile")
+                raise AKGValidationError(
+                    f"Method node {method} missing payload_profile",
+                    invariant="payload_profiles",
+                    repair="define the method in _attach_payload_profiles",
+                )
             missing = required - set(profile)
             if missing:
-                raise ValueError(f"Method node {method} payload_profile missing keys: {sorted(missing)}")
+                raise AKGValidationError(
+                    f"Method node {method} payload_profile missing keys: {sorted(missing)}",
+                    invariant="payload_profiles",
+                    repair="add every listed key to the method's static payload profile",
+                )
             if not profile.get("seed_payload_refs") or not profile.get("expected_success_signals"):
-                raise ValueError(f"Method node {method} has incomplete payload_profile")
+                raise AKGValidationError(
+                    f"Method node {method} has incomplete payload_profile",
+                    invariant="payload_profiles",
+                    repair="provide non-empty seed_payload_refs and expected_success_signals",
+                )
 
     def get_viable_methods(self, surface: str, observations: dict) -> list[str]:
         """Return method nodes for a surface whose preconditions are satisfied."""
