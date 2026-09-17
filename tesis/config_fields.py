@@ -196,6 +196,7 @@ def _logging_choices() -> tuple[str, ...]:
 
 LOG_VERBOSITY_CHOICES: tuple[str, ...] = _logging_choices()
 LOG_LEVEL_CHOICES = LOG_VERBOSITY_CHOICES
+REASONING_EFFORT_CHOICES: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
 
 
 # ---------------------------------------------------------------------------
@@ -858,6 +859,18 @@ MODEL_MAX_TOKENS = _field(
     min_value=1,
     forms=_SETTINGS_ONLY,
 )
+MODEL_REASONING_EFFORT = _field(
+    "models.{provider}.reasoning_effort",
+    label="Reasoning effort",
+    category=FieldCategory.MODEL.value,
+    value_type=str,
+    kind="discrete_slider",
+    choices=REASONING_EFFORT_CHOICES,
+    allow_none=True,
+    forms=_SETTINGS_ONLY,
+    normalize="lower",
+    description="Optional provider reasoning effort; blank keeps the provider default.",
+)
 MODEL_TIMEOUT = _field(
     "models.{provider}.timeout",
     label="Request timeout",
@@ -886,6 +899,7 @@ MODEL_FIELDS: tuple[FieldSpec, ...] = (
     MODEL_BASE_URL,
     MODEL_TEMPERATURE,
     MODEL_MAX_TOKENS,
+    MODEL_REASONING_EFFORT,
     MODEL_TIMEOUT,
     MODEL_SYSTEM_PROMPT,
 )
@@ -1638,6 +1652,7 @@ __all__ = [
     "MODEL_PROFILE",
     "MODEL_NAME",
     "MODEL_PROVIDER",
+    "MODEL_REASONING_EFFORT",
     "OUTPUT_DIR",
     "PAYLOAD_MODE",
     "PAYLOAD_MODE_CHOICES",
@@ -1647,6 +1662,7 @@ __all__ = [
     "PROVIDER",
     "PROVIDERS",
     "REPEATS",
+    "REASONING_EFFORT_CHOICES",
     "RUN_FIELDS",
     "RUN_CONTROL_FIELDS",
     "SECURITY_LEVEL",

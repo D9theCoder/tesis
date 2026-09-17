@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 from rich.syntax import Syntax
 from rich.text import Text
-from textual import on
+from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
@@ -81,6 +81,7 @@ from tesis.config_fields import (
     METHOD_CHOICES,
     PAYLOAD_MODE_CHOICES,
     PROVIDER_CHOICES,
+    REASONING_EFFORT_CHOICES,
     SECURITY_LEVEL_CHOICES,
     SURFACE_CHOICES,
 )
@@ -176,6 +177,166 @@ LLM_STRUCTURED_OUTPUT_CHOICES = (
 )
 
 
+class ReasoningEffortSlider(Static):
+    """A compact discrete slider with inherited and mixed role states."""
+
+    can_focus = True
+    VALUES: tuple[str | None, ...] = (None, *REASONING_EFFORT_CHOICES)
+
+    class Changed(Message):
+        """Emitted when the selected reasoning effort changes."""
+
+        def __init__(self, slider: "ReasoningEffortSlider", effort: str | None) -> None:
+            self.slider = slider
+            self.effort = effort
+            super().__init__()
+
+        @property
+        def control(self) -> "ReasoningEffortSlider":
+            return self.slider
+
+    def __init__(self, effort: str | None = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._index = self._index_for(effort)
+        self._mixed = False
+        self._mixed_label = "mixed — unchanged"
+        self._clean_index = self._index
+        self._clean_mixed = False
+        self._user_changed = False
+
+    @staticmethod
+    def _index_for(effort: str | None) -> int:
+        normalized = str(effort or "").strip().lower() or None
+        try:
+            return ReasoningEffortSlider.VALUES.index(normalized)
+        except ValueError:
+            return 0
+
+    @property
+    def effort(self) -> str | None:
+        return self.VALUES[self._index]
+
+    @effort.setter
+    def effort(self, value: str | None) -> None:
+        self.set_effort(value)
+
+    @property
+    def value(self) -> str | None:
+        """Textual-style value alias used by form and test code."""
+
+        return self.effort
+
+    @value.setter
+    def value(self, effort: str | None) -> None:
+        self.set_effort(effort)
+
+    @property
+    def mixed(self) -> bool:
+        """Whether the control represents distinct loaded role efforts."""
+
+        return self._mixed
+
+    @property
+    def changed(self) -> bool:
+        """Whether the loaded state was replaced by a global selection."""
+
+        return (
+            self._user_changed
+            or self._index != self._clean_index
+            or self._mixed != self._clean_mixed
+        )
+
+    @property
+    def track_width(self) -> int:
+        """Width of the rendered marker-and-line track in cells."""
+
+        return len(self.VALUES) * 2 - 1
+
+    def on_mount(self) -> None:
+        self._refresh_content()
+
+    def mark_clean(self) -> None:
+        """Record the current state as loaded rather than user-selected."""
+
+        self._clean_index = self._index
+        self._clean_mixed = self._mixed
+        self._user_changed = False
+
+    def set_mixed(self, label: str = "mixed — unchanged") -> None:
+        """Show distinct role values without inventing a global override."""
+
+        self._index = 0
+        self._mixed = True
+        self._mixed_label = label
+        self._refresh_content()
+
+    def set_effort(
+        self,
+        effort: str | None,
+        *,
+        emit: bool = True,
+        user_changed: bool = False,
+    ) -> None:
+        index = self._index_for(effort)
+        state_changed = index != self._index or self._mixed
+        self._index = index
+        self._mixed = False
+        if user_changed:
+            self._user_changed = True
+        self._refresh_content()
+        if state_changed and emit and self.is_mounted:
+            self.post_message(self.Changed(self, self.effort))
+
+    @property
+    def marker_track(self) -> str:
+        """The rendered marker line: one marker cell per value, separators between."""
+
+        markers = ["●" if index == self._index else "○" for index in range(len(self.VALUES))]
+        return "─".join(markers)
+
+    def _refresh_content(self) -> None:
+        if not self.is_mounted:
+            return
+        label = self._mixed_label if self._mixed else self.effort or "provider/model default"
+        self.update(f"{self.marker_track}  [bold]{label}[/]")
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key in {"left", "down"}:
+            self._move(-1)
+            event.stop()
+            event.prevent_default()
+        elif event.key in {"right", "up"}:
+            self._move(1)
+            event.stop()
+            event.prevent_default()
+        elif event.key == "home":
+            self.set_effort(None, user_changed=True)
+            event.stop()
+            event.prevent_default()
+        elif event.key == "end":
+            self.set_effort("max", user_changed=True)
+            event.stop()
+            event.prevent_default()
+
+    def on_click(self, event: events.Click) -> None:
+        offset = event.get_content_offset(self)
+        if offset is None:
+            return
+        # The track alternates marker/separator cells, so only an even cell
+        # inside the track selects: the marker under the pointer is then the
+        # selected value. Values clipped away in a narrow widget stay
+        # unreachable by pointer (use the keyboard) rather than selecting a
+        # value whose marker is not rendered under the click.
+        if not 0 <= offset.x < self.track_width or offset.x % 2:
+            return
+        self.set_effort(self.VALUES[offset.x // 2], user_changed=True)
+        self.focus()
+
+    def _move(self, amount: int) -> None:
+        index = max(0, min(self._index + amount, len(self.VALUES) - 1))
+        self.set_effort(self.VALUES[index], user_changed=True)
+
+
 def _object_mapping(value: Any) -> dict[str, Any]:
     """Return a shallow mapping for a typed or YAML-shaped config object."""
 
@@ -198,6 +359,7 @@ def _object_mapping(value: Any) -> dict[str, Any]:
         "temperature",
         "max_tokens",
         "structured_output",
+        "reasoning_effort",
     ):
         if hasattr(value, name):
             result[name] = getattr(value, name)
@@ -243,6 +405,7 @@ def _runtime_values(config: EngagementConfig) -> dict[str, Any]:
             "temperature": raw_role.get("temperature", 0.0),
             "max_tokens": raw_role.get("max_tokens"),
             "structured_output": raw_role.get("structured_output", "auto"),
+            "reasoning_effort": raw_role.get("reasoning_effort"),
         }
     selected_profile = _config_value(config, "model_profile")
     if selected_profile is None or not str(selected_profile).strip():
@@ -258,6 +421,31 @@ def _runtime_values(config: EngagementConfig) -> dict[str, Any]:
         "model_profile": str(selected_profile).strip() if selected_profile else None,
         "roles": roles,
     }
+
+def _role_reasoning_efforts(runtime: Mapping[str, Any]) -> dict[str, str | None]:
+    """Return explicit role effort values without applying profile inheritance."""
+
+    return {
+        role: str(runtime["roles"][role].get("reasoning_effort") or "").strip() or None
+        for role in LLM_RUNTIME_ROLES
+    }
+
+
+def _load_role_reasoning_slider(
+    slider: ReasoningEffortSlider,
+    efforts: Mapping[str, str | None],
+) -> None:
+    """Load a common effort or a truthful mixed-role state into one control."""
+
+    distinct = set(efforts.values())
+    if len(distinct) == 1:
+        slider.set_effort(next(iter(distinct)), emit=False)
+    else:
+        details = ", ".join(
+            f"{role}={efforts.get(role) or 'inherit'}" for role in LLM_RUNTIME_ROLES
+        )
+        slider.set_mixed(f"mixed: {details}")
+    slider.mark_clean()
 
 
 def _effective_role_model(
@@ -290,9 +478,17 @@ def _llm_runtime_summary(
     runtime_values: Mapping[str, Any] | None = None,
 ) -> str:
     runtime = dict(runtime_values or _runtime_values(config))
+    def effort_for(role: str) -> str:
+        role_values = runtime["roles"].get(role, {})
+        effort = str(role_values.get("reasoning_effort") or "").strip()
+        if effort:
+            return effort
+        profile = str(role_values.get("model_profile") or runtime.get("model_profile") or config.provider)
+        return str(_model_dict(config, profile).get("reasoning_effort") or "provider-default")
+
     return (
-        f"LLM orchestrator={_effective_role_model(config, 'orchestrator', runtime)}  "
-        f"payload_generator={_effective_role_model(config, 'payload_generator', runtime)}  "
+        f"LLM orchestrator={_effective_role_model(config, 'orchestrator', runtime)}[{effort_for('orchestrator')}]  "
+        f"payload_generator={_effective_role_model(config, 'payload_generator', runtime)}[{effort_for('payload_generator')}]  "
         f"cache={runtime['cache_scope']}  concurrency={runtime['max_concurrency']}"
     )
 
@@ -393,16 +589,29 @@ def _runtime_form_values(screen: Screen, *, prefix: str = "") -> dict[str, Any]:
         raise ValueError("llm max concurrency must be between 1 and 4")
     cache_scope = select_value("llm-cache-scope", "none")
     model_profile = select_value("model-profile", "")
+    reasoning_slider = screen.query_one(
+        f"#{prefix}reasoning-effort", ReasoningEffortSlider
+    )
+    reasoning_effort = reasoning_slider.effort
+    loaded_efforts = getattr(screen, "_loaded_role_efforts", {})
     roles: dict[str, dict[str, Any]] = {}
     for role, stem in (("orchestrator", "orchestrator"), ("payload_generator", "payload")):
+        role_effort = (
+            reasoning_effort
+            if reasoning_slider.changed
+            else loaded_efforts.get(role)
+        )
         roles[role] = {
             "model_profile": input_value(f"{stem}-model-profile") or None,
             "model_name": input_value(f"{stem}-model") or None,
+            "reasoning_effort": role_effort,
         }
     return {
         "max_concurrency": max_concurrency,
         "cache_scope": cache_scope,
         "model_profile": model_profile or None,
+        "reasoning_effort": reasoning_effort,
+        "reasoning_effort_changed": reasoning_slider.changed,
         "roles": roles,
     }
 
@@ -417,6 +626,8 @@ def _runtime_cli_overrides(values: Mapping[str, Any]) -> dict[str, Any]:
     }
     if values.get("model_profile"):
         result["model_profile"] = values["model_profile"]
+    if values.get("reasoning_effort_changed") and values.get("reasoning_effort"):
+        result["reasoning_effort"] = values["reasoning_effort"]
     roles = values.get("roles", {})
     for role, stem in (("orchestrator", "orchestrator"), ("payload_generator", "payload")):
         role_values = roles.get(role, {})
@@ -615,6 +826,9 @@ class RunSetupScreen(BaseTesisScreen):
         super().__init__()
         self.matrix = matrix
         self.config: EngagementConfig | None = None
+        self._loaded_role_efforts: dict[str, str | None] = {
+            role: None for role in LLM_RUNTIME_ROLES
+        }
 
     def compose(self) -> ComposeResult:
         title = "Experiment Matrix" if self.matrix else "Single Experiment"
@@ -669,6 +883,8 @@ class RunSetupScreen(BaseTesisScreen):
                 yield Input("1", type="integer", id="llm-max-concurrency")
                 yield Label("LLM cache scope")
                 yield Select(LLM_CACHE_SCOPE_CHOICES, id="llm-cache-scope")
+                yield Label("Reasoning effort (both roles)")
+                yield ReasoningEffortSlider(id="reasoning-effort", classes="reasoning-slider")
                 yield Label("Model profile (both roles)")
                 yield Select((), id="model-profile", allow_blank=True)
                 yield Label("Orchestrator model profile")
@@ -731,6 +947,11 @@ class RunSetupScreen(BaseTesisScreen):
         runtime = _runtime_values(cfg)
         self.query_one("#llm-max-concurrency", Input).value = str(runtime["max_concurrency"])
         self.query_one("#llm-cache-scope", Select).value = runtime["cache_scope"]
+        self._loaded_role_efforts = _role_reasoning_efforts(runtime)
+        _load_role_reasoning_slider(
+            self.query_one("#reasoning-effort", ReasoningEffortSlider),
+            self._loaded_role_efforts,
+        )
         profile_select = self.query_one("#model-profile", Select)
         profile_select.set_options(_model_profile_choices(cfg))
         selected_profile = runtime.get("model_profile")
@@ -793,6 +1014,7 @@ class RunSetupScreen(BaseTesisScreen):
     @on(Input.Changed, "#payload-model-profile")
     @on(Input.Changed, "#payload-model")
     @on(Select.Changed, "#llm-cache-scope")
+    @on(ReasoningEffortSlider.Changed, "#reasoning-effort")
     def update_runtime_preview(self) -> None:
         if not self.is_mounted or self.config is None:
             return
@@ -1534,6 +1756,11 @@ class SettingsScreen(BaseTesisScreen):
                             yield Input(id="settings-base-url")
                             yield Label("Temperature")
                             yield Input(type="number", id="settings-temperature")
+                            yield Label("Model reasoning effort")
+                            yield ReasoningEffortSlider(
+                                id="settings-model-reasoning-effort",
+                                classes="reasoning-slider",
+                            )
                             yield Label("Timeout (seconds)")
                             yield Input(type="integer", id="settings-timeout")
                             yield Label("API key (blank preserves)")
@@ -1578,6 +1805,11 @@ class SettingsScreen(BaseTesisScreen):
                             yield Input("1", type="integer", id="settings-llm-max-concurrency")
                             yield Label("LLM cache scope")
                             yield Select(LLM_CACHE_SCOPE_CHOICES, id="settings-llm-cache-scope")
+                            yield Label("Run reasoning effort (both roles)")
+                            yield ReasoningEffortSlider(
+                                id="settings-reasoning-effort",
+                                classes="reasoning-slider",
+                            )
                             yield Label("Orchestrator model profile")
                             yield Input(id="settings-orchestrator-model-profile")
                             yield Label("Orchestrator model")
@@ -1643,11 +1875,23 @@ class SettingsScreen(BaseTesisScreen):
             self.query_one("#settings-model", Input).value = model_values.get("model_name", "")
             self.query_one("#settings-base-url", Input).value = model_values.get("base_url") or ""
             self.query_one("#settings-temperature", Input).value = str(model_values.get("temperature", 0.0))
+            model_reasoning_slider = self.query_one(
+                "#settings-model-reasoning-effort", ReasoningEffortSlider
+            )
+            model_reasoning_slider.set_effort(
+                model_values.get("reasoning_effort"), emit=False
+            )
+            model_reasoning_slider.mark_clean()
             self.query_one("#settings-timeout", Input).value = str(model_values.get("timeout", 60))
             self.query_one("#settings-api-key", Input).value = ""
             runtime = _runtime_values(resolved)
             self.query_one("#settings-llm-max-concurrency", Input).value = str(runtime["max_concurrency"])
             self.query_one("#settings-llm-cache-scope", Select).value = runtime["cache_scope"]
+            role_efforts = _role_reasoning_efforts(runtime)
+            _load_role_reasoning_slider(
+                self.query_one("#settings-reasoning-effort", ReasoningEffortSlider),
+                role_efforts,
+            )
             for role, stem in (("orchestrator", "orchestrator"), ("payload_generator", "payload")):
                 role_values = runtime["roles"][role]
                 self.query_one(f"#settings-{stem}-model-profile", Input).value = str(role_values.get("model_profile") or "")
@@ -1675,6 +1919,11 @@ class SettingsScreen(BaseTesisScreen):
             self.query_one("#settings-model", Input).value = str(entry.get("model_name", ""))
             self.query_one("#settings-base-url", Input).value = str(entry.get("base_url") or "")
             self.query_one("#settings-temperature", Input).value = str(entry.get("temperature", 0.0))
+            model_reasoning_slider = self.query_one(
+                "#settings-model-reasoning-effort", ReasoningEffortSlider
+            )
+            model_reasoning_slider.set_effort(entry.get("reasoning_effort"), emit=False)
+            model_reasoning_slider.mark_clean()
             self.query_one("#settings-timeout", Input).value = str(entry.get("timeout", 60))
             self.query_one("#settings-api-key", Input).value = ""
         except (ConfigError, AttributeError):
@@ -1713,6 +1962,15 @@ class SettingsScreen(BaseTesisScreen):
             if model_name:
                 models.setdefault(provider, {})["model_name"] = model_name
             models.setdefault(provider, {})["temperature"] = temperature
+            model_reasoning_slider = self.query_one(
+                "#settings-model-reasoning-effort", ReasoningEffortSlider
+            )
+            model_reasoning_effort = model_reasoning_slider.effort
+            if model_reasoning_slider.changed:
+                if model_reasoning_effort is None:
+                    models.setdefault(provider, {}).pop("reasoning_effort", None)
+                else:
+                    models.setdefault(provider, {})["reasoning_effort"] = model_reasoning_effort
             models.setdefault(provider, {})["timeout"] = timeout
             if base_url:
                 models.setdefault(provider, {})["base_url"] = base_url
@@ -1731,6 +1989,10 @@ class SettingsScreen(BaseTesisScreen):
             runtime_payload["cache_scope"] = _select_value(
                 self, "#settings-llm-cache-scope", "none"
             )
+            reasoning_slider = self.query_one(
+                "#settings-reasoning-effort", ReasoningEffortSlider
+            )
+            reasoning_effort = reasoning_slider.effort
             roles_payload = runtime_payload.setdefault("roles", {})
             if not isinstance(roles_payload, Mapping):
                 raise ConfigError("llm_runtime.roles must be a mapping")
@@ -1759,6 +2021,11 @@ class SettingsScreen(BaseTesisScreen):
                 else:
                     role_payload.pop("max_tokens", None)
                 role_payload["structured_output"] = structured_output
+                if reasoning_slider.changed:
+                    if reasoning_effort is None:
+                        role_payload.pop("reasoning_effort", None)
+                    else:
+                        role_payload["reasoning_effort"] = reasoning_effort
 
             if _contains_literal_secret(payload) and not self.literal_warning_acknowledged:
                 self.literal_warning_acknowledged = True
@@ -1780,6 +2047,8 @@ class SettingsScreen(BaseTesisScreen):
             )
             self.query_one("#settings-api-key", Input).value = ""
             self.literal_warning_acknowledged = False
+            model_reasoning_slider.mark_clean()
+            reasoning_slider.mark_clean()
             self.query_one("#settings-status", Static).update("✓ config.yaml validated and saved")
         except (ConfigError, OSError, ValueError) as exc:
             self.query_one("#settings-status", Static).update(f"✗ Not saved: {exc}")
@@ -2183,6 +2452,8 @@ class ValidationScreen(BaseTesisScreen):
             yield Select(((v, v) for v in RUNTIME_AGENT_NODE_NAMES), id="validation-agent")
             with Horizontal(classes="actions"):
                 yield Button("Configuration", id="validate-config")
+                yield Button("Doctor (offline)", id="doctor-offline")
+                yield Button("Doctor (live)", id="doctor-live", variant="warning")
                 yield Button("Target reachability", id="validate-target")
                 yield Button("Selected method agent", id="validate-agent")
                 yield Button("All registered agents", id="validate-all")
@@ -2201,6 +2472,17 @@ class ValidationScreen(BaseTesisScreen):
     @on(Button.Pressed, "#validate-target")
     def validate_target(self) -> None:
         self.run_validation("target")
+
+    @on(Button.Pressed, "#doctor-offline")
+    def doctor_offline(self) -> None:
+        self.run_validation("doctor-offline")
+
+    @on(Button.Pressed, "#doctor-live")
+    def doctor_live(self) -> None:
+        self.query_one("#validation-log", RichLog).write(
+            "[yellow]Live Doctor makes benign provider calls and checks the configured DVWA session settings.[/]"
+        )
+        self.run_validation("doctor-live")
 
     @on(Button.Pressed, "#validate-agent")
     def validate_agent(self) -> None:
@@ -2233,6 +2515,17 @@ class ValidationScreen(BaseTesisScreen):
     def _run_validation(self, generation: int, scope: str) -> None:
         try:
             cfg = load_and_resolve_config(config_path=str(CONFIG_PATH), cli_args={})
+            if scope in {"doctor-offline", "doctor-live"}:
+                from tesis.doctor import run_doctor
+
+                live = scope == "doctor-live"
+                self._validation_line(
+                    generation,
+                    f"[bold]Running {'live' if live else 'offline'} Doctor checks…[/]",
+                )
+                result = run_doctor(cfg, live=live)
+                self._render_doctor_result(generation, result)
+                return
             if scope == "target":
                 response = httpx.get(cfg.target_url, timeout=5, follow_redirects=False)
                 self._validation_line(generation, f"Target: HTTP {response.status_code}")
@@ -2250,6 +2543,41 @@ class ValidationScreen(BaseTesisScreen):
                     self._validation_line(generation, f"[red]✗ {name}[/] {type(exc).__name__}: {exc}")
         except Exception as exc:
             self._validation_line(generation, f"[red]✗ {type(exc).__name__}: {exc}[/]")
+
+    def _render_doctor_result(self, generation: int, result: Mapping[str, Any]) -> None:
+        """Render structured Doctor checks without losing remediation details."""
+
+        colors = {"passed": "green", "failed": "red", "skipped": "yellow"}
+        marks = {"passed": "✓", "failed": "✗", "skipped": "○"}
+        for check in result.get("checks", []):
+            if not isinstance(check, Mapping):
+                continue
+            status = str(check.get("status", "failed")).lower()
+            color = colors.get(status, "red")
+            mark = marks.get(status, "✗")
+            check_id = str(check.get("id", "unknown"))
+            category = str(check.get("category", "general"))
+            summary = str(check.get("summary", "No summary supplied"))
+            self._validation_line(
+                generation,
+                f"[{color}]{mark} {category}/{check_id}[/] {summary}",
+            )
+            details = str(check.get("details") or "").strip()
+            remediation = str(check.get("remediation") or "").strip()
+            if details:
+                self._validation_line(generation, f"  {details}")
+            if remediation:
+                self._validation_line(generation, f"  [bold]Remediation:[/] {remediation}")
+        summary = result.get("summary", {})
+        if isinstance(summary, Mapping):
+            self._validation_line(
+                generation,
+                "[bold]Doctor summary:[/] "
+                f"{summary.get('passed', 0)} passed, "
+                f"{summary.get('failed', 0)} failed, "
+                f"{summary.get('skipped', 0)} skipped, "
+                f"{summary.get('total', 0)} total",
+            )
 
     @on(ValidationLine)
     def receive_validation_line(self, message: ValidationLine) -> None:
@@ -2319,7 +2647,9 @@ class TesisApp(App[None]):
     #setup-scroll, #settings-shell, #results-shell, #detail-shell, #validation-shell, #info-shell { padding: 1 2 3 2; }
     .form-grid { grid-size: 2; grid-columns: 1fr 2fr; grid-gutter: 0 1; height: auto; }
     .form-grid Label { height: 3; content-align: left middle; }
-    .form-grid Input, .form-grid Select { height: 3; }
+    .form-grid Input, .form-grid Select, .form-grid .reasoning-slider { height: 3; }
+    .reasoning-slider { border: round #173f4d; padding: 0 1; }
+    .reasoning-slider:focus { border: round #33d6c8; }
     #matrix-grid { grid-size: 4; grid-columns: 1fr 1fr 1fr 1fr; height: 13; grid-gutter: 1; }
     SelectionList { height: 10; border: round #173f4d; }
     .inline-form, .checks, .actions, .filters { height: 4; align-vertical: middle; }

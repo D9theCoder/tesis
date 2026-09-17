@@ -6,6 +6,8 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 from tesis import tui
 from tesis.model_config import EngagementConfig, ModelConfig
 from tesis.runtime_events import RunEvent
@@ -92,6 +94,232 @@ def test_run_setup_round_trips_llm_runtime_controls(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_run_setup_reasoning_slider_applies_global_role_override(monkeypatch):
+    config = EngagementConfig(
+        target_url="http://localhost/dvwa",
+        provider="openai_compatible",
+        level="low",
+        models={
+            "openai_compatible": ModelConfig(
+                "openai_compatible", "", "reasoning-model"
+            ),
+        },
+    )
+    config.llm_runtime = {
+        "max_concurrency": 1,
+        "cache_scope": "none",
+        "roles": {"orchestrator": {}, "payload_generator": {}},
+    }
+    captured: dict[str, object] = {}
+
+    def load_config(**kwargs):
+        captured.update(kwargs.get("cli_args", {}))
+        return config
+
+    monkeypatch.setattr(tui, "load_and_resolve_config", load_config)
+
+    async def scenario() -> None:
+        app = tui.TesisApp()
+        async with app.run_test(size=(120, 44)) as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            setup = app.screen
+            assert isinstance(setup, tui.RunSetupScreen)
+            slider = setup.query_one("#reasoning-effort", tui.ReasoningEffortSlider)
+            assert slider.effort is None
+
+            slider.focus()
+            await pilot.press("right", "right", "right")
+            assert slider.effort == "high"
+
+            resolved = setup.resolved_config()
+            assert captured["reasoning_effort"] == "high"
+            assert resolved.llm_runtime["roles"]["orchestrator"]["reasoning_effort"] == "high"
+            assert resolved.llm_runtime["roles"]["payload_generator"]["reasoning_effort"] == "high"
+
+            await pilot.press("home")
+            assert slider.effort is None
+            inherited = setup.resolved_config()
+            assert "reasoning_effort" not in inherited.llm_runtime["roles"]["orchestrator"]
+            assert "reasoning_effort" not in inherited.llm_runtime["roles"]["payload_generator"]
+
+    asyncio.run(scenario())
+
+@pytest.mark.parametrize(
+    ("loaded_roles", "payload_effort"),
+    [
+        (
+            {
+                "orchestrator": {"reasoning_effort": "xhigh"},
+                "payload_generator": {"reasoning_effort": "high"},
+            },
+            "high",
+        ),
+        (
+            {
+                "orchestrator": {"reasoning_effort": "xhigh"},
+                "payload_generator": {},
+            },
+            None,
+        ),
+    ],
+)
+def test_run_setup_preserves_mixed_role_efforts_until_global_control_changes(
+    monkeypatch, loaded_roles, payload_effort
+):
+    config = EngagementConfig(
+        target_url="http://localhost/dvwa",
+        provider="openai_compatible",
+        level="low",
+        models={
+            "openai_compatible": ModelConfig(
+                "openai_compatible", "", "reasoning-model"
+            ),
+        },
+    )
+    config.llm_runtime = {
+        "max_concurrency": 1,
+        "cache_scope": "none",
+        "roles": loaded_roles,
+    }
+    monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kwargs: config)
+
+    async def scenario() -> None:
+        app = tui.TesisApp()
+        async with app.run_test(size=(120, 44)) as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            setup = app.screen
+            assert isinstance(setup, tui.RunSetupScreen)
+            slider = setup.query_one("#reasoning-effort", tui.ReasoningEffortSlider)
+            assert slider.effort is None
+            assert slider.mixed
+            rendered = str(slider.render())
+            assert "orchestrator=xhigh" in rendered
+            assert f"payload_generator={payload_effort or 'inherit'}" in rendered
+
+            resolved = setup.resolved_config()
+            roles = resolved.llm_runtime["roles"]
+            assert roles["orchestrator"]["reasoning_effort"] == "xhigh"
+            if payload_effort is None:
+                assert "reasoning_effort" not in roles["payload_generator"]
+            else:
+                assert roles["payload_generator"]["reasoning_effort"] == payload_effort
+
+            slider.focus()
+            await pilot.press("right")
+            assert slider.effort == "low"
+            assert not slider.mixed
+            overridden = setup.resolved_config()
+            assert overridden.llm_runtime["roles"]["orchestrator"]["reasoning_effort"] == "low"
+            assert overridden.llm_runtime["roles"]["payload_generator"]["reasoning_effort"] == "low"
+
+    asyncio.run(scenario())
+
+
+def test_reasoning_slider_pointer_uses_rendered_track_and_keyboard_still_steps(
+    monkeypatch,
+):
+    config = EngagementConfig(
+        target_url="http://localhost/dvwa",
+        provider="openai_compatible",
+        level="low",
+        models={
+            "openai_compatible": ModelConfig(
+                "openai_compatible", "", "reasoning-model"
+            ),
+        },
+    )
+    monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kwargs: config)
+
+    async def scenario() -> None:
+        app = tui.TesisApp()
+        async with app.run_test(size=(120, 44)) as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            slider = app.screen.query_one(
+                "#reasoning-effort", tui.ReasoningEffortSlider
+            )
+            slider.scroll_visible(animate=False, immediate=True)
+            await pilot.pause()
+            content_x = slider.content_region.x - slider.region.x
+            content_y = slider.content_region.y - slider.region.y
+
+            assert await pilot.click(
+                slider,
+                offset=(content_x + slider.track_width - 1, content_y),
+            )
+            assert slider.effort == "max"
+
+            assert await pilot.click(
+                slider,
+                offset=(content_x + slider.track_width, content_y),
+            )
+            assert slider.effort == "max"
+
+            assert await pilot.click(slider, offset=(content_x + 4, content_y))
+            assert slider.effort == "medium"
+            await pilot.press("left")
+            assert slider.effort == "low"
+            await pilot.press("right")
+            assert slider.effort == "medium"
+            await pilot.press("home")
+            assert slider.effort is None
+
+    asyncio.run(scenario())
+
+
+def test_reasoning_slider_narrow_track_selects_the_rendered_marker(monkeypatch):
+    config = EngagementConfig(
+        target_url="http://localhost/dvwa",
+        provider="openai_compatible",
+        level="low",
+        models={
+            "openai_compatible": ModelConfig(
+                "openai_compatible", "", "reasoning-model"
+            ),
+        },
+    )
+    monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kwargs: config)
+
+    async def scenario() -> None:
+        app = tui.TesisApp()
+        async with app.run_test(size=(20, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            slider = app.screen.query_one(
+                "#reasoning-effort", tui.ReasoningEffortSlider
+            )
+            slider.scroll_visible(animate=False, immediate=True)
+            await pilot.pause()
+            # Narrow terminals clip the track, so some markers are unreachable.
+            assert slider.content_region.width < slider.track_width
+            content_x = slider.content_region.x - slider.region.x
+            content_y = slider.content_region.y - slider.region.y
+            visible_cells = min(slider.content_region.width, slider.track_width)
+
+            for x in range(visible_cells):
+                previous = slider.effort
+                await pilot.click(slider, offset=(content_x + x, content_y))
+                track = slider.marker_track
+                if x % 2 == 0:
+                    assert slider.effort == slider.VALUES[x // 2]
+                    assert track[x] == "●"
+                else:
+                    assert slider.effort == previous
+                    assert track[x] == "─"
+
+            settled = slider.effort
+            await pilot.click(slider, offset=(content_x + visible_cells, content_y))
+            assert slider.effort == settled
+
+    asyncio.run(scenario())
+
+
 def test_run_setup_global_model_profile_switches_both_roles(monkeypatch):
     config = EngagementConfig(
         target_url="http://localhost/dvwa",
@@ -157,6 +385,12 @@ def test_settings_saves_llm_runtime_controls(tmp_path, monkeypatch):
             settings.query_one("#settings-orchestrator-model").value = "orch-model"
             settings.query_one("#settings-payload-model-profile").value = "payload-profile"
             settings.query_one("#settings-payload-model").value = "payload-model"
+            settings.query_one(
+                "#settings-model-reasoning-effort", tui.ReasoningEffortSlider
+            ).effort = "xhigh"
+            settings.query_one(
+                "#settings-reasoning-effort", tui.ReasoningEffortSlider
+            ).effort = "high"
             settings.query_one("#settings-save").press()
             await pilot.pause()
             saved = config_path.read_text(encoding="utf-8")
@@ -164,6 +398,156 @@ def test_settings_saves_llm_runtime_controls(tmp_path, monkeypatch):
             assert "cache_scope: run" in saved
             assert "model_profile: orch-profile" in saved
             assert "model_name: payload-model" in saved
+            assert "reasoning_effort: xhigh" in saved
+            assert saved.count("reasoning_effort: high") == 2
+
+    asyncio.run(scenario())
+
+
+def test_settings_preserves_mixed_roles_and_profile_effort_until_changed(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "target_url: http://localhost/dvwa\n"
+        "provider: openai_compatible\n"
+        "level: low\n"
+        "models:\n"
+        "  openai_compatible:\n"
+        "    model_name: reasoning-model\n"
+        "    reasoning_effort: xhigh\n"
+        "llm_runtime:\n"
+        "  max_concurrency: 1\n"
+        "  cache_scope: none\n"
+        "  roles:\n"
+        "    orchestrator:\n"
+        "      reasoning_effort: xhigh\n"
+        "    payload_generator:\n"
+        "      reasoning_effort: high\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tui, "CONFIG_PATH", config_path)
+
+    async def scenario() -> None:
+        app = tui.TesisApp()
+        async with app.run_test(size=(120, 44)) as pilot:
+            await pilot.pause()
+            await pilot.press("down", "down", "enter")
+            await pilot.pause()
+            settings = app.screen
+            assert isinstance(settings, tui.SettingsScreen)
+            role_slider = settings.query_one(
+                "#settings-reasoning-effort", tui.ReasoningEffortSlider
+            )
+            model_slider = settings.query_one(
+                "#settings-model-reasoning-effort", tui.ReasoningEffortSlider
+            )
+            assert role_slider.effort is None
+            assert role_slider.mixed
+            assert "orchestrator=xhigh" in str(role_slider.render())
+            assert "payload_generator=high" in str(role_slider.render())
+            assert model_slider.effort == "xhigh"
+
+            settings.query_one("#settings-llm-max-concurrency").value = "2"
+            settings.query_one("#settings-save").press()
+            await pilot.pause()
+            saved = tui.load_yaml_config(config_path)
+            assert saved["models"]["openai_compatible"]["reasoning_effort"] == "xhigh"
+            assert (
+                saved["llm_runtime"]["roles"]["orchestrator"]["reasoning_effort"]
+                == "xhigh"
+            )
+            assert (
+                saved["llm_runtime"]["roles"]["payload_generator"]["reasoning_effort"]
+                == "high"
+            )
+
+            model_slider.effort = "max"
+            settings.query_one("#settings-save").press()
+            await pilot.pause()
+            saved = tui.load_yaml_config(config_path)
+            assert saved["models"]["openai_compatible"]["reasoning_effort"] == "max"
+            assert (
+                saved["llm_runtime"]["roles"]["orchestrator"]["reasoning_effort"]
+                == "xhigh"
+            )
+            assert (
+                saved["llm_runtime"]["roles"]["payload_generator"]["reasoning_effort"]
+                == "high"
+            )
+
+            role_slider.focus()
+            await pilot.press("right")
+            assert role_slider.effort == "low"
+            settings.query_one("#settings-save").press()
+            await pilot.pause()
+            saved = tui.load_yaml_config(config_path)
+            assert saved["models"]["openai_compatible"]["reasoning_effort"] == "max"
+            assert (
+                saved["llm_runtime"]["roles"]["orchestrator"]["reasoning_effort"]
+                == "low"
+            )
+            assert (
+                saved["llm_runtime"]["roles"]["payload_generator"]["reasoning_effort"]
+                == "low"
+            )
+
+    asyncio.run(scenario())
+
+
+def test_validation_screen_runs_structured_offline_doctor(monkeypatch):
+    calls: list[bool] = []
+
+    def fake_doctor(_config, *, live=False):
+        calls.append(live)
+        return {
+            "status": "failed",
+            "summary": {"passed": 1, "failed": 1, "skipped": 0, "total": 2},
+            "checks": [
+                {
+                    "id": "akg",
+                    "category": "graph",
+                    "status": "passed",
+                    "summary": "AKG topology is valid",
+                    "details": "9 methods covered",
+                },
+                {
+                    "id": "provider",
+                    "category": "llm",
+                    "status": "failed",
+                    "summary": "Provider configuration is incomplete",
+                    "remediation": "Set the provider API key",
+                },
+            ],
+        }
+
+    import tesis.doctor
+
+    monkeypatch.setattr(tesis.doctor, "run_doctor", fake_doctor)
+    monkeypatch.setattr(
+        tui,
+        "load_and_resolve_config",
+        lambda **_kwargs: EngagementConfig(
+            target_url="http://localhost/dvwa", provider="gemini", level="low"
+        ),
+    )
+
+    async def scenario() -> None:
+        app = tui.TesisApp()
+        async with app.run_test(size=(120, 42)) as pilot:
+            app.push_screen(tui.ValidationScreen())
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, tui.ValidationScreen)
+            screen._run_validation(screen._validation_generation, "doctor-offline")
+            await pilot.pause()
+            rendered = "\n".join(
+                str(line) for line in screen.query_one("#validation-log").lines
+            )
+            assert calls == [False]
+            assert "AKG topology is valid" in rendered
+            assert "Set the provider API key" in rendered
+            assert "1 passed, 1 failed" in rendered
 
     asyncio.run(scenario())
 
