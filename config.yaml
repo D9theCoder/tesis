@@ -142,16 +142,14 @@ llm_runtime:
   roles:
     orchestrator:
       temperature: 0
-      # This profile uses a reasoning-capable model; 256 is the smallest
-      # preflight-validated ceiling that still emits the required tool call.
-      max_tokens: 256
+      # Shared ceiling includes reasoning and the final structured response.
+      max_tokens: 8192
       structured_output: auto
 
     payload_generator:
       temperature: 0
-      # The provider can return a valid tool call just above the default
-      # formula ceiling; this explicit role override keeps it from truncating.
-      max_tokens: 768
+      # Leave room for reasoning before the final payload JSON.
+      max_tokens: 8192
       structured_output: auto
 
 # -----------------------------------------------------------------------------
@@ -187,6 +185,7 @@ models:
   openai:
     provider: openai
     model_name: gpt-5.6-luna
+    reasoning_effort: medium
     base_url: https://opencode.ai/zen/go/v1
     # api_key: ${OPENAI_API_KEY}
     use_responses_api: true
@@ -204,8 +203,9 @@ models:
   # ---------------------------------------------------------------------------
   openai_compatible:
     provider: openai_compatible
-    model_name: deepseek-v4-flash
-    base_url: https://opencode.ai/zen/go/v1
+    model_name: deepseek-v4.1-flash:free
+    reasoning_effort: high
+    base_url: https://tokenharbor.ai/v1/
     # api_key: ${OPENAI_API_KEY}
     temperature: 1
     timeout: 60

@@ -10,6 +10,7 @@ PAYLOAD_MODES: frozenset[str] = frozenset({"static_only", "hybrid", "llm_mutatio
 LLM_CACHE_SCOPES: frozenset[str] = frozenset({"none", "run"})
 STRUCTURED_OUTPUT_MODES: frozenset[str] = frozenset({"auto", "native", "json_prompt"})
 LLM_RUNTIME_ROLES: tuple[str, ...] = ("orchestrator", "payload_generator")
+REASONING_EFFORTS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
 
 # Backward-compatible alias
 EVASION_STRATEGIES = EVASION_MODES
@@ -27,6 +28,7 @@ class ModelConfig:
     base_url: str | None = None
     system_prompt: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+    reasoning_effort: str | None = None
 
 
 @dataclass(slots=True)
@@ -45,6 +47,7 @@ class RoleConfig:
     temperature: float = 0.0
     max_tokens: int | None = None
     structured_output: str = "auto"
+    reasoning_effort: str | None = None
 
 
 # More explicit name for callers that do not use the shorter role terminology.

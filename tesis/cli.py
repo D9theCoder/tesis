@@ -138,6 +138,8 @@ def _headless_parser() -> argparse.ArgumentParser:
     parser.add_argument("--condition", "--experiment-condition", dest="experiment_condition")
     parser.add_argument("--target-method")
     parser.add_argument("--model")
+    parser.add_argument("--reasoning-effort", choices=("low", "medium", "high", "xhigh", "max"),
+                        help="Override reasoning effort for both LLM roles.")
     parser.add_argument("--llm-max-concurrency", type=_llm_concurrency)
     parser.add_argument(
         "--llm-cache",
@@ -184,7 +186,7 @@ def _headless_overrides(namespace: argparse.Namespace) -> dict[str, object]:
     values = vars(namespace)
     overrides: dict[str, object] = {}
     for key in (
-        "target", "provider", "level", "surface", "payload_mode", "model_profile",
+        "target", "provider", "level", "surface", "payload_mode", "model_profile", "reasoning_effort",
         "experiment_condition",
         "target_method", "repeats", "candidate_budget", "iterations", "stop_policy",
         "coverage_target", "output_dir", "format", "log_verbosity", "providers", "levels",
@@ -257,6 +259,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     explicit coordinate flags for automation or LLM-driven terminal execution.
     """
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "doctor":
+        from tesis.doctor import main as doctor_main
+
+        return doctor_main(arguments[1:])
     dry_run_config = _parse_dry_run(arguments)
     if dry_run_config is not None:
         return _dry_run(dry_run_config)
@@ -267,6 +273,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments != ["run"]:
         print(
             "Usage: python -m tesis run\n"
+            "       python -m tesis doctor [--config config.yaml] [--live] [--json]\n"
             "       python -m tesis run --dry-run [--config config.yaml]\n"
             "       python -m tesis run --headless --mode single|matrix [options]",
             file=sys.stderr,

@@ -26,6 +26,7 @@ from tesis.model_config import (
     ModelConfig,
     PAYLOAD_MODES,
     RoleConfig,
+    REASONING_EFFORTS,
 )
 from tesis.config_fields import FORM_MATRIX, FORM_SINGLE, validate_config as validate_field_schema
 
@@ -221,12 +222,18 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
             continue
 
         suffix = key[len(prefix):]
+        if suffix == "REASONING_EFFORT":
+            runtime = overrides.setdefault("llm_runtime", {})
+            roles = runtime.setdefault("roles", {})
+            for role in LLM_RUNTIME_ROLES:
+                roles.setdefault(role, {})["reasoning_effort"] = raw_value
+            continue
         if suffix == "MODEL_PROFILE":
             overrides["model_profile"] = raw_value
             runtime = overrides.setdefault("llm_runtime", {})
             roles = runtime.setdefault("roles", {})
             for role in ("orchestrator", "payload_generator"):
-                roles[role] = {"model_profile": raw_value}
+                roles.setdefault(role, {})["model_profile"] = raw_value
             continue
         if suffix.startswith("MODEL_") and suffix != "MODEL_PROFILE":
             remainder = suffix[len("MODEL_"):]
@@ -370,12 +377,15 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         runtime_override["cache_scope"] = cli_args["llm_cache_scope"]
 
     role_overrides: dict[str, dict[str, Any]] = {}
+    if cli_args.get("reasoning_effort") is not None:
+        for role in LLM_RUNTIME_ROLES:
+            role_overrides[role] = {"reasoning_effort": cli_args["reasoning_effort"]}
     selected_profile = cli_args.get("model_profile")
     if selected_profile is not None and str(selected_profile).strip():
         # A global runtime selection is the convenient path for switching the
         # whole run. Explicit role flags below remain more specific and win.
         for role in ("orchestrator", "payload_generator"):
-            role_overrides[role] = {"model_profile": str(selected_profile).strip()}
+            role_overrides.setdefault(role, {})["model_profile"] = str(selected_profile).strip()
 
     for role, profile_key, model_key in (
         ("orchestrator", "orchestrator_model_profile", "orchestrator_model"),
@@ -387,7 +397,7 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         if cli_args.get(model_key) is not None:
             role_override["model_name"] = cli_args[model_key]
         if role_override:
-            role_overrides[role] = role_override
+            role_overrides.setdefault(role, {}).update(role_override)
 
     if role_overrides:
         existing_roles = runtime_override.get("roles")
@@ -467,7 +477,80 @@ def _default_api_key(provider: str) -> str:
         return os.getenv("OPENAI_API_KEY", "")
     if provider == "openai_compatible":
         return os.getenv("OPENAI_COMPATIBLE_API_KEY", "")
+    if provider == "claude":
+        return os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("CLAUDE_API_KEY", "")
     return os.getenv(f"{provider.upper()}_API_KEY", "")
+
+
+def _reasoning_effort(value: Any, path: str) -> str | None:
+    if value is None or value == "":
+        return None
+    normalized = str(value).strip().lower()
+    if normalized not in REASONING_EFFORTS:
+        raise ConfigError(f"{path} must be one of {', '.join(REASONING_EFFORTS)} or null (inherit)")
+    return normalized
+
+
+_MISSING = object()
+
+
+def _legacy_reasoning_effort(config: Mapping[str, Any]) -> Any:
+    """Return an effort from pre-canonical nested provider request fields."""
+    reasoning = config.get("reasoning")
+    if isinstance(reasoning, Mapping) and "effort" in reasoning:
+        return reasoning["effort"]
+    for container_name in ("model_kwargs", "extra_body"):
+        container = config.get(container_name)
+        if not isinstance(container, Mapping):
+            continue
+        if "reasoning_effort" in container:
+            return container["reasoning_effort"]
+        reasoning = container.get("reasoning")
+        if isinstance(reasoning, Mapping) and "effort" in reasoning:
+            return reasoning["effort"]
+    return _MISSING
+
+
+def _configured_reasoning_effort(config: Mapping[str, Any], path: str) -> str | None:
+    """Resolve canonical effort before legacy nested request fields."""
+    if "reasoning_effort" in config:
+        return _reasoning_effort(config["reasoning_effort"], path)
+    extra = config.get("extra")
+    if isinstance(extra, Mapping) and "reasoning_effort" in extra:
+        return _reasoning_effort(extra["reasoning_effort"], path)
+    legacy = _legacy_reasoning_effort(config)
+    if legacy is _MISSING and isinstance(extra, Mapping):
+        legacy = _legacy_reasoning_effort(extra)
+    return None if legacy is _MISSING else _reasoning_effort(legacy, path)
+
+
+def _without_legacy_reasoning_effort(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Remove legacy effort fields after they have been normalized."""
+    cleaned = dict(config)
+    reasoning = cleaned.get("reasoning")
+    if isinstance(reasoning, Mapping):
+        remaining_reasoning = dict(reasoning)
+        remaining_reasoning.pop("effort", None)
+        if remaining_reasoning:
+            cleaned["reasoning"] = remaining_reasoning
+        else:
+            cleaned.pop("reasoning", None)
+    for container_name in ("model_kwargs", "extra_body"):
+        container = cleaned.get(container_name)
+        if not isinstance(container, Mapping):
+            continue
+        remaining_container = dict(container)
+        remaining_container.pop("reasoning_effort", None)
+        nested_reasoning = remaining_container.get("reasoning")
+        if isinstance(nested_reasoning, Mapping):
+            remaining_nested = dict(nested_reasoning)
+            remaining_nested.pop("effort", None)
+            if remaining_nested:
+                remaining_container["reasoning"] = remaining_nested
+            else:
+                remaining_container.pop("reasoning", None)
+        cleaned[container_name] = remaining_container
+    return cleaned
 
 
 def _parse_model_configs(raw_models: Mapping[str, Any]) -> dict[str, ModelConfig]:
@@ -500,9 +583,15 @@ def _parse_model_configs(raw_models: Mapping[str, Any]) -> dict[str, ModelConfig
         except (TypeError, ValueError) as exc:
             raise ConfigError(f"Invalid timeout for model '{provider}'") from exc
 
+        reasoning_effort = _configured_reasoning_effort(
+            section, f"models.{model_key}.reasoning_effort",
+        )
+        section.pop("reasoning_effort", None)
         extra = dict(section.pop("extra", {}))
+        extra.pop("reasoning_effort", None)
         for key, value in section.items():
             extra[key] = value
+        extra = _without_legacy_reasoning_effort(extra)
 
         # Preserve the original YAML section name (e.g. "simulator") as the
         # dictionary key so that special entries are not overwritten when
@@ -516,6 +605,7 @@ def _parse_model_configs(raw_models: Mapping[str, Any]) -> dict[str, ModelConfig
             timeout=timeout,
             base_url=base_url,
             extra=extra,
+            reasoning_effort=reasoning_effort,
         )
 
     return models
@@ -636,10 +726,22 @@ def _parse_llm_runtime_config(
         except (TypeError, ValueError) as exc:
             raise ConfigError(f"Invalid temperature for LLM role '{role_name}'") from exc
 
-        max_tokens_raw = role.get(
-            "max_tokens",
-            payload_default_tokens if role_name == "payload_generator" else 96,
+        effort = _configured_reasoning_effort(
+            role, f"llm_runtime.roles.{role_name}.reasoning_effort",
         )
+        raw_profile = (merged.get("models") or {}).get(profile_text, {})
+        profile_effort = (
+            _configured_reasoning_effort(
+                raw_profile, f"models.{profile_text}.reasoning_effort",
+            )
+            if isinstance(raw_profile, Mapping)
+            else None
+        )
+        default_tokens = (
+            8192 if effort or profile_effort
+            else payload_default_tokens if role_name == "payload_generator" else 96
+        )
+        max_tokens_raw = role.get("max_tokens", default_tokens)
         if max_tokens_raw is None:
             max_tokens = None
         else:
@@ -659,6 +761,7 @@ def _parse_llm_runtime_config(
             temperature=temperature,
             max_tokens=max_tokens,
             structured_output=structured_output,
+            reasoning_effort=effort,
         )
 
     config = LLMRuntimeConfig(
