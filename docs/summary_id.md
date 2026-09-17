@@ -171,11 +171,11 @@ llm_runtime:
   roles:
     orchestrator:
       temperature: 0
-      max_tokens: 256  # hasil preflight provider; profil non-reasoning dapat memakai 96
+      max_tokens: 8192  # batas gabungan reasoning dan output akhir
       structured_output: auto
     payload_generator:
       temperature: 0
-      max_tokens: 768  # batas eksplisit gateway untuk satu varian
+      max_tokens: 8192  # batas gabungan reasoning dan output akhir
       structured_output: auto
 ```
 
@@ -188,6 +188,59 @@ run-setup TUI dapat menerapkan satu profile ke kedua role tanpa mengubah YAML.
 Kontrol role-specific tetap dapat mengubah profile orchestrator atau payload
 secara terpisah. Concurrency efektif dibatasi 1--4; single run selalu
 menggunakan concurrency efektif satu.
+
+Reasoning effort merupakan kontrol decoding opsional pada profile/role:
+`low`, `medium`, `high`, `xhigh`, atau `max`. Role mewarisi effort profile jika
+tidak dioverride. Urutan precedence adalah CLI `--reasoning-effort` >
+`TESIS_REASONING_EFFORT` > role YAML > profile; kontrol CLI/environment berlaku
+untuk kedua role. Dalam block profile atau role, `reasoning_effort` canonical
+mengalahkan bentuk lama `reasoning.effort`, `model_kwargs`, dan `extra_body`;
+nilai lama dinormalisasi lalu dibuang dari request provider.
+
+Adapter OpenAI dan OpenAI-compatible mengirim satu field effort canonical,
+menghapus temperature dan field lama yang bertentangan, serta tidak pernah
+menurunkan nilai yang ditolak secara diam-diam. Effort portable eksplisit untuk
+Gemini atau Claude menghasilkan error yang actionable; provider tersebut
+memerlukan null/inherit plus konfigurasi thinking native. Jika effort efektif
+bersifat eksplisit dan `max_tokens` tidak ditentukan, setiap role mendapat
+default ceiling gabungan reasoning-dan-output 8.192 token. Null/inherit
+mempertahankan default role lama. Artifact membedakan
+`reasoning_effort_requested`, penggunaan provider, dan
+`reasoning_token_evidence` eksplisit; prose response tidak dipakai untuk
+menyimpulkan hidden reasoning. Setting reasoning masuk fingerprint client/cache.
+
+TUI memiliki slider reasoning level-profile dan slider global dua-role yang
+independen. Slider global menampilkan state mixed saat nilai eksplisit role yang
+dimuat berbeda, termasuk satu nilai eksplisit plus satu nilai inherit, dan
+menampilkan keduanya (misalnya
+`orchestrator=xhigh, payload_generator=inherit`). Save tanpa menggerakkan
+kontrol tersebut mempertahankan dua setting role yang dimuat; menggerakkannya
+mengganti keduanya. Klik pointer hanya dipetakan ke marker track yang dirender.
+
+`python -m tesis doctor` mandiri hanya berjalan jika diminta. Sebelas check
+offline mencakup scope tetap 3 surface/9 method/3 level/3 payload mode/2
+condition, invariant AKG, kompilasi LangGraph, seluruh 81 koordinat static-seed,
+containment request dan redirect, profile/role, credentials, endpoint,
+dependency, output writability, serta reasoning controls. `--live` menambahkan
+satu probe model terstruktur yang benign per role dan check contained DVWA untuk
+authentication, security level, serta surface. Response model tanpa penggunaan
+provider berstatus `skipped` dengan penggunaan reasoning-token unknown, tidak
+pernah passed; penggunaan tanpa field reasoning-token dapat melewati probe
+terstruktur, tetapi reasoning di sisi provider tetap unverified.
+
+Output JSON Doctor berupa satu objek berisi `status`,
+`summary{passed,failed,skipped,total}`, dan `checks`; setiap check berisi `id`,
+`category`, `status`, `summary`, `details`, dan `remediation`. Status top-level
+menjadi failed hanya jika sedikitnya satu check gagal; check skipped tetap
+terpisah. Exit code adalah 0 untuk passed, 1 untuk failed, dan 2 untuk usage
+error. Failure dikumpulkan beserta saran perbaikan dan live check yang dilewati
+tetap eksplisit. Doctor tidak pernah berjalan otomatis, menjadi gate run,
+mengarantina provider, atau mengubah topology runtime.
+Error provider mempertahankan konteks
+role/coordinate/model dan remediation yang sudah disensor, menelusuri exception
+chain untuk status serta request ID, dan menyensor setiap nilai query dan
+fragment URL. Error AKG menjelaskan kontrak graph yang tidak valid. Kontrol ini
+tidak mengubah rubric scoring atau dua kondisi eksperimen hybrid utama.
 
 Runtime mengirim system message yang stabil berisi otorisasi DVWA, aturan
 containment, instruksi role, dan schema version. Setiap koordinat hanya
@@ -235,9 +288,9 @@ Payload generator hanya mengembalikan variant yang dibatasi:
 
 Candidate ID, source, method, stage, target parameter, expected signal, dan
 provenance diisi secara deterministik setelah parsing dan validasi. Pada
-`structured_output: auto`, preflight framework mencatat dukungan JSON Schema
-native per role/profile dan menggunakannya bila tersedia; jika tidak,
-framework memakai compact JSON prompt. Output invalid, incomplete, atau
+`structured_output: auto`, invocation pertama menjalankan check capability
+client lokal tanpa request provider, lalu memakai structured output native jika
+tersedia atau compact JSON prompt jika tidak. Output invalid, incomplete, atau
 gagal validasi schema langsung dicatat lalu fallback ke static seeds; tidak
 ada repair loop tanpa batas. Hanya refusal aktual yang mengaktifkan
 guardrail. Capsule context atau cache hit tidak dihitung sebagai guardrail
@@ -267,10 +320,11 @@ artifact selesai maupun dibatalkan disimpan.
 
 Setiap call mempertahankan `llm_activity` dan menambahkan record performance
 per role yang bebas secret: prompt hash, role, model fingerprint, cache
-hit/miss, queue wait, durasi call, structured-output mode, parse status, serta
-token usage provider bila tersedia. Telemetry agregat memuat waktu per role,
-cache-hit rate, invalid-output rate, dan peak concurrency LLM/DVWA node. Raw
-prompt dan secret tidak disimpan dalam performance summary.
+hit/miss, queue wait, durasi call, structured-output mode, parse status,
+`reasoning_effort_requested`, `provider_usage`, serta
+`reasoning_token_evidence` jika dilaporkan secara eksplisit. Telemetry agregat
+memuat waktu per role, cache-hit rate, invalid-output rate, dan peak concurrency
+LLM/DVWA node. Raw prompt dan secret tidak disimpan dalam performance summary.
 
 ### 3.7 Catatan Perubahan Arsitektur: Sebelum dan Sesudah
 
@@ -366,11 +420,15 @@ deterministik oleh harness:
 | Metadata turunan | Sebagian diberikan oleh model | Candidate ID, method, stage, target parameter, expected signal, fallback, score, dan provenance diisi harness |
 | Reuse context | Conversation/history dapat mempengaruhi call berikutnya | Capsule lokal coordinate; history penuh, raw HTTP body, credential, wording refusal, dan outcome coordinate lain dikeluarkan |
 
-Native structured output dipilih saat preflight jika didukung. Jalur
+Structured output native dipilih setelah check capability client lokal pada
+invocation pertama; check ini tidak mengirim request provider. Jalur
 OpenAI-compatible memakai function calling; provider lain memakai JSON Schema.
-Jika `structured_output` bernilai `auto` dan gateway menolak native structured
-output, runtime mencatat capability lalu memakai satu compact JSON prompt
-fallback. Validator lokal tetap menjadi otoritas pada kedua jalur.
+Jika `structured_output` bernilai `auto`, capability lokal yang tidak tersedia
+atau error gateway yang secara spesifik melaporkan structured output native
+sebagai unsupported memilih satu compact JSON-prompt fallback. Authentication,
+rate-limit, timeout, connection, dan failure provider lainnya tidak memicu
+fallback ini. Teks response dinormalisasi dari string dan block list
+`text`/`output_text`. Validator lokal tetap menjadi otoritas pada kedua jalur.
 
 #### 3.7.4 Klasifikasi failure dan perilaku fallback
 
@@ -381,12 +439,12 @@ perbedaannya pada state dan artifact:
 | Kondisi | Sebelum | Sesudah |
 | --- | --- | --- |
 | JSON malformed | Loose parsing atau response dibuang; penyebab sulit dipisahkan | `parse_status=invalid`, optional `invalid_json_events`, fallback deterministic per role, dan tidak masuk cache |
-| Output terpotong/batas token | Dapat dianggap malformed JSON biasa | `parse_status=incomplete`; tidak masuk cache dan langsung fallback |
+| Output terpotong, terkena batas panjang, atau dilaporkan `incomplete` oleh provider | Dapat dianggap malformed JSON biasa | `parse_status=incomplete`; tidak masuk cache dan langsung fallback |
 | Method tidak diizinkan | Model dapat menyebut method unavailable atau cross-surface sebelum route final | Dynamic allowed-method schema dan allow-list lokal; nama tersebut tidak executable dan pilihan deterministic dicatat di `fallback_events` |
 | Seed `probe` dipakai untuk mutasi Stage 2 | Detection probe dapat dimutasi lalu diperlakukan sebagai candidate exploit | Prompt hanya menampilkan seed `exploit`/`bypass`, stage dibuat eksplisit, dan variant dari seed `probe` memicu fallback static-seed yang tercatat |
 | Payload gagal validasi | Candidate invalid dapat mengurangi candidate set tanpa provenance lengkap | Hasil validation menjadi otoritas eksekusi: generated candidate invalid tetap menjadi audit history tetapi tidak dapat masuk queue method; static seeds dipakai jika tidak ada generated candidate yang valid, dan alasan validation/provenance disimpan |
 | Mutation dengan biaya resource tidak aman | Model dapat mengirim delay tak terbatas atau mutation SQL yang berat CPU dan menghabiskan budget timeout target/request | `BENCHMARK(...)` dan mutation delay di atas threshold keselamatan diblokir sebelum HTTP dengan `unsafe_resource_cost`; generated payload tidak pernah dianggap sebagai exploit sukses secara diam-diam |
-| Failure provider/network | Fallback dapat membuat partial run terlihat sukses | `LLM_RUNTIME_FAILURE` dicatat; fallback hanya dipertahankan untuk audit dan runner menandai run incomplete/error |
+| Failure provider/network | Fallback dapat membuat partial run terlihat sukses | Status/request ID dari exception chain dan konteks/remediation yang disensor dicatat; `LLM_RUNTIME_FAILURE` menandai run incomplete/error, dan fallback native-output hanya terjadi untuk error capability-unsupported yang spesifik |
 | Tidak ada method viable di AKG | Orchestrator masih dapat dipanggil dan mengembalikan nilai mustahil sehingga terminal result ambigu | Automatic AKG-guided selection melewati LLM, route ke `scorer`, dan mencatat `NO_VIABLE_METHODS` |
 | Method habis tanpa confirmation | Stop pada scorer setelah HTTP request dapat hanya dilaporkan sebagai `UNSPECIFIED` | Jika semua method viable dari AKG sudah dicoba atau diblokir tanpa vulnerability atau enabling outcome yang terkonfirmasi, orchestrator mencatat `task_result=INCOMPLETE` dan `incomplete_reason=ALL_METHODS_FAILED`; HTTP 2xx adalah evidence transport, bukan confirmation semantic |
 
@@ -429,7 +487,7 @@ selalu tersedia. Artifact baru menambahkan lapisan audit berikut:
 | --- | --- | --- |
 | Identitas run | Metadata run dan final state | Run ID plus execution ID, config fingerprint, condition, repeat, dan effective runtime config |
 | Aktivitas provider | Informasi started/completed/failure yang coarse | Lifecycle record direkonsiliasi dengan runtime sehingga satu call tidak dihitung dua kali |
-| Performance per call | Evidence terbatas atau spesifik provider | Role, provider, model fingerprint, prompt hash, cache hit, queue wait, durasi, structured-output mode, parse status, dan token usage |
+| Performance per call | Evidence terbatas atau spesifik provider | Role, provider, model fingerprint, prompt hash, cache hit, queue wait, durasi, structured-output mode, parse status, `reasoning_effort_requested`, `provider_usage`, dan `reasoning_token_evidence` eksplisit |
 | Kualitas output | Field invalid JSON/fallback ada tetapi klasifikasinya belum seragam | Evidence terpisah untuk invalid, incomplete, provider-error, refusal, fallback, dan no-viable-method |
 | Audit payload | Candidate dan execution evidence | Generated candidate, hasil validation accepted/rejected, provenance deterministik, source seed, mutation, target parameter, dan expected signal |
 | Concurrency | Peak LLM/DVWA node tidak tersedia per artifact | Peak LLM concurrency, peak DVWA-node concurrency, waktu per role, cache-hit rate, dan invalid-output rate |
@@ -880,8 +938,8 @@ Preliminary validation sebelum eksperimen utama:
 
 Framework menggunakan validation gate untuk menangani structured output atau
 refusal. Framework tidak menggunakan jailbreak, roleplay deception, atau
-adversarial prompt injection. Native structured output dipilih saat preflight
-jika didukung; jika tidak, compact JSON prompt digunakan.
+adversarial prompt injection. Structured output native dipilih setelah check
+capability client lokal tanpa request; jika tidak, compact JSON prompt dipakai.
 
 Alur:
 

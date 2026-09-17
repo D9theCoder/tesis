@@ -168,11 +168,11 @@ llm_runtime:
   roles:
     orchestrator:
       temperature: 0
-      max_tokens: 256  # provider-preflight value; non-reasoning profiles may use 96
+      max_tokens: 8192  # shared ceiling for reasoning and final output
       structured_output: auto
     payload_generator:
       temperature: 0
-      max_tokens: 768  # explicit gateway-compatible ceiling for one variant
+      max_tokens: 8192  # shared ceiling for reasoning and final output
       structured_output: auto
 ```
 
@@ -185,6 +185,58 @@ selector can apply one named profile to both roles without editing the YAML.
 The role-specific controls may still override the orchestrator or payload
 profile independently. Effective concurrency remains bounded to 1--4;
 single-run execution uses an effective concurrency of one.
+
+Reasoning effort is an explicit, optional profile/role decoding control:
+`low`, `medium`, `high`, `xhigh`, or `max`. Roles inherit profile effort unless
+overridden. Precedence is CLI `--reasoning-effort` > `TESIS_REASONING_EFFORT` >
+YAML role > profile, and either CLI/environment control applies to both roles.
+Within a profile or role block, canonical `reasoning_effort` wins over legacy
+`reasoning.effort`, `model_kwargs`, and `extra_body` forms; legacy values are
+normalized and stripped from the provider request.
+
+OpenAI and OpenAI-compatible adapters send one canonical effort field, remove
+temperature and conflicting legacy fields, and never silently lower a rejected
+value. An explicit portable effort for Gemini or Claude raises an actionable
+error; those providers require null/inherit plus native thinking configuration.
+When effective effort is explicit and `max_tokens` is omitted, each role
+defaults to the shared 8,192-token reasoning-and-output ceiling. Null/inherit
+preserves the historical role defaults. Artifacts distinguish
+`reasoning_effort_requested`, provider usage, and explicit
+`reasoning_token_evidence`; they do not infer hidden reasoning from response
+prose. Reasoning settings participate in client/cache fingerprints.
+
+The TUI has independent profile-level and global two-role reasoning sliders.
+The global slider displays a mixed state when the loaded explicit role values
+differ, including one explicit value and one inherited value, and shows both
+values (for example, `orchestrator=xhigh, payload_generator=inherit`). Saving
+without moving that control preserves the two loaded role settings; moving it
+replaces both. Pointer clicks are interpreted only on the rendered marker
+track.
+
+Standalone `python -m tesis doctor` runs only when requested. Its 11 offline
+checks cover the fixed 3-surface/9-method/3-level/3-payload-mode/2-condition
+scope, AKG invariants, LangGraph compilation, all 81 static-seed coordinates,
+request and redirect containment, profiles/roles, credentials, endpoints,
+dependencies, output writability, and reasoning controls. `--live` adds one
+benign structured model probe per role and contained DVWA authentication,
+security-level, and surface checks. A model response with no provider usage is
+`skipped` with reasoning-token usage unknown, never passed; usage with no
+reasoning-token field may pass the structured probe but leaves provider-side
+reasoning unverified.
+
+JSON Doctor output is one object containing `status`, a
+`summary{passed,failed,skipped,total}`, and `checks`; each check contains `id`,
+`category`, `status`, `summary`, `details`, and `remediation`. Top-level status
+is failed only when at least one check fails; skipped checks remain separate.
+Exit codes are 0 for passed, 1 for failed, and 2 for usage errors. Failures
+accumulate with repair guidance and skipped live checks remain explicit. Doctor
+never runs automatically, gates runs, quarantines providers, or alters runtime
+topology.
+Provider failures retain redacted role/coordinate/model context and remediation,
+walk exception chains for status and request IDs, and redact every URL query and
+fragment value. AKG validation failures identify the invalid graph contract.
+These controls do not change the scoring rubric or the two primary hybrid
+experiment conditions.
 
 The runtime sends a stable system message containing DVWA authorization and
 containment rules, role instructions, and the schema version. A coordinate
@@ -232,9 +284,10 @@ The payload generator returns only constrained variants:
 
 Candidate ID, source, method, stage, target parameter, expected signal, and
 provenance are populated deterministically after validation. In
-`structured_output: auto`, framework preflight records native JSON-schema
-support per role/profile and uses it when available; otherwise it uses the
-compact JSON prompt. Invalid, incomplete, or schema-invalid output falls back
+`structured_output: auto`, the first invocation performs a local client
+capability check without a provider request, then uses native structured output
+when available or the compact JSON prompt otherwise. Invalid, incomplete, or
+schema-invalid output falls back
 immediately to static seeds and is recorded; there is no unbounded repair
 loop. Only an actual refusal activates guardrail handling. A context capsule
 or a cache hit does not count as a guardrail check.
@@ -262,10 +315,12 @@ reach a safe boundary, and persists completed and cancelled artifacts.
 
 Every call preserves `llm_activity` and adds secret-free role performance
 records containing prompt hash, role, model fingerprint, cache hit/miss, queue
-wait, call duration, structured-output mode, parse status, and provider token
-usage when available. Aggregate telemetry reports time by role, cache-hit
-rate, invalid-output rate, and peak LLM/DVWA-node concurrency. Raw prompts and
-secrets are excluded from performance summaries.
+wait, call duration, structured-output mode, parse status,
+`reasoning_effort_requested`, `provider_usage`, and
+`reasoning_token_evidence` when explicitly reported. Aggregate telemetry
+reports time by role, cache-hit rate, invalid-output rate, and peak
+LLM/DVWA-node concurrency. Raw prompts and secrets are excluded from
+performance summaries.
 
 ### 3.7 Architecture Change Log: Before and After
 
@@ -359,11 +414,15 @@ The new contract separates model judgment from deterministic harness data:
 | Derived metadata | Partly supplied by the model | Candidate ID, method, stage, target parameter, expected signal, fallback, score, and provenance are filled by the harness |
 | Context reuse | Conversation/history could influence later calls | Coordinate-local capsules; full history, raw HTTP bodies, credentials, refusal wording, and other-coordinate outcomes are excluded |
 
-Native structured output is selected during preflight when supported. The
+Native structured output is selected after a local client capability check on
+the first invocation; that check sends no provider request. The
 OpenAI-compatible path uses function calling; other providers use JSON Schema.
-When `structured_output` is `auto` and a gateway rejects native structured
-output, the runtime records the capability result and uses one compact JSON
-prompt fallback. The local validator remains authoritative in both paths.
+When `structured_output` is `auto`, an unavailable local capability or a
+gateway error that specifically reports native structured output as unsupported
+selects one compact JSON-prompt fallback. Authentication, rate-limit, timeout,
+connection, and other provider failures do not trigger this fallback. Response
+text is normalized from strings and list-based `text`/`output_text` blocks.
+The local validator remains authoritative in both paths.
 
 #### 3.7.4 Failure classification and fallback behavior
 
@@ -374,12 +433,12 @@ state and artifacts:
 | Condition | Before | After |
 | --- | --- | --- |
 | Malformed JSON | Loose parsing or discarded response; cause was difficult to separate from other failures | `parse_status=invalid`, optional `invalid_json_events`, deterministic role-specific fallback, and no cache insertion |
-| Truncated/length-limited output | Could be mistaken for ordinary malformed JSON | `parse_status=incomplete`; no cache insertion and immediate fallback |
+| Truncated, length-limited, or provider-reported `incomplete` output | Could be mistaken for ordinary malformed JSON | `parse_status=incomplete`; no cache insertion and immediate fallback |
 | Disallowed method | A model could name an unavailable or cross-surface method before the final route check | Dynamic allowed-method schema plus local allow-list; the name is never executable, and `fallback_events` records the deterministic choice |
 | Probe seed used for Stage 2 mutation | A detection probe could be mutated and treated as an exploit candidate | The prompt exposes only `exploit`/`bypass` seeds, stage is explicit, and probe-derived variants trigger a recorded static-seed fallback |
 | Payload validation failure | Invalid model candidates could reduce the usable candidate set without a complete provenance trail | Validation results are authoritative for execution: invalid generated candidates remain audit history but cannot enter the method queue; static seeds are used when no generated candidate is valid, and provenance/validation reasons are stored |
 | Unsafe resource-cost mutation | A model could submit an unbounded delay or CPU-heavy SQL mutation and consume the target/request timeout budget | `BENCHMARK(...)` and delay mutations above the bounded safety threshold are rejected before HTTP execution with `unsafe_resource_cost`; the generated payload is never silently treated as a successful exploit |
-| Provider/network failure | A fallback could make a partial run appear successful | `LLM_RUNTIME_FAILURE` is recorded; fallback output is retained only for audit and the runner marks the run incomplete/error |
+| Provider/network failure | A fallback could make a partial run appear successful | Exception-chain status/request IDs and redacted context/remediation are recorded; `LLM_RUNTIME_FAILURE` marks the run incomplete/error, and native-output fallback occurs only for a specific unsupported-capability error |
 | No AKG-viable method | The orchestrator could still be called and return an impossible value, producing an ambiguous terminal result | Automatic AKG-guided selection skips the LLM call, routes to `scorer`, and records `NO_VIABLE_METHODS` |
 | Method exhausted without confirmation | A scorer stop after an HTTP request could be reported only as `UNSPECIFIED` | If all AKG-viable methods were attempted or blocked without a confirmed vulnerability or enabling outcome, the orchestrator records `task_result=INCOMPLETE` and `incomplete_reason=ALL_METHODS_FAILED`; an HTTP 2xx is transport evidence, not semantic confirmation |
 
@@ -423,7 +482,7 @@ layers:
 | --- | --- | --- |
 | Run identity | Run metadata and final state | Run ID plus execution ID, configuration fingerprint, condition, repeat, and effective runtime configuration |
 | Provider activity | Coarse started/completed/failure information | Lifecycle records reconciled against runtime records so one call is not counted twice |
-| Per-call performance | Limited or provider-specific evidence | Role, provider, model fingerprint, prompt hash, cache hit, queue wait, duration, structured-output mode, parse status, and token usage |
+| Per-call performance | Limited or provider-specific evidence | Role, provider, model fingerprint, prompt hash, cache hit, queue wait, duration, structured-output mode, parse status, `reasoning_effort_requested`, `provider_usage`, and explicit `reasoning_token_evidence` |
 | Output quality | Invalid JSON/fallback fields were present but not uniformly classified | Separate invalid, incomplete, provider-error, refusal, fallback, and no-viable-method evidence |
 | Payload audit | Candidates and execution evidence | Generated candidates, accepted/rejected validation results, deterministic provenance, source seed, mutation, target parameter, and expected signal |
 | Concurrency | No per-artifact peak LLM/DVWA-node evidence | Peak LLM concurrency, peak DVWA-node concurrency, role time, cache-hit rate, and invalid-output rate |
@@ -873,8 +932,8 @@ Preliminary validation before the main experiment:
 
 The framework uses validation gates to handle structured output or refusal.
 The framework does not use jailbreak, roleplay deception, or adversarial
-prompt injection. Native structured output is selected during preflight when
-supported; otherwise the compact JSON prompt is used.
+prompt injection. Native structured output is chosen after a request-free local
+client capability check; otherwise the compact JSON prompt is used.
 
 Flow:
 

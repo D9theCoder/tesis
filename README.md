@@ -41,6 +41,64 @@ Role-specific `--orchestrator-model-profile` and
 different profiles. `TESIS_MODEL_PROFILE` is the equivalent environment
 override.
 
+Reasoning effort can be set to `low`, `medium`, `high`, `xhigh`, or `max` with
+`--reasoning-effort`, `TESIS_REASONING_EFFORT`, or the TUI's discrete slider.
+Persist a profile default at `models.<profile>.reasoning_effort`; an explicit
+`llm_runtime.roles.<role>.reasoning_effort` overrides it, while null inherits.
+Precedence is CLI > environment > YAML role > profile. Canonical
+`reasoning_effort` also wins over legacy nested `reasoning.effort`,
+`model_kwargs`, or `extra_body` forms; legacy values are normalized and removed
+before the provider request is built.
+
+OpenAI and OpenAI-compatible adapters send one canonical effort field, omit
+temperature, and remove conflicting legacy request values. An explicit portable
+effort on Gemini or Claude raises an actionable error; it is never silently
+downgraded. If an effective effort is configured and a role has no explicit
+`max_tokens`, that role defaults to an 8,192-token ceiling shared by reasoning
+and final output. Null preserves the older defaults (96 for the orchestrator and
+`min(512, 96 + 64 * candidate_budget)` for the payload generator). Runtime
+artifacts record `reasoning_effort_requested`, provider usage, and explicit
+`reasoning_token_evidence` separately; absent provider usage is not evidence
+that reasoning was disabled.
+
+Run Doctor explicitly before an experiment:
+
+```bash
+python -m tesis doctor --config config.yaml --json
+python -m tesis doctor --config config.yaml --live --json
+```
+
+Offline Doctor performs 11 local checks: fixed coverage (3 surfaces, 9 methods,
+3 security levels, 3 payload modes, and 2 experiment conditions), AKG
+invariants, LangGraph compilation, all 81 static-seed method/level/mode
+coordinates, HTTP request-and-redirect containment, profile/role resolution,
+credentials, endpoints, dependencies, output-directory writability, and
+reasoning controls. `--live` additionally makes one benign structured model
+probe per role, then checks contained DVWA authentication, all security levels,
+and all in-scope surfaces; provider calls can consume credits. A model response
+without provider usage is `skipped`, with reasoning-token usage reported as
+unknown rather than passed. Usage without a reasoning-token field can pass the
+structured probe, but provider-side reasoning remains unverified.
+
+`--json` prints one object with top-level `status`, `summary` (`passed`,
+`failed`, `skipped`, `total`), and `checks`; every check has `id`, `category`,
+`status`, `summary`, `details`, and `remediation`. Top-level status is failed
+only when at least one check fails; skipped checks remain separate. Exit codes
+are 0 for a passed report, 1 for a failed report, and 2 for CLI usage errors.
+The Validation screen
+exposes offline and live Doctor buttons. Doctor is standalone: it never runs
+automatically, gates a run, performs provider quarantine, or changes runtime
+topology.
+
+Provider diagnostics walk exception chains for HTTP status and request IDs,
+retain redacted role/coordinate/model context with remediation, and redact every
+URL query and fragment value. Runtime extracts text from strings or list-based
+`text`/`output_text` blocks and treats provider-reported incomplete Responses
+output as failure. In automatic mode, compact-JSON fallback is used when the
+local client lacks native structured output or the provider specifically
+reports that capability as unsupported; authentication, rate-limit, timeout,
+and connection failures do not trigger it.
+
 The repository-root `config.yaml` is the sole configuration document. Prefer environment references such as `${OPENAI_API_KEY}` for secrets.
 
 ## Screens and keys
@@ -59,7 +117,15 @@ Use arrow keys and Enter to navigate, Esc to return, `q` to exit from the menu, 
 
 Single and matrix setup screens expose target, provider/model, security level, surface, target method, experiment condition, payload mode and budgets, stop policy, diagnostics, reporting, guardrail handling, output location, and logging controls. “Validate only” replaces the old dry-run behavior.
 
-Settings offers typed controls and an advanced round-trip YAML editor. YAML ordering, comments, nested model blocks, and unknown keys are retained. Blank secret inputs preserve their existing values; the UI warns before saving a literal secret.
+Settings offers typed controls and an advanced round-trip YAML editor. Its
+profile-level reasoning slider and global two-role slider are independent. If
+the loaded role values differ—including one explicit value plus one inherited
+value—the global slider displays a truthful mixed label such as
+`orchestrator=xhigh, payload_generator=inherit` and preserves both values on
+save until the operator moves it. Pointer clicks map only to the rendered marker
+track. YAML ordering, comments, nested model blocks, and unknown keys are
+retained. Blank secret inputs preserve their existing values; the UI warns
+before saving a literal secret.
 
 ## Runtime dashboard
 
