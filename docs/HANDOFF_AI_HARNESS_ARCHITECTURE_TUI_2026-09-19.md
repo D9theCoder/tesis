@@ -7,6 +7,55 @@ core AI harness, model-call contract, prompts, LangGraph lifecycle, evaluation,
 and operator experience. It does not expand the DVWA attack scope or replace the
 canonical workflow in `AGENTS.md`.
 
+## Compatibility and rollout disclaimer
+
+Several recommendations below are potentially breaking if implemented together
+or enabled without a migration period. The highest-risk changes are durable
+checkpoints, removal of prompt/response data from graph state, application-owned
+retry and cancellation behavior, provider-call abstractions, prompt versioning,
+changing unavailable metrics from `0.0` to `null`, and replacing TUI background
+threads with workers. They can affect checkpoint compatibility, replay safety,
+provider cost and latency, event ordering, artifact consumers, cached results,
+and experiment reproducibility.
+
+Treat the recommendations as a sequence of independently reversible migrations,
+not as one refactor. Before changing defaults:
+
+- Add explicit state, checkpoint, artifact, prompt, graph, and configuration
+  versions where applicable. Never silently resume or reinterpret incompatible
+  persisted data.
+- Inventory every reader before removing or changing a field. Prefer additive
+  fields, dual readers, and a documented compatibility window.
+- Introduce new checkpoint, retry, and execution behavior behind independent
+  opt-in configuration flags. Preserve the existing behavior as the initial
+  default.
+- Introduce `ModelCallSpec` and `ModelCallResult` as adapters around the current
+  request path first, and require serialized-request and result parity before
+  switching callers.
+- Keep application retries disabled while attempt telemetry is validated. When
+  enabled, retry only explicitly transient failures, enforce a total deadline,
+  and prevent nested SDK retries from invalidating attempt counts.
+- Assign stable action and attempt IDs before replaying method-agent work. Never
+  retry an action that may have completed unless idempotency or a completion
+  receipt makes the outcome safe to determine.
+- Version cost and consistency semantics. During migration, consumers must
+  accept both the legacy numeric representation and the new unavailable/null
+  representation without treating unknown as measured zero.
+- Preserve the current graph topology, containment boundaries, artifact copies,
+  and prompt versions until their replacements pass behavioral and compatibility
+  tests.
+- Establish golden artifacts and replay fixtures from the current green baseline,
+  then test crash/restart at every graph boundary, cancellation during queueing,
+  backoff and active calls, old-artifact rendering, and narrow/wide TUI states.
+- Do not make a migrated path the default based only on unit or smoke tests.
+  Require the full offline suite, programmatic artifact audit, and the full
+  authorized DVWA/provider experiment matrix required by the project acceptance
+  policy.
+
+Back up experiment artifacts and checkpoint databases before testing migrations.
+If a checkpoint, state, prompt, or artifact version is unsupported, fail closed
+with an actionable diagnostic rather than attempting a best-effort resume.
+
 ## Executive summary
 
 The harness already has the right overall shape: a centralized LLM runtime,
