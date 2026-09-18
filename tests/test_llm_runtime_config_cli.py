@@ -30,7 +30,7 @@ def test_legacy_config_uses_serial_no_cache_runtime(tmp_path: Path) -> None:
     assert config.llm_runtime.cache_enabled is False
 
 
-def test_runtime_roles_inherit_profile_and_default_payload_budget(tmp_path: Path) -> None:
+def test_runtime_roles_preserve_unpinned_profile_and_default_payload_budget(tmp_path: Path) -> None:
     config = load_and_resolve_config(
         config_path=str(_config(
             tmp_path / "config.yaml",
@@ -51,7 +51,9 @@ def test_runtime_roles_inherit_profile_and_default_payload_budget(tmp_path: Path
     assert config.llm_runtime.max_concurrency == 2
     assert config.llm_runtime.cache_enabled is True
     assert config.role_configs["orchestrator"].model_name == "fast-orchestrator"
-    assert config.role_configs["payload_generator"].model_profile == "openai_compatible"
+    # An omitted role profile must remain unpinned so a matrix coordinate can
+    # supply its provider at runtime.
+    assert config.role_configs["payload_generator"].model_profile is None
     assert config.role_configs["payload_generator"].max_tokens == 288
     assert config.role_configs["payload_generator"].structured_output == "json_prompt"
 

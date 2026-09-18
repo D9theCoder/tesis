@@ -13,7 +13,13 @@ from typing import Any, Callable, Iterator, Mapping
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from llm.diagnostics import enrich_provider_exception, provider_error_details
+from llm.diagnostics import (
+    classify_failure,
+    enrich_provider_exception,
+    provider_error_details,
+    redact_diagnostic_text,
+    sanitize_endpoint,
+)
 from llm.provider import get_llm
 
 
@@ -179,6 +185,83 @@ class LLMOutputError(ValueError):
         super().__init__(message)
         self.text = text
         self.performance = dict(performance or {})
+        provider_failure = self.performance.get("failure")
+        self.provider_failure = dict(provider_failure) if isinstance(provider_failure, Mapping) else None
+
+
+def _numeric_setting(value: Any, *, default: float | int | None = None) -> float | int | None:
+    """Normalize provider timeout/retry settings without leaking SDK objects."""
+    if value is None or value == "":
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number.is_integer():
+        return int(number)
+    return number
+
+
+def build_failure_envelope(
+    record: Mapping[str, Any],
+    *,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    """Build the canonical redacted provider failure object from one record."""
+    status_code = record.get("http_status")
+    if status_code is None:
+        status_code = record.get("status_code")
+    cause_type = record.get("cause_type")
+    error_type = record.get("error_type")
+    parse_status = record.get("parse_status")
+    raw_message = record.get("error_message")
+    if raw_message is None:
+        raw_message = record.get("message")
+    if raw_message is None and error_type:
+        raw_message = str(error_type)
+    message = redact_diagnostic_text(raw_message, limit=800)
+    failure_class = str(record.get("failure_class") or "").strip()
+    if not failure_class:
+        failure_class = classify_failure(
+            parse_status=str(parse_status or ""),
+            status_code=status_code,
+            error_type=str(error_type or ""),
+            cause_type=str(cause_type or ""),
+            message=message,
+        )
+    failure: dict[str, Any] = {
+        "failure_class": failure_class,
+        "provider": redact_diagnostic_text(record.get("provider") or "unknown", limit=120),
+        "model": redact_diagnostic_text(record.get("model") or "unknown", limit=200),
+        "model_profile": redact_diagnostic_text(
+            record.get("model_profile") or record.get("provider") or "unknown",
+            limit=120,
+        ),
+        "role": redact_diagnostic_text(record.get("role") or "unknown", limit=120),
+        "coordinate_id": redact_diagnostic_text(record.get("coordinate_id") or "unknown", limit=240),
+        "call_id": redact_diagnostic_text(record.get("call_id") or "unknown", limit=300),
+        "endpoint": sanitize_endpoint(record.get("endpoint")),
+        "timeout_s": record.get("timeout_s"),
+        "attempts": record.get("attempts") if record.get("attempts") is not None else 1,
+        "max_retries": record.get("max_retries") if record.get("max_retries") is not None else 0,
+        "elapsed_ms": record.get("elapsed_ms")
+        if record.get("elapsed_ms") is not None
+        else record.get("call_duration_ms", 0),
+        "error_type": error_type,
+        "cause_type": cause_type,
+        "http_status": status_code,
+        "status_code": status_code,
+        "request_id": record.get("request_id"),
+        "parse_status": parse_status,
+        "message": message or "provider call failed without an error message",
+        "remediation": redact_diagnostic_text(
+            record.get("remediation") or "Check the provider profile, endpoint, and credential, then retry.",
+            limit=800,
+        ),
+    }
+    if run_id is not None:
+        failure["run_id"] = redact_diagnostic_text(run_id, limit=240)
+    return failure
 
 
 @dataclass(slots=True)
@@ -242,14 +325,20 @@ class CoordinateCallContext:
             "source": "llm_runtime",
             "provider": record.get("provider"),
             "model": record.get("model"),
+            "model_profile": record.get("model_profile"),
             "role": record.get("role"),
             "coordinate_id": record.get("coordinate_id"),
             "call_id": call_id,
+            "endpoint": record.get("endpoint"),
+            "timeout_s": record.get("timeout_s"),
+            "attempts": record.get("attempts"),
+            "max_retries": record.get("max_retries"),
             "prompt_hash": record.get("prompt_hash"),
             "model_fingerprint": record.get("model_fingerprint"),
             "cache_hit": bool(record.get("cache_hit")),
             "queue_wait_ms": int(record.get("queue_wait_ms", 0) or 0),
             "call_duration_ms": int(record.get("call_duration_ms", 0) or 0),
+            "elapsed_ms": int(record.get("elapsed_ms", 0) or 0),
             "structured_output_mode": record.get("structured_output_mode"),
             "parse_status": record.get("parse_status"),
             "reasoning_effort_requested": record.get("reasoning_effort_requested"),
@@ -266,11 +355,14 @@ class CoordinateCallContext:
                 data["reasoning_token_evidence"] = dict(record["reasoning_token_evidence"])
             for key in (
                 "status_code",
+                "http_status",
                 "request_id",
                 "cause_type",
                 "error_message",
                 "incomplete_reason",
                 "remediation",
+                "failure_class",
+                "failure",
             ):
                 if record.get(key) is not None:
                     data[key] = record[key]
@@ -510,6 +602,12 @@ class LLMRuntime:
         provider, config, settings = context.role_config(role, max_tokens=max_tokens)
         pool, fingerprint = self._pool(role, provider, config)
         model = str(config.get("model_name") or config.get("model") or "unknown")
+        model_profile = str(settings.model_profile or context.default_provider or provider)
+        endpoint = sanitize_endpoint(config.get("base_url") or config.get("endpoint"))
+        timeout_s = _numeric_setting(
+            config.get("timeout", config.get("request_timeout")),
+        )
+        max_retries = _numeric_setting(config.get("max_retries"), default=0)
         reasoning_effort = config.get("reasoning_effort")
         call_id = context.next_call_id(role)
         prompt_hash = "sha256:" + hashlib.sha256(
@@ -531,14 +629,28 @@ class LLMRuntime:
             "role": role,
             "provider": provider,
             "model": model,
+            "model_profile": model_profile,
             "call_id": call_id,
             "coordinate_id": context.coordinate_id,
+            "endpoint": endpoint,
+            "timeout_s": timeout_s,
+            "attempts": 1,
+            "max_retries": max_retries,
             "model_fingerprint": fingerprint,
             "cache_hit": False,
             "queue_wait_ms": 0,
             "call_duration_ms": 0,
+            "elapsed_ms": 0,
             "structured_output_mode": "json_prompt",
             "parse_status": "pending",
+            "failure_class": None,
+            "error_type": None,
+            "cause_type": None,
+            "status_code": None,
+            "http_status": None,
+            "request_id": None,
+            "error_message": None,
+            "remediation": None,
             "provider_usage": {},
             "reasoning_effort_requested": reasoning_effort,
             "reasoning_token_evidence": None,
@@ -692,26 +804,35 @@ class LLMRuntime:
                 duration_ms = int((perf_counter() - started_at) * 1000)
         except Exception as exc:
             incomplete = output_incomplete or type(exc).__name__ == "LengthFinishReasonError"
+            elapsed_ms = int((perf_counter() - acquired_at) * 1000)
             failure_usage_source = (
                 response.get("raw") if isinstance(response, Mapping) else response
             )
             failure_usage = self._usage(failure_usage_source)
             diagnostic = None
-            if not text and not incomplete:
+            parse_rejected = bool(text) or (response is not None and not incomplete)
+            if not text and not incomplete and not parse_rejected:
                 diagnostic = provider_error_details(
                     exc,
                     provider=provider,
                     model=model,
                     role=role,
                     coordinate_id=context.coordinate_id,
+                    endpoint=endpoint,
+                    model_profile=model_profile,
+                    timeout_s=timeout_s,
+                    attempts=1,
+                    max_retries=max_retries,
+                    elapsed_ms=elapsed_ms,
                 )
             record = {
                 **base_record,
                 "queue_wait_ms": int((acquired_at - queued_at) * 1000),
-                "call_duration_ms": int((perf_counter() - acquired_at) * 1000),
+                "call_duration_ms": elapsed_ms,
+                "elapsed_ms": elapsed_ms,
                 "structured_output_mode": mode,
                 "parse_status": (
-                    "incomplete" if incomplete else "invalid" if text else "provider_error"
+                    "incomplete" if incomplete else "invalid" if parse_rejected else "provider_error"
                 ),
                 "error_type": type(exc).__name__,
                 "provider_usage": failure_usage,
@@ -720,22 +841,50 @@ class LLMRuntime:
             if incomplete:
                 reason = incomplete_reason or "provider_output_limit"
                 record["incomplete_reason"] = reason
+                record["error_message"] = redact_diagnostic_text(str(exc)) or (
+                    f"Provider returned incomplete output ({reason})."
+                )
                 record["remediation"] = (
                     "Increase max_tokens/max_output_tokens for this role or reduce the "
                     "requested structured response size, then retry the coordinate."
+                )
+            elif parse_rejected:
+                # A provider answered, but JSON/schema validation rejected the
+                # response. Keep this distinct from transport/provider errors;
+                # the provider may already have billed the request.
+                record["error_message"] = redact_diagnostic_text(str(exc)) or (
+                    "Provider response did not satisfy the required JSON schema."
+                )
+                record["remediation"] = (
+                    "Check the response schema and prompt format; the provider answered, "
+                    "so fix parsing/schema compatibility before retrying."
                 )
             if structured_output_fallback is not None:
                 record["structured_output_fallback"] = structured_output_fallback
             if diagnostic is not None:
                 record.update({
                     "status_code": diagnostic.get("status_code"),
+                    "http_status": diagnostic.get("status_code"),
                     "request_id": diagnostic.get("request_id"),
                     "cause_type": diagnostic.get("cause_type"),
                     "error_message": diagnostic["message"],
                     "remediation": diagnostic["remediation"],
                 })
+            record["failure_class"] = classify_failure(
+                parse_status=record["parse_status"],
+                status_code=record.get("status_code"),
+                error_type=record.get("error_type"),
+                cause_type=record.get("cause_type"),
+                message=record.get("error_message"),
+            )
+            failure = build_failure_envelope(record)
+            record["failure"] = failure
             context.append_record(record)
             context.emit_activity("llm.failed", call_id=call_id, record=record)
+            try:
+                setattr(exc, "provider_failure", dict(failure))
+            except (AttributeError, TypeError):
+                pass
             if text or incomplete:
                 message = str(exc)
                 if incomplete:
@@ -757,6 +906,7 @@ class LLMRuntime:
             **base_record,
             "queue_wait_ms": int((acquired_at - queued_at) * 1000),
             "call_duration_ms": duration_ms,
+            "elapsed_ms": duration_ms,
             "structured_output_mode": mode,
             "parse_status": "ok",
             "provider_usage": provider_usage,
@@ -794,6 +944,7 @@ def serialized_dvwa_node() -> Iterator[None]:
 
 
 __all__ = [
+    "build_failure_envelope",
     "CoordinateCallContext",
     "LLMCallResult",
     "LLMOutputError",

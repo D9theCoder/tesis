@@ -6,6 +6,7 @@ import pytest
 
 from core.knowledge_graph import AKGValidationError
 from llm.diagnostics import (
+    format_failure_line,
     format_provider_error,
     provider_error_details,
     redact_diagnostic_text,
@@ -157,6 +158,108 @@ def test_provider_diagnostic_redacts_bare_fragment_segment():
 
     assert "sess9f2b" not in rendered
     assert "https://p.test/x#[REDACTED]" in rendered
+
+
+def test_provider_diagnostic_does_not_consume_semicolon_prose_tail():
+    rendered = _render_url_diagnostic(
+        "https://p.test/x?token=private-value; retry the coordinate"
+    )
+
+    assert "private-value" not in rendered
+    assert "retry the coordinate" in rendered
+
+
+def test_provider_diagnostic_uses_budget_remediation_for_credits_error():
+    class Response:
+        status_code = 401
+        headers = {"x-request-id": "req-budget"}
+
+    class CreditsError(RuntimeError):
+        response = Response()
+
+    details = provider_error_details(
+        CreditsError("Error code: 401 - Insufficient balance / CreditsError"),
+        provider="openai",
+        model="gpt-test",
+        role="orchestrator",
+        coordinate_id="budget-coordinate",
+    )
+
+    assert details["failure_class"] == "http_rejected"
+    assert "top up quota" in details["remediation"]
+    assert "retry alone will not succeed" in details["remediation"]
+
+
+def test_runtime_failure_envelope_captures_timeout_endpoint_and_actionable_line(monkeypatch):
+    class Client:
+        def invoke(self, messages):
+            del messages
+            raise TimeoutError(
+                "request timed out at https://user:secret@example.test/v1?token=private"
+            )
+
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: Client())
+    runtime = LLMRuntime(max_concurrency=1)
+    with runtime.coordinate(
+        coordinate_id="timeout-coordinate",
+        default_provider="openai_compatible",
+        default_model_config={
+            "model_name": "test-model",
+            "base_url": "https://user:secret@example.test/v1/?token=private",
+            "timeout": 17,
+            "max_retries": 2,
+        },
+        role_settings={"orchestrator": RoleSettings(structured_output="json_prompt")},
+    ) as context:
+        with pytest.raises(TimeoutError):
+            _invoke(runtime, context)
+
+    record = context.records[0]
+    failure = record["failure"]
+    assert failure["failure_class"] == "transport_timeout"
+    assert failure["endpoint"] == "https://example.test/v1"
+    assert failure["timeout_s"] == 17
+    assert failure["attempts"] == 1
+    assert failure["max_retries"] == 2
+    assert failure["parse_status"] == "provider_error"
+    assert "secret" not in str(failure)
+    assert "https://user:secret" not in failure["message"]
+    assert "https://[REDACTED]@example.test" in failure["message"]
+    rendered = format_failure_line({**failure, "run_id": "run-id"})
+    assert len(rendered) <= 400
+    assert "transport_timeout" in rendered
+    assert "remediation:" in rendered
+    runtime.close()
+
+
+def test_runtime_parse_failure_records_message_and_schema_class(monkeypatch):
+    class Response:
+        content = "not-json"
+        usage_metadata = {"input_tokens": 3, "output_tokens": 4}
+        response_metadata = {}
+
+    class Client:
+        def invoke(self, messages):
+            del messages
+            return Response()
+
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: Client())
+    runtime = LLMRuntime(max_concurrency=1)
+    with runtime.coordinate(
+        coordinate_id="parse-coordinate",
+        default_provider="openai",
+        role_settings={"orchestrator": RoleSettings(structured_output="json_prompt")},
+    ) as context:
+        with pytest.raises(LLMOutputError):
+            _invoke(runtime, context)
+
+    record = context.records[0]
+    assert record["parse_status"] == "invalid"
+    assert record["error_message"]
+    assert record["failure_class"] == "schema_rejected"
+    assert record["failure"]["message"] == record["error_message"]
+    assert record["provider_usage"]["output_tokens"] == 4
+    runtime.close()
 
 
 def test_redaction_is_bounded_and_removes_named_credentials():

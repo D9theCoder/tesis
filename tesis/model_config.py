@@ -120,6 +120,11 @@ class EngagementConfig:
     # specific role-level override is supplied.
     model_profile: str | None = None
 
+    # Contained DVWA lab credentials.  Keep these after the historical/runtime
+    # fields so positional construction by older callers remains stable.
+    dvwa_username: str = "admin"
+    dvwa_password: str = field(default="password", repr=False)
+
     @property
     def llm_max_concurrency(self) -> int:
         """Compatibility accessor used by execution runners."""

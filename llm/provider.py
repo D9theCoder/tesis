@@ -20,6 +20,7 @@ SAMPLE_QUERY = "What model are you? Reply with your model name only."
 # where the provider uses that spelling).
 DEFAULT_MAX_OUTPUT_TOKENS = 512
 REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+REASONING_EFFORT_PROVIDERS = frozenset({"openai", "openai_compatible"})
 logger = logging.getLogger(__name__)
 
 # NOTE: Callers must load env vars before importing if needed (e.g. via load_dotenv())
@@ -38,11 +39,17 @@ def validate_reasoning_effort(value: Any) -> str | None:
     return effort
 
 
+def supports_reasoning_effort(provider: str) -> bool:
+    """Return whether the provider adapter forwards portable reasoning effort."""
+
+    return str(provider).strip().lower() in REASONING_EFFORT_PROVIDERS
+
+
 def _reasoning_kwargs(provider: str, kwargs: dict[str, Any]) -> None:
     effort = validate_reasoning_effort(kwargs.pop("reasoning_effort", None))
     if effort is None:
         return
-    if provider not in {"openai", "openai_compatible"}:
+    if not supports_reasoning_effort(provider):
         raise ValueError(
             f"reasoning_effort={effort!r} is not mapped for provider '{provider}'. "
             "Use null (provider default) and configure native thinking parameters in models.<profile>.extra, "

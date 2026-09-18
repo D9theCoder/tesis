@@ -128,7 +128,9 @@ payload_modes:
 # LLM runtime acceleration
 # -----------------------------------------------------------------------------
 # Role settings inherit provider, endpoint, credentials, timeout, and defaults
-# from models.<model_profile>. The role temperature overrides the model default.
+# from their resolved profile. With no global or role profile, an unpinned role
+# follows each matrix coordinate's provider. Explicit role > global profile >
+# coordinate provider; the role temperature overrides the model default.
 # `auto` uses native structured output when supported and otherwise uses the
 # compact JSON prompt.
 llm_runtime:
