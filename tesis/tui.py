@@ -93,6 +93,15 @@ from tesis.runtime_journal import JSONLJournalSink, MultiplexingRuntimeEventSink
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPOSITORY_ROOT / "config.yaml"
 
+
+def _safe_config_error_text(exc: BaseException) -> str:
+    """Format config-load failures without exposing YAML scalar values."""
+
+    from tesis.doctor import sanitize_config_error
+
+    return sanitize_config_error(exc)
+
+
 # Rendering every provider token as its own Textual message and RichLog row can
 # overwhelm terminal emulators.  Keep UI refreshes comfortably below terminal
 # frame rates while the runner continues to retain the canonical event stream.
@@ -700,7 +709,7 @@ def _invoke_runner(runner: Any, kwargs: dict[str, Any]) -> Any:
 
 def _select_value(screen: Screen, selector: str, default: str) -> str:
     value = screen.query_one(selector, Select).value
-    return default if value is Select.BLANK else str(value)
+    return default if value in {Select.BLANK, Select.NULL} else str(value)
 
 
 def _contains_literal_secret(value: Any) -> bool:
@@ -928,7 +937,9 @@ class RunSetupScreen(BaseTesisScreen):
         try:
             cfg = load_and_resolve_config(config_path=str(CONFIG_PATH), cli_args={})
         except ConfigError as exc:
-            self.query_one("#setup-status", Static).update(f"Config error: {exc}")
+            self.query_one("#setup-status", Static).update(
+                f"Config error: {_safe_config_error_text(exc)}"
+            )
             return
         self.config = cfg
         self.query_one("#target", Input).value = cfg.target_url
@@ -1028,7 +1039,7 @@ class RunSetupScreen(BaseTesisScreen):
     def model_profile_changed(self, event: Select.Changed) -> None:
         """Apply one selected profile to both standard runtime roles."""
 
-        if not self.is_mounted or event.value is Select.BLANK:
+        if not self.is_mounted or event.value in {Select.BLANK, Select.NULL}:
             return
         profile = str(event.value)
         for stem in ("orchestrator", "payload"):
@@ -1097,14 +1108,18 @@ class RunSetupScreen(BaseTesisScreen):
             self.query_one("#setup-status", Static).update(f"✓ Configuration valid{total}")
             self._update_runtime_summary(cfg)
         except (ConfigError, ValueError) as exc:
-            self.query_one("#setup-status", Static).update(f"✗ {exc}")
+            self.query_one("#setup-status", Static).update(
+                f"✗ {_safe_config_error_text(exc)}"
+            )
 
     @on(Button.Pressed, "#start-run")
     def start_run(self) -> None:
         try:
             cfg = self.resolved_config()
         except (ConfigError, ValueError) as exc:
-            self.query_one("#setup-status", Static).update(f"✗ {exc}")
+            self.query_one("#setup-status", Static).update(
+                f"✗ {_safe_config_error_text(exc)}"
+            )
             return
         condition = _select_value(self, "#condition", "linear_hybrid")
         method = _select_value(self, "#target-method", "") or None
@@ -1632,10 +1647,37 @@ class RuntimeDashboardScreen(BaseTesisScreen):
             or "fallback" in event.event_type
         ):
             affected = event.method or safe_candidate or event.node or "run"
+            terminal_parent_failure = (
+                event.event_type in {"run.failed", "run.cancelled"}
+                and self._is_matrix_parent_event(event)
+            )
             self.query_one("#failure-content", Static).update(
                 f"[red]{event.event_type}[/]\n{safe_message}\nAffected: {affected}\n"
-                f"Continuing: {event.event_type not in {'run.failed', 'run.cancelled'}}"
+                f"Continuing: {not terminal_parent_failure}"
             )
+
+    def _is_matrix_parent_event(self, event: RunEvent) -> bool:
+        """Identify terminal events for this dashboard's matrix parent run.
+
+        Matrix workers forward their own ``run.failed``/``run.cancelled``
+        events through the shared sink. Their execution IDs differ from the
+        matrix descriptor, so those failures must not make the dashboard claim
+        that the parent matrix stopped.
+        """
+
+        if not self.matrix:
+            return True
+        descriptor = (
+            self._runtime_heartbeat_sink.descriptor
+            if self._runtime_heartbeat_sink is not None
+            else self._runtime_descriptor
+        )
+        parent_execution_id = descriptor.execution_id if descriptor is not None else None
+        if parent_execution_id:
+            return event.execution_id == parent_execution_id
+        # Matrix-level events emitted before the descriptor is assigned have no
+        # child execution identity. A child coordinate always has one.
+        return event.execution_id is None
 
     def _set_stage(self, stage: str, status: str) -> None:
         icon = {"running": "◉", "success": "✓", "failure": "✗", "fallback": "↪"}.get(status, "○")
@@ -1906,7 +1948,9 @@ class SettingsScreen(BaseTesisScreen):
                 )
             self.query_one("#settings-status", Static).update("Loaded config.yaml")
         except (OSError, ConfigError) as exc:
-            self.query_one("#settings-status", Static).update(f"✗ {exc}")
+            self.query_one("#settings-status", Static).update(
+                f"✗ {_safe_config_error_text(exc)}"
+            )
 
     @on(Select.Changed, "#settings-provider")
     def settings_provider_changed(self, event: Select.Changed) -> None:
@@ -2051,7 +2095,9 @@ class SettingsScreen(BaseTesisScreen):
             reasoning_slider.mark_clean()
             self.query_one("#settings-status", Static).update("✓ config.yaml validated and saved")
         except (ConfigError, OSError, ValueError) as exc:
-            self.query_one("#settings-status", Static).update(f"✗ Not saved: {exc}")
+            self.query_one("#settings-status", Static).update(
+                f"✗ Not saved: {_safe_config_error_text(exc)}"
+            )
 
 
 class ResultsScanned(Message):
@@ -2467,7 +2513,9 @@ class ValidationScreen(BaseTesisScreen):
             load_and_resolve_config(config_path=str(CONFIG_PATH), cli_args={})
             self.query_one("#validation-log", RichLog).write("[green]✓ Configuration valid[/]")
         except ConfigError as exc:
-            self.query_one("#validation-log", RichLog).write(f"[red]✗ {exc}[/]")
+            self.query_one("#validation-log", RichLog).write(
+                f"[red]✗ {_safe_config_error_text(exc)}[/]"
+            )
 
     @on(Button.Pressed, "#validate-target")
     def validate_target(self) -> None:
@@ -2542,7 +2590,10 @@ class ValidationScreen(BaseTesisScreen):
                 except Exception as exc:
                     self._validation_line(generation, f"[red]✗ {name}[/] {type(exc).__name__}: {exc}")
         except Exception as exc:
-            self._validation_line(generation, f"[red]✗ {type(exc).__name__}: {exc}[/]")
+            self._validation_line(
+                generation,
+                f"[red]✗ {type(exc).__name__}: {_safe_config_error_text(exc)}[/]",
+            )
 
     def _render_doctor_result(self, generation: int, result: Mapping[str, Any]) -> None:
         """Render structured Doctor checks without losing remediation details."""

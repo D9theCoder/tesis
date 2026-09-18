@@ -14,6 +14,14 @@ EXIT_RUNTIME_ERROR = 1
 EXIT_USAGE_ERROR = 2
 
 
+def _safe_config_error_text(exc: BaseException) -> str:
+    """Format loader failures without exposing YAML scalar values."""
+
+    from tesis.doctor import sanitize_config_error
+
+    return sanitize_config_error(exc)
+
+
 def _interactive_terminal() -> bool:
     return bool(sys.stdin.isatty() and sys.stdout.isatty())
 
@@ -74,7 +82,10 @@ def _dry_run(config_path: str) -> int:
                         )
                     checked += 1
     except (ConfigError, ValueError, KeyError) as exc:
-        print(f"TESIS dry-run failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(
+            f"TESIS dry-run failed: {type(exc).__name__}: {_safe_config_error_text(exc)}",
+            file=sys.stderr,
+        )
         return EXIT_RUNTIME_ERROR
 
     print(
@@ -236,7 +247,10 @@ def _headless_run(arguments: list[str]) -> int:
         print("TESIS headless run cancelled", file=sys.stderr)
         return EXIT_OK
     except (ConfigError, ValueError, OSError) as exc:
-        print(f"TESIS headless run failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(
+            f"TESIS headless run failed: {type(exc).__name__}: {_safe_config_error_text(exc)}",
+            file=sys.stderr,
+        )
         return EXIT_RUNTIME_ERROR
 
     summary = _headless_summary(result, artifact_root)
@@ -293,7 +307,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except KeyboardInterrupt:
         return EXIT_OK
     except Exception as exc:  # pragma: no cover - protects terminal startup
-        print(f"Unable to start TESIS TUI: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(
+            f"Unable to start TESIS TUI: {type(exc).__name__}: {_safe_config_error_text(exc)}",
+            file=sys.stderr,
+        )
         return EXIT_RUNTIME_ERROR
 
 

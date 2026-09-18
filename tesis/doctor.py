@@ -22,7 +22,7 @@ from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS, SURFACES, new_defaul
 from foundation.http_client import ContainmentError, HTTPClient
 from foundation.payload_library import PayloadLibrary
 from foundation.payload_validator import validate_payload_candidates
-from llm.provider import SUPPORTED_PROVIDERS
+from llm.provider import SUPPORTED_PROVIDERS, supports_reasoning_effort
 from tesis.model_config import (
     EngagementConfig,
     LLM_RUNTIME_ROLES,
@@ -505,7 +505,7 @@ def _check_reasoning(config: EngagementConfig) -> DoctorCheck:
         requested.append(f"{role_name}={effort} ({profile_name}/{provider})")
         if effort != "provider-default" and effort not in REASONING_EFFORTS:
             problems.append(f"role {role_name!r} requests invalid effort {effort!r}")
-        if effort != "provider-default" and provider in {"gemini", "claude"}:
+        if effort != "provider-default" and not supports_reasoning_effort(provider):
             problems.append(
                 f"role {role_name!r} requests {effort!r} for {provider}, whose adapter cannot forward portable reasoning_effort"
             )
@@ -770,6 +770,40 @@ def _known_secrets(config: EngagementConfig) -> tuple[str, ...]:
     return tuple(sorted(set(values), key=len, reverse=True))
 
 
+def _safe_known_secrets(config: EngagementConfig) -> tuple[tuple[str, ...], DoctorCheck]:
+    """Resolve report-redaction values without letting discovery abort Doctor."""
+
+    secrets: tuple[str, ...] = ()
+
+    def resolve() -> DoctorCheck:
+        nonlocal secrets
+        try:
+            secrets = _known_secrets(config)
+        except Exception as exc:
+            # Do not include the exception text here: this is the path used to
+            # obtain the values that would otherwise redact it.
+            return _failed(
+                "config.redaction",
+                "configuration",
+                "Configuration secret redaction could not be initialized",
+                f"error_type={type(exc).__name__}",
+                "Repair the configured model credentials and rerun Doctor.",
+            )
+        return _passed(
+            "config.redaction",
+            "configuration",
+            "Configuration report redaction initialized",
+        )
+
+    check = _safe_check(
+        "config.redaction",
+        "configuration",
+        "Repair the configured model credentials and rerun Doctor.",
+        resolve,
+    )
+    return secrets, check
+
+
 def _redact_text(value: str, secrets: Sequence[str]) -> str:
     redacted = str(value)
     for secret in secrets:
@@ -927,7 +961,10 @@ def run_doctor(config: EngagementConfig, *, live: bool = False) -> dict[str, Any
                 f"error={type(exc).__name__}: {exc}",
                 "Verify the contained target URL, DVWA service, and local session configuration.",
             ))
-    return _build_report(checks, secrets=_known_secrets(config))
+    secrets, redaction_check = _safe_known_secrets(config)
+    if redaction_check.status == "failed":
+        checks.append(redaction_check)
+    return _build_report(checks, secrets=secrets)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -954,15 +991,67 @@ def _config_path_problem(config_path: str) -> str | None:
     return None
 
 
+_YAML_ERROR_PREFIX = re.compile(r"(?im)^\s*invalid yaml(?:\s+in\s+[^:\n]+)?\s*:")
+_YAML_LINE_NUMBER = re.compile(r"\bline:\s*(\d+)|\(line:\s*(\d+)\)")
+_DUPLICATE_KEY = re.compile(r"(?i)found duplicate key\s+['\"]([^'\"]+)['\"]")
+_SENSITIVE_TOKEN = re.compile(
+    r"(?i)\b(?:thk_live|sk-live|sk-proj|xai-[A-Za-z0-9_-]*|AIza[\w-]{20,})[A-Za-z0-9_-]*"
+)
+_SENSITIVE_VALUE = re.compile(
+    r"(?im)(\b(?:api[_-]?key|password|passwd|secret|token|authorization|cookie|session)\s*[:=]\s*)"
+    r"(?:bearer\s+)?(?:\"[^\"]*\"|'[^']*'|[^\s,;\)\]]+)"
+)
+_DUPLICATE_VALUE = re.compile(
+    r"(?i)(\b(?:with|original)\s+value\s+)"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s,\)]+)"
+)
+
+
+def sanitize_config_error(exc: BaseException) -> str:
+    """Return a configuration-load error safe to display to a user.
+
+    YAML parser diagnostics include source excerpts and duplicate-key values.
+    Those values are unavailable to the caller as a resolved configuration, so
+    they must be removed before the error reaches Doctor, CLI, or TUI output.
+    Keep the exception's useful class/message for ordinary validation errors,
+    while reducing parser failures to the duplicate key and source lines.
+    """
+
+    text = str(exc)
+    if _YAML_ERROR_PREFIX.search(text):
+        duplicate = _DUPLICATE_KEY.search(text)
+        lines = sorted(
+            {
+                int(value)
+                for match in _YAML_LINE_NUMBER.finditer(text)
+                for value in match.groups()
+                if value
+            }
+        )
+        safe = "Invalid YAML configuration"
+        if duplicate:
+            safe += f": duplicate key {duplicate.group(1)!r}"
+        if lines:
+            safe += "; source lines=" + ",".join(str(line) for line in lines)
+        return safe
+
+    # Non-parser ConfigError messages can still carry a secret-like token or a
+    # value attached to a credential-shaped key (for example an env override).
+    safe = _DUPLICATE_VALUE.sub(r"\1<redacted>", text)
+    safe = _SENSITIVE_VALUE.sub(r"\1<redacted>", safe)
+    return _SENSITIVE_TOKEN.sub("<redacted>", safe)
+
+
 def _config_error_report(config_path: str, exc: BaseException) -> dict[str, Any]:
     """Build the single-check report for a configuration that could not load."""
 
+    safe_error = sanitize_config_error(exc)
     path_problem = _config_path_problem(config_path)
     if path_problem:
         summary = f"Configuration could not be loaded: {path_problem}"
-        details = f"config_path={config_path}; loader_error={type(exc).__name__}: {exc}"
+        details = f"config_path={config_path}; loader_error={type(exc).__name__}: {safe_error}"
     else:
-        summary = f"Configuration could not be loaded: {type(exc).__name__}: {exc}"
+        summary = f"Configuration could not be loaded: {type(exc).__name__}: {safe_error}"
         details = f"config_path={config_path}"
     check = _failed(
         "config.load",
@@ -1026,4 +1115,4 @@ def main(argv: Sequence[str] | None = None) -> int:
     return EXIT_OK if report.get("status") == "passed" else EXIT_RUNTIME_ERROR
 
 
-__all__ = ["DoctorCheck", "main", "run_doctor"]
+__all__ = ["DoctorCheck", "main", "run_doctor", "sanitize_config_error"]

@@ -595,6 +595,35 @@ def test_settings_rejects_invalid_yaml_without_overwriting(tmp_path, monkeypatch
     asyncio.run(scenario())
 
 
+def test_run_setup_config_error_redacts_duplicate_secret_scalars(tmp_path, monkeypatch):
+    first = "thk_live_tui_first_duplicate_secret"
+    second = "thk_live_tui_second_duplicate_secret"
+    config_path = tmp_path / "duplicate.yaml"
+    config_path.write_text(
+        "provider: openai\n"
+        "models:\n"
+        "  openai:\n"
+        f"    api_key: {first}\n"
+        f"    api_key: {second}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tui, "CONFIG_PATH", config_path)
+
+    async def scenario() -> None:
+        app = tui.TesisApp()
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, tui.RunSetupScreen)
+            status = str(app.screen.query_one("#setup-status").render())
+            assert first not in status
+            assert second not in status
+            assert "Invalid YAML configuration" in status
+
+    asyncio.run(scenario())
+
+
 def test_settings_masks_literal_secret_in_raw_editor(tmp_path, monkeypatch):
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -702,5 +731,46 @@ def test_dashboard_stream_and_tab_trace_toggle(monkeypatch):
             await pilot.pause()
             assert not app.screen.query_one("#trace-log").has_class("hidden")
             assert app.screen.query_one("#stream-log").has_class("hidden")
+
+    asyncio.run(scenario())
+
+
+def test_matrix_dashboard_continues_after_child_run_failure(tmp_path, monkeypatch):
+    config = _dashboard_config(tmp_path)
+    monkeypatch.setattr(tui.RuntimeDashboardScreen, "run_experiment", lambda self: None)
+
+    async def scenario() -> None:
+        app = tui.TesisApp()
+        async with app.run_test(size=(120, 42)) as pilot:
+            dashboard = tui.RuntimeDashboardScreen(
+                config,
+                matrix=True,
+                condition="linear_hybrid",
+                target_method=None,
+            )
+            app.push_screen(dashboard)
+            await pilot.pause()
+            dashboard._runtime_descriptor = tui.build_runtime_descriptor(
+                mode="matrix",
+                experiment_dir=tmp_path / "matrix",
+                execution_id="matrix-parent-execution",
+            )
+            dashboard._consume_runtime_event(RunEvent(
+                event_type="run.failed",
+                execution_id="child-coordinate-execution",
+                run_id="child-coordinate",
+                message="child failed",
+            ))
+            assert "Continuing: True" in str(
+                dashboard.query_one("#failure-content").render()
+            )
+            dashboard._consume_runtime_event(RunEvent(
+                event_type="run.failed",
+                execution_id="matrix-parent-execution",
+                message="matrix failed",
+            ))
+            assert "Continuing: False" in str(
+                dashboard.query_one("#failure-content").render()
+            )
 
     asyncio.run(scenario())

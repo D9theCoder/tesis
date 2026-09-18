@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import tesis.cli as cli
 import tesis.tui as tui
 
@@ -96,3 +98,35 @@ def test_headless_override_parser_maps_csv_coordinates():
         "experiment_condition": "akg_guided_hybrid",
         "matrix": True,
     }
+
+
+def test_cli_config_load_errors_redact_duplicate_scalars_across_modes(
+    tmp_path: Path,
+    capsys,
+):
+    first = "thk_live_cli_first_duplicate_secret"
+    second = "thk_live_cli_second_duplicate_secret"
+    config_path = tmp_path / "duplicate.yaml"
+    config_path.write_text(
+        "provider: openai\n"
+        "models:\n"
+        "  openai:\n"
+        f"    api_key: {first}\n"
+        f"    api_key: {second}\n",
+        encoding="utf-8",
+    )
+
+    commands = (
+        ["run", "--dry-run", "--config", str(config_path)],
+        [
+            "run", "--headless", "--mode", "single", "--config", str(config_path), "--json",
+        ],
+        [
+            "run", "--headless", "--mode", "matrix", "--config", str(config_path), "--json",
+        ],
+    )
+    for command in commands:
+        assert cli.main(command) == cli.EXIT_RUNTIME_ERROR
+        captured = capsys.readouterr()
+        assert first not in captured.out + captured.err
+        assert second not in captured.out + captured.err

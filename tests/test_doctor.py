@@ -222,6 +222,38 @@ def test_explicit_reasoning_on_unsupported_provider_is_reported(
     assert "native thinking parameters" in check["remediation"]
 
 
+def test_reasoning_check_uses_runtime_rule_for_custom_provider(
+    valid_config: EngagementConfig,
+) -> None:
+    valid_config.models["openai"].provider = "deepseek"
+    valid_config.models["openai"].reasoning_effort = "medium"
+
+    check = check_by_id(doctor.run_doctor(valid_config), "reasoning.controls")
+
+    assert check["status"] == "failed"
+    assert "deepseek" in check["details"]
+    assert "cannot be forwarded" in check["summary"]
+
+
+def test_secret_discovery_failure_is_reported_without_aborting_doctor(
+    valid_config: EngagementConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        doctor,
+        "_known_secrets",
+        lambda _config: (_ for _ in ()).throw(RuntimeError("secret discovery failed")),
+    )
+
+    report = doctor.run_doctor(valid_config)
+
+    check = check_by_id(report, "config.redaction")
+    assert report["status"] == "failed"
+    assert check["status"] == "failed"
+    assert "RuntimeError" in check["details"]
+    assert report["summary"]["total"] == len(report["checks"])
+
+
 @pytest.mark.parametrize(
     ("report_status", "expected_exit"),
     [("passed", doctor.EXIT_OK), ("failed", doctor.EXIT_RUNTIME_ERROR)],
@@ -313,6 +345,33 @@ def test_cli_config_error_is_clean_json(
     assert report["checks"][0]["id"] == "config.load"
     assert "broken test config" in report["checks"][0]["summary"]
     assert "Traceback" not in captured.out + captured.err
+
+
+def test_config_load_report_redacts_both_duplicate_secret_scalars(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    first = "thk_live_first_duplicate_secret"
+    second = "thk_live_second_duplicate_secret"
+    config_path = tmp_path / "duplicate.yaml"
+    config_path.write_text(
+        "provider: openai\n"
+        "models:\n"
+        "  openai:\n"
+        f"    api_key: {first}\n"
+        f"    api_key: {second}\n",
+        encoding="utf-8",
+    )
+
+    assert doctor.main(
+        ["--config", str(config_path), "--json"]
+    ) == doctor.EXIT_RUNTIME_ERROR
+    captured = capsys.readouterr()
+
+    assert first not in captured.out + captured.err
+    assert second not in captured.out + captured.err
+    report = json.loads(captured.out)
+    assert "duplicate key 'api_key'" in report["checks"][0]["summary"]
 
 
 def test_cli_usage_error_returns_two(capsys: pytest.CaptureFixture[str]) -> None:
