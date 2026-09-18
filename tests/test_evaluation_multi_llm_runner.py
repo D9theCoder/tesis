@@ -9,6 +9,72 @@ import threading
 import time
 
 
+def test_matrix_forwards_each_coordinate_provider_to_the_runtime(monkeypatch):
+    """The execute-coordinate boundary preserves the provider matrix axis."""
+    resolved = []
+
+    def fake_run(**kwargs):
+        provider = kwargs["llm_provider"]
+        runtime = kwargs["llm_runtime"]
+        with runtime.coordinate(
+            coordinate_id=kwargs["execution_id"],
+            default_provider=provider,
+            default_model_config=kwargs["model_config"],
+            model_profiles=kwargs["model_profiles"],
+            role_settings=kwargs["llm_role_configs"],
+        ) as context:
+            resolved_provider, resolved_config, _ = context.role_config(
+                "orchestrator",
+                max_tokens=128,
+            )
+        resolved.append((provider, resolved_provider, resolved_config["model_name"]))
+        return {
+            "status": "success",
+            "config": {
+                "provider": provider,
+                "security_level": kwargs["security_level"],
+                "surface": kwargs["surface"],
+                "payload_mode": kwargs["payload_mode"],
+                "repeat_index": kwargs["repeat_index"],
+            },
+            "report": {"summary": {}, "module_scores": {}},
+            "llm_performance": [],
+            "llm_performance_summary": {},
+        }
+
+    monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", fake_run)
+
+    artifacts, aggregate = run_provider_matrix(
+        target_url="http://localhost/dvwa",
+        providers=["openai", "openai_compatible"],
+        security_levels=["low"],
+        surfaces=["sqli"],
+        payload_modes=["static_only"],
+        model_configs={
+            "openai": {"provider": "openai", "model_name": "openai-coordinate-model"},
+            "openai_compatible": {
+                "provider": "openai_compatible",
+                "model_name": "compatible-coordinate-model",
+            },
+        },
+        llm_role_configs={
+            "orchestrator": {"model_profile": None},
+            "payload_generator": {"model_profile": None},
+        },
+        include_aggregate=True,
+    )
+
+    assert [artifact["config"]["provider"] for artifact in artifacts] == [
+        "openai",
+        "openai_compatible",
+    ]
+    assert resolved == [
+        ("openai", "openai", "openai-coordinate-model"),
+        ("openai_compatible", "openai_compatible", "compatible-coordinate-model"),
+    ]
+    assert aggregate["matrix"]["providers"] == ["openai", "openai_compatible"]
+
+
 def test_run_provider_matrix_skips_unsupported_provider(monkeypatch):
     """Verifies run provider matrix skips unsupported provider behavior."""
     def fail_engagement(**kwargs):
@@ -61,6 +127,7 @@ def test_skipped_artifacts_preserve_runtime_metadata_and_empty_contract(monkeypa
 
     assert len(artifacts) == 1
     artifact = artifacts[0]
+    assert artifact["repeat_index"] == 0
     required = {
         "llm_activity",
         "llm_performance",
@@ -128,6 +195,7 @@ def test_cancelled_artifacts_preserve_runtime_metadata_and_empty_contract(monkey
     assert len(artifacts) == 1
     artifact = artifacts[0]
     assert artifact["status"] == "cancelled"
+    assert artifact["repeat_index"] == 0
     assert artifact["incomplete_reason"] == "CANCELLED"
     assert artifact["config"]["llm_max_concurrency"] == 2
     assert artifact["config"]["llm_cache_scope"] == "none"

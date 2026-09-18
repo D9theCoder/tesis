@@ -1,9 +1,12 @@
-"""Reasoning controls reach actual SDK request payloads without live calls."""
+"""Reasoning and provider-routing controls without live calls."""
+
+from dataclasses import asdict
 
 import pytest
 from langchain_core.messages import HumanMessage
 
 from llm.provider import get_llm, get_llm_from_model_config
+from llm.runtime import LLMRuntime
 from tesis.cli import _headless_overrides, _headless_parser
 from tesis.config_loader import ConfigError, load_and_resolve_config
 from tesis.model_config import ModelConfig
@@ -102,6 +105,117 @@ def test_legacy_config_does_not_force_reasoning():
     client = get_llm("openai", model_name="gpt-4o-mini", api_key="test")
     assert client.reasoning_effort is None
     assert client.temperature == 0
+
+
+def test_unpinned_roles_follow_each_coordinate_provider(tmp_path):
+    """An omitted role profile resolves from the matrix coordinate provider."""
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "target_url: http://localhost/dvwa\n"
+        "provider: openai_compatible\n"
+        "models:\n"
+        "  openai:\n"
+        "    provider: openai\n"
+        "    model_name: openai-coordinate-model\n"
+        "  openai_compatible:\n"
+        "    provider: openai_compatible\n"
+        "    model_name: compatible-coordinate-model\n",
+        encoding="utf-8",
+    )
+
+    config = load_and_resolve_config(config_path=str(path), cli_args={})
+    assert all(role.model_profile is None for role in config.role_configs.values())
+
+    role_settings = {
+        role: asdict(settings)
+        for role, settings in config.role_configs.items()
+    }
+    model_profiles = {
+        profile: asdict(model)
+        for profile, model in config.models.items()
+    }
+    runtime = LLMRuntime()
+    try:
+        for provider, expected_model in (
+            ("openai", "openai-coordinate-model"),
+            ("openai_compatible", "compatible-coordinate-model"),
+        ):
+            with runtime.coordinate(
+                coordinate_id=f"coordinate-{provider}",
+                default_provider=provider,
+                default_model_config=model_profiles[provider],
+                model_profiles=model_profiles,
+                role_settings=role_settings,
+            ) as context:
+                for role in ("orchestrator", "payload_generator"):
+                    resolved_provider, resolved_config, settings = context.role_config(
+                        role,
+                        max_tokens=128,
+                    )
+                    assert resolved_provider == provider
+                    assert resolved_config["model_name"] == expected_model
+                    assert settings.model_profile is None
+    finally:
+        runtime.close()
+
+
+def test_pinned_role_profile_precedes_global_profile_and_coordinate(tmp_path):
+    """Role pins win over a global pin, which wins over the coordinate axis."""
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "target_url: http://localhost/dvwa\n"
+        "provider: openai_compatible\n"
+        "model_profile: openai_compatible\n"
+        "llm_runtime:\n"
+        "  roles:\n"
+        "    orchestrator:\n"
+        "      model_profile: openai\n"
+        "models:\n"
+        "  openai:\n"
+        "    provider: openai\n"
+        "    model_name: pinned-role-model\n"
+        "  openai_compatible:\n"
+        "    provider: openai_compatible\n"
+        "    model_name: pinned-global-model\n",
+        encoding="utf-8",
+    )
+
+    config = load_and_resolve_config(config_path=str(path), cli_args={})
+    assert config.role_configs["orchestrator"].model_profile == "openai"
+    assert config.role_configs["payload_generator"].model_profile == "openai_compatible"
+
+    model_profiles = {
+        profile: asdict(model)
+        for profile, model in config.models.items()
+    }
+    role_settings = {
+        role: asdict(settings)
+        for role, settings in config.role_configs.items()
+    }
+    runtime = LLMRuntime()
+    try:
+        with runtime.coordinate(
+            coordinate_id="coordinate-openai",
+            default_provider="openai",
+            default_model_config=model_profiles["openai"],
+            model_profiles=model_profiles,
+            role_settings=role_settings,
+        ) as context:
+            orchestrator_provider, orchestrator_config, _ = context.role_config(
+                "orchestrator",
+                max_tokens=128,
+            )
+            payload_provider, payload_config, _ = context.role_config(
+                "payload_generator",
+                max_tokens=128,
+            )
+    finally:
+        runtime.close()
+
+    assert orchestrator_provider == "openai"
+    assert orchestrator_config["model_name"] == "pinned-role-model"
+    assert payload_provider == "openai_compatible"
+    assert payload_config["model_name"] == "pinned-global-model"
 
 
 @pytest.mark.parametrize("provider", ["gemini", "claude"])

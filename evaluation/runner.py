@@ -25,7 +25,13 @@ from evaluation.failure_logger import write_failure_artifact
 from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.reporter import write_events_jsonl, write_json_report, write_rich_report
 from evaluation.telemetry import RunTelemetry, stable_sha256
-from llm.runtime import LLMRuntime, RoleSettings, model_fingerprint
+from llm.diagnostics import format_failure_line
+from llm.runtime import (
+    LLMRuntime,
+    RoleSettings,
+    build_failure_envelope,
+    model_fingerprint,
+)
 from tesis.artifact_repository import config_fingerprint, new_execution_id
 from tesis.runtime_events import (
     CancellationRequested,
@@ -271,6 +277,59 @@ def _orchestrator_failure(events: list[dict[str, Any]]) -> dict[str, Any] | None
     return None
 
 
+def _failure_for_run(
+    records: list[Mapping[str, Any]],
+    *,
+    run_id: str,
+    fallback: Mapping[str, Any] | None = None,
+    provider: str,
+    model_config: Mapping[str, Any] | None,
+    coordinate_id: str,
+) -> dict[str, Any] | None:
+    """Return one canonical failure envelope for a provider-backed run."""
+    for row in records:
+        candidate = row.get("failure") if isinstance(row, Mapping) else None
+        if isinstance(candidate, Mapping):
+            return build_failure_envelope({**dict(row), **dict(candidate)}, run_id=run_id)
+        parse_status = str(row.get("parse_status") or "").lower() if isinstance(row, Mapping) else ""
+        if parse_status in {"provider_error", "invalid", "incomplete"}:
+            return build_failure_envelope(row, run_id=run_id)
+
+    if fallback is None:
+        return None
+    candidate = fallback.get("failure") if isinstance(fallback, Mapping) else None
+    if isinstance(candidate, Mapping):
+        envelope = dict(candidate)
+        envelope["run_id"] = run_id
+        return envelope
+
+    config = dict(model_config or {})
+    role = str(fallback.get("role") or "orchestrator")
+    error_type = str(fallback.get("error_type") or "ProviderError")
+    synthetic = {
+        "provider": provider,
+        "model": config.get("model_name") or config.get("model") or "unknown",
+        "model_profile": config.get("model_profile") or provider,
+        "role": role,
+        "coordinate_id": coordinate_id,
+        "call_id": fallback.get("call_id") or f"{coordinate_id}:{role}:1",
+        "endpoint": config.get("base_url") or config.get("endpoint"),
+        "timeout_s": config.get("timeout", config.get("request_timeout")),
+        "attempts": fallback.get("attempts", 1),
+        "max_retries": config.get("max_retries", fallback.get("max_retries", 0)),
+        "elapsed_ms": fallback.get("elapsed_ms", 0),
+        "error_type": error_type,
+        "cause_type": fallback.get("cause_type"),
+        "status_code": fallback.get("status_code"),
+        "request_id": fallback.get("request_id"),
+        "parse_status": fallback.get("parse_status") or "provider_error",
+        "error_message": fallback.get("message") or fallback.get("error_message") or error_type,
+        "remediation": fallback.get("remediation"),
+        "failure_class": fallback.get("failure_class"),
+    }
+    return build_failure_envelope(synthetic, run_id=run_id)
+
+
 def _payload_generation_failure(final_state: dict[str, Any]) -> dict[str, Any] | None:
     """Return a provider-error payload fallback recorded by the graph."""
     for event in final_state.get("fallback_events", []) or []:
@@ -507,6 +566,7 @@ def run_single_engagement(
 
     init_state: dict[str, Any] | None = None
     final_state: dict[str, Any] | None = None
+    provider_failure: dict[str, Any] | None = None
     try:
         cancellation_token.check()
         evasion_enabled = bool(evasion_enabled)
@@ -590,6 +650,32 @@ def run_single_engagement(
         hidden_failure = _orchestrator_failure(runtime_events)
         terminal_incomplete_reason = _terminal_incomplete_reason(final_state)
         payload_generation_failure = _payload_generation_failure(final_state)
+        failure_seed: Mapping[str, Any] | None = hidden_failure
+        if failure_seed is None:
+            for runtime_event in runtime_events:
+                if runtime_event.get("event_type") != "llm.failed":
+                    continue
+                event_data = runtime_event.get("data")
+                if isinstance(event_data, Mapping) and event_data.get("source") == "llm_runtime":
+                    failure_seed = event_data
+                    break
+        provider_failure = _failure_for_run(
+            call_context.records,
+            run_id=run_id,
+            fallback=failure_seed,
+            provider=llm_provider,
+            model_config=model_config,
+            coordinate_id=execution_id,
+        )
+        if provider_failure is None and payload_generation_failure is not None:
+            provider_failure = _failure_for_run(
+                call_context.records,
+                run_id=run_id,
+                fallback=payload_generation_failure,
+                provider=llm_provider,
+                model_config=model_config,
+                coordinate_id=execution_id,
+            )
         if hidden_failure is not None:
             # Deterministic fallback may preserve a partial execution artifact,
             # but an experiment whose orchestrator model failed is not a
@@ -600,22 +686,35 @@ def run_single_engagement(
             final_state["incomplete_reason"] = "LLM_RUNTIME_FAILURE"
             error_type = str(hidden_failure.get("error_type") or "LLMError")
             error = (
-                f"{error_type}: orchestrator model call failed; "
-                "deterministic fallback output was retained for audit only"
+                format_failure_line(provider_failure)
+                if provider_failure is not None
+                else (
+                    f"{error_type}: orchestrator model call failed; "
+                    "deterministic fallback output was retained for audit only"
+                )
             )
             status = "error"
+            failure_payload = {
+                "error_type": error_type,
+                "reason": "LLM_RUNTIME_FAILURE",
+            }
+            if provider_failure is not None:
+                failure_payload.update({
+                    "failure_class": provider_failure.get("failure_class"),
+                    "failure": provider_failure,
+                })
             telemetry.emit(
                 iteration=int(final_state.get("iteration_count", 0) or 0),
                 node="orchestrator",
                 event_type="run.failed",
                 status="error",
-                payload={"error_type": error_type, "reason": "LLM_RUNTIME_FAILURE"},
+                payload=failure_payload,
             )
             emit(
                 "run.failed",
                 node="orchestrator",
                 message=error,
-                    data={"error_type": error_type, "reason": "LLM_RUNTIME_FAILURE"},
+                data=failure_payload,
             )
         elif (
             terminal_incomplete_reason is not None
@@ -657,20 +756,30 @@ def run_single_engagement(
             final_state = dict(final_state)
             final_state["task_result"] = "INCOMPLETE"
             final_state["incomplete_reason"] = "LLM_RUNTIME_FAILURE"
-            error = "LLM runtime failure: at least one provider call failed"
+            error = (
+                format_failure_line(provider_failure)
+                if provider_failure is not None
+                else "LLM runtime failure: at least one provider call failed"
+            )
             status = "error"
+            failure_payload = {"error_type": "LLM_RUNTIME_FAILURE", "reason": "LLM_RUNTIME_FAILURE"}
+            if provider_failure is not None:
+                failure_payload.update({
+                    "failure_class": provider_failure.get("failure_class"),
+                    "failure": provider_failure,
+                })
             telemetry.emit(
                 iteration=int(final_state.get("iteration_count", 0) or 0),
                 node="runner",
                 event_type="run.failed",
                 status="error",
-                payload={"error_type": "LLM_RUNTIME_FAILURE", "reason": "LLM_RUNTIME_FAILURE"},
+                payload=failure_payload,
             )
             emit(
                 "run.failed",
                 node="runner",
                 message=error,
-                data={"error_type": "LLM_RUNTIME_FAILURE", "reason": "LLM_RUNTIME_FAILURE"},
+                data=failure_payload,
             )
         elif payload_generation_failure is not None:
             # Payload generation currently retains static seeds after a
@@ -680,20 +789,30 @@ def run_single_engagement(
             final_state = dict(final_state)
             final_state["task_result"] = "INCOMPLETE"
             final_state["incomplete_reason"] = "LLM_RUNTIME_FAILURE"
-            error = "LLM runtime failure: payload generation fell back to static seeds"
+            error = (
+                format_failure_line(provider_failure)
+                if provider_failure is not None
+                else "LLM runtime failure: payload generation fell back to static seeds"
+            )
             status = "error"
+            failure_payload = {"error_type": "LLM_RUNTIME_FAILURE", "reason": "LLM_RUNTIME_FAILURE"}
+            if provider_failure is not None:
+                failure_payload.update({
+                    "failure_class": provider_failure.get("failure_class"),
+                    "failure": provider_failure,
+                })
             telemetry.emit(
                 iteration=int(final_state.get("iteration_count", 0) or 0),
                 node="payload_candidate_builder",
                 event_type="run.failed",
                 status="error",
-                payload={"error_type": "LLM_RUNTIME_FAILURE", "reason": "LLM_RUNTIME_FAILURE"},
+                payload=failure_payload,
             )
             emit(
                 "run.failed",
                 node="payload_candidate_builder",
                 message=error,
-                data={"error_type": "LLM_RUNTIME_FAILURE", "reason": "LLM_RUNTIME_FAILURE"},
+                data=failure_payload,
             )
         elif llm_required and llm_activity["started"] == 0:
             # Automatic selection and hybrid/mutation coordinates are
@@ -868,6 +987,7 @@ def run_single_engagement(
                 output_dir=base_dir,
                 run_id=execution_id,
                 error=error or "unknown_error",
+                failure=provider_failure,
                 final_state={
                     "iteration_count": final_state.get("iteration_count", 0),
                     "task_result": final_state.get("task_result"),
@@ -922,6 +1042,8 @@ def run_single_engagement(
         "execution_id": execution_id,
         "run_id": run_id,
         "status": status,
+        "repeat_index": repeat_index,
+        "failure": provider_failure,
         "experiment_condition": experiment_condition,
         "target_method": target_method,
         "provider": llm_provider,

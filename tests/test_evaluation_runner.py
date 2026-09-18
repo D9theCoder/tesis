@@ -6,6 +6,7 @@ code."""
 import json
 
 from evaluation.runner import _llm_activity, run_single_engagement
+from llm.runtime import current_call_context
 from tesis.runtime_events import CancellationToken, CollectingEventSink
 
 
@@ -245,6 +246,69 @@ def test_llm_failed_callback_is_not_reported_as_success(monkeypatch):
     assert artifact["status"] == "error"
     assert artifact["incomplete_reason"] == "LLM_RUNTIME_FAILURE"
     assert artifact["llm_activity"] == {"started": 1, "completed": 0, "failed": 1, "tokens": 0}
+
+
+def test_provider_failure_envelope_reaches_artifact_event_and_sidecar(monkeypatch, tmp_path):
+    class Client:
+        def invoke(self, messages):
+            del messages
+            raise TimeoutError("simulated unroutable provider endpoint")
+
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: Client())
+
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            del stream_mode, config
+            context = current_call_context()
+            try:
+                context.runtime.invoke(
+                    context=context,
+                    role="orchestrator",
+                    system_message="system",
+                    user_message="user",
+                    schema={"type": "object"},
+                    schema_version="failure-envelope.v1",
+                    validator=lambda value: value,
+                    max_tokens=32,
+                )
+            except TimeoutError:
+                pass
+            yield {**state, "iteration_count": 1, "task_result": "SUCCESS"}
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
+    artifact = run_single_engagement(
+        target_url="http://localhost/dvwa",
+        security_level="low",
+        llm_provider="openai_compatible",
+        payload_mode="hybrid",
+        repeat_index=3,
+        output_dir=str(tmp_path),
+        model_config={
+            "model_name": "offline-test",
+            "base_url": "https://user:secret@unroutable.test/v1",
+            "timeout": 9,
+            "max_retries": 0,
+        },
+    )
+
+    assert artifact["status"] == "error"
+    assert artifact["repeat_index"] == 3
+    assert artifact["failure"]["failure_class"] == "transport_timeout"
+    expected_per_call_failure = dict(artifact["failure"])
+    expected_per_call_failure.pop("run_id")
+    assert artifact["llm_performance"][0]["failure"] == expected_per_call_failure
+    assert artifact["failure"]["endpoint"] == "https://unroutable.test/v1"
+    assert len(artifact["error"]) <= 400
+
+    failed_event = next(
+        event for event in artifact["execution_log"] if event["event_type"] == "run.failed"
+    )
+    assert failed_event["data"]["failure"] == artifact["failure"]
+    assert failed_event["data"]["failure_class"] == "transport_timeout"
+    sidecar = json.loads(
+        (tmp_path / f"{artifact['execution_id']}.failure.json").read_text(encoding="utf-8")
+    )
+    assert sidecar["failure"] == artifact["failure"]
 
 
 def test_partial_llm_activity_is_not_reported_as_success(monkeypatch):

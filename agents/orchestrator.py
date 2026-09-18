@@ -599,6 +599,18 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "error_type": type(exc).__name__,
             "next_agent": fallback_agent,
         }
+        provider_failure = getattr(exc, "provider_failure", None)
+        if not isinstance(provider_failure, dict):
+            performance = getattr(exc, "performance", None)
+            candidate = performance.get("failure") if isinstance(performance, dict) else None
+            if isinstance(candidate, dict):
+                provider_failure = dict(candidate)
+        if isinstance(provider_failure, dict):
+            failure_event["failure"] = dict(provider_failure)
+            failure_event["message"] = str(provider_failure.get("message") or exc)
+        fallback_payload = {"error_type": type(exc).__name__, "next_agent": fallback_agent}
+        if isinstance(provider_failure, dict):
+            fallback_payload["failure"] = dict(provider_failure)
         return {
             "next_agent": "payload_candidate_builder" if fallback_agent != "scorer" else "scorer",
             "selected_method": fallback_agent if fallback_agent != "scorer" else None,
@@ -609,7 +621,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "fallback_events": [failure_event],
             "telemetry_events": [
                 *telemetry_events,
-                {**telemetry_base, "event": "orchestrator.fallback.applied", "status": "fallback", "payload": {"error_type": type(exc).__name__, "next_agent": fallback_agent}},
+                {**telemetry_base, "event": "orchestrator.fallback.applied", "status": "fallback", "payload": fallback_payload},
             ],
             "messages": [HumanMessage(content=prompt), AIMessage(content=f"orchestrator_fallback:{type(exc).__name__}")],
             "evasion_attempts": state.get("evasion_attempts", 0) + (retries_used if evasion_triggered else 0),

@@ -698,6 +698,7 @@ def run_provider_matrix(
             "status": status,
             "experiment_condition": coordinate["experiment_condition"],
             "target_method": coordinate["target_method"],
+            "repeat_index": coordinate["repeat_index"],
             "provider": provider,
             "model": model_name,
             "surface": coordinate["surface"],

@@ -106,6 +106,31 @@ default_security_level: low
     assert cfg.target_url == "http://env.local/dvwa"
 
 
+def test_dvwa_credentials_are_loaded_and_environment_overridable(tmp_path, monkeypatch):
+    """The live doctor/session layer receives resolved lab credentials."""
+    config_path = tmp_path / "config.yaml"
+    _write_yaml(
+        config_path,
+        """
+target_url: http://localhost/dvwa
+provider: gemini
+level: low
+dvwa_username: yaml-user
+dvwa_password: yaml-password
+""",
+    )
+
+    yaml_config = load_and_resolve_config(config_path=str(config_path), cli_args={})
+    assert yaml_config.dvwa_username == "yaml-user"
+    assert yaml_config.dvwa_password == "yaml-password"
+
+    monkeypatch.setenv("TESIS_DVWA_USERNAME", "env-user")
+    monkeypatch.setenv("TESIS_DVWA_PASSWORD", "env-password")
+    env_config = load_and_resolve_config(config_path=str(config_path), cli_args={})
+    assert env_config.dvwa_username == "env-user"
+    assert env_config.dvwa_password == "env-password"
+
+
 def test_cli_override_has_highest_priority(tmp_path, monkeypatch):
     """Verifies cli override has highest priority behavior."""
     config_path = tmp_path / "config.yaml"

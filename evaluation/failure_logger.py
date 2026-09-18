@@ -14,6 +14,7 @@ def write_failure_artifact(
     error: str,
     final_state: dict[str, Any],
     recent_events: list[dict[str, Any]],
+    failure: dict[str, Any] | None = None,
 ) -> Path:
     """Handles write failure artifact behavior for this module.
 
@@ -30,6 +31,7 @@ def write_failure_artifact(
         "schema_version": "stage6.failure.v1",
         "run_id": run_id,
         "error": error,
+        "failure": failure,
         "final_state": final_state,
         "recent_events": recent_events,
     }

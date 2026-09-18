@@ -192,6 +192,8 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "STOP_POLICY": "stop_policy",
         "COVERAGE_TARGET": "coverage_target",
         "DIAGNOSE": "diagnose",
+        "DVWA_USERNAME": "dvwa_username",
+        "DVWA_PASSWORD": "dvwa_password",
         "EVASION_ENABLED": "evasion_enabled",
         "EVASION_MODE": "evasion_mode",
         "EVASION_STRATEGY": "evasion_strategy",
@@ -614,7 +616,8 @@ def _parse_model_configs(raw_models: Mapping[str, Any]) -> dict[str, ModelConfig
 def _parse_llm_runtime_config(
     merged: Mapping[str, Any],
     *,
-    default_profile: str,
+    default_profile: str | None,
+    default_provider: str,
     candidate_budget: int,
 ) -> LLMRuntimeConfig:
     """Parse LLM-only execution controls while preserving legacy defaults.
@@ -708,10 +711,16 @@ def _parse_llm_runtime_config(
             raise ConfigError(f"llm_runtime.roles.{role_name} must be a mapping")
         role = dict(raw_role)
 
-        profile = role.get("model_profile", role.get("profile", default_profile))
-        profile_text = str(profile).strip() if profile is not None else default_profile
-        if not profile_text:
+        # Keep an unset role profile unset.  The runtime uses ``None`` to
+        # select the coordinate's provider profile, which is essential for a
+        # provider-axis matrix.  Only an explicitly selected global profile
+        # is inherited here; a role-level profile remains more specific and
+        # therefore wins over that global selection.
+        profile = role.get("model_profile", role.get("profile"))
+        if profile is None or not str(profile).strip():
             profile_text = default_profile
+        else:
+            profile_text = str(profile).strip()
 
         model_name_raw = role.get("model_name", role.get("model"))
         model_name = None if model_name_raw is None else str(model_name_raw).strip()
@@ -729,10 +738,15 @@ def _parse_llm_runtime_config(
         effort = _configured_reasoning_effort(
             role, f"llm_runtime.roles.{role_name}.reasoning_effort",
         )
-        raw_profile = (merged.get("models") or {}).get(profile_text, {})
+        # Profile-level decoding defaults still inherit from the coordinate's
+        # configured provider when no profile is pinned.  This lookup is only
+        # for decoding/token defaults; ``profile_text`` remains ``None`` so
+        # the runtime can select the provider for each matrix coordinate.
+        profile_for_defaults = profile_text or default_provider
+        raw_profile = (merged.get("models") or {}).get(profile_for_defaults, {})
         profile_effort = (
             _configured_reasoning_effort(
-                raw_profile, f"models.{profile_text}.reasoning_effort",
+                raw_profile, f"models.{profile_for_defaults}.reasoning_effort",
             )
             if isinstance(raw_profile, Mapping)
             else None
@@ -916,6 +930,8 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         or "sqli"
     ).strip().lower()
     payload_mode = str(merged.get("payload_mode") or "static_only").strip().lower()
+    raw_dvwa_username = merged.get("dvwa_username", "admin")
+    raw_dvwa_password = merged.get("dvwa_password", "password")
     raw_model_profile = merged.get("model_profile")
     model_profile = (
         str(raw_model_profile).strip()
@@ -925,7 +941,12 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
     candidate_budget = int(merged.get("candidate_budget") or 5)
     llm_runtime = _parse_llm_runtime_config(
         merged,
-        default_profile=model_profile or provider,
+        # Do not materialize the engagement's default provider as a role
+        # profile.  In matrix mode, each coordinate supplies its provider to
+        # the runtime; an unset role must follow that coordinate.  A global
+        # model_profile remains an explicit pin and is inherited by roles.
+        default_profile=model_profile,
+        default_provider=provider,
         # Let the existing engagement validator report an invalid candidate
         # budget using its established error while keeping role token defaults
         # positive during this preliminary parse.
@@ -1018,6 +1039,16 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         models=_parse_model_configs(merged.get("models", {})),
         llm_runtime=llm_runtime,
         model_profile=model_profile,
+        dvwa_username=(
+            str(raw_dvwa_username).strip()
+            if raw_dvwa_username is not None
+            else ""
+        ),
+        dvwa_password=(
+            str(raw_dvwa_password)
+            if raw_dvwa_password is not None
+            else ""
+        ),
     )
 
     _validate_engagement_config(config)
