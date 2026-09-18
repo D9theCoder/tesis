@@ -1,22 +1,56 @@
 # Remaining tasks (2026-09-17)
 
-Implementation complete. Full offline suite green (`1374 passed`), focused subset
-green (`99 passed`), offline doctor green (`11/11`, exit 0). Nothing is committed
-(no commit, no push). No live provider budget was available, so no `--live` run
-and no completed matrix exist. Detailed verified/not-verified record:
+Continuation implementation is complete for R1, R2, and the selected R4
+repairs. Full offline suite green (`1389 passed`), focused routing/config suite
+green (`79 passed`), focused doctor/CLI/TUI/reasoning/diagnostics suite green
+(`118 passed`), and offline doctor green (`11/11`, exit 0). The five commits
+listed in Housekeeping predate this continuation; the continuation changes are
+uncommitted and nothing was pushed. Detailed earlier verified/not-verified record:
 [`docs/HANDOFF_REASONING_DOCTOR_2026-09-17.md`](HANDOFF_REASONING_DOCTOR_2026-09-17.md).
 
-## Hazards (read first)
+## Continuation update (2026-09-19)
 
-- **Do not commit `test.py` as-is.** `git status --porcelain` shows `A  test.py` — it is already staged, and its content
-  is a one-off probe posting to `https://tokenharbor.ai/v1/chat/completions` with a live bearer token in plaintext, so a
-  commit publishes that credential. Unstage or delete it first (details: Housekeeping).
-- **V1 — a rejected config echoes raw YAML scalars** into the doctor report, the dry-run/headless/**matrix** stderr and
-  the TUI (`tesis/doctor.py:974`, `tesis/cli.py:77,239`, `tesis/tui.py:931,1100,1107,1909,2054,2470`). Reproduced with a
-  duplicated `api_key` key: both scalars appear verbatim. Impact and the correct fix — sanitize the loader text; a
-  secrets tuple is unobtainable there and plain redaction misses `thk_live_…` — are in R4/V1.
+- **R1 complete offline**: unpinned roles retain `model_profile=None` and follow
+  each matrix coordinate provider. Precedence is explicit role profile > global
+  profile > coordinate provider. An offline two-provider matrix-boundary test
+  proves distinct provider/model resolution.
+- **R2 complete offline**: per-call records, the run artifact, `run.failed`, and
+  `*.failure.json` carry the canonical redacted failure object. It includes the
+  failure class, provider/model/profile/role, coordinate and call IDs, sanitized
+  endpoint, timeout, attempts/retries, elapsed time, exception/cause, HTTP status,
+  request ID, parse status, bounded provider message, and remediation. Simulated
+  timeout, schema rejection, and quota rejection paths are covered without live
+  calls.
+- **R4 repairs complete**: V1, N5, N7, N8, N11, N12, and the child-coordinate
+  TUI `Continuing` defect are fixed. The artifact schema lists in both summaries
+  now match implemented names, and `repeat_index` is top-level for regular and
+  synthetic matrix artifacts.
+- **Accepted limitations**: N2 remains a validation-only axis for seed-only
+  checks; N3 remains an offline scope-helper check rather than a live redirect;
+  N9/N10 retain the current narrow structured-output fallback and canonical
+  reasoning-field behavior. These do not weaken the runtime execution boundary.
+- **Manual TUI startup verified**: `python -m tesis run` rendered the main menu
+  in a real PTY and exited cleanly with `q`.
+- **Contained DVWA live slice verified**: authentication passed, all three
+  security levels (`low`, `medium`, `high`) passed, and all three in-scope
+  surfaces (`sqli`, `access_control`, `brute_force`) passed. This command called
+  `_dvwa_live_checks` directly so it did not contact the model provider.
+- **R3 is explicitly INCOMPLETE**: the final `doctor --live`, real experiment
+  matrix, completed-run artifact audit, and provider-side reasoning evidence were
+  **not tested because the currently selected API endpoint has no quota**. Do not
+  treat the offline routing/failure simulations as a completed experiment. Run
+  the exact R3 commands only after provider quota is restored.
 
-## TL;DR — what completed
+## Current hazards (read first)
+
+- The selected model endpoint has no quota. Do not run the real matrix or use
+  failed provider probes as experiment evidence until quota is restored.
+- The old plaintext `test.py` probe is no longer present or tracked. Do not
+  recreate or commit a probe containing a literal bearer token.
+- V1 is fixed and regression-tested: rejected duplicate-key YAML no longer
+  echoes either raw scalar through Doctor, dry-run, headless/matrix CLI, or TUI.
+
+## Prior baseline TL;DR (superseded by the continuation update above)
 
 - **Doctor module**: `tesis/doctor.py` + `tests/test_doctor.py` (untracked, 27 tests).
   `python -m tesis doctor [--config PATH] [--live] [--json]`; exit 0 passed / 1 failed / 2 usage error; 11 offline checks
@@ -40,7 +74,7 @@ and no completed matrix exist. Detailed verified/not-verified record:
 
 ## Remaining tasks
 
-### R1 — Provider-axis routing defect (blocks every provider-axis experiment)
+### R1 — COMPLETED OFFLINE: provider-axis routing
 
 **Why**: the matrix `provider` axis is metadata-only. With top-level `provider: openai_compatible`, both roles resolve to
 that profile and every coordinate runs the same model. Proven from the aborted matrices: all 130 LLM calls ran on
@@ -67,7 +101,7 @@ not pin one; an offline test (no network) proves it; a documented precedence exi
 .venv/bin/python -m tesis run --headless --mode matrix --config config.yaml --providers openai_compatible --json
 ```
 
-### R2 — Richer provider-failure messages
+### R2 — COMPLETED OFFLINE: richer provider-failure messages
 
 **Why**: run-level failure text is unactionable and content-free. Observed in both matrices:
 `"APITimeoutError: orchestrator model call failed; deterministic fallback output was retained for audit only"`
@@ -205,7 +239,7 @@ still work. Deliberately **not** now: per-coordinate error rows in the matrix ag
 (`evaluation/multi_llm_runner.py:145-230`) and merging the thin UUID-keyed `llm.failed` record (touches the counting
 semantics documented in the detailed handoff).
 
-### R3 — Restore provider budget, then complete the evidence
+### R3 — INCOMPLETE: restore provider budget, then complete the evidence
 
 **Why**: no successful experiment exists. Live doctor and a completed matrix were never finished. Both matrices are
 `status=active` with `manifest_path: null` (`heartbeat_at` `2026-09-17T14:58:21.983513+00:00` / `…:19.969377+00:00`);
@@ -221,69 +255,54 @@ provider/environment failure was never separated from harness defect.
 ```
 Then audit the newest `results/runs/` matrix directory against the AGENTS.md artifact-field list.
 
-### R4 — Known limitations to accept or fix
+### R4 — Disposition of known limitations
 
-- **N2** — payload-mode axis is inert for seed-only validation. `evaluation/` seed-only path. Low. Accept or mark the
-  axis as validated-only for that mode.
-- **N3** — containment check exercises the scope helper (`client._assert_in_scope`, request/redirect kinds), not a live
-  redirect. `tesis/doctor.py` `containment.http`. Low. Add a live redirect fixture or document the limitation.
-- **N5** — URL redaction over-consumes into the tail of the query string. `llm/diagnostics.py`. Low. Tighten the
-  component split.
-- **N7** — duplicated provider-capability literal: `tesis/doctor.py:508` hardcodes `{"gemini", "claude"}`, but the real
-  runtime rule is broader — `llm/provider.py:45` (`_reasoning_kwargs`) rejects an explicit effort for **any** provider
-  outside `{openai, openai_compatible}`, so a `deepseek`/custom profile carrying an effort raises at call time while the
-  doctor's `reasoning.controls` check stays silent. Low. Import the provider rule from `llm/provider.py`, not just the
-  literal.
-- **N8** — `_known_secrets` is evaluated outside `_safe_check` (`tesis/doctor.py:930`, which does pass
-  `secrets=_known_secrets(config)`). Low-Medium robustness gap: an exception raised while deriving the secrets escapes
-  the check wrapper. Wrap it. (Not the same defect as **V1** below, which is about the *failed-load* path.)
-- **N9/N10** — structured-output fallback breadth; legacy `reasoning` keys are discarded on the Chat path.
-  `llm/runtime.py` / `llm/provider.py`. Low. Document, or map the legacy keys onto the canonical field.
-- **N11** — DVWA credentials read with `admin`/`password` defaults because `EngagementConfig` carries no `dvwa_*` fields
-  (`tesis/doctor.py:643-644`). Low. Add the fields or document the default.
-- **N12** — pre-existing artifact-schema drift across the two summaries and `AGENTS.md`. Docs only. Low. Reconcile in one
-  pass with the R3 artifact audit.
-- **V1 — config-load rejection echoes raw YAML scalars (reproduced independently; wider than first recorded)**. The
-  disclosure is not doctor-only: every surface that prints the loader error echoes it — `tesis/doctor.py:974`
-  (`_build_report([check])`, no `secrets=`), `tesis/cli.py:77` (dry run), `tesis/cli.py:239` (headless **and matrix**),
-  `tesis/tui.py:931,1100,1107,1909,2054,2470`. Reproduced with a duplicated `api_key` key: both scalars appear verbatim
-  in `doctor --json` **and** in the human report (exit 1, 0 bytes stderr).
-  Impact Medium (a run's stderr carries it, not just the doctor), trigger narrow (malformed/duplicate-key YAML only).
-  The fix prescribed in the previous revision ("pass the secrets tuple") does not work: `_config_error_report` runs
-  *because* the config failed to load, so no resolved config exists to derive secrets from, and `redact_diagnostic_text`
-  covers only some shapes — measured on this exact message it redacts `sk-live-…` (its `sk-` pattern) and
-  `api_key: <value>`, but leaves `thk_live_…` intact. Correct fix: stop embedding the raw loader text — sanitize the
-  exception string (redact quoted scalars after `with value`/`original value`, generalize the key-shape patterns), or
-  report only the problem class plus YAML line/column. Distinct from **N8**: N8 is `_known_secrets` being called outside
-  `_safe_check` at `tesis/doctor.py:930`, which does pass `secrets=_known_secrets(config)` on the success path.
-- **NEW (review round)** — a click that re-selects the already-selected slider value no longer emits `Changed`
-  (`tesis/tui.py:281` `state_changed = index != self._index or self._mixed`, guarded at `:287`), even though
-  `_user_changed` is still set. Benign: the only consumer recomputes from widget state. Accept as-is; no action.
-- **NEW (R2 design review)** — the TUI failure pane keys "Continuing" on `event_type` alone (`tesis/tui.py:1637`, in the
-  `_consume_runtime_event` pane update at `:1631-1638`; the first revision cited `:1640-1645`, which is the unrelated
-  `_set_stage`), so a forwarded child-coordinate `run.failed` renders `Continuing: False` while the matrix keeps running
-  — `_SerializedSink.emit` forwards the child event verbatim (`evaluation/multi_llm_runner.py:519-528`). Low-Medium:
-  misleading live status for a watcher. Fix by checking whether the failing run is the matrix itself before setting the
-  flag.
+- **N2 — accepted**: the payload-mode axis is validation-only for seed-only
+  checks. Generated runtime modes still use their distinct generation paths.
+- **N3 — accepted**: the offline containment check exercises request and
+  redirect scope helpers, not a live redirect server.
+- **N5 — fixed**: URL redaction preserves semicolon-delimited prose and trailing
+  punctuation while redacting query/fragment values and URL userinfo.
+- **N7 — fixed**: Doctor imports the shared runtime provider-capability rule;
+  custom providers with an unsupported explicit effort now fail the check.
+- **N8 — fixed**: secret discovery runs through a safe check and returns a
+  structured `config.redaction` failure instead of aborting Doctor.
+- **N9/N10 — accepted**: the narrow structured-output fallback and canonical
+  Chat reasoning field remain intended; conflicting legacy keys are not sent.
+- **N11 — fixed**: typed config now carries DVWA username/password, including
+  environment overrides, and Doctor receives the resolved values.
+- **N12 — fixed offline**: both summaries use the implemented artifact names,
+  and regular plus synthetic artifacts carry top-level `repeat_index`. The
+  completed-run audit remains part of R3.
+- **V1 — fixed**: malformed/duplicate-key loader messages retain the problem,
+  duplicate key, and source line while removing raw scalar values across every
+  doctor/CLI/TUI surface.
+- **TUI child-failure status — fixed**: a child coordinate's `run.failed` shows
+  `Continuing: True`; only a matrix-parent terminal event shows `False`.
+- **Slider re-selection — accepted**: re-selecting the current slider value
+  does not emit `Changed`; consumers already recompute from widget state.
 
-### R5 — Unverified items that remain
+### R5 — Unverified items that remain after the continuation
 
 - **Provider-side reasoning execution is unproven.** The one live probe reported `reasoning_tokens=not_reported` /
   `provider_side_reasoning=unverified`; only request-side serialization is asserted. A setting proves the request, not
   that the provider reasoned.
-- **No manual terminal check of the TUI.** All TUI verification is Textual-test-harness only (plus the 20-column
-  regression). Run the real TUI once by hand on the final tree.
+- **Manual terminal startup is now verified.** The real TUI rendered its main
+  menu in a PTY and exited cleanly; no experiment was started.
 - **No completed-run artifact audit.** The AGENTS.md field-list audit was performed only against the aborted matrices.
 - Live doctor evidence is a single run from a cancelled session (16 checks: 11 offline + 2 `live.model.*` role probes +
   3 `live.dvwa.*`; 15 passed, 1 failed on the harness-handled
   `LLMOutputError: native structured output did not return an object`) and was not repeated on the final tree.
+  The three contained `live.dvwa.*` checks were repeated separately on
+  2026-09-19 and all passed; the two `live.model.*` checks were not repeated
+  because the selected endpoint has no quota.
 
-## Drift audit against the frozen record (verified this session)
+## Historical drift audit against the frozen record (2026-09-17)
 
 `docs/HANDOFF_REASONING_DOCTOR_2026-09-17.md` stays frozen as the evidence record; the corrections live here.
 
-**Matching — no drift.** The recorded `git status --porcelain` block is identical to today's (plus this new untracked
-file). `pytest -q` => `1374 passed in 51.36 s` (recorded 51.63 s). Offline doctor: exit 0, one JSON object, 0 bytes
+**Matching — no drift at that time.** The recorded `git status --porcelain` block was identical to that session's (plus
+this then-new file). `pytest -q` => `1374 passed in 51.36 s` (recorded 51.63 s). Offline doctor: exit 0, one JSON object, 0 bytes
 stderr, `{"failed":0,"passed":11,"skipped":0,"total":11}`. The cited sites resolve as recorded: `tesis/cli.py:263`,
 `tesis/tui.py:2519`, `tesis/doctor.py:508,643-644,930`, `tesis/config_loader.py:711-712,928`, `llm/runtime.py:190,203`,
 `evaluation/runner.py:398`; `run_doctor` still has exactly those two call sites and neither is on the runtime path. No
@@ -322,26 +341,24 @@ containment are unchanged. Consequence to remember before rerunning the matrix: 
 
 ```bash
 .venv/bin/python -m pytest -q
-# expect: 1374 passed
+# current expectation: 1389 passed
 
 .venv/bin/python -m tesis doctor --config config.yaml --json
 # expect: exit 0, exactly one JSON object on stdout, 0 bytes stderr,
 #         status=passed, summary {"failed":0,"passed":11,"skipped":0,"total":11}
 
 git status --porcelain
-# expect: the changed-file list in the detailed handoff, plus
-#         ?? docs/HANDOFF_REMAINING_TASKS_2026-09-17.md
-#         (still uncommitted; tesis/doctor.py and tests/test_doctor.py untracked)
+# expect: the continuation files listed in the 2026-09-19 update to be modified;
+#         the baseline doctor files are tracked in the five local commits.
 ```
 
 ## Housekeeping
 
-- Everything is uncommitted. **No commit, no push.**
-- `config.yaml` (modified, staged) and `test.py` are pre-existing user files — leave them alone. **Correction to the
-  earlier wording: `test.py` is not untracked — `git status --porcelain` shows `A  test.py`, i.e. already staged as a new
-  file.** Its content is a one-off probe posting to `https://tokenharbor.ai/v1/chat/completions` with a live bearer token
-  in plaintext, so a commit would publish that credential: unstage/exclude it before committing (it is also the probe
-  behind the recorded 401 `CreditsError` evidence). It is not collected by pytest: `pyproject.toml` has no
-  `[tool.pytest.ini_options]`, so the default `test_*.py` / `*_test.py` patterns apply and `test.py` matches neither.
-- `tesis/doctor.py` and `tests/test_doctor.py` are untracked and must be added by the user's own commit.
+- The baseline work is in five local commits (`5998e24` through `5ed18f9`), and
+  the branch is five commits ahead of its upstream. The 2026-09-19 continuation
+  is uncommitted. **No push was performed.**
+- `test.py` is absent and is not tracked. `tesis/doctor.py` and
+  `tests/test_doctor.py` are tracked by the earlier baseline commits.
+- `config.yaml` has only a documentation-comment change in this continuation;
+  its provider credentials/settings were not changed.
 - Do not modify `docs/HANDOFF_REASONING_DOCTOR_2026-09-17.md`; it is the evidence record for this change set.

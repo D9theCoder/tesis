@@ -177,8 +177,12 @@ llm_runtime:
 ```
 
 Each role inherits its provider, endpoint, credentials, timeout, and default
-model from `models.<model_profile>`. An optional role-level `model_name` may
-override that model. The payload-generator token limit defaults to
+model from its resolved profile. If no global `model_profile` or role-level
+profile is set, the role remains unpinned and follows the provider of the
+current matrix coordinate. An explicit role profile takes precedence over the
+global profile; the global profile takes precedence over the coordinate
+provider. An optional role-level `model_name` may override that model. The
+payload-generator token limit defaults to
 `min(512, 96 + 64 * candidate_budget)` when it is not explicitly set. The
 headless `--model-profile PROFILE`/`TESIS_MODEL_PROFILE` and the TUI run-setup
 selector can apply one named profile to both roles without editing the YAML.
@@ -971,47 +975,59 @@ Each run produces a JSON artifact with at least the following fields:
 
 ```text
 schema_version
+execution_id
 run_id
 status
+experiment_condition
+target_method
 provider
 model
+model_profile
 surface
-method
 security_level
-condition
 payload_mode
+repeat_index
 selected_method
 viable_methods
 akg_path
 payload_candidates
-generated_payloads
 payload_validation_results
 payload_provenance
 execution_log
 response_evidence
 timing_evidence
 verifier_decision
-method_score
-payload_scores
-exploitation_score
-chain_score
-output_validity_score
-composite_score
+confirmed_vulns
+achieved_outcomes
 guardrail_activations
 payload_guardrail_activations
 invalid_json_events
 fallback_events
+containment_events
+method_score
+payload_scores
+exploitation_score
+chain_score
+output_score
+composite_score
 attempts_to_success
-token_usage
 token_cost
 llm_activity
 llm_performance
-llm_runtime_telemetry
+llm_performance_summary
+llm_runtime_config
 config
 final_state
+failure
 error
 manual_scoring_evidence
 ```
+
+The complete per-method score maps and generated-payload map are retained in
+`final_state`; the top-level singular score fields identify the selected
+method's values. `failure` is null for runs without a provider failure and is
+otherwise the same canonical redacted failure object emitted in `run.failed`
+and the failure sidecar.
 
 `manual_scoring_evidence` must link:
 

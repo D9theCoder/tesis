@@ -180,8 +180,12 @@ llm_runtime:
 ```
 
 Setiap role mewarisi provider, endpoint, credentials, timeout, dan model
-default dari `models.<model_profile>`. `model_name` pada level role dapat
-digunakan sebagai override. Jika tidak diatur eksplisit, batas token
+default dari profile yang telah di-resolve. Jika `model_profile` global maupun
+profile level role tidak diatur, role tetap tidak di-pin dan mengikuti provider
+coordinate matrix saat ini. Profile level role yang eksplisit mengalahkan
+profile global; profile global mengalahkan provider coordinate. `model_name`
+pada level role dapat digunakan sebagai override. Jika tidak diatur eksplisit,
+batas token
 payload-generator adalah `min(512, 96 + 64 * candidate_budget)`. Kontrol
 headless `--model-profile PROFILE`/`TESIS_MODEL_PROFILE` dan selector pada
 run-setup TUI dapat menerapkan satu profile ke kedua role tanpa mengubah YAML.
@@ -977,47 +981,59 @@ Setiap run menghasilkan JSON artifact dengan field minimal:
 
 ```text
 schema_version
+execution_id
 run_id
 status
+experiment_condition
+target_method
 provider
 model
+model_profile
 surface
-method
 security_level
-condition
 payload_mode
+repeat_index
 selected_method
 viable_methods
 akg_path
 payload_candidates
-generated_payloads
 payload_validation_results
 payload_provenance
 execution_log
 response_evidence
 timing_evidence
 verifier_decision
-method_score
-payload_scores
-exploitation_score
-chain_score
-output_validity_score
-composite_score
+confirmed_vulns
+achieved_outcomes
 guardrail_activations
 payload_guardrail_activations
 invalid_json_events
 fallback_events
+containment_events
+method_score
+payload_scores
+exploitation_score
+chain_score
+output_score
+composite_score
 attempts_to_success
-token_usage
 token_cost
 llm_activity
 llm_performance
-llm_runtime_telemetry
+llm_performance_summary
+llm_runtime_config
 config
 final_state
+failure
 error
 manual_scoring_evidence
 ```
+
+Map score lengkap per method dan map payload hasil generation disimpan di
+`final_state`; field score singular di level atas berisi nilai untuk method
+terpilih. `failure` bernilai null jika tidak ada provider failure, dan jika ada
+berisi object failure teredaksi yang sama dengan event `run.failed` dan failure
+sidecar.
 
 `manual_scoring_evidence` wajib menghubungkan:
 

@@ -41,6 +41,11 @@ Role-specific `--orchestrator-model-profile` and
 different profiles. `TESIS_MODEL_PROFILE` is the equivalent environment
 override.
 
+Without a global or role-specific profile, roles stay unpinned and follow each
+matrix coordinate's provider. Precedence is explicit role profile > global
+`model_profile` > coordinate provider; this keeps provider-axis experiments
+from reusing the top-level single-run provider profile.
+
 Reasoning effort can be set to `low`, `medium`, `high`, `xhigh`, or `max` with
 `--reasoning-effort`, `TESIS_REASONING_EFFORT`, or the TUI's discrete slider.
 Persist a profile default at `models.<profile>.reasoning_effort`; an explicit
