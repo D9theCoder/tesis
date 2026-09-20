@@ -196,8 +196,10 @@ def format_module_scores_table(
     if show_chains:
         headers.append("Chain")
 
-    summary = report.get("summary", {})
-    distribution = summary.get("score_distribution", {})
+    from evaluation.metrics import artifact_summary as _artifact_summary
+
+    summary = _artifact_summary(run)
+    distribution = summary.get("score_distribution", {}) if isinstance(summary, Mapping) else {}
     if isinstance(distribution, Mapping):
         normalized_distribution = {
             int(key): int(value)
@@ -210,18 +212,24 @@ def format_module_scores_table(
     tail = [
         "",
         f"Score Distribution: {normalized_distribution}",
-        f"Highest Outcome: {summary.get('highest_impact_outcome', 'N/A')}",
-        f"Longest Chain: {summary.get('longest_chain', 'N/A')}",
+        f"Highest Outcome: {summary.get('highest_impact_outcome', 'N/A') if isinstance(summary, Mapping) else 'N/A'}",
+        f"Longest Chain: {summary.get('longest_chain', 'N/A') if isinstance(summary, Mapping) else 'N/A'}",
     ]
-    evasion_attempts = summary.get("evasion_attempts")
+    summary_map = summary if isinstance(summary, dict) else {}
+    evasion_attempts = summary_map.get("evasion_attempts")
     if evasion_attempts is not None:
         tail.append(f"Evasion Attempts: {evasion_attempts}")
-    successful_evasions = summary.get("successful_evasions")
+    successful_evasions = summary_map.get("successful_evasions")
     if successful_evasions is not None:
         tail.append(f"Successful Evasions: {successful_evasions}")
-    evasion_strategy = summary.get("evasion_strategy")
+    evasion_strategy = summary_map.get("evasion_strategy")
     if evasion_strategy is not None:
         tail.append(f"Evasion Strategy: {evasion_strategy}")
+    # ponytail: unavailable renders N/A via metric_reading; never None-as-number.
+    from evaluation.metrics import UNAVAILABLE_METRICS, format_metric
+
+    for _name in UNAVAILABLE_METRICS:
+        tail.append(f"{_name}: {format_metric(summary_map, _name)}")
     return _as_table(headers, rows) + "\n" + "\n".join(tail)
 
 
@@ -306,7 +314,29 @@ def format_provider_comparison_table(matrix_data: Mapping[str, Any]) -> str:
                     row.append("-")
         rows.append(row)
 
-    return _as_table(headers, rows)
+    # ponytail: mixed old/new aggregates exclude unavailable (never average as
+    # zero); all-unavailable rows render N/A with the unavailable count.
+    from evaluation.metrics import UNAVAILABLE_METRICS, aggregate_metric, artifact_summary
+
+    summaries_by_provider = {provider: [] for provider in providers}
+    for run in runs:
+        provider = str(run.get("config", {}).get("provider", "unknown"))
+        if provider in summaries_by_provider:
+            summaries_by_provider[provider].append(artifact_summary(run))
+    tail: list[str] = []
+    for name in UNAVAILABLE_METRICS:
+        cells = []
+        for provider in providers:
+            agg = aggregate_metric(summaries_by_provider[provider], name)
+            mean = agg.get("mean")
+            cells.append(
+                f"{mean:g} ({agg['n_available']} avail)"
+                if isinstance(mean, (int, float)) and not isinstance(mean, bool)
+                else f"N/A ({agg['n_unavailable']} unavail)"
+            )
+        tail.append(f"{name}: " + " | ".join(cells))
+
+    return _as_table(headers, rows) + "\n" + "\n".join([""] + tail)
 
 
 def format_rich_report_sections(data: Mapping[str, Any]) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import math
 
 from core.state import ALL_METHOD_AGENTS, SURFACES, METHODS_BY_SURFACE
 NOT_COMPUTED = "not_computed"
@@ -16,18 +17,93 @@ def metric_reading(summary: dict, name: str) -> tuple[float | None, bool, str | 
     ``metric_availability``/``metric_unavailable_reason`` maps alongside null
     values; legacy artifacts carry a bare numeric (0.0) with no maps and are
     treated as unavailable with reason ``"legacy_numeric"``. Explicit
-    ``True`` availability returns the stored value verbatim.
+    ``True`` availability returns the stored value coerced to float.
     """
+    if not isinstance(summary, dict):
+        return None, False, NOT_COMPUTED
     availability = summary.get("metric_availability")
     reasons = summary.get("metric_unavailable_reason")
     if isinstance(availability, dict) and name in availability:
         available = bool(availability[name])
         if available:
-            return summary.get(name), True, None
+            value = summary.get(name)
+            # ponytail: fail closed — available + null/non-numeric/nonfinite is
+            # a producer bug; never hand None/inf/nan to arithmetic.
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                reason = reasons.get(name) if isinstance(reasons, dict) else None
+                return None, False, str(reason or NOT_COMPUTED)
+            if not math.isfinite(value):
+                reason = reasons.get(name) if isinstance(reasons, dict) else None
+                return None, False, str(reason or "nonfinite")
+            return float(value), True, None
         reason = reasons.get(name) if isinstance(reasons, dict) else None
         return None, False, str(reason or NOT_COMPUTED)
+    value = summary.get(name)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None, False, NOT_COMPUTED
     # ponytail: legacy numeric artifacts read as unavailable, not zero.
     return None, False, "legacy_numeric"
+
+
+def format_metric(summary: dict, name: str) -> str:
+    """Render one availability-tracked metric for display.
+
+    Available readings render as a compact number; anything unavailable
+    renders as ``"N/A"``. Never formats ``None`` as a number and never
+    converts ``null`` back to ``0.0``.
+    """
+    value, available, _reason = metric_reading(summary, name)
+    if available and value is not None:
+        return f"{value:g}"
+    return "N/A"
+
+
+def aggregate_metric(summaries: list[dict], name: str) -> dict:
+    """Aggregate one availability-tracked metric across score summaries.
+
+    Only available readings contribute to the mean; unavailable readings are
+    counted by reason, never averaged as zero. An all-unavailable aggregate
+    reports ``mean=None`` (rendered as ``N/A``), not ``0.0``.
+    """
+    values: list[float] = []
+    reasons: dict[str, int] = {}
+    for summary in summaries:
+        value, available, reason = metric_reading(summary, name)
+        if available and value is not None:
+            values.append(value)
+        else:
+            key = str(reason or NOT_COMPUTED)
+            reasons[key] = reasons.get(key, 0) + 1
+    return {
+        "n_available": len(values),
+        "n_unavailable": sum(reasons.values()),
+        "mean": round(sum(values) / len(values), 4) if values else None,
+        "unavailable_reasons": reasons,
+    }
+
+
+def artifact_summary(artifact: dict) -> dict:
+    """Return the score-summary mapping for a run artifact.
+
+    Prefers the nested ``report.summary``; stub nested summaries (skipped or
+    cancelled coordinates) carry no metric keys, so top-level metric keys
+    backfill them instead of being shadowed. The nested mapping wins on
+    conflict; flattened artifacts without a nested summary return as-is.
+    """
+    if not isinstance(artifact, dict):
+        return {}
+    report = artifact.get("report")
+    nested = report.get("summary") if isinstance(report, dict) else None
+    if not isinstance(nested, dict):
+        return artifact
+    base = {
+        key: artifact[key]
+        for key in (*UNAVAILABLE_METRICS, "metric_availability", "metric_unavailable_reason")
+        if key in artifact
+    }
+    if not base:
+        return nested
+    return {**base, **nested}
 
 
 def clamp_score(raw: object) -> int:
@@ -219,10 +295,12 @@ def aggregate_runs(run_artifacts: list[dict]) -> dict:
     Args:
         run_artifacts: Value used by this function."""
     completed = [r for r in run_artifacts if r.get("status") == "success"]
+    summaries = [artifact_summary(artifact) for artifact in run_artifacts]
     return {
         "total_runs": len(run_artifacts),
         "successful_runs": len(completed),
         "error_runs": sum(1 for r in run_artifacts if r.get("status") == "error"),
         "skipped_runs": sum(1 for r in run_artifacts if r.get("status") == "skipped"),
         "cancelled_runs": sum(1 for r in run_artifacts if r.get("status") == "cancelled"),
+        "metrics": {name: aggregate_metric(summaries, name) for name in UNAVAILABLE_METRICS},
     }

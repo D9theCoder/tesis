@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -60,6 +61,16 @@ class ScoreSummary:
                 f"successful_evasions ({self.successful_evasions}) cannot exceed "
                 f"evasion_attempts ({self.evasion_attempts})"
             )
+        # ponytail: fail closed — any non-None tracked metric needs explicit
+        # availability=True; unavailable ones must stay null. Never persist
+        # unknown as 0.0. (Legacy dict artifacts never construct this type.)
+        for name in ("consistency_score", "token_cost", "token_cost_per_success"):
+            value = getattr(self, name)
+            flag = self.metric_availability.get(name) if isinstance(self.metric_availability, dict) else None
+            if value is not None and flag is not True:
+                raise ValueError(f"{name} carries {value!r} without explicit availability=True; use None or mark available")
+            if flag is True and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)):
+                raise ValueError(f"{name} is marked available but carries {value!r}; use a finite number")
 
 
 @dataclass(frozen=True, slots=True)
