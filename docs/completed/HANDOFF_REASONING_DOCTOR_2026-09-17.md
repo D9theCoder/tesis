@@ -31,8 +31,8 @@ below). All changes are uncommitted.
   - legacy effort selects the 8192-token reasoning budget;
   - no silent effort downgrade;
   - exactly one effort field on the wire, with temperature removed.
-- **Documentation reconciled against code**: `README.md`, `docs/summary_en.md`,
-  `docs/summary_id.md`, `guide.md`.
+- **Documentation reconciled against code**: `README.md`,
+  `docs/reference/summary_en.md`, `docs/reference/summary_id.md`, `guide.md`.
 - Also on disk from this change set: `core/knowledge_graph.py` (actionable
   `AKGValidationError`), `tests/test_diagnostics.py`,
   `tests/test_reasoning_config.py`, `tests/test_tui.py`.
@@ -115,8 +115,8 @@ MM tests/test_tui.py
   block skipping, legacy-effort precedence and non-duplication, 8192-token legacy
   budget, no silent downgrade, single effort field on the wire without
   temperature.
-- **Documentation** reconciled against code in `README.md`, `docs/summary_en.md`,
-  `docs/summary_id.md`, `guide.md`.
+- **Documentation** reconciled against code in `README.md`,
+  `docs/reference/summary_en.md`, `docs/reference/summary_id.md`, `guide.md`.
 - **Hygiene**: `git diff --check` and `git diff --cached --check` both exit 0.
   `tesis/doctor.py` and `tests/test_doctor.py` remain untracked.
 - **DVWA reachable** at `http://172.19.48.1/dvwa`.

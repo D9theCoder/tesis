@@ -2,13 +2,13 @@
 
 ## Manifest
 - **module_name:** `fix-sqli-medium-evidence`
-- **output_filename:** `docs/plan-sqli-medium.md`
+- **output_filename:** `docs/reference/plan-sqli-medium.md`
 - **repo_root:** `/home/kevin/coding/tesis`
 - **language:** `python`
 - **test_command:** `uv sync && source .venv/bin/activate && pytest -q tests/test_sqli_union_agent.py tests/test_sqli_error_agent.py tests/test_sqli_boolean_blind_agent.py tests/test_sqli_time_blind_agent.py tests/test_payload_library.py tests/test_verifier.py tests/test_sqli_medium_verification.py`
 - **ruleset_files:** [`AGENTS.md`, `core/knowledge_graph.py`, `core/state.py`, `core/graph_builder.py`]
 - **files_to_modify:** [`foundation/payload_library.py`, `agents/sqli/sqli_union_agent.py`, `agents/sqli/sqli_error_agent.py`, `agents/sqli/sqli_boolean_blind_agent.py`, `agents/sqli/sqli_time_blind_agent.py`, `foundation/verifier.py`, `core/knowledge_graph.py` (payload profiles only, no topology)]
-- **files_to_create:** [`tests/test_sqli_medium_verification.py`, `docs/plan-sqli-medium.md`]
+- **files_to_create:** [`tests/test_sqli_medium_verification.py`, `docs/reference/plan-sqli-medium.md`]
 - **branch:** `fix/sqli-medium-verification`
 - **commit_prefix:** `fix(sqli): make medium verifiable without weakening high`
 
@@ -34,7 +34,7 @@ Dry-run gate `python -m tesis run --dry-run --config config.yaml` must pass befo
 ## Design
 
 ### Principles (from `AGENTS.md` priority)
-1. Runtime topology `core/graph_builder.py` > `core/state.py` > `core/knowledge_graph.py` > `foundation/`/`agents/` > `docs/summary_en.md`. No topology edit, no new surface/method, no LLM-created agent.
+1. Runtime topology `core/graph_builder.py` > `core/state.py` > `core/knowledge_graph.py` > `foundation/`/`agents/` > `docs/reference/summary_en.md`. No topology edit, no new surface/method, no LLM-created agent.
 2. AKG stays static/predefined/prevalidated/payload-aware (`AttackKnowledgeGraph`). Only `payload_profile.expected_success_signals / seed_payload_refs / budget` may be enriched; `METHOD_PRECONDITIONS`, edges, chain semantics unchanged.
 3. Payload pipeline `static seed → optional LLM → validation → ranking → agent → verifier → scoring` unchanged. Provenance, deduplication, containment, `invalid_json ≤5%`, per-dimension scores `Smethod/Spayload/Sexploit/Schain/Soutput/Srun` preserved.
 4. Fix is *evidence-backed* and *level-scoped*: medium-only seed/ verifier relaxations; high retains `2.5s` and strict body checks.
@@ -99,7 +99,7 @@ Legend: `B` loads `PayloadLibrary.load_seed_candidates(method, medium)` includin
 
 ## Files to Create
 * **`tests/test_sqli_medium_verification.py`** — mocked `DVWASession` for medium (see Tests).
-* **`docs/plan-sqli-medium.md`** — this plan (rendered artifact for audit trail).
+* **`docs/reference/plan-sqli-medium.md`** — this plan (rendered artifact for audit trail).
 
 ## Public API & Contracts (unchanged)
 * `AttackKnowledgeGraph.get_viable_methods(surface, observations)` — unchanged behavior; `sqli/medium` stays 4 viable.
@@ -146,7 +146,7 @@ The distinct medium probe forms are level-scoped static seeds in `PayloadLibrary
 * Medium branch decisions are logged via existing `telemetry_events` payloads; add `security_level` to `score_event` comment if not present for post-hoc grouping.
 
 ## Rollback Plan
-* `git revert` single commit `fix(sqli): make medium verifiable without weakening high` restores `_PAYLOAD_DB`, `_EXPLOIT_SIGNALS`, `TIME_THRESHOLD` constants, and `core/knowledge_graph.py` seed lists; `tests/test_sqli_medium_verification.py` deleted. No migration to reverse, no artifact rewrite needed. Quarantine of `sqli/high` + `bf/high` remains documented in `docs/plan-sqli-medium.md`.
+* `git revert` single commit `fix(sqli): make medium verifiable without weakening high` restores `_PAYLOAD_DB`, `_EXPLOIT_SIGNALS`, `TIME_THRESHOLD` constants, and `core/knowledge_graph.py` seed lists; `tests/test_sqli_medium_verification.py` deleted. No migration to reverse, no artifact rewrite needed. Quarantine of `sqli/high` + `bf/high` remains documented in `docs/reference/plan-sqli-medium.md`.
 
 ## Acceptance Criteria
 * `pytest -q` green including new `test_sqli_medium_verification.py`.

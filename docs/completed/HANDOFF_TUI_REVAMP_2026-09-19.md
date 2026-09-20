@@ -1,10 +1,11 @@
 # Handoff: terminal-native TUI revamp (2026-09-19)
 
-Status: design and repository review complete; implementation not started. This
-handoff translates the visual/interaction research into an implementation plan
-for the TESIS Textual UI. It is intentionally separate from
-`HANDOFF_AI_HARNESS_ARCHITECTURE_TUI_2026-09-19.md`: this document owns the
-presentation and operator workflow, while that document owns durable execution,
+Status: implementation complete on the current working tree. The original plan
+remains below as the design record. The redesigned shell is still opt-in while
+the legacy TUI remains the default; compatibility remediation is tracked in
+`docs/upcoming/HANDOFF_BREAKING_CHANGE_REGRESSION_2026-09-20.md`. This document
+owns presentation and operator workflow, while
+`HANDOFF_AI_HARNESS_ARCHITECTURE_TUI_2026-09-19.md` owns durable execution,
 model-call, prompt, state, and evaluation architecture.
 
 ## Objective

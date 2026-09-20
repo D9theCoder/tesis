@@ -6,7 +6,7 @@ green (`79 passed`), focused doctor/CLI/TUI/reasoning/diagnostics suite green
 (`118 passed`), and offline doctor green (`11/11`, exit 0). The five commits
 listed in Housekeeping predate this continuation; the continuation changes are
 uncommitted and nothing was pushed. Detailed earlier verified/not-verified record:
-[`docs/HANDOFF_REASONING_DOCTOR_2026-09-17.md`](HANDOFF_REASONING_DOCTOR_2026-09-17.md).
+[`docs/completed/HANDOFF_REASONING_DOCTOR_2026-09-17.md`](HANDOFF_REASONING_DOCTOR_2026-09-17.md).
 
 ## Continuation update (2026-09-19)
 
@@ -64,7 +64,7 @@ uncommitted and nothing was pushed. Detailed earlier verified/not-verified recor
   `reasoning` / `model_kwargs` / `extra_body` cannot override or duplicate an explicit effort; legacy effort selects the
   8192-token reasoning budget; no silent effort downgrade; chained-cause status/request-id extraction; full URL
   query+fragment redaction; Responses `incomplete` now raises; non-text content blocks skipped.
-- **Docs reconciled against code**: `README.md`, `docs/summary_en.md`, `docs/summary_id.md`, `guide.md`.
+- **Docs reconciled against code**: `README.md`, `docs/reference/summary_en.md`, `docs/reference/summary_id.md`, `guide.md`.
 - **Independent review + repair round**: 6 review defects fixed (URL userinfo leak, malformed-config exit contract,
   missing/directory config path naming, coverage conditions axis, env-provided endpoint, 20-column slider selection);
   +10 regression tests (doctor 18→27, TUI 16→17).
@@ -299,7 +299,7 @@ Then audit the newest `results/runs/` matrix directory against the AGENTS.md art
 
 ## Historical drift audit against the frozen record (2026-09-17)
 
-`docs/HANDOFF_REASONING_DOCTOR_2026-09-17.md` stays frozen as the evidence record; the corrections live here.
+`docs/completed/HANDOFF_REASONING_DOCTOR_2026-09-17.md` stays frozen as the evidence record; the corrections live here.
 
 **Matching — no drift at that time.** The recorded `git status --porcelain` block was identical to that session's (plus
 this then-new file). `pytest -q` => `1374 passed in 51.36 s` (recorded 51.63 s). Offline doctor: exit 0, one JSON object, 0 bytes
@@ -361,4 +361,4 @@ git status --porcelain
   `tests/test_doctor.py` are tracked by the earlier baseline commits.
 - `config.yaml` has only a documentation-comment change in this continuation;
   its provider credentials/settings were not changed.
-- Do not modify `docs/HANDOFF_REASONING_DOCTOR_2026-09-17.md`; it is the evidence record for this change set.
+- Do not modify `docs/completed/HANDOFF_REASONING_DOCTOR_2026-09-17.md`; it is the evidence record for this change set.

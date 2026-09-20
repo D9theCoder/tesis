@@ -135,7 +135,7 @@ Think of it as: **discover → decide → probe → exploit → chain → score 
 
 ## 1.1. Agent structure (3 surfaces, 9 method agents)
 
-The codebase targets **3 DVWA surfaces with deep method-level evaluation** (see `docs/summary_en.md`):
+The codebase targets **3 DVWA surfaces with deep method-level evaluation** (see `docs/reference/summary_en.md`):
 
 | Surface | Directory | Method Agents |
 |---|---|---|
@@ -330,7 +330,7 @@ That state becomes the ground truth for all subsequent routing decisions.
 
 ## 7.1. The Scoring (How 0–4 is Decided)
 
-DVWA does not return a score. Agents apply the 0–4 rubric documented in `docs/summary_en.md`:
+DVWA does not return a score. Agents apply the 0–4 rubric documented in `docs/reference/summary_en.md`:
 
 | Score | Label | When | Example |
 |---|---|---|---|

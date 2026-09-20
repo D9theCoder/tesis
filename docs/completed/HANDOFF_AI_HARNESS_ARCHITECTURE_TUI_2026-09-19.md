@@ -1,9 +1,10 @@
 # Handoff: AI harness architecture and TUI recommendations (2026-09-19)
 
-Status: research and repository review complete; recommendations only. No item
-in this document should be treated as implemented or verified unless the current
-source and tests independently prove it. This handoff deliberately concerns the
-core AI harness, model-call contract, prompts, LangGraph lifecycle, evaluation,
+Status: implementation complete on the current working tree. The original
+recommendations remain below as the design record. Compatibility remediation
+identified after implementation is tracked in
+`docs/upcoming/HANDOFF_BREAKING_CHANGE_REGRESSION_2026-09-20.md`.
+This handoff concerns the core AI harness, model-call contract, prompts, LangGraph lifecycle, evaluation,
 and operator experience. It does not expand the DVWA attack scope or replace the
 canonical workflow in `AGENTS.md`.
 
@@ -416,4 +417,4 @@ semantics change.
 - No verifier node added to LangGraph.
 - No prompt-based policy bypass or external-target adaptation.
 - No automatic live Doctor/preflight gate before every experiment.
-- No claim that these recommendations are already implemented.
+- The original recommendations remain an auditable design record; implementation status is stated at the top.

@@ -29,7 +29,7 @@ sample LLM-query runner and does not load `config.yaml`.
 
 This repository implements an LLM-assisted autonomous penetration testing framework for authorized DVWA sandbox testing.
 
-This file is intentionally concise. Detailed research design, experiment matrix, scoring rubrics, artifact schema, AKG semantics, and thesis alignment are documented in `summary_en.md`. If a topic is not specified here, follow `summary_en.md`.
+This file is intentionally concise. Detailed research design, experiment matrix, scoring rubrics, artifact schema, AKG semantics, and thesis alignment are documented in `docs/reference/summary_en.md`. If a topic is not specified here, follow `docs/reference/summary_en.md`.
 
 ## Source of Truth
 
@@ -39,8 +39,22 @@ Use the following priority:
 2. State schema: `core/state.py`
 3. Attack Knowledge Graph: `core/knowledge_graph.py`
 4. Runtime behavior: `foundation/`, `agents/`, `llm/`, `evaluation/`
-5. Research design and methodology: `summary_en.md`
+5. Research design and methodology: `docs/reference/summary_en.md`
 6. User-facing thesis draft: latest thesis document
+
+## Documentation Lifecycle
+
+Place new Markdown documentation under exactly one lifecycle folder:
+
+* `docs/active/`: handoffs for implementation work currently in progress.
+* `docs/completed/`: handoffs whose implementation and required verification are complete.
+* `docs/upcoming/`: proposed, unstarted, or incomplete handoffs and remediation work.
+* `docs/reference/`: durable architecture, methodology, research, acceptance, and fixed-guideline documents that are not task-status handoffs.
+
+Move a handoff from `upcoming` to `active` when implementation starts, and from
+`active` to `completed` only after its acceptance checks pass. Update links when
+moving a document. Do not place generated TUI captures in these folders;
+`docs/tui_baseline_*` and `docs/tui_shell_*` are ignored.
 
 ## Research Scope
 
@@ -270,7 +284,7 @@ Containment must be enforced at both the payload validation layer and the HTTP c
 
 ## Scoring
 
-Use the thesis scoring model documented in `summary_en.md`.
+Use the thesis scoring model documented in `docs/reference/summary_en.md`.
 
 Required score dimensions:
 
@@ -355,7 +369,7 @@ Before finalizing a change:
 * Runtime flow still matches `core/graph_builder.py`.
 * State updates follow `core/state.py`.
 * AKG changes are reflected in `core/knowledge_graph.py`.
-* `summary_en.md` and `summary_id.md` are updated if methodology or architecture changes.
+* `docs/reference/summary_en.md` and `docs/reference/summary_id.md` are updated if methodology or architecture changes.
 * Payload candidates preserve provenance.
 * Invalid payloads cannot execute.
 * Guardrail and invalid JSON events are logged.

@@ -166,7 +166,7 @@ START → recon → orchestrator → payload_candidate_builder → payload_valid
       → orchestrator | payload_candidate_builder | scorer → END
 ```
 
-Verification remains inside method agents, containment remains enforced by payload validation and the HTTP layer, and the AKG remains static and prevalidated. See [docs/architecture.md](docs/architecture.md), [docs/summary_en.md](docs/summary_en.md), and [guide.md](guide.md).
+Verification remains inside method agents, containment remains enforced by payload validation and the HTTP layer, and the AKG remains static and prevalidated. See [docs/reference/architecture.md](docs/reference/architecture.md), [docs/reference/summary_en.md](docs/reference/summary_en.md), and [guide.md](guide.md).
 
 ## Tests
 
