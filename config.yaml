@@ -205,8 +205,8 @@ models:
   # ---------------------------------------------------------------------------
   openai_compatible:
     provider: openai_compatible
-    model_name: deepseek-v4.1-flash:free
-    reasoning_effort: high
+    model_name: deepseek-v4.1-flash
+    reasoning_effort: max
     base_url: https://tokenharbor.ai/v1/
     # api_key: ${OPENAI_API_KEY}
     temperature: 1

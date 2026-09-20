@@ -26,6 +26,8 @@ from foundation.recon import recon
 from llm.runtime import serialized_dvwa_node
 
 
+GRAPH_BUILD_VERSION = "graph.v1"
+
 RUNTIME_AGENT_NODE_NAMES: tuple[str, ...] = (
     "sqli_union",
     "sqli_error",
@@ -115,12 +117,16 @@ def route_from_chaining_router(state: ExploitationState) -> str:
 # NOTE: llm_provider and surface are accepted for API compatibility but currently
 # do not alter graph topology. Future per-surface or per-provider customization
 # may use these parameters.
-def build_framework(llm_provider: str = "gemini", surface: str = "sqli"):
+def build_framework(llm_provider: str = "gemini", surface: str = "sqli", checkpointer=None):
     """Builds the LangGraph execution graph for the DVWA framework.
 
     Args:
         llm_provider: Provider name accepted for API compatibility.
         surface: Initial surface name accepted for API compatibility.
+        checkpointer: Optional LangGraph checkpointer. Defaults to a
+            process-local `MemorySaver` (tests, dry runs). Pass an
+            experiment-local `SqliteSaver` for durable runs. Topology is
+            unchanged either way.
 
     Returns:
         Compiled graph with recon, orchestration, payload, method-agent, chaining,
@@ -146,4 +152,4 @@ def build_framework(llm_provider: str = "gemini", surface: str = "sqli"):
     graph.add_conditional_edges("chaining_router", route_from_chaining_router)
     graph.add_edge("scorer", END)
     from langgraph.checkpoint.memory import MemorySaver
-    return graph.compile(checkpointer=MemorySaver())
+    return graph.compile(checkpointer=MemorySaver() if checkpointer is None else checkpointer)

@@ -1,16 +1,21 @@
 """Multi-LLM Layer utilities and prompts for framework decisions.
 
 This module prepares provider integrations, guardrail handling, evasion retry
-logic, or prompt text used by the LangGraph Execution Flow."""
+logic, or prompt text used by the LangGraph Execution Flow.
+
+Central provider capability registry: all assumptions about structured output,
+reasoning fields, token parameters, and retry ownership live here. Runtime
+call sites MUST resolve through :func:`provider_capabilities` instead of
+scattering provider-name checks."""
 import copy
 import os
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Any, Mapping
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
-
 SUPPORTED_PROVIDERS = ["gemini", "openai", "claude", "openai_compatible"]
 SAMPLE_QUERY = "What model are you? Reply with your model name only."
 # Provider APIs treat an omitted output limit as unbounded.  That is unsafe for
@@ -39,10 +44,41 @@ def validate_reasoning_effort(value: Any) -> str | None:
     return effort
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderCapabilities:
+    """Central capability record; single owner of per-provider assumptions."""
+
+    name: str
+    structured_output_method: str
+    supports_reasoning: bool
+    token_param: str = "max_tokens"
+    sdk_retries_default: int = 0
+
+
+_PROVIDER_CAPABILITIES: dict[str, ProviderCapabilities] = {
+    "gemini": ProviderCapabilities(name="gemini", structured_output_method="json_schema", supports_reasoning=False),
+    "openai": ProviderCapabilities(name="openai", structured_output_method="json_schema", supports_reasoning=True),
+    "openai_compatible": ProviderCapabilities(name="openai_compatible", structured_output_method="function_calling", supports_reasoning=True),
+    "claude": ProviderCapabilities(name="claude", structured_output_method="json_schema", supports_reasoning=False),
+}
+
+
+def provider_capabilities(provider: str) -> ProviderCapabilities:
+    """Resolve one central capability record; raises on unknown provider."""
+    normalized = str(provider).strip().lower()
+    try:
+        return _PROVIDER_CAPABILITIES[normalized]
+    except KeyError:
+        raise ValueError(f"Unsupported LLM provider: {provider}") from None
+
+
 def supports_reasoning_effort(provider: str) -> bool:
     """Return whether the provider adapter forwards portable reasoning effort."""
-
-    return str(provider).strip().lower() in REASONING_EFFORT_PROVIDERS
+    normalized = str(provider).strip().lower()
+    capabilities = _PROVIDER_CAPABILITIES.get(normalized)
+    if capabilities is not None:
+        return capabilities.supports_reasoning
+    return normalized in REASONING_EFFORT_PROVIDERS
 
 
 def _reasoning_kwargs(provider: str, kwargs: dict[str, Any]) -> None:

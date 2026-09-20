@@ -42,9 +42,15 @@ class ScoreSummary:
     payload_improvement_rate: float = 0.0
     guardrail_activation_rate: float = 0.0
     payload_guardrail_activations: int = 0
-    consistency_score: float = 0.0
-    token_cost: float = 0.0
-    token_cost_per_success: float = 0.0
+    consistency_score: float | None = None
+    token_cost: float | None = None
+    token_cost_per_success: float | None = None
+    # Availability contract: unavailable metrics are null above; these maps
+    # say which metrics were actually computed and why the rest were not.
+    # Dual-read rule: artifacts lacking these maps but carrying a numeric
+    # value are legacy (see evaluation.metrics.metric_reading).
+    metric_availability: dict[str, bool] = field(default_factory=dict)
+    metric_unavailable_reason: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         if self.evasion_attempts < 0 or self.successful_evasions < 0:

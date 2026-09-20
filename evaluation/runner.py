@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from collections import Counter
 from collections.abc import Mapping
 from contextlib import ExitStack
@@ -15,11 +16,24 @@ from traceback import format_exc
 from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
-
-from core.graph_builder import build_framework
+from core.checkpoint_store import (
+    ExperimentCheckpointStore,
+    coordinate_fingerprint,
+    default_graph_store_path,
+    default_store_path,
+    stable_thread_id,
+    validate_checkpoint_identity,
+    validate_resume,
+)
+from langgraph.checkpoint.sqlite import SqliteSaver
+from core.graph_builder import GRAPH_BUILD_VERSION, build_framework
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.scorer import build_score_report
-from core.state import new_default_state
+from core.state import (
+    CHECKPOINT_SCHEMA_VERSION,
+    STATE_SCHEMA_VERSION,
+    new_default_state,
+)
 from evaluation.diagnostics import diagnose_quality
 from evaluation.failure_logger import write_failure_artifact
 from evaluation.manual_scoring_sheet import manual_scoring_rows
@@ -45,6 +59,15 @@ from tesis.runtime_events import (
 
 LLM_TOKEN_BATCH_INTERVAL = 0.05
 LLM_TOKEN_BATCH_CHARS = 256
+
+# Partial graph resume may only continue past pure internal nodes. Anything
+# else (recon, orchestrator, payload_candidate_builder, method agents) may
+# have external target/provider effects and must fail closed.
+SAFE_RESUME_NODES = frozenset({"payload_validator", "chaining_router", "scorer"})
+
+
+class _ResumeFailed(RuntimeError):
+    """Internal fail-closed resume signal; converted to an error artifact."""
 
 
 class _RuntimeCallbackHandler(BaseCallbackHandler):
@@ -395,6 +418,9 @@ def run_single_engagement(
     llm_cache_scope: str | None = None,
     role_configs: dict[str, RoleSettings | dict[str, Any]] | None = None,
     llm_runtime_config: dict[str, Any] | None = None,
+    resume: bool = False,
+    checkpoint_dir: str | None = None,
+    experiment_id: str | None = None,
 ) -> dict:
     """Run one configured DVWA framework engagement and write evaluation artifacts.
 
@@ -432,7 +458,110 @@ def run_single_engagement(
     execution_id = execution_id or new_execution_id()
     cancellation_token = cancellation_token or CancellationToken()
     runtime_events: list[dict[str, Any]] = []
-    del llm_max_concurrency  # Single-run mode is intentionally fixed at one coordinate.
+    # Opt-in durable resume (handoff slice 2). Defaults are unchanged: without
+    # resume/checkpoint flags the run uses a random execution_id thread on the
+    # process-local MemorySaver and never touches SQLite.
+    coordinate = {
+        "target_url": target_url,
+        "provider": llm_provider,
+        "surface": surface,
+        "security_level": security_level,
+        "payload_mode": payload_mode,
+        "experiment_condition": experiment_condition,
+        "target_method": target_method,
+        "repeat_index": repeat_index,
+        "stop_policy": stop_policy,
+        "coverage_target": coverage_target,
+        "candidate_budget": candidate_budget,
+        "max_iterations": max_iterations,
+        "model_name": (model_config or {}).get("model_name") if isinstance(model_config, Mapping) else None,
+        "evasion_enabled": evasion_enabled,
+        "evasion_mode": evasion_mode,
+    }
+    checkpoint_experiment = str(experiment_id or "experiment")
+    checkpoint_thread_id = stable_thread_id(checkpoint_experiment, coordinate)
+    checkpoint_store_path = default_store_path(checkpoint_dir, output_dir) if (checkpoint_dir is not None or experiment_id is not None) else None
+    graph_store_path = default_graph_store_path(checkpoint_dir, output_dir) if checkpoint_store_path is not None else None
+    graph_thread_id = checkpoint_thread_id if checkpoint_store_path is not None else execution_id
+    partial_graph_resume = False
+
+    def _resume_error(reason: str) -> dict:
+        return {
+            "schema_version": "tui.v1",
+            "execution_id": execution_id,
+            "run_id": run_id,
+            "status": "error",
+            "error": reason,
+            "resumed_from_checkpoint": False,
+            "checkpoint_thread_id": checkpoint_thread_id,
+            "state_schema_version": STATE_SCHEMA_VERSION,
+            "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "graph_build_version": GRAPH_BUILD_VERSION,
+        }
+
+    if resume:
+        lookup_path = checkpoint_store_path or default_store_path(None, None)
+        if not lookup_path.exists():
+            return _resume_error(
+                f"no checkpoint metadata at {lookup_path}; re-run without --resume; refusing resume"
+            )
+        store = ExperimentCheckpointStore(lookup_path, experiment_id=checkpoint_experiment)
+        try:
+            stored = store.load(checkpoint_thread_id)
+        finally:
+            store.close()
+        if stored is None:
+            return _resume_error(
+                f"no checkpoint for thread {checkpoint_thread_id!r} at {lookup_path}; "
+                "re-run without --resume; refusing resume"
+            )
+        ok, reason = validate_checkpoint_identity(
+            stored, coordinate=coordinate, experiment_id=checkpoint_experiment
+        )
+        if not ok:
+            return _resume_error(reason)
+        if int(stored.get("completion_receipt", 0) or 0) == 1:
+            ok, reason = validate_resume(stored, coordinate=coordinate)
+            if not ok:
+                return _resume_error(reason)
+            resumed = dict(stored["artifact"])
+            resumed["resumed_from_checkpoint"] = True
+            resumed["resume_thread_id"] = checkpoint_thread_id
+            resumed["resume_request_execution_id"] = execution_id
+            if graph_store_path is not None:
+                resumed["graph_checkpoint_store"] = str(graph_store_path)
+            if output_dir:
+                try:
+                    write_json_report(Path(output_dir) / f"{execution_id}.json", resumed)
+                except Exception as exc:
+                    resumed["artifact_write_warning"] = f"{type(exc).__name__}: {exc}"
+            return resumed
+        partial_graph_resume = True
+        if graph_store_path is None or not graph_store_path.exists():
+            return _resume_error(
+                f"checkpoint for thread {checkpoint_thread_id!r} has no completion receipt "
+                f"and no graph checkpoint at {graph_store_path}; re-run without --resume; "
+                "refusing resume"
+            )
+    elif checkpoint_store_path is not None:
+        # Fail closed before any external action: without a start-of-run
+        # identity row, a later --resume could misattribute this run's graph
+        # checkpoints to a different coordinate. Never warn-and-continue.
+        try:
+            _start_store = ExperimentCheckpointStore(
+                checkpoint_store_path, experiment_id=checkpoint_experiment
+            )
+            try:
+                _start_store.save_started(
+                    thread_id=checkpoint_thread_id, coordinate=coordinate
+                )
+            finally:
+                _start_store.close()
+        except Exception as exc:
+            return _resume_error(
+                f"cannot record checkpoint identity at {checkpoint_store_path} "
+                f"({type(exc).__name__}: {exc}); refusing run"
+            )
     if llm_role_configs is None:
         llm_role_configs = role_configs
     if llm_runtime_config and not llm_role_configs:
@@ -567,10 +696,26 @@ def run_single_engagement(
     init_state: dict[str, Any] | None = None
     final_state: dict[str, Any] | None = None
     provider_failure: dict[str, Any] | None = None
+    saver_conn = None
+    resumed_from_graph_checkpoint = False
     try:
         cancellation_token.check()
         evasion_enabled = bool(evasion_enabled)
-        app = build_framework(llm_provider=llm_provider, surface=surface)
+        saver = None
+        if checkpoint_store_path is not None:
+            graph_store_path.parent.mkdir(parents=True, exist_ok=True)
+            saver_conn = sqlite3.connect(str(graph_store_path), check_same_thread=False)
+            saver = SqliteSaver(saver_conn)
+            try:
+                saver.setup()
+            except Exception:
+                pass
+        if checkpoint_store_path is not None:
+            app = build_framework(llm_provider=llm_provider, surface=surface, checkpointer=saver)
+        else:
+            # Default path keeps the legacy call shape so test doubles patching
+            # build_framework without a checkpointer kwarg keep working.
+            app = build_framework(llm_provider=llm_provider, surface=surface)
         init_state = {
             **new_default_state(),
             "target_url": target_url,
@@ -599,14 +744,41 @@ def run_single_engagement(
         graph_config = {
             "callbacks": [callback_handler],
             "configurable": {
-                "thread_id": execution_id,
+                "thread_id": graph_thread_id,
             }
         }
-        try:
-            stream_iter = app.stream(init_state, stream_mode="values", config=graph_config)
-        except TypeError:
-            # Lightweight test doubles may not accept LangGraph's config kwarg.
-            stream_iter = app.stream(init_state, stream_mode="values")
+        if partial_graph_resume:
+            snapshot = app.get_state(graph_config)
+            if snapshot is None or getattr(snapshot, "values", None) is None:
+                raise _ResumeFailed(
+                    f"no graph checkpoint for thread {graph_thread_id!r} at {graph_store_path}; "
+                    "re-run without --resume; refusing resume"
+                )
+            pending = set(getattr(snapshot, "next", None) or ())
+            unsafe = sorted(n for n in pending if n not in SAFE_RESUME_NODES)
+            if unsafe:
+                raise _ResumeFailed(
+                    f"graph checkpoint for thread {graph_thread_id!r} is paused before "
+                    f"{', '.join(unsafe)}; resuming could duplicate external target/provider "
+                    "effects (recon, orchestrator, candidate builder, method agents); "
+                    "re-run without --resume; refusing resume"
+                )
+            if not pending:
+                final_state = dict(snapshot.values)
+                resumed_from_graph_checkpoint = True
+                stream_iter = iter(())
+            else:
+                resumed_from_graph_checkpoint = True
+                try:
+                    stream_iter = app.stream(None, stream_mode="values", config=graph_config)
+                except TypeError:
+                    stream_iter = app.stream(None, stream_mode="values")
+        else:
+            try:
+                stream_iter = app.stream(init_state, stream_mode="values", config=graph_config)
+            except TypeError:
+                # Lightweight test doubles may not accept LangGraph's config kwarg.
+                stream_iter = app.stream(init_state, stream_mode="values")
         try:
             for state_snapshot in stream_iter:
                 final_state = state_snapshot
@@ -639,12 +811,17 @@ def run_single_engagement(
         finally:
             if cancellation_token.is_cancelled and hasattr(stream_iter, "close"):
                 stream_iter.close()
-        if final_state is None:
+        if final_state is None and not partial_graph_resume:
             cancellation_token.check()
             try:
                 final_state = app.invoke(init_state, config=graph_config)
             except TypeError:
                 final_state = app.invoke(init_state)
+        if final_state is None:
+            raise _ResumeFailed(
+                f"graph resume for thread {graph_thread_id!r} produced no state; "
+                "re-run without --resume; refusing resume"
+            )
         telemetry.extend_from_state_events(list(final_state.get("telemetry_events", [])))
         llm_activity = _llm_activity(runtime_events)
         hidden_failure = _orchestrator_failure(runtime_events)
@@ -871,6 +1048,13 @@ def run_single_engagement(
         status = "cancelled"
         error = None
         emit("run.cancelled", message="Cancellation requested; latest safe state retained")
+    except _ResumeFailed as exc:
+        final_state = new_default_state()
+        final_state.update({"task_result": "INCOMPLETE", "incomplete_reason": "RESUME_REFUSED"})
+        report = build_score_report(final_state).to_dict()
+        status = "error"
+        error = f"{type(exc).__name__}: {exc}"
+        emit("run.failed", node="runner", message=str(exc), data={"error_type": "_ResumeFailed"})
     except Exception as exc:
         final_state = new_default_state()
         final_state.update({
@@ -1071,12 +1255,15 @@ def run_single_engagement(
         "payload_validity_rate": summary.get("payload_validity_rate", 0.0),
         "payload_execution_success_rate": summary.get("payload_execution_success_rate", 0.0),
         "payload_improvement_rate": summary.get("payload_improvement_rate", 0.0),
-        "consistency_score": summary.get("consistency_score", 0.0),
+        "consistency_score": summary.get("consistency_score"),
+        "metric_availability": summary.get("metric_availability", {}),
+        "metric_unavailable_reason": summary.get("metric_unavailable_reason", {}),
         "guardrail_activations": list(final_state.get("guardrail_activations", [])),
         "guardrail_activation_count": len(final_state.get("guardrail_activations", [])),
         "payload_guardrail_activations": len(final_state.get("payload_guardrail_activations", [])),
         "attempts_to_success": int(round(summary.get("mean_attempts_to_success", 0.0) or 0.0)),
-        "token_cost": summary.get("token_cost", 0.0),
+        "token_cost": summary.get("token_cost"),
+        "token_cost_per_success": summary.get("token_cost_per_success"),
         "config": {
             "target_url": target_url,
             "provider": llm_provider,
@@ -1169,13 +1356,46 @@ def run_single_engagement(
         "composite_score": dict(final_state.get("composite_scores", {})).get(selected_method, 0),
         "error": error,
     }
+    artifact["state_schema_version"] = STATE_SCHEMA_VERSION
+    artifact["checkpoint_schema_version"] = CHECKPOINT_SCHEMA_VERSION
+    artifact["graph_build_version"] = GRAPH_BUILD_VERSION
     artifact["config_fingerprint"] = config_fingerprint(artifact["config"])
+    artifact["checkpoint_thread_id"] = checkpoint_thread_id
+    artifact["checkpoint_store"] = str(checkpoint_store_path) if checkpoint_store_path else None
+    artifact["graph_checkpoint_store"] = str(graph_store_path) if graph_store_path else None
+    artifact["resumed_from_checkpoint"] = bool(partial_graph_resume and status != "error")
+    artifact["resumed"] = bool(partial_graph_resume and resumed_from_graph_checkpoint and status != "error")
     artifact["manual_scoring_evidence"] = manual_scoring_rows(artifact)
     if output_dir:
         try:
             write_json_report(Path(output_dir) / f"{execution_id}.json", artifact)
         except Exception as exc:
             artifact["artifact_write_warning"] = f"{type(exc).__name__}: {exc}"
+    # Completed successful fast-path runs are the only safe checkpoint receipts.
+    # Partial/error/cancelled runs are never stored, so resume cannot replay
+    # externally acting nodes. Opt-in: only when checkpoint flags are set.
+    if checkpoint_store_path is not None and status == "success" and error is None and final_state:
+        try:
+            store = ExperimentCheckpointStore(checkpoint_store_path, experiment_id=checkpoint_experiment)
+            try:
+                store.save_completed(
+                    thread_id=checkpoint_thread_id,
+                    final_state=final_state,
+                    artifact=artifact,
+                    coordinate=coordinate,
+                )
+            finally:
+                store.close()
+        except Exception as exc:
+            artifact["checkpoint_write_warning"] = f"{type(exc).__name__}: {exc}"
+    try:
+        runtime_stack.close()
+    finally:
+        if saver_conn is not None:
+            try:
+                saver_conn.close()
+            except Exception:
+                pass
     if owns_runtime:
         runtime_service.close()
     return artifact

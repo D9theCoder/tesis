@@ -5,6 +5,29 @@ from __future__ import annotations
 from collections import Counter
 
 from core.state import ALL_METHOD_AGENTS, SURFACES, METHODS_BY_SURFACE
+NOT_COMPUTED = "not_computed"
+UNAVAILABLE_METRICS = ("consistency_score", "token_cost", "token_cost_per_success")
+
+
+def metric_reading(summary: dict, name: str) -> tuple[float | None, bool, str | None]:
+    """Dual-read one availability-tracked metric from a score summary dict.
+
+    Returns (value, available, reason). New artifacts carry explicit
+    ``metric_availability``/``metric_unavailable_reason`` maps alongside null
+    values; legacy artifacts carry a bare numeric (0.0) with no maps and are
+    treated as unavailable with reason ``"legacy_numeric"``. Explicit
+    ``True`` availability returns the stored value verbatim.
+    """
+    availability = summary.get("metric_availability")
+    reasons = summary.get("metric_unavailable_reason")
+    if isinstance(availability, dict) and name in availability:
+        available = bool(availability[name])
+        if available:
+            return summary.get(name), True, None
+        reason = reasons.get(name) if isinstance(reasons, dict) else None
+        return None, False, str(reason or NOT_COMPUTED)
+    # ponytail: legacy numeric artifacts read as unavailable, not zero.
+    return None, False, "legacy_numeric"
 
 
 def clamp_score(raw: object) -> int:

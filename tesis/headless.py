@@ -176,6 +176,11 @@ def _cancelled_result(
             "task_result": None,
             "incomplete_reason": "CANCELLED",
         },
+        "consistency_score": None,
+        "token_cost": None,
+        "token_cost_per_success": None,
+        "metric_availability": {"consistency_score": False, "token_cost": False, "token_cost_per_success": False},
+        "metric_unavailable_reason": {"consistency_score": "not_computed", "token_cost": "not_computed", "token_cost_per_success": "not_computed"},
         "timing": {},
         "report": {},
         "llm_performance": [],
@@ -251,6 +256,9 @@ def run_headless(
     cancellation_token = CancellationToken()
     execution_id = new_execution_id()
     common = _common_kwargs(config, output_dir=layout.root)
+    for _key in ("resume", "checkpoint_dir", "experiment_id"):
+        if cli_args.get(_key) is not None:
+            common[_key] = cli_args[_key]
     common["cancellation_token"] = cancellation_token
     common["execution_id"] = execution_id
     # The matrix runner owns one runtime across all coordinates.  A single run

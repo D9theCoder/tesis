@@ -252,6 +252,131 @@ def new_default_state() -> dict[str, Any]:
     return deepcopy(_default_state_template())
 
 
+STATE_SCHEMA_VERSION = "state.v1"
+CHECKPOINT_SCHEMA_VERSION = "checkpoint.v1"
+
+# Persistent vs artifact-only inventory (handoff phase 1, design-only).
+# Runtime behavior is unchanged: nodes still read/write the full
+# ExploitationState. Future durable checkpoints MUST persist only
+# PERSISTENT_STATE_FIELDS and reload audit payloads from artifacts.
+# ARTIFACT_ONLY fields carry rendered prompts, full model responses, or
+# verbose per-node diagnostics; artifacts retain the redacted copies.
+ARTIFACT_ONLY_STATE_FIELDS = frozenset({
+    "messages",
+    "generation_prompts",
+    "telemetry_events",
+    "response_evidence",
+    "timing_evidence",
+    # Scorer-derived reports stored on the state snapshot, not inputs.
+    "summary",
+    "surface_scores",
+})
+
+PERSISTENT_STATE_FIELDS = frozenset({
+    "target_url",
+    "security_level",
+    "llm_provider",
+    "current_surface",
+    "payload_mode",
+    "experiment_condition",
+    "target_method",
+    "endpoints",
+    "input_vectors",
+    "observations",
+    "confirmed_vulns",
+    "achieved_outcomes",
+    "found_credentials",
+    "tried_payloads",
+    "payload_candidates",
+    "generated_payloads",
+    "payload_validation_results",
+    "payload_scores",
+    "payload_provenance",
+    "payload_guardrail_activations",
+    "candidate_budget",
+    "scores",
+    "method_scores",
+    "exploitation_scores",
+    "chain_scores",
+    "output_scores",
+    "composite_scores",
+    "current_chain",
+    "chain_history",
+    "guardrail_activations",
+    "invalid_json_events",
+    "fallback_events",
+    "containment_events",
+    "verifier_decision",
+    "blocked_patterns",
+    "successful_bypasses",
+    "consecutive_clean_responses",
+    # Runner-carried engagement setup (set in init_state, not in the default
+    # template); persistent so a future resume keeps the same stop rule.
+    "stop_policy",
+    "coverage_target",
+    "evasion_enabled",
+    "evasion_max_retries",
+    "evasion_mode",
+    "evasion_strategy",
+    "evasion_cooldown_threshold",
+    "evasion_attempts",
+    "successful_evasions",
+    "model_config",
+    "attempted_agents",
+    "blocked_agents",
+    "failure_agents",
+    "akg_path",
+    "fallback_depth",
+    "next_agent",
+    "selected_method",
+    "viable_methods",
+    "iteration_count",
+    "max_iterations",
+    "task_result",
+    "incomplete_reason",
+})
+
+
+def checkpoint_safe_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Return a persistent-only copy honoring the explicit allowlist."""
+    return {
+        key: value
+        for key, value in dict(state).items()
+        if key in PERSISTENT_STATE_FIELDS
+    }
+
+
+def validate_checkpoint_compatibility(
+    stored: dict[str, Any],
+    *,
+    expected_state_version: str = STATE_SCHEMA_VERSION,
+    expected_checkpoint_version: str = CHECKPOINT_SCHEMA_VERSION,
+    expected_graph_version: str | None = None,
+    expected_config_fingerprint: str | None = None,
+) -> tuple[bool, str]:
+    """Fail closed when stored checkpoint identity is missing or mismatched."""
+    state_version = stored.get("state_schema_version")
+    if state_version != expected_state_version:
+        return False, (
+            f"unsupported state_schema_version {state_version!r}; "
+            f"expected {expected_state_version!r}; refusing resume"
+        )
+    checkpoint_version = stored.get("checkpoint_schema_version")
+    if checkpoint_version != expected_checkpoint_version:
+        return False, (
+            f"unsupported checkpoint_schema_version {checkpoint_version!r}; "
+            f"expected {expected_checkpoint_version!r}; refusing resume"
+        )
+    if expected_graph_version is not None and stored.get("graph_build_version") != expected_graph_version:
+        return False, (
+            f"graph_build_version {stored.get('graph_build_version')!r} "
+            f"does not match {expected_graph_version!r}; refusing resume"
+        )
+    if expected_config_fingerprint is not None and stored.get("config_fingerprint") != expected_config_fingerprint:
+        return False, "config fingerprint changed since checkpoint; refusing resume"
+    return True, "compatible"
+
+
 # Surfaces
 SURFACES: list[str] = ["sqli", "access_control", "brute_force"]
 

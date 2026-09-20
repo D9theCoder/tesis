@@ -132,6 +132,9 @@ def _run_single_with_payload_kwargs(kwargs: dict[str, Any]) -> dict:
             "llm_role_configs",
             "model_profiles",
             "llm_cache_enabled",
+            "resume",
+            "checkpoint_dir",
+            "experiment_id",
         }
         rejected = {key for key in optional_compat if key in str(exc)}
         if not rejected:
@@ -418,6 +421,9 @@ def run_provider_matrix(
     llm_cache_scope: str | None = None,
     role_configs: dict[str, RoleSettings | dict[str, Any]] | None = None,
     llm_runtime_config: dict[str, Any] | None = None,
+    resume: bool = False,
+    checkpoint_dir: str | None = None,
+    experiment_id: str | None = None,
 ) -> list[dict] | tuple[list[dict], dict[str, Any]]:
     """Run a deterministic matrix over all requested DVWA experiment axes.
 
@@ -719,12 +725,15 @@ def run_provider_matrix(
             "payload_validity_rate": 0.0,
             "payload_execution_success_rate": 0.0,
             "payload_improvement_rate": 0.0,
-            "consistency_score": 0.0,
+            "consistency_score": None,
+            "metric_availability": {"consistency_score": False, "token_cost": False, "token_cost_per_success": False},
+            "metric_unavailable_reason": {"consistency_score": "not_computed", "token_cost": "not_computed", "token_cost_per_success": "not_computed"},
             **audit_lists,
             "payload_guardrail_activations": 0,
             "guardrail_activation_count": 0,
             "attempts_to_success": 0,
-            "token_cost": 0.0,
+            "token_cost": None,
+            "token_cost_per_success": None,
             "config": artifact_config,
             "timing": {},
             "final_state": final_state,
@@ -794,6 +803,9 @@ def run_provider_matrix(
             "llm_role_configs": llm_role_configs or {},
             "model_profiles": model_configs or {},
             "llm_cache_enabled": llm_cache_enabled,
+            "resume": resume,
+            "checkpoint_dir": checkpoint_dir or coordinate_output_dir,
+            "experiment_id": experiment_id or matrix_execution_id,
         }
         return _run_single_with_payload_kwargs(run_kwargs)
 

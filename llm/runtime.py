@@ -20,7 +20,7 @@ from llm.diagnostics import (
     redact_diagnostic_text,
     sanitize_endpoint,
 )
-from llm.provider import get_llm
+from llm.provider import get_llm, provider_capabilities
 
 
 ORCHESTRATOR_SCHEMA_VERSION = "orchestrator.v2"
@@ -167,6 +167,207 @@ class RoleSettings:
     max_tokens: int | None = None
     reasoning_effort: str | None = None
     structured_output: str = "auto"
+    total_deadline_s: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCallSpec:
+    """Immutable resolved plan for one logical model call (adapter, no dispatch change).
+
+    ``configured_max_retries`` is the raw profile value; ``effective_max_retries``
+    is forced to 0 while application retries stay disabled. ``retry_owner`` is
+    always ``"none"`` (SDK retries also default to 0). ``total_deadline_s`` is
+    recorded but NOT enforced until telemetry proves attempt accounting.
+    """
+
+    role: str
+    provider: str
+    model: str
+    model_profile: str
+    system_message: str
+    user_message: str
+    schema: dict[str, Any]
+    schema_version: str
+    max_tokens: int
+    temperature: Any
+    reasoning_effort: Any
+    structured_output: str
+    structured_output_method: str
+    endpoint: str | None
+    timeout_s: float | int | None
+    configured_max_retries: int
+    effective_max_retries: int
+    retry_owner: str
+    total_deadline_s: float | None
+    coordinate_id: str
+    call_id: str
+    prompt_hash: str
+    cache_key: str
+    model_fingerprint: str
+
+    def serialized_request(self) -> dict[str, Any]:
+        """Return the redacted, JSON-safe request view shared with result parity."""
+        return {
+            "role": self.role,
+            "provider": self.provider,
+            "model": self.model,
+            "model_profile": self.model_profile,
+            "coordinate_id": self.coordinate_id,
+            "call_id": self.call_id,
+            "schema_version": self.schema_version,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "reasoning_effort": self.reasoning_effort,
+            "structured_output": self.structured_output,
+            "structured_output_method": self.structured_output_method,
+            "endpoint": self.endpoint,
+            "timeout_s": self.timeout_s,
+            "configured_max_retries": self.configured_max_retries,
+            "effective_max_retries": self.effective_max_retries,
+            "retry_owner": self.retry_owner,
+            "total_deadline_s": self.total_deadline_s,
+            "prompt_hash": self.prompt_hash,
+            "cache_key": self.cache_key,
+            "model_fingerprint": self.model_fingerprint,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptMetadata:
+    """One recorded application-level attempt (currently exactly one per call)."""
+
+    attempt_id: str
+    status: str
+    elapsed_ms: int
+    provider_request_id: str | None = None
+    provider_usage: dict[str, Any] | None = None
+    failure_class: str | None = None
+    may_have_been_billed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCallResult:
+    """Immutable parity view: serialized request + outcome + attempt metadata."""
+
+    spec: ModelCallSpec
+    ok: bool
+    text: str
+    parsed: dict[str, Any] | None
+    performance: dict[str, Any]
+    attempts: tuple[AttemptMetadata, ...]
+
+    def serialized(self) -> dict[str, Any]:
+        return {
+            "request": self.spec.serialized_request(),
+            "ok": self.ok,
+            "text": self.text,
+            "parsed": dict(self.parsed) if self.parsed is not None else None,
+            "performance": dict(self.performance),
+            "attempts": [dict(
+                attempt_id=a.attempt_id, status=a.status, elapsed_ms=a.elapsed_ms,
+                provider_request_id=a.provider_request_id,
+                provider_usage=dict(a.provider_usage or {}),
+                failure_class=a.failure_class,
+                may_have_been_billed=a.may_have_been_billed,
+            ) for a in self.attempts],
+        }
+
+def build_model_call_spec(
+    *,
+    context: "CoordinateCallContext",
+    role: str,
+    system_message: str,
+    user_message: str,
+    schema: Mapping[str, Any],
+    schema_version: str,
+    max_tokens: int,
+    call_id: str,
+) -> "ModelCallSpec":
+    """Resolve one immutable call plan with the same inputs as ``invoke``."""
+    provider, config, settings = context.role_config(role, max_tokens=max_tokens)
+    fingerprint = model_fingerprint({"provider": provider, **dict(config)})
+    try:
+        structured_method = provider_capabilities(provider).structured_output_method
+    except ValueError:
+        structured_method = "function_calling" if provider == "openai_compatible" else "json_schema"
+    configured_retries = _numeric_setting(config.get("max_retries"), default=0) or 0
+    prompt_hash = "sha256:" + hashlib.sha256(
+        _canonical({"system": system_message, "user": user_message}).encode("utf-8")
+    ).hexdigest()
+    cache_key = "sha256:" + hashlib.sha256(_canonical({
+        "role": role,
+        "model": fingerprint,
+        "schema_version": schema_version,
+        "system": system_message,
+        "user": user_message,
+        "max_tokens": max_tokens,
+        "temperature": config.get("temperature", 0),
+        "structured_output": settings.structured_output,
+        "reasoning_effort": config.get("reasoning_effort"),
+    }).encode("utf-8")).hexdigest()
+    return ModelCallSpec(
+        role=role,
+        provider=provider,
+        model=str(config.get("model_name") or config.get("model") or "unknown"),
+        model_profile=str(settings.model_profile or context.default_provider or provider),
+        system_message=system_message,
+        user_message=user_message,
+        schema=dict(schema),
+        schema_version=schema_version,
+        max_tokens=int(max_tokens),
+        temperature=config.get("temperature", 0),
+        reasoning_effort=config.get("reasoning_effort"),
+        structured_output=settings.structured_output,
+        structured_output_method=structured_method,
+        endpoint=sanitize_endpoint(config.get("base_url") or config.get("endpoint")),
+        timeout_s=_numeric_setting(config.get("timeout", config.get("request_timeout"))),
+        configured_max_retries=int(configured_retries),
+        effective_max_retries=0,
+        retry_owner="none",
+        total_deadline_s=settings.total_deadline_s,
+        coordinate_id=context.coordinate_id,
+        call_id=call_id,
+        prompt_hash=prompt_hash,
+        cache_key=cache_key,
+        model_fingerprint=fingerprint,
+    )
+
+
+def build_model_call_result(
+    *,
+    spec: "ModelCallSpec",
+    ok: bool,
+    text: str,
+    parsed: dict[str, Any] | None,
+    performance: Mapping[str, Any],
+    attempts: tuple["AttemptMetadata", ...] | None = None,
+) -> "ModelCallResult":
+    """Wrap one call outcome with single-attempt metadata (retries disabled)."""
+    perf = dict(performance)
+    if attempts is None:
+        parse_status = str(perf.get("parse_status") or ("ok" if ok else "provider_error"))
+        failure = perf.get("failure")
+        failure_class = perf.get("failure_class")
+        if failure_class is None and isinstance(failure, Mapping):
+            failure_class = failure.get("failure_class")
+        usage = perf.get("provider_usage")
+        attempts = (AttemptMetadata(
+            attempt_id=f"{spec.call_id}:attempt-1",
+            status="ok" if ok else parse_status,
+            elapsed_ms=int(perf.get("elapsed_ms") or perf.get("call_duration_ms") or 0),
+            provider_request_id=perf.get("request_id"),
+            provider_usage=dict(usage) if isinstance(usage, Mapping) else None,
+            failure_class=failure_class,
+            may_have_been_billed=bool(text) or parse_status in {"ok", "invalid", "incomplete"},
+        ),)
+    return ModelCallResult(
+        spec=spec,
+        ok=bool(ok),
+        text=text,
+        parsed=dict(parsed) if parsed is not None else None,
+        performance=perf,
+        attempts=attempts,
+    )
 
 
 @dataclass(slots=True)
@@ -569,7 +770,10 @@ class LLMRuntime:
                 self._capabilities[key] = False
                 return False
             try:
+                method = provider_capabilities(provider).structured_output_method
+            except ValueError:
                 method = "function_calling" if provider == "openai_compatible" else "json_schema"
+            try:
                 factory(
                     dict(schema),
                     method=method,
@@ -703,9 +907,10 @@ class LLMRuntime:
             with pool.lease() as client:
                 started_at = perf_counter()
                 if native_supported:
-                    structured_method = (
-                        "function_calling" if provider == "openai_compatible" else "json_schema"
-                    )
+                    try:
+                        structured_method = provider_capabilities(provider).structured_output_method
+                    except ValueError:
+                        structured_method = "function_calling" if provider == "openai_compatible" else "json_schema"
                     mode = f"native_{structured_method}"
                     try:
                         structured = client.with_structured_output(
@@ -944,11 +1149,16 @@ def serialized_dvwa_node() -> Iterator[None]:
 
 
 __all__ = [
+    "AttemptMetadata",
     "build_failure_envelope",
+    "build_model_call_result",
+    "build_model_call_spec",
     "CoordinateCallContext",
     "LLMCallResult",
     "LLMOutputError",
     "LLMRuntime",
+    "ModelCallResult",
+    "ModelCallSpec",
     "ORCHESTRATOR_SCHEMA_VERSION",
     "PAYLOAD_SCHEMA_VERSION",
     "RoleSettings",

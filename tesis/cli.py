@@ -185,6 +185,13 @@ def _headless_parser() -> argparse.ArgumentParser:
         choices=("reactive", "proactive", "disabled"),
     )
     parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume a completed run from the experiment-local SQLite checkpoint store (fail-closed on mismatch).",
+    )
+    parser.add_argument("--checkpoint-dir", default=None, help="Experiment-local directory holding checkpoints.sqlite3.")
+    parser.add_argument("--experiment-id", default=None, help="Stable experiment identity for checkpoint thread IDs.")
+    parser.add_argument(
         "--json",
         dest="json_output",
         action="store_true",
@@ -204,10 +211,13 @@ def _headless_overrides(namespace: argparse.Namespace) -> dict[str, object]:
         "surfaces", "payload_modes", "enriched_reporting", "diagnose",
         "guardrail_retry_enabled", "guardrail_handling", "llm_max_concurrency", "llm_cache",
         "orchestrator_model_profile", "orchestrator_model", "payload_model_profile", "payload_model",
+        "checkpoint_dir", "experiment_id",
     ):
         value = values.get(key)
         if value is not None:
             overrides[key] = value
+    if values.get("resume"):
+        overrides["resume"] = True
     if values.get("mode") is not None:
         overrides["matrix"] = values["mode"] == "matrix"
     if values.get("payload_mode") is not None and values.get("mode") == "matrix":

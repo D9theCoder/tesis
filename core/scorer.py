@@ -132,9 +132,11 @@ def build_score_report(state: dict) -> ScorerReport:
         payload_execution_success_rate=round(payload_execution_success_rate(state.get("payload_scores", {})), 4),
         payload_improvement_rate=payload_improve,
         guardrail_activation_rate=guardrail_rate,
-        consistency_score=0.0,
-        token_cost=0.0,
-        token_cost_per_success=0.0,
+        consistency_score=None,
+        token_cost=None,
+        token_cost_per_success=None,
+        metric_availability={"consistency_score": False, "token_cost": False, "token_cost_per_success": False},
+        metric_unavailable_reason={"consistency_score": "not_computed", "token_cost": "not_computed", "token_cost_per_success": "not_computed"},
     )
     return ScorerReport(module_scores=module_scores, summary=summary)
 
