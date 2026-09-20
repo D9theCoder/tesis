@@ -404,3 +404,250 @@ def test_native_length_response_is_recorded_as_incomplete(monkeypatch):
             _invoke(runtime, context)
 
     assert caught.value.performance["parse_status"] == "incomplete"
+
+
+def test_auto_accepts_complete_native_text_when_parsed_is_none(monkeypatch):
+    class Raw:
+        content = '{"value":"from-text"}'
+        tool_calls = []
+        invalid_tool_calls = []
+        response_metadata = {"finish_reason": "stop"}
+        additional_kwargs = {}
+        usage_metadata = {"input_tokens": 5, "output_tokens": 3}
+
+    class StructuredRunnable:
+        def invoke(self, messages):
+            del messages
+            return {"raw": Raw(), "parsed": None}
+
+    class Client(_FakeClient):
+        def with_structured_output(self, *args, **kwargs):
+            del args, kwargs
+            return StructuredRunnable()
+
+        def invoke(self, messages):
+            del messages
+            raise AssertionError("accepted text must not cost another call")
+
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: Client(contents=[]))
+    runtime = LLMRuntime(max_concurrency=1)
+    with runtime.coordinate(
+        coordinate_id="one",
+        default_provider="openai_compatible",
+        role_settings={"orchestrator": RoleSettings(structured_output="auto")},
+    ) as context:
+        result = _invoke(runtime, context)
+
+    assert result.parsed == {"value": "from-text"}
+    assert result.performance["structured_output_mode"] == "native_function_calling_text"
+    assert result.performance["provider_usage"] == {"input_tokens": 5, "output_tokens": 3}
+    assert result.performance["structured_output_fallback"]["fallback"] == "native_text"
+
+
+def test_explicit_native_rejects_complete_text_without_parsed_object(monkeypatch):
+    class Raw:
+        content = '{"value":"from-text"}'
+        tool_calls = []
+        invalid_tool_calls = []
+        response_metadata = {"finish_reason": "stop"}
+        additional_kwargs = {}
+        usage_metadata = {}
+
+    class StructuredRunnable:
+        def invoke(self, messages):
+            del messages
+            return {"raw": Raw(), "parsed": None}
+
+    class Client(_FakeClient):
+        def with_structured_output(self, *args, **kwargs):
+            del args, kwargs
+            return StructuredRunnable()
+
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: Client(contents=[]))
+    runtime = LLMRuntime(max_concurrency=1)
+    with runtime.coordinate(
+        coordinate_id="one",
+        default_provider="openai_compatible",
+        role_settings={"orchestrator": RoleSettings(structured_output="native")},
+    ) as context:
+        with pytest.raises(LLMOutputError) as caught:
+            _invoke(runtime, context)
+
+    assert caught.value.performance["parse_status"] == "invalid"
+
+
+def test_auto_rejects_truncated_native_text(monkeypatch):
+    class Raw:
+        content = '{"value":"cut'
+        tool_calls = []
+        invalid_tool_calls = []
+        response_metadata = {"finish_reason": "length"}
+        additional_kwargs = {}
+        usage_metadata = {}
+
+    class StructuredRunnable:
+        def invoke(self, messages):
+            del messages
+            return {"raw": Raw(), "parsed": None}
+
+    class Client(_FakeClient):
+        def with_structured_output(self, *args, **kwargs):
+            del args, kwargs
+            return StructuredRunnable()
+
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: Client(contents=[]))
+    runtime = LLMRuntime(max_concurrency=1)
+    with runtime.coordinate(
+        coordinate_id="one",
+        default_provider="openai_compatible",
+        role_settings={"orchestrator": RoleSettings(structured_output="auto")},
+    ) as context:
+        with pytest.raises(LLMOutputError) as caught:
+            _invoke(runtime, context)
+
+    assert caught.value.performance["parse_status"] == "incomplete"
+
+
+def test_auto_rejects_non_object_native_text(monkeypatch):
+    class Raw:
+        content = '["not","an","object"]'
+        tool_calls = []
+        invalid_tool_calls = []
+        response_metadata = {"finish_reason": "stop"}
+        additional_kwargs = {}
+        usage_metadata = {}
+
+    class StructuredRunnable:
+        def invoke(self, messages):
+            del messages
+            return {"raw": Raw(), "parsed": None}
+
+    class Client(_FakeClient):
+        def with_structured_output(self, *args, **kwargs):
+            del args, kwargs
+            return StructuredRunnable()
+
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: Client(contents=[]))
+    runtime = LLMRuntime(max_concurrency=1)
+    with runtime.coordinate(
+        coordinate_id="one",
+        default_provider="openai_compatible",
+        role_settings={"orchestrator": RoleSettings(structured_output="auto")},
+    ) as context:
+        with pytest.raises(LLMOutputError) as caught:
+            _invoke(runtime, context)
+
+    assert caught.value.performance["parse_status"] == "invalid"
+
+
+def test_auto_rejects_contradictory_tool_calls_and_refusal(monkeypatch):
+    for tool_calls, invalid_tool_calls, extra in (
+        ([{"args": "broken"}], [], {}),
+        ([], [{"name": "bad"}], {}),
+        ([], [], {"refusal": "declined"}),
+    ):
+        class Raw:
+            content = '{"value":"from-text"}'
+            response_metadata = {"finish_reason": "stop"}
+            additional_kwargs = extra
+            usage_metadata = {}
+
+        Raw.tool_calls = tool_calls
+        Raw.invalid_tool_calls = invalid_tool_calls
+
+        class StructuredRunnable:
+            def invoke(self, messages):
+                del messages
+                return {"raw": Raw(), "parsed": None}
+
+        class Client(_FakeClient):
+            def with_structured_output(self, *args, **kwargs):
+                del args, kwargs
+                return StructuredRunnable()
+
+        monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: Client(contents=[]))
+        runtime = LLMRuntime(max_concurrency=1)
+        with runtime.coordinate(
+            coordinate_id="one",
+            default_provider="openai_compatible",
+            role_settings={"orchestrator": RoleSettings(structured_output="auto")},
+        ) as context:
+            with pytest.raises(LLMOutputError):
+                _invoke(runtime, context)
+
+
+def test_completed_event_carries_native_text_fallback(monkeypatch):
+    class Raw:
+        content = '{"value":"from-text"}'
+        tool_calls = []
+        invalid_tool_calls = []
+        response_metadata = {"finish_reason": "stop"}
+        additional_kwargs = {}
+        usage_metadata = {"input_tokens": 5, "output_tokens": 3}
+
+    class StructuredRunnable:
+        def invoke(self, messages):
+            del messages
+            return {"raw": Raw(), "parsed": None}
+
+    class Client(_FakeClient):
+        def with_structured_output(self, *args, **kwargs):
+            del args, kwargs
+            return StructuredRunnable()
+
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: Client(contents=[]))
+    runtime = LLMRuntime(max_concurrency=1)
+    with runtime.coordinate(
+        coordinate_id="one",
+        default_provider="openai_compatible",
+        role_settings={"orchestrator": RoleSettings(structured_output="auto")},
+        activity_callback=lambda event_type, data: events.append((event_type, data)),
+    ) as context:
+        _invoke(runtime, context)
+
+    completed = [data for event_type, data in events if event_type == "llm.completed"]
+    assert completed and completed[0]["structured_output_mode"] == "native_function_calling_text"
+    assert completed[0]["structured_output_fallback"]["fallback"] == "native_text"
+
+
+def test_failed_event_carries_native_text_fallback_on_schema_rejection(monkeypatch):
+    class Raw:
+        content = '{"value": 42}'
+        tool_calls = []
+        invalid_tool_calls = []
+        response_metadata = {"finish_reason": "stop"}
+        additional_kwargs = {}
+        usage_metadata = {"input_tokens": 5, "output_tokens": 3}
+
+    class StructuredRunnable:
+        def invoke(self, messages):
+            del messages
+            return {"raw": Raw(), "parsed": None}
+
+    class Client(_FakeClient):
+        def with_structured_output(self, *args, **kwargs):
+            del args, kwargs
+            return StructuredRunnable()
+
+        def invoke(self, messages):
+            del messages
+            raise AssertionError("rejected text must not cost another call")
+
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: Client(contents=[]))
+    runtime = LLMRuntime(max_concurrency=1)
+    with runtime.coordinate(
+        coordinate_id="one",
+        default_provider="openai_compatible",
+        role_settings={"orchestrator": RoleSettings(structured_output="auto")},
+        activity_callback=lambda event_type, data: events.append((event_type, data)),
+    ) as context:
+        with pytest.raises(LLMOutputError) as caught:
+            _invoke(runtime, context)
+
+    assert caught.value.performance["parse_status"] == "invalid"
+    assert caught.value.performance["structured_output_fallback"]["fallback"] == "native_text"
+    failed = [data for event_type, data in events if event_type == "llm.failed"]
+    assert failed and failed[0]["structured_output_fallback"]["fallback"] == "native_text"
+    assert failed[0]["structured_output_mode"] == "native_function_calling_text"

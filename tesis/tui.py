@@ -2685,6 +2685,9 @@ class TesisApp(App[None]):
     """Keyboard-first terminal application for TESIS."""
 
     TITLE = "TESIS Experiment Harness"
+    # Class default keeps the shell provider so shell-enabled instances and
+    # direct TesisShellProvider readers see the full registry. Legacy
+    # instances narrow to App.COMMANDS below via an instance shadow.
     COMMANDS = App.COMMANDS | {TesisShellProvider}
 
     def __init__(self, *args: Any, new_shell: bool | None = None, **kwargs: Any) -> None:
@@ -2692,6 +2695,16 @@ class TesisApp(App[None]):
         if new_shell is None:
             new_shell = os.environ.get("TESIS_NEW_SHELL", "") == "1"
         self._new_shell = bool(new_shell)
+        if not self._new_shell:
+            # Strict palette isolation: legacy launch exposes only builtin
+            # providers. Shell intents stay reachable via RunConsoleScreen
+            # only. Instance attribute shadows the class set (class untouched);
+            # Textual gathers providers from self.app.COMMANDS at palette-open.
+            self.COMMANDS = set(App.COMMANDS)  # type: ignore[assignment]
+        # tesis-mono theme intentionally stays registered for every launch:
+        # additive only, default remains textual-dark (pinned by
+        # test_mono_theme_registered_without_changing_default), hex contrast
+        # keeps NO_COLOR captures readable.
         self.register_theme(SHELL_MONO_THEME)
     CSS = """
     Screen { background: #071018; color: #d7e3ea; }

@@ -548,12 +548,16 @@ class CoordinateCallContext:
             data["provider_usage"] = dict(record.get("provider_usage") or {})
             if record.get("reasoning_token_evidence") is not None:
                 data["reasoning_token_evidence"] = dict(record["reasoning_token_evidence"])
+            if record.get("structured_output_fallback") is not None:
+                data["structured_output_fallback"] = dict(record["structured_output_fallback"])
         elif event_type == "llm.failed":
             data["error_type"] = record.get("error_type")
             if record.get("provider_usage"):
                 data["provider_usage"] = dict(record["provider_usage"])
             if record.get("reasoning_token_evidence") is not None:
                 data["reasoning_token_evidence"] = dict(record["reasoning_token_evidence"])
+            if record.get("structured_output_fallback") is not None:
+                data["structured_output_fallback"] = dict(record["structured_output_fallback"])
             for key in (
                 "status_code",
                 "http_status",
@@ -978,6 +982,33 @@ class LLMRuntime:
                                 refusal = getattr(raw, "additional_kwargs", {}).get("refusal")
                                 if refusal:
                                     text = str(refusal)
+                            if (
+                                not isinstance(parsed_raw, Mapping)
+                                and settings.structured_output == "auto"
+                                and parsed_raw is None
+                                and text
+                                and not output_incomplete
+                            ):
+                                # Narrow AUTO-only compat: some gateways return
+                                # the object as complete text with empty tool
+                                # calls while the wrapper reports parsed=None.
+                                # Validate that same text without another call.
+                                tool_calls = getattr(raw, "tool_calls", None)
+                                invalid_calls = getattr(raw, "invalid_tool_calls", None)
+                                extra_kwargs = getattr(raw, "additional_kwargs", None)
+                                refusal = extra_kwargs.get("refusal") if isinstance(extra_kwargs, Mapping) else None
+                                if not tool_calls and not invalid_calls and not refusal:
+                                    try:
+                                        text_object = json.loads(text)
+                                    except json.JSONDecodeError:
+                                        text_object = None
+                                    if isinstance(text_object, dict):
+                                        parsed_raw = text_object
+                                        mode = f"{mode}_text"
+                                        structured_output_fallback = {
+                                            "fallback": "native_text",
+                                            "reason": "native wrapper returned parsed=None with complete JSON text; validated raw text without an extra provider call",
+                                        }
                         if output_incomplete:
                             raise ValueError("native structured output was truncated")
                         if not isinstance(parsed_raw, Mapping):

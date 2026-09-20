@@ -429,7 +429,14 @@ invocation pertama; check ini tidak mengirim request provider. Jalur
 OpenAI-compatible memakai function calling; provider lain memakai JSON Schema.
 Jika `structured_output` bernilai `auto`, capability lokal yang tidak tersedia
 atau error gateway yang secara spesifik melaporkan structured output native
-sebagai unsupported memilih satu compact JSON-prompt fallback. Authentication,
+sebagai unsupported memilih satu compact JSON-prompt fallback. Jika `auto`
+tetap memakai mode native tetapi wrapper melaporkan `parsed=None` tanpa tool
+call, tanpa invalid tool call, tanpa refusal, dan tanpa truncation, objek JSON
+native lengkap yang kembali sebagai teks divalidasi oleh validator yang sama
+tanpa request provider tambahan dan dicatat sebagai `native_*_text` dengan
+penanda fallback `native_text`. `structured_output: native` yang eksplisit
+tidak pernah menafsir ulang teks biasa: bentuk yang sama tetap gagal.
+Authentication,
 rate-limit, timeout, connection, dan failure provider lainnya tidak memicu
 fallback ini. Teks response dinormalisasi dari string dan block list
 `text`/`output_text`. Validator lokal tetap menjadi otoritas pada kedua jalur.

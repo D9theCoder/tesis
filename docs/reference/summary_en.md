@@ -423,7 +423,13 @@ the first invocation; that check sends no provider request. The
 OpenAI-compatible path uses function calling; other providers use JSON Schema.
 When `structured_output` is `auto`, an unavailable local capability or a
 gateway error that specifically reports native structured output as unsupported
-selects one compact JSON-prompt fallback. Authentication, rate-limit, timeout,
+selects one compact JSON-prompt fallback. When `auto` keeps native mode but the
+wrapper reports `parsed=None` with no tool calls, no invalid tool calls, no
+refusal, and no truncation, a complete native JSON object returned as text is
+validated by the same validator without an extra provider call and recorded as
+`native_*_text` with a `native_text` fallback marker. Explicit
+`structured_output: native` never reinterprets plain text: the same shape still
+fails. Authentication, rate-limit, timeout,
 connection, and other provider failures do not trigger this fallback. Response
 text is normalized from strings and list-based `text`/`output_text` blocks.
 The local validator remains authoritative in both paths.
