@@ -6,6 +6,7 @@ import dataclasses
 import inspect
 import json
 import logging
+import os
 import tempfile
 from collections import deque
 from collections.abc import Mapping
@@ -88,6 +89,7 @@ from tesis.config_fields import (
 from tesis.model_config import EngagementConfig, ModelConfig
 from tesis.runtime_events import CallbackEventSink, CancellationToken, RunEvent, redact_secrets
 from tesis.runtime_journal import JSONLJournalSink, MultiplexingRuntimeEventSink
+from tesis.tui_shell import SHELL_MONO_THEME, TesisShellProvider
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -2683,6 +2685,14 @@ class TesisApp(App[None]):
     """Keyboard-first terminal application for TESIS."""
 
     TITLE = "TESIS Experiment Harness"
+    COMMANDS = App.COMMANDS | {TesisShellProvider}
+
+    def __init__(self, *args: Any, new_shell: bool | None = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        if new_shell is None:
+            new_shell = os.environ.get("TESIS_NEW_SHELL", "") == "1"
+        self._new_shell = bool(new_shell)
+        self.register_theme(SHELL_MONO_THEME)
     CSS = """
     Screen { background: #071018; color: #d7e3ea; }
     Header { background: #0b1b26; color: #70e1f5; }
@@ -2742,7 +2752,12 @@ class TesisApp(App[None]):
         super().exit(result=result, return_code=return_code, message=message)
 
     def on_mount(self) -> None:
-        self.push_screen(MainMenuScreen())
+        if self._new_shell:
+            from tesis.tui_shell import RunConsoleScreen
+
+            self.push_screen(RunConsoleScreen())
+        else:
+            self.push_screen(MainMenuScreen())
 
 
 def run_tui() -> None:
