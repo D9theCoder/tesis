@@ -124,9 +124,14 @@ class ExperimentCheckpointStore:
         self.path = Path(path)
         self.experiment_id = str(experiment_id)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.path))
-        self._conn.execute(_SCHEMA)
-        self._conn.commit()
+        conn = sqlite3.connect(str(self.path))
+        try:
+            conn.execute(_SCHEMA)
+            conn.commit()
+        except Exception:
+            conn.close()
+            raise
+        self._conn = conn
 
     def close(self) -> None:
         try:
@@ -235,12 +240,17 @@ class ExperimentCheckpointStore:
 
 
 def validate_checkpoint_identity(
-    stored: Mapping[str, Any],
+    stored: Mapping[str, Any] | None,
     *,
     coordinate: Mapping[str, Any],
     experiment_id: str | None = None,
 ) -> tuple[bool, str]:
     """Fail closed on identity mismatch; does NOT require a completion receipt."""
+    if not isinstance(stored, Mapping):
+        return False, (
+            "no checkpoint metadata to validate (missing or unreadable stored row); "
+            "re-run without --resume; refusing resume"
+        )
     if stored.get("decode_error") is not None:
         return False, (
             f"checkpoint for thread {stored.get('thread_id')!r} is corrupted "
@@ -303,7 +313,15 @@ def validate_resume(
     ok, reason = validate_checkpoint_identity(stored, coordinate=coordinate)
     if not ok:
         return ok, reason
-    if int(stored.get("completion_receipt", 0) or 0) != 1:
+    try:
+        receipt = int(stored.get("completion_receipt", 0) or 0)
+    except (TypeError, ValueError):
+        return False, (
+            f"checkpoint for thread {stored.get('thread_id')!r} has an unreadable "
+            "completion receipt; replaying it could duplicate external DVWA actions; "
+            "delete the checkpoint and re-run without --resume; refusing resume"
+        )
+    if receipt != 1:
         return False, (
             f"checkpoint for thread {stored.get('thread_id')!r} has no completion "
             "receipt (run did not reach the terminal safe node); replaying it "

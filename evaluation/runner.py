@@ -25,7 +25,6 @@ from core.checkpoint_store import (
     validate_checkpoint_identity,
     validate_resume,
 )
-from langgraph.checkpoint.sqlite import SqliteSaver
 from core.graph_builder import GRAPH_BUILD_VERSION, build_framework
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.scorer import build_score_report
@@ -493,11 +492,24 @@ def run_single_engagement(
             "status": "error",
             "error": reason,
             "resumed_from_checkpoint": False,
+            "resumed": False,
             "checkpoint_thread_id": checkpoint_thread_id,
             "state_schema_version": STATE_SCHEMA_VERSION,
             "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
             "graph_build_version": GRAPH_BUILD_VERSION,
         }
+
+    if checkpoint_store_path is not None:
+        # Single opt-in availability probe, before any metadata write,
+        # runtime setup, or graph work: explicit checkpointing without the
+        # sqlite-saver package fails once with a 'uv sync' remediation.
+        try:
+            from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: F401
+        except ImportError as exc:
+            return _resume_error(
+                "checkpointing requires the 'langgraph-checkpoint-sqlite' package; "
+                f"run 'uv sync' to install it ({type(exc).__name__}: {exc}); refusing run"
+            )
 
     if resume:
         lookup_path = checkpoint_store_path or default_store_path(None, None)
@@ -505,11 +517,18 @@ def run_single_engagement(
             return _resume_error(
                 f"no checkpoint metadata at {lookup_path}; re-run without --resume; refusing resume"
             )
-        store = ExperimentCheckpointStore(lookup_path, experiment_id=checkpoint_experiment)
         try:
-            stored = store.load(checkpoint_thread_id)
-        finally:
-            store.close()
+            store = ExperimentCheckpointStore(lookup_path, experiment_id=checkpoint_experiment)
+            try:
+                stored = store.load(checkpoint_thread_id)
+            finally:
+                store.close()
+        except (sqlite3.Error, ValueError) as exc:
+            return _resume_error(
+                f"checkpoint metadata at {lookup_path} is unreadable or corrupt "
+                f"({type(exc).__name__}: {exc}); delete the checkpoint file and "
+                "re-run without --resume; refusing resume"
+            )
         if stored is None:
             return _resume_error(
                 f"no checkpoint for thread {checkpoint_thread_id!r} at {lookup_path}; "
@@ -520,12 +539,20 @@ def run_single_engagement(
         )
         if not ok:
             return _resume_error(reason)
-        if int(stored.get("completion_receipt", 0) or 0) == 1:
+        try:
+            _receipt = int(stored.get("completion_receipt", 0) or 0)
+        except (TypeError, ValueError):
+            return _resume_error(
+                f"checkpoint for thread {checkpoint_thread_id!r} has an unreadable completion receipt; "
+                "delete the checkpoint and re-run without --resume; refusing resume"
+            )
+        if _receipt == 1:
             ok, reason = validate_resume(stored, coordinate=coordinate)
             if not ok:
                 return _resume_error(reason)
             resumed = dict(stored["artifact"])
             resumed["resumed_from_checkpoint"] = True
+            resumed["resumed"] = True
             resumed["resume_thread_id"] = checkpoint_thread_id
             resumed["resume_request_execution_id"] = execution_id
             if graph_store_path is not None:
@@ -703,13 +730,18 @@ def run_single_engagement(
         evasion_enabled = bool(evasion_enabled)
         saver = None
         if checkpoint_store_path is not None:
+            # Availability already probed before runtime setup; plain import here.
+            from langgraph.checkpoint.sqlite import SqliteSaver
             graph_store_path.parent.mkdir(parents=True, exist_ok=True)
             saver_conn = sqlite3.connect(str(graph_store_path), check_same_thread=False)
             saver = SqliteSaver(saver_conn)
             try:
                 saver.setup()
-            except Exception:
-                pass
+            except Exception as exc:
+                raise _ResumeFailed(
+                    f"cannot initialize graph checkpoint store at {graph_store_path} "
+                    f"({type(exc).__name__}: {exc}); refusing run"
+                )
         if checkpoint_store_path is not None:
             app = build_framework(llm_provider=llm_provider, surface=surface, checkpointer=saver)
         else:
@@ -1363,8 +1395,9 @@ def run_single_engagement(
     artifact["checkpoint_thread_id"] = checkpoint_thread_id
     artifact["checkpoint_store"] = str(checkpoint_store_path) if checkpoint_store_path else None
     artifact["graph_checkpoint_store"] = str(graph_store_path) if graph_store_path else None
-    artifact["resumed_from_checkpoint"] = bool(partial_graph_resume and status != "error")
-    artifact["resumed"] = bool(partial_graph_resume and resumed_from_graph_checkpoint and status != "error")
+    resumed_ok = bool(partial_graph_resume and resumed_from_graph_checkpoint and status != "error")
+    artifact["resumed_from_checkpoint"] = resumed_ok
+    artifact["resumed"] = resumed_ok
     artifact["manual_scoring_evidence"] = manual_scoring_rows(artifact)
     if output_dir:
         try:

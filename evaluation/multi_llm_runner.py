@@ -136,11 +136,17 @@ def _run_single_with_payload_kwargs(kwargs: dict[str, Any]) -> dict:
             "checkpoint_dir",
             "experiment_id",
         }
-        rejected = {key for key in optional_compat if key in str(exc)}
+        # Checkpoint opt-in must never be silently dropped: only default-valued
+        # flags (resume=False, dir/id None) may be stripped for legacy
+        # signatures. Explicit values re-raise instead of running uncheckpointed.
+        default_valued_only = {"resume": False, "checkpoint_dir": None, "experiment_id": None}
+        rejected = {key for key in optional_compat if key in kwargs and key in str(exc)}
         if not rejected:
             raise
         legacy_kwargs = dict(kwargs)
         for key in rejected:
+            if key in default_valued_only and legacy_kwargs[key] != default_valued_only[key]:
+                raise
             legacy_kwargs.pop(key, None)
         return _run_single_with_payload_kwargs(legacy_kwargs)
 
@@ -804,8 +810,8 @@ def run_provider_matrix(
             "model_profiles": model_configs or {},
             "llm_cache_enabled": llm_cache_enabled,
             "resume": resume,
-            "checkpoint_dir": checkpoint_dir or coordinate_output_dir,
-            "experiment_id": experiment_id or matrix_execution_id,
+            "checkpoint_dir": checkpoint_dir,
+            "experiment_id": experiment_id,
         }
         return _run_single_with_payload_kwargs(run_kwargs)
 
