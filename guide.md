@@ -6,11 +6,16 @@ project environment from `pyproject.toml` and `uv.lock`:
 
 ```bash
 uv sync
-source .venv/bin/activate
-python -m tesis run
+uv run tesis run
 ```
 
-The command opens the interactive Textual application and requires a TTY.
+`uv run` resolves the project `.venv` itself, so no manual activation is
+needed. With an activated shell (`source .venv/bin/activate`), bare
+`tesis run` (or `python -m tesis run`) works too.
+
+The command opens the run-console shell (transcript-first, slash commands
+such as `/run`, `/matrix`, `/plan`, `/doctor`, `/help`) and requires a TTY.
+Set `TESIS_NEW_SHELL=0` to restore the legacy menu-first TUI instead.
 Choose **Validate Framework** or **Validate only** on a setup screen for
 explicit validation workflows. Single runs, matrices, settings, reports,
 result filtering, exports, and framework information live inside the
@@ -101,7 +106,8 @@ uv sync
 source .venv/bin/activate
 ```
 
-The framework entry point is `python -m tesis run`. `main.py` is a separate
+The framework entry point is `tesis run` (`uv run tesis run` without an
+activated shell; `python -m tesis run` also works). `main.py` is a separate
 sample LLM-query runner and does not load `config.yaml`.
 
 ## 1. How this app works
@@ -110,7 +116,7 @@ The framework autonomously discovers and exploits vulnerabilities in DVWA using 
 
 Simple flow:
 
-1. The TUI starts from `python -m tesis run` and resolves a validated setup from `config.yaml` plus the selected form values.
+1. The TUI starts from `tesis run` and resolves a validated setup from `config.yaml` plus the selected form values.
 2. A LangGraph workflow is assembled from `core/graph_builder.py`.
 3. `recon` crawls DVWA, extracts CSRF tokens, maps endpoints, and derives observable preconditions.
 4. `orchestrator` queries the AKG for viable method agents and uses LLM reasoning to pick the best next method.

@@ -2685,7 +2685,7 @@ class TesisApp(App[None]):
     """Keyboard-first terminal application for TESIS."""
 
     TITLE = "TESIS Experiment Harness"
-    # Class default keeps the shell provider so shell-enabled instances and
+    # Class default keeps the shell provider so shell instances and
     # direct TesisShellProvider readers see the full registry. Legacy
     # instances narrow to App.COMMANDS below via an instance shadow.
     COMMANDS = App.COMMANDS | {TesisShellProvider}
@@ -2693,7 +2693,9 @@ class TesisApp(App[None]):
     def __init__(self, *args: Any, new_shell: bool | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         if new_shell is None:
-            new_shell = os.environ.get("TESIS_NEW_SHELL", "") == "1"
+            # Shell is the default; TESIS_NEW_SHELL=0 (or new_shell=False)
+            # restores the legacy menu-first launch.
+            new_shell = os.environ.get("TESIS_NEW_SHELL", "1") == "1"
         self._new_shell = bool(new_shell)
         if not self._new_shell:
             # Strict palette isolation: legacy launch exposes only builtin

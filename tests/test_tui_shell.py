@@ -1,9 +1,9 @@
-"""Behavior coverage for the opt-in run-console shell (Phase 0 + shell Phase 1).
+"""Behavior coverage for the run-console shell (default launch; legacy opt-out).
 
-Legacy UI in ``tesis.tui`` is covered by ``tests/test_tui.py``; these tests
-own only the new shell: registry/intent/view-model units plus headless
-``run_test``/``Pilot`` coverage of the console screen at wide, standard,
-80x24, and <80 sizes.
+Legacy UI in ``tesis.tui`` is covered by ``tests/test_tui.py`` (pinned with
+``new_shell=False``); these tests own the shell: registry/intent/view-model
+units plus headless ``run_test``/``Pilot`` coverage of the console screen at
+wide, standard, 80x24, and <80 sizes.
 """
 
 from __future__ import annotations
@@ -197,11 +197,11 @@ def _shell_app(**kwargs):
     return tui.TesisApp(new_shell=True, **kwargs)
 
 
-def test_new_shell_is_opt_in_and_legacy_stays_default() -> None:
-    assert tui.TesisApp()._new_shell is False
+def test_shell_is_default_and_legacy_is_opt_out() -> None:
+    assert tui.TesisApp()._new_shell is True
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 36)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, tui.MainMenuScreen)

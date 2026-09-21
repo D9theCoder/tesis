@@ -138,7 +138,7 @@ def test_result_detail_renders_active_tab_lazily_and_truncates_raw(monkeypatch, 
     }
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 42)) as pilot:
             await pilot.pause()
             screen = tui.ResultDetailScreen(metadata)
@@ -187,7 +187,7 @@ def test_dashboard_rich_logs_have_hard_line_limits(monkeypatch) -> None:
     monkeypatch.setattr(tui.RuntimeDashboardScreen, "run_experiment", lambda self: None)
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 42)) as pilot:
             await pilot.pause()
             screen = _dashboard()
@@ -215,7 +215,7 @@ def test_dashboard_rich_logs_have_hard_line_limits(monkeypatch) -> None:
 
 def test_main_menu_q_exits_promptly() -> None:
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             started = monotonic()
@@ -242,7 +242,7 @@ def test_blocked_runtime_shutdown_is_prompt_and_worker_is_daemon(monkeypatch) ->
 
     async def scenario() -> None:
         nonlocal runtime_thread
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         started = monotonic()
         async with app.run_test(size=(120, 42)) as pilot:
             await pilot.pause()

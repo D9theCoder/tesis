@@ -1,4 +1,4 @@
-"""New opt-in run-console shell (Phase 0 + shell portion of Phase 1).
+"""Run-console shell (default launch; legacy menu remains via opt-out).
 
 Legacy screens in :mod:`tesis.tui` are unchanged. This module owns only the
 new presentation shell: typed operator intents, the slash-command registry,

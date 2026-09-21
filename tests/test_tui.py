@@ -15,7 +15,7 @@ from tesis.runtime_events import RunEvent
 
 def test_main_menu_keyboard_navigation_opens_single_setup():
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, tui.MainMenuScreen)
@@ -33,7 +33,7 @@ def test_main_menu_keyboard_navigation_opens_single_setup():
 
 def test_matrix_screen_calculates_total_and_uses_compact_layout():
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(90, 44)) as pilot:
             await pilot.pause()
             await pilot.press("down", "enter")
@@ -68,7 +68,7 @@ def test_run_setup_round_trips_llm_runtime_controls(monkeypatch):
     monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kwargs: config)
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 44)) as pilot:
             await pilot.pause()
             await pilot.press("enter")
@@ -119,7 +119,7 @@ def test_run_setup_reasoning_slider_applies_global_role_override(monkeypatch):
     monkeypatch.setattr(tui, "load_and_resolve_config", load_config)
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 44)) as pilot:
             await pilot.pause()
             await pilot.press("enter")
@@ -186,7 +186,7 @@ def test_run_setup_preserves_mixed_role_efforts_until_global_control_changes(
     monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kwargs: config)
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 44)) as pilot:
             await pilot.pause()
             await pilot.press("enter")
@@ -235,7 +235,7 @@ def test_reasoning_slider_pointer_uses_rendered_track_and_keyboard_still_steps(
     monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kwargs: config)
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 44)) as pilot:
             await pilot.pause()
             await pilot.press("enter")
@@ -286,7 +286,7 @@ def test_reasoning_slider_narrow_track_selects_the_rendered_marker(monkeypatch):
     monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kwargs: config)
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(20, 30)) as pilot:
             await pilot.pause()
             await pilot.press("enter")
@@ -343,7 +343,7 @@ def test_run_setup_global_model_profile_switches_both_roles(monkeypatch):
     monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kwargs: config)
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 44)) as pilot:
             await pilot.pause()
             await pilot.press("enter")
@@ -372,7 +372,7 @@ def test_settings_saves_llm_runtime_controls(tmp_path, monkeypatch):
     monkeypatch.setattr(tui, "CONFIG_PATH", config_path)
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 44)) as pilot:
             await pilot.pause()
             await pilot.press("down", "down", "enter")
@@ -429,7 +429,7 @@ def test_settings_preserves_mixed_roles_and_profile_effort_until_changed(
     monkeypatch.setattr(tui, "CONFIG_PATH", config_path)
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 44)) as pilot:
             await pilot.pause()
             await pilot.press("down", "down", "enter")
@@ -533,7 +533,7 @@ def test_validation_screen_runs_structured_offline_doctor(monkeypatch):
     )
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 42)) as pilot:
             app.push_screen(tui.ValidationScreen())
             await pilot.pause()
@@ -561,7 +561,7 @@ def test_settings_loads_round_trip_yaml_editor(tmp_path, monkeypatch):
     monkeypatch.setattr(tui, "CONFIG_PATH", config_path)
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 42)) as pilot:
             await pilot.pause()
             await pilot.press("down", "down", "enter")
@@ -581,7 +581,7 @@ def test_settings_rejects_invalid_yaml_without_overwriting(tmp_path, monkeypatch
     monkeypatch.setattr(tui, "CONFIG_PATH", config_path)
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 42)) as pilot:
             await pilot.pause()
             await pilot.press("down", "down", "enter")
@@ -610,7 +610,7 @@ def test_run_setup_config_error_redacts_duplicate_secret_scalars(tmp_path, monke
     monkeypatch.setattr(tui, "CONFIG_PATH", config_path)
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 42)) as pilot:
             await pilot.pause()
             await pilot.press("enter")
@@ -634,7 +634,7 @@ def test_settings_masks_literal_secret_in_raw_editor(tmp_path, monkeypatch):
     monkeypatch.setattr(tui, "CONFIG_PATH", config_path)
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 42)) as pilot:
             await pilot.pause()
             await pilot.press("down", "down", "enter")
@@ -710,7 +710,7 @@ def test_dashboard_stream_and_tab_trace_toggle(monkeypatch):
     monkeypatch.setattr(tui.RuntimeDashboardScreen, "run_experiment", lambda self: None)
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 42)) as pilot:
             await pilot.pause()
             await pilot.press("enter")
@@ -740,7 +740,7 @@ def test_matrix_dashboard_continues_after_child_run_failure(tmp_path, monkeypatc
     monkeypatch.setattr(tui.RuntimeDashboardScreen, "run_experiment", lambda self: None)
 
     async def scenario() -> None:
-        app = tui.TesisApp()
+        app = tui.TesisApp(new_shell=False)
         async with app.run_test(size=(120, 42)) as pilot:
             dashboard = tui.RuntimeDashboardScreen(
                 config,
