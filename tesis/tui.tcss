@@ -1,0 +1,478 @@
+/* TESIS mission-control stylesheet. Single replacement for the dual-system shell.
+ *
+ * Expected compose contract (see HANDOFF_TUI_MISSION_CONTROL_REDESIGN_2026-09-21):
+ * - Root is MissionControlScreen with ONE responsive class: wide (>=120x24),
+ *   standard (>=80x20), narrow (>=60x18), or too-small (below 60x18).
+ * - Chrome: #context-bar, #mission-body, #status-strip, #context-footer.
+ * - Wide grid DOM order: #pipeline-pane, #coordinate-pane, #notice-pane,
+ *   #evidence-pane (row-wise: pipeline/coords top, notices/evidence bottom).
+ * - Pane visibility (which panes exist on screen) is decided in Python from the
+ *   same size classes; this file never sets `display`, so there is one owner.
+ * - In the wide layout 1/2/3 and Tab/Shift+Tab move focus between
+ *   #pipeline-pane, #coordinate-pane, and #evidence-body; focus is a
+ *   background lift ($boost), never a second border.
+ * - Run status uses ONE of status-ready/running/degraded/succeeded/failed/
+ *   cancelled on #status-strip (mirrored on the screen as fallback).
+ * - #command-launcher is bottom-docked; drawers dock right at 80+ columns and
+ *   take the whole screen (.drawer-full) below 80.
+ * - Semantic theme vars only: no hardcoded palette, so dark / light /
+ *   tesis-mono all work. Glyphs/text (not color) carry status meaning.
+ */
+
+MissionControlScreen {
+    layout: vertical;
+    background: $background;
+    color: $foreground;
+}
+
+/* ---- one-row chrome: context / status / footer ---- */
+
+#context-bar {
+    height: 1;
+    padding: 0 1;
+    background: $background;
+    color: $text-muted;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+
+#mission-body {
+    height: 1fr;
+    padding: 0 1;
+}
+
+#status-strip {
+    height: 1;
+    padding: 0 1;
+    background: $background;
+    color: $text-muted;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+
+#status-rail {
+    width: 1;
+    height: 1;
+}
+
+#status-label {
+    height: 1;
+    text-style: bold;
+    padding: 0 1;
+}
+
+#context-footer {
+    height: 1;
+    padding: 0 1;
+    background: $background;
+    color: $text-muted;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+
+Footer {
+    background: $background;
+    color: $text-muted;
+}
+
+/* ---- run-status semantics: rail + label only, never whole-screen tint ---- */
+
+#status-strip.status-ready #status-label,
+MissionControlScreen.status-ready #status-label {
+    color: $text-muted;
+}
+
+#status-strip.status-running #status-rail,
+MissionControlScreen.status-running #status-rail {
+    background: $primary;
+}
+
+#status-strip.status-running #status-label,
+MissionControlScreen.status-running #status-label {
+    color: $primary;
+}
+
+#status-strip.status-succeeded #status-rail,
+MissionControlScreen.status-succeeded #status-rail {
+    background: $success;
+}
+
+#status-strip.status-succeeded #status-label,
+MissionControlScreen.status-succeeded #status-label {
+    color: $success;
+}
+
+#status-strip.status-degraded #status-rail,
+MissionControlScreen.status-degraded #status-rail,
+#status-strip.status-failed #status-rail,
+MissionControlScreen.status-failed #status-rail {
+    background: $error;
+}
+
+#status-strip.status-degraded #status-label,
+MissionControlScreen.status-degraded #status-label,
+#status-strip.status-failed #status-label,
+MissionControlScreen.status-failed #status-label {
+    color: $error;
+}
+
+#status-strip.status-cancelled #status-rail,
+MissionControlScreen.status-cancelled #status-rail {
+    background: $warning;
+}
+
+#status-strip.status-cancelled #status-label,
+MissionControlScreen.status-cancelled #status-label {
+    color: $warning;
+}
+
+/* ---- panes: spacing and type, never nested boxes ---- */
+
+.panel {
+    background: $surface;
+}
+
+.panel-title {
+    height: 1;
+    color: $text-muted;
+    text-style: bold;
+}
+
+#pipeline-pane,
+#coordinate-pane,
+#evidence-pane,
+#notice-pane {
+    layout: vertical;
+    height: 1fr;
+    border: none;
+    background: $background;
+    scrollbar-size: 1 1;
+}
+
+/* Focus is a lift on the focused pane, never a second border. `$boost` is
+ * invisible in the monochrome theme (it resolves to transparent), so bold
+ * carries the focus meaning where colour cannot. */
+
+#pipeline-pane:focus,
+#coordinate-pane:focus,
+#evidence-body:focus,
+#evidence-pane:focus-within,
+#notice-body:focus,
+#notice-pane:focus-within {
+    background: $boost;
+    text-style: bold;
+}
+
+/* the evidence pane stacks its badge above the triage body */
+
+#evidence-body {
+    height: 1fr;
+    scrollbar-size: 1 1;
+}
+
+/* the notice pane stacks a fixed badge above a scrollable bounded stream */
+
+#notice-body {
+    height: 1fr;
+    scrollbar-size: 1 1;
+}
+
+#notice-text {
+    height: auto;
+}
+
+.notice-new-badge {
+    color: $warning;
+    text-style: bold;
+}
+
+#triage-line {
+    height: auto;
+    max-height: 4;
+    color: $text-muted;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+
+/* Truthful minimum-size state: the body is replaced, nothing is clipped. */
+
+#size-notice {
+    height: 1fr;
+    padding: 2 3;
+    color: $warning;
+    text-style: bold;
+}
+
+/* ---- wide (>=120x24): pipeline + coordinates top, notices + evidence bottom ----
+ * Pane visibility is driven from the screen (one `.display` source of truth);
+ * this stylesheet only decides how the visible panes are arranged and painted. */
+
+MissionControlScreen.wide #mission-body {
+    layout: grid;
+    grid-size: 2;
+    grid-columns: 3fr 2fr;
+    grid-rows: 1fr 1fr;
+    grid-gutter: 0 1;
+}
+
+/* ---- standard (>=80x20) and narrow (>=60x18): one primary pane + triage ---- */
+
+MissionControlScreen.standard #mission-body,
+MissionControlScreen.narrow #mission-body {
+    layout: vertical;
+}
+
+MissionControlScreen.standard #pipeline-pane,
+MissionControlScreen.narrow #pipeline-pane {
+    height: 1fr;
+}
+
+/* ---- pipeline stages: glyph row colored, label text stays readable ---- */
+
+.stage-row {
+    height: 1;
+    color: $foreground;
+}
+
+.stage-active {
+    color: $primary;
+    text-style: bold;
+}
+
+.stage-ok {
+    color: $success;
+}
+
+.stage-warn {
+    color: $warning;
+}
+
+.stage-bad {
+    color: $error;
+    text-style: bold;
+}
+
+.evidence-badge {
+    color: $warning;
+    text-style: bold;
+}
+
+/* ---- bottom-anchored command launcher: the single allowed chrome border ---- */
+
+CommandLauncher {
+    background: transparent;
+}
+
+#command-launcher {
+    dock: bottom;
+    height: auto;
+    max-height: 12;
+    padding: 0 1;
+    background: $surface;
+    border-top: solid $primary;
+}
+
+#launcher-input {
+    height: 3;
+    margin: 0 0 1 0;
+}
+
+#launcher-list {
+    height: auto;
+    max-height: 8;
+    scrollbar-size: 1 1;
+}
+
+/* ---- uniform drawers: one left-edge border, full-width below 80 columns ----
+ * The drawer screen stays transparent and covers the terminal; its single
+ * .drawer panel docks right at a fixed 76 cells, so the mission surface stays
+ * visible to its left. Below 80 columns the shell tags the screen
+ * `drawer-full` and the panel takes the whole width instead.
+ */
+
+.drawer {
+    dock: right;
+    width: 76;
+    height: 100%;
+    padding: 1 2;
+    background: $surface;
+    border-left: solid $primary;
+    scrollbar-size: 1 1;
+}
+
+BaseDrawer {
+    background: transparent;
+}
+
+BaseDrawer.drawer-full .drawer {
+    dock: top;
+    width: 100%;
+    border: none;
+}
+
+.drawer-title {
+    height: 1;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.drawer-body {
+    height: 1fr;
+    scrollbar-size: 1 1;
+}
+
+.drawer-hint {
+    height: 1;
+    margin-top: 1;
+    color: $text-muted;
+}
+
+.launch-step {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#launch-step-indicator {
+    height: 1;
+    color: $text-muted;
+}
+
+#launch-steps {
+    height: 1fr;
+}
+
+#launch-nav {
+    height: auto;
+    margin-top: 1;
+}
+
+#launch-nav Button {
+    margin-right: 1;
+}
+
+/* ---- tables: selectable rows, no boxes, focused table is obvious ---- */
+
+#coordinate-pane,
+#coordinates-table,
+#results-table {
+    height: 1fr;
+    border: none;
+    scrollbar-size: 1 1;
+}
+
+#coordinate-pane:focus,
+#coordinates-table:focus,
+#results-table:focus {
+    background: $boost;
+}
+
+/* ---- forms: dense grid, grouping by spacing not boxes ---- */
+
+.screen-title {
+    height: 1;
+    text-style: bold;
+    padding: 0 1;
+}
+
+.section-title {
+    height: 1;
+    color: $text-muted;
+    text-style: bold;
+    margin-top: 1;
+}
+
+.form-grid {
+    grid-size: 2;
+    grid-columns: 1fr 2fr;
+    grid-gutter: 0 1;
+    height: auto;
+}
+
+.inline-form {
+    height: auto;
+}
+
+.checks {
+    height: auto;
+}
+
+.actions {
+    height: 3;
+    margin-top: 1;
+}
+
+.filters {
+    height: 3;
+}
+
+.filters Select {
+    width: 1fr;
+    margin-right: 1;
+}
+
+/* Below the wide threshold the filter row stacks so no select is clipped at
+   the 80-column floor (the .stacked class is toggled by on_resize). */
+.filters.stacked {
+    layout: vertical;
+    height: auto;
+}
+
+.filters.stacked Select {
+    width: 100%;
+    margin-right: 0;
+}
+
+.filters.stacked Label {
+    height: 1;
+}
+
+#yaml-editor {
+    height: 1fr;
+}
+
+/* ---- trace / results / doctor specifics ---- */
+
+#trace-body {
+    height: 1fr;
+    scrollbar-size: 1 1;
+}
+
+.trace-new-badge {
+    color: $warning;
+    text-style: bold;
+}
+
+.check-row {
+    height: 1;
+}
+
+.check-ok {
+    color: $success;
+}
+
+.check-warn {
+    color: $warning;
+}
+
+.check-bad {
+    color: $error;
+    text-style: bold;
+}
+
+/* ---- clear keyboard focus everywhere ---- */
+
+Input:focus,
+Select:focus,
+SelectionList:focus,
+TextArea:focus,
+#launcher-input:focus {
+    border: tall $primary;
+}
+
+Button:focus {
+    text-style: bold;
+}
+
+OptionList:focus {
+    background: $boost;
+}
