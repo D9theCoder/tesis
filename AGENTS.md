@@ -54,7 +54,7 @@ Place new Markdown documentation under exactly one lifecycle folder:
 Move a handoff from `upcoming` to `active` when implementation starts, and from
 `active` to `completed` only after its acceptance checks pass. Update links when
 moving a document. Do not place generated TUI captures in these folders;
-`docs/tui_baseline_*` and `docs/tui_shell_*` are ignored.
+`docs/tui_baseline_*`, `docs/tui_shell_*`, and `docs/tui_mission_control_*` are ignored.
 
 ## Research Scope
 

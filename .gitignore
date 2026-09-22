@@ -19,3 +19,4 @@ results/
 # Generated TUI screenshot captures
 /docs/tui_baseline_*/
 /docs/tui_shell_*/
+/docs/tui_mission_control_*/

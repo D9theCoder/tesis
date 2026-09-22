@@ -12,7 +12,7 @@ source .venv/bin/activate
 python -m tesis run
 ```
 
-`python -m tesis run` opens the full-screen Textual application when used
+`python -m tesis run` opens the full-screen mission-control TUI when used
 without additional flags. Automation can use the same entry point with
 `--headless`, for example:
 
@@ -90,8 +90,8 @@ structured probe, but provider-side reasoning remains unverified.
 `status`, `summary`, `details`, and `remediation`. Top-level status is failed
 only when at least one check fails; skipped checks remain separate. Exit codes
 are 0 for a passed report, 1 for a failed report, and 2 for CLI usage errors.
-The Validation screen
-exposes offline and live Doctor buttons. Doctor is standalone: it never runs
+The Doctor drawer
+exposes offline and live Doctor actions. Doctor is standalone: it never runs
 automatically, gates a run, performs provider quarantine, or changes runtime
 topology.
 
@@ -106,41 +106,65 @@ and connection failures do not trigger it.
 
 The repository-root `config.yaml` is the sole configuration document. Prefer environment references such as `${OPENAI_API_KEY}` for secrets.
 
-## Screens and keys
+## Mission control and keys
 
-The main menu provides:
+`python -m tesis run` opens the full-screen mission-control TUI when used
+without additional flags. It requires a TTY and a minimum 60x18 terminal;
+smaller terminals show a size message with only quit/help available. Wide
+terminals (120x24 and up) show pipeline, coordinates, and evidence together;
+narrower terminals collapse coordinates and evidence into drawers, then to one
+focused pane.
 
-1. Run Single Experiment
-2. Run Experiment Matrix
-3. Settings
-4. Recent Results
-5. Validate Framework
-6. Framework Information
-7. Exit
+The mission-control screen shows pipeline stages, coordinate rows, verified
+evidence, and bounded notices. There is no permanent command input: press `/`,
+`:`, or Ctrl+P to summon the command launcher (`run`, `matrix`, `plan`,
+`cancel`, `coordinates`, `evidence`, `failure`, `trace`, `doctor`, `results`,
+`settings`, `export`, `about`, `help`, `quit`). `/run` and `/matrix` open the
+guided launcher (Scope, Coordinates, Runtime, Review); Review is the only
+place with Start, and Start freezes the resolved request until terminal state.
 
-Use arrow keys and Enter to navigate, Esc to return, `q` to exit from the menu, Ctrl+C to request graceful cancellation, and Tab to switch between the response stream and redacted LLM trace. Press Ctrl+C again to close immediately if an active provider or HTTP call is stuck; background tasks do not hold the terminal process open.
+While a run is active, starting/configuration commands are disabled and only
+inspect/export/cancel operations remain available. Press `r` for a single run,
+`m` for a matrix, `p` for plan, `d` for Doctor, `1/2/3` for
+pipeline/coordinates/evidence, Tab to move focus, Enter to inspect, `?` for
+help, and `q` to quit while idle. Ctrl+C requests graceful cancellation;
+press Ctrl+C again to close immediately if an active provider or HTTP call is
+stuck; background tasks do not hold the terminal process open.
 
-Single and matrix setup screens expose target, provider/model, security level, surface, target method, experiment condition, payload mode and budgets, stop policy, diagnostics, reporting, guardrail handling, output location, and logging controls. “Validate only” replaces the old dry-run behavior.
-
-Settings offers typed controls and an advanced round-trip YAML editor. Its
+The launch drawers expose target, provider/model, security level, surface,
+target method, experiment condition, payload mode and budgets, stop policy,
+diagnostics, reporting, guardrail handling, output location, and logging
+controls. Review resolves and freezes the exact effective request and is the
+only place with Start; validating a configuration without running it stays in
+the headless path (`python -m tesis run --dry-run`). The settings
+drawer offers the same typed controls and advanced round-trip YAML editor. Its
 profile-level reasoning slider and global two-role slider are independent. If
-the loaded role values differ—including one explicit value plus one inherited
-value—the global slider displays a truthful mixed label such as
+the loaded role values differ--including one explicit value plus one inherited
+value--the global slider displays a truthful mixed label such as
 `orchestrator=xhigh, payload_generator=inherit` and preserves both values on
-save until the operator moves it. Pointer clicks map only to the rendered marker
-track. YAML ordering, comments, nested model blocks, and unknown keys are
-retained. Blank secret inputs preserve their existing values; the UI warns
+save until the operator moves it. Pointer clicks map only to the rendered
+marker track. YAML ordering, comments, nested model blocks, and unknown keys
+are retained. Blank secret inputs preserve their existing values; the UI warns
 before saving a literal secret.
 
-## Runtime dashboard
+Runs execute on a daemon background thread. The mission-control panes show
+graph stages, coordinate rows, verified evidence, bounded notices, and matrix
+progress; the full redacted event trace lives in the trace drawer. Notices do
+not steal focus. Core runners communicate through UI-independent `RunEvent`,
+`RuntimeEventSink`, and `CancellationToken` contracts; runtime and evaluation
+modules do not import Textual.
 
-Runs execute on a daemon background thread. The dashboard shows graph stages, streamed model output, prompt/response trace, method and AKG telemetry, candidate validation, active failures, and matrix progress. Live logs and trace rendering are bounded for terminal stability; the artifact retains the complete execution log. Core runners communicate through UI-independent `RunEvent`, `RuntimeEventSink`, and `CancellationToken` contracts; runtime and evaluation modules do not import Textual.
-
-Cancellation is cooperative: after the active LLM or HTTP operation returns, no later graph or matrix work is scheduled. The latest safe state is persisted with status `cancelled`.
+Cancellation is cooperative: after the active LLM or HTTP operation returns, no
+later graph or matrix work is scheduled. The latest safe state is persisted
+with status `cancelled`.
 
 ## Results and artifact identity
 
-Recent Results reads both historical and current JSON artifacts, ignores malformed files, supports metadata filters, and provides detail tabs and JSON/Markdown/terminal exports.
+The results drawer reads both historical and current JSON artifacts, ignores
+malformed files, supports metadata filters, and provides triage detail with a
+JSON triage export (`Export JSON` writes the summary to
+`tui-results-export.json`). Deep JSON, graphs, and charts stay in the web app.
+
 
 Every new execution has:
 

@@ -13,13 +13,19 @@ uv run tesis run
 needed. With an activated shell (`source .venv/bin/activate`), bare
 `tesis run` (or `python -m tesis run`) works too.
 
-The command opens the run-console shell (transcript-first, slash commands
-such as `/run`, `/matrix`, `/plan`, `/doctor`, `/help`) and requires a TTY.
-Set `TESIS_NEW_SHELL=0` to restore the legacy menu-first TUI instead.
-Choose **Validate Framework** or **Validate only** on a setup screen for
-explicit validation workflows. Single runs, matrices, settings, reports,
-result filtering, exports, and framework information live inside the
-TUI. For automation or LLM-driven terminal execution, use the headless layer
+The command opens the mission-control TUI and requires a TTY and a minimum
+60x18 terminal; smaller terminals show a size message with only quit/help
+available. There is no permanent command input: press `/`, `:`, or Ctrl+P to
+summon the command launcher (`run`, `matrix`, `plan`, `cancel`, `coordinates`,
+`evidence`, `failure`, `trace`, `doctor`, `results`, `settings`, `export`,
+`about`, `help`, `quit`). `/run` and `/matrix` open the guided launcher
+(Scope, Coordinates, Runtime, Review); Review is the only place with Start.
+While a run is active, starting/configuration commands are disabled and only
+inspect/export/cancel operations remain available. Validating a configuration
+without running it stays in the headless path (`uv run tesis run --dry-run`).
+Doctor, results, settings, reports, result filtering, and exports live inside
+drawers.
+For automation or LLM-driven terminal execution, use the headless layer
 with explicit flags:
 
 ```bash
@@ -50,8 +56,8 @@ native thinking configuration. If effective effort is explicit and
 and final output. Null/inherit keeps the historical defaults: 96 for the
 orchestrator and `min(512, 96 + 64 * candidate_budget)` for payload generation.
 
-The run and Settings forms use the same discrete marker slider. Settings keeps
-the profile-level slider independent from the global two-role slider. If loaded
+The launch and settings drawers use the same discrete marker slider.
+Settings keeps the profile-level slider independent from the global two-role slider. If loaded
 role values differ—even one explicit value plus one inherit—the global control
 shows a mixed label such as
 `orchestrator=xhigh, payload_generator=inherit`. Saving without moving it
@@ -80,8 +86,8 @@ JSON mode emits one object with `status`,
 `summary{passed,failed,skipped,total}`, and `checks`; each check contains `id`,
 `category`, `status`, `summary`, `details`, and `remediation`. Top-level status
 is failed only when at least one check fails; skipped checks remain separate.
-Exit codes are 0 for passed, 1 for failed, and 2 for usage errors. The TUI
-Validation screen has separate offline and live Doctor buttons. Neither mode
+Exit codes are 0 for passed, 1 for failed, and 2 for usage errors. The Doctor
+drawer has separate offline and live Doctor actions. Neither mode
 runs automatically, gates an experiment, quarantines a provider, or changes
 runtime topology.
 
@@ -116,21 +122,20 @@ The framework autonomously discovers and exploits vulnerabilities in DVWA using 
 
 Simple flow:
 
-1. The TUI starts from `tesis run` and resolves a validated setup from `config.yaml` plus the selected form values.
+1. The mission-control TUI starts from `tesis run` and resolves a validated setup from `config.yaml` plus the launch drawer values; Review freezes the resolved request until terminal state.
 2. A LangGraph workflow is assembled from `core/graph_builder.py`.
 3. `recon` crawls DVWA, extracts CSRF tokens, maps endpoints, and derives observable preconditions.
 4. `orchestrator` queries the AKG for viable method agents and uses LLM reasoning to pick the best next method.
 5. One of 9 method agents executes the canonical **PROBE → EXPLOIT → CHAIN CHECK** pipeline against DVWA via real HTTP.
 6. `chaining_coordinator` checks for cross-surface chain opportunities and routes directly to the next agent (bypassing the orchestrator) or falls back to unexplored methods.
 7. `scorer` computes graduated 0–4 scores per surface plus aggregate quality metrics.
-8. Evaluation streams redacted runtime events to the dashboard and writes auditable artifacts to `results/`.
+8. Evaluation streams redacted runtime events to the mission-control panes (pipeline, coordinates, evidence, bounded notices) and writes auditable artifacts to `results/`.
 
 Ctrl+C requests cooperative cancellation. The current LLM or HTTP call is
 allowed to return, later graph or matrix coordinates are not scheduled, and
-the latest safe state is saved with status `cancelled`. Tab switches between
-the default model-response stream and the redacted prompt/response trace. The
-live trace is bounded for terminal stability; the saved artifact retains the
-complete execution log.
+the latest safe state is saved with status `cancelled`. The full redacted
+event trace lives in the trace drawer and is bounded for terminal stability;
+the saved artifact retains the complete execution log.
 
 Press Ctrl+C again while cancellation is pending to close the TUI immediately.
 Runtime, validation, result-scan, and artifact-load tasks use daemon background
