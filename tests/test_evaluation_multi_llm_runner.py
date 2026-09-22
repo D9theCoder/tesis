@@ -4,7 +4,7 @@ This module verifies current behavior for state handling, routing, payloads,
 LLM adapters, agents, evaluation, or CLI integration without changing runtime
 code."""
 from evaluation.multi_llm_runner import _build_matrix_aggregate, run_provider_matrix
-from tesis.runtime_events import CancellationToken, CollectingEventSink
+from tesis.runtime_events import REDACTED, CancellationToken, CollectingEventSink, RunEvent
 import threading
 import time
 
@@ -741,3 +741,133 @@ def test_matrix_workers_overlap_and_store_artifacts_in_coordinate_order(monkeypa
 
     assert peak == 2
     assert [artifact["config"]["security_level"] for artifact in artifacts] == ["high", "low"]
+
+def test_matrix_run_events_carry_canonical_coordinate_identity(monkeypatch):
+    """matrix.run.started/finished expose the canonical preparation index and execution id."""
+    child_execution_ids: list[str] = []
+
+    def fake_run(**kwargs):
+        child_execution_ids.append(kwargs["execution_id"])
+        kwargs["event_sink"].emit(RunEvent(
+            event_type="llm.completed",
+            execution_id=kwargs["execution_id"],
+            message="child work",
+        ))
+        return {
+            "schema_version": "tui.v1",
+            "execution_id": kwargs["execution_id"],
+            "run_id": f"run-{kwargs['security_level']}",
+            "status": "error" if kwargs["security_level"] == "low" else "success",
+            "selected_method": "sqli_union",
+            "confirmed_vulns": [{"api_key": "secret-value", "finding": "sqli"}],
+            "achieved_outcomes": ["authenticated_session"],
+            "task_result": "SUCCESS",
+            "failure": {"failure_class": "auth_failure", "message": "bad creds"}
+            if kwargs["security_level"] == "low" else None,
+            "config": {"security_level": kwargs["security_level"]},
+            "timing": {},
+            "final_state": {},
+            "report": {},
+            "error": None,
+        }
+
+    monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", fake_run)
+    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["gemini"])
+    sink = CollectingEventSink()
+
+    artifacts = run_provider_matrix(
+        target_url="http://localhost/dvwa",
+        providers=["gemini"],
+        security_levels=["low", "high"],
+        surfaces=["sqli"],
+        payload_modes=["hybrid"],
+        repeats=1,
+        llm_max_concurrency=1,
+        event_sink=sink,
+    )
+
+    # Single worker: preparation order is high(0), low(1) after canonical sort.
+    assert [artifact["config"]["security_level"] for artifact in artifacts] == ["high", "low"]
+    started = [event for event in sink.events if event.event_type == "matrix.run.started"]
+    finished = [event for event in sink.events if event.event_type == "matrix.run.finished"]
+    assert [(event.data["coordinate_index"], event.data["security_level"]) for event in started] == [(0, "high"), (1, "low")]
+    assert [(event.data["coordinate_index"], event.data["security_level"]) for event in finished] == [(0, "high"), (1, "low")]
+    for event in started:
+        assert event.data["coordinate_execution_id"]
+        assert event.execution_id != event.data["coordinate_execution_id"]
+    for event in finished:
+        assert event.data["coordinate_execution_id"]
+        assert event.data["run_id"] == f"run-{event.data['security_level']}"
+        assert event.data["selected_method"] == "sqli_union"
+        assert event.data["task_result"] == "SUCCESS"
+        assert event.data["confirmed_vulns"] == [{"api_key": REDACTED, "finding": "sqli"}]
+        assert event.data["achieved_outcomes"] == ["authenticated_session"]
+    by_index = {event.data["coordinate_index"]: event for event in finished}
+    assert by_index[1].data["failure_class"] == "auth_failure"
+    assert "failure_class" not in by_index[0].data
+    # Child RunEvent.execution_id values map to the coordinate execution id.
+    child_events = [event for event in sink.events if event.event_type == "llm.completed"]
+    assert len(child_events) == 2
+    assert {event.execution_id for event in child_events} == set(child_execution_ids)
+    assert {event.execution_id for event in child_events} == {
+        event.data["coordinate_execution_id"] for event in finished
+    }
+
+
+def test_matrix_out_of_order_completion_correlates_identity_and_preserves_order(monkeypatch):
+    """Concurrent completion updates the correct row; artifact order is unchanged."""
+    def delayed_engagement(**kwargs):
+        # Canonical first coordinate (high) finishes last.
+        time.sleep(0.06 if kwargs["security_level"] == "high" else 0.01)
+        return {
+            "schema_version": "tui.v1",
+            "execution_id": kwargs["execution_id"],
+            "run_id": f"run-{kwargs['security_level']}",
+            "status": "success",
+            "selected_method": "sqli_union",
+            "confirmed_vulns": [kwargs["security_level"]],
+            "achieved_outcomes": [],
+            "task_result": "SUCCESS",
+            "config": {
+                "provider": kwargs["llm_provider"],
+                "surface": kwargs["surface"],
+                "security_level": kwargs["security_level"],
+                "payload_mode": kwargs["payload_mode"],
+            },
+            "timing": {},
+            "final_state": {},
+            "report": {},
+            "error": None,
+        }
+
+    monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", delayed_engagement)
+    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["gemini"])
+    sink = CollectingEventSink()
+
+    artifacts = run_provider_matrix(
+        target_url="http://localhost/dvwa",
+        providers=["gemini"],
+        security_levels=["low", "high"],
+        surfaces=["sqli"],
+        payload_modes=["hybrid"],
+        repeats=1,
+        llm_max_concurrency=2,
+        event_sink=sink,
+    )
+
+    # Aggregate artifact ordering still follows canonical preparation order.
+    assert [artifact["config"]["security_level"] for artifact in artifacts] == ["high", "low"]
+    finished = [event for event in sink.events if event.event_type == "matrix.run.finished"]
+    assert len(finished) == 2
+    # Low (index 1) completes first despite being prepared second.
+    assert [event.data["coordinate_index"] for event in finished] == [1, 0]
+    by_index = {event.data["coordinate_index"]: event for event in finished}
+    assert by_index[0].data["run_id"] == "run-high"
+    assert by_index[0].data["confirmed_vulns"] == ["high"]
+    assert by_index[1].data["run_id"] == "run-low"
+    assert by_index[1].data["confirmed_vulns"] == ["low"]
+    started_ids = {
+        event.data["coordinate_index"]: event.data["coordinate_execution_id"]
+        for event in sink.events if event.event_type == "matrix.run.started"
+    }
+    assert {index: event.data["coordinate_execution_id"] for index, event in by_index.items()} == started_ids

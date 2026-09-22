@@ -845,12 +845,24 @@ def run_provider_matrix(
             )
         ordered_artifacts[index] = artifact
         completed = sum(item is not None for item in ordered_artifacts)
-        emit("matrix.run.finished", message="Matrix coordinate finished", data={
+        failure = artifact.get("failure")
+        failure_class = failure.get("failure_class") if isinstance(failure, dict) else None
+        finished_data: dict[str, Any] = {
             **coordinate,
+            "coordinate_index": index,
+            "coordinate_execution_id": prepared[index][3],
+            "run_id": artifact.get("run_id"),
+            "selected_method": artifact.get("selected_method"),
+            "confirmed_vulns": redact_secrets(list(artifact.get("confirmed_vulns") or [])),
+            "achieved_outcomes": redact_secrets(list(artifact.get("achieved_outcomes") or [])),
+            "task_result": artifact.get("task_result"),
             "status": artifact.get("status", "unknown"),
             "completed": completed,
             "total": total_runs,
-        })
+        }
+        if failure_class:
+            finished_data["failure_class"] = failure_class
+        emit("matrix.run.finished", message="Matrix coordinate finished", data=finished_data)
 
     def shutdown_executor(executor: ThreadPoolExecutor) -> None:
         """Wait for safe worker boundaries even when Ctrl-C repeats."""
@@ -882,7 +894,10 @@ def run_provider_matrix(
                     continue
                 completed = sum(item is not None for item in ordered_artifacts)
                 emit("matrix.run.started", message="Starting matrix coordinate", data={
-                    **coordinate, "completed": completed, "total": total_runs,
+                    **coordinate,
+                    "coordinate_index": index,
+                    "coordinate_execution_id": run_execution_id,
+                    "completed": completed, "total": total_runs,
                 })
                 future = executor.submit(
                     execute_coordinate, coordinate, coordinate_output_dir, run_execution_id
