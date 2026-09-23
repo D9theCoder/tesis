@@ -66,6 +66,32 @@ verification, scores, guardrails, fallbacks, containment, exceptions, and
 matrix coordinates. Providers that expose streaming callbacks produce token
 events; a completed response remains available when streaming is absent.
 
+## TUI module boundaries
+
+`tesis.tui` is the public import root and a small facade for `TesisApp`,
+`run_tui`, and the supported names in `__all__`. The implementation lives in
+flat sibling modules so callers keep the same public entry point while each
+module has a focused responsibility:
+
+- `tesis.tui_security` owns secret redaction, URL sanitization, and safe error
+  formatting.
+- `tesis.tui_state` owns shared paths, TUI state types, and the run-event
+  reducer. It has no Textual dependency.
+- `tesis.tui_commands` owns the command registry, navigation and terminal-size
+  policy, shared drawer base, and command launcher.
+- `tesis.tui_forms` owns launch and settings forms, including configuration
+  editing.
+- `tesis.tui_drawers` owns coordinate, evidence, failure, trace, result,
+  doctor, plan, help, and about views.
+- `tesis.tui_mission` owns the mission screen, live rendering, event delivery,
+  and runtime cancellation.
+
+State and security modules provide the shared lower-level helpers. Screen,
+drawer, and launcher links that would otherwise create import cycles use
+method-local imports, keeping the top-level TUI import graph acyclic. Public
+exports remain available through `tesis.tui`; moved private helpers are
+imported from their owning module.
+
 ## Cancellation
 
 `CancellationToken` is cooperative and thread-safe. Ctrl+C sets the token; a

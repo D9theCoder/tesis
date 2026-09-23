@@ -1,7 +1,6 @@
 # Handoff — TUI module split (2026-09-22)
 
-Status: `docs/upcoming/` (proposed, unstarted). Move to `docs/active/` when
-implementation starts; to `docs/completed/` only after all acceptance checks pass.
+Status: `docs/completed/`. Implementation and §12 acceptance checks passed.
 
 Behavioral source of truth (do not re-derive behavior here):
 
@@ -125,7 +124,6 @@ flowchart TD
     ST --> MIS
     SEC --> MIS
     CMD --> MIS
-    SEC --> FAC
     ST --> FAC
     CMD --> FAC
     FORMS --> FAC
@@ -175,8 +173,9 @@ only** (inside the method body, never at module top). Rules:
 - Keep flat `tesis/tui_*.py` siblings; do NOT create a `tesis/tui/` package —
   Python resolves the package over the module file, which would shadow the
   `tesis.tui` import root the CLI and tests rely on.
-- `tui.py` is the only module that top-level imports all six owners (for
-  re-export). `cli.py` keeps importing only `tesis.tui`.
+- `tui.py` top-level imports the public owner modules it re-exports. The
+  security owner has no public `__all__` names and is loaded through its
+  consumers. `cli.py` keeps importing only `tesis.tui`.
 - `TesisApp` stays in `tui.py` (same directory as `tui.tcss`) so relative
   `CSS_PATH = "tui.tcss"` resolution is unchanged.
 
@@ -225,7 +224,7 @@ currently reach past `__all__` and patch facade globals:
   test retarget together), while behavior-focused assertions and public exports
   stay stable. Example: when `_redact_text` moves, tests patching or importing
   it switch from `tui._redact_text` to `tui_security._redact_text` in that same
-  commit; `tui._redact_text` is not kept as a private alias.
+  change; `tui._redact_text` is not kept as a private alias.
 - `CONFIG_PATH` is a public re-export, but rebinding `tui.CONFIG_PATH` is a
   test seam, not shared Python module state. From Phase 2, patch
   `tui_state.CONFIG_PATH` and have every consumer read that owner attribute at
@@ -248,7 +247,7 @@ currently reach past `__all__` and patch facade globals:
 Each phase: move symbols verbatim, migrate every caller and test in the same
 change, delete the old definitions. No duplicate implementations, no shims.
 Each phase ends green (focused + full suite) and is independently revertible
-by reverting its single commit with no test edits.
+by reverting its phase-specific source and test changes together.
 
 - **Phase 0 — baseline contract inventory.** Add one test asserting every `__all__` name (29) resolves on `tesis.tui`. Pre-move the defining module is `tui.py` itself; from Phase 2 onward the same test asserts `is`-identity to the owning module. No moves, no private-name inventory test (private seams migrate atomically in their phase per §8; pinning them in Phase 0 would freeze implementation detail). Oracle for phases 1–5.
 - **Phase 1 — extract `tui_security.py`.** Move the 12-symbol §4 security cluster (no `__all__` names inside, so no facade re-export change). Internal callers import from `tui_security`; retarget private test imports/patches to `tui_security` atomically, no private alias kept on `tui`. Green gate: §11 rows 1, 5, 6.
@@ -306,19 +305,69 @@ behavior changes.
    restoration, representative screenshots equivalent.
 4. No duplicate symbol definitions (`grep` each moved name: defined once, in
    its owner); no shims/aliases for test-only internals; obsolete definitions
-   removed in the same commit that moves them.
+   removed in the same change that moves them.
 5. `tesis/tui.py` holds only §5 facade rows (~150–200 lines, diagnostic).
 6. This handoff moves `upcoming → active → completed` per §13 with links updated.
 
 ## 13. Docs lifecycle
 
-Per `AGENTS.md`: this file starts at `docs/upcoming/` (proposed). Move to
-`docs/active/` when implementation starts; move to `docs/completed/` only
-after §12 passes. Update inbound links on each move. Generated captures stay
-under ignored `docs/tui_*/` paths, never in lifecycle folders. `README.md` /
-`guide.md` change only if user-visible behavior changes (not expected).
+Per `AGENTS.md`, this handoff moved from `docs/upcoming/` to `docs/active/`
+when implementation started, then to `docs/completed/` after §12 passed. No
+inbound links to the old path were found. Generated captures stay under
+ignored `docs/tui_*/` paths, never in lifecycle folders. `README.md` / `guide.md`
+change only if user-visible behavior changes (not expected).
 
-## 14. Rejected alternatives
+## 14. Implementation and acceptance record (2026-09-23)
+
+Phase 5 moved MissionControlScreen and its rendering/runtime helpers to
+tesis/tui_mission.py, moved CommandLauncher to tesis/tui_commands.py, migrated
+the drawer/launcher method-local imports and consuming test seams, and kept
+the facade contract and TesisApp.CSS_PATH in tesis/tui.py.
+
+Verified:
+
+- §11 row 1: .venv/bin/pytest -q tests/test_tui.py tests/test_tui_performance.py
+  — 128 passed.
+- §11 row 2: .venv/bin/pytest -q tests/test_evaluation_multi_llm_runner.py
+  — 18 passed.
+- §11 row 3: .venv/bin/python -m tesis run --dry-run --config config.yaml
+  — 4 payload coordinates validated; AKG and runtime graph compiled.
+- §11 row 4: .venv/bin/pytest -q — 1,559 passed.
+- §11 rows 5–6: all TUI modules import; facade owner identity assertions pass;
+  AST checks found every target symbol in exactly one owner, no forbidden
+  top-level imports in tui_security/tui_state, and an acyclic top-level
+  TUI import graph.
+- §11 rows 7–9: existing redaction, reducer, launcher/drawer, and screen
+  interaction contracts passed in the focused and full suites.
+- §11 row 11: normalized SVGs matched pre-split HEAD:tesis/tui.py exactly
+  for 12 representative cases: READY at 120×36, RUNNING at 80×24, Help at
+  60×18, and the 59×17 floor state, each in dark, light, and mono themes.
+  Textual's generated terminal class ID was normalized. The stored 59×17
+  capture uses an earlier canary target fixture, so its header text differs
+  from the current local config; the controlled split-vs-pre-split comparisons
+  were exact and the floor notice remained identical.
+- uv run could not acquire its cache lock because the configured uv cache is
+  read-only. The repository .venv executables ran the same checks.
+
+§11 row 10 passed with a controlling terminal created by `pty.fork()`. Real
+key input exercised idle quit; launcher, Doctor, and Help open/close then
+quit; resize to 59×17 then quit; graceful cancellation then quit; second
+Ctrl+C during an active run; and runner error then quit. The harness observed
+the relevant screen or run-state transitions and compared
+`termios.tcgetattr(0)` before and after `TesisApp.run()` in each child. Every
+path exited with its terminal settings restored. The earlier PTY bridge did
+not deliver keys to either the split app or pre-split HEAD, so its timeouts
+were not used as acceptance evidence.
+
+The final source review found all 64 pre-split top-level definitions exactly
+once across the owners; their ASTs matched after owner import references were
+normalized. The facade is 148 lines. A separate reviewer run passed the full
+suite (1,559 tests), focused TUI and runner suites together (146 tests), the
+four-coordinate dry run, and Textual-blocked leaf imports. `git diff --check`
+passed. The documentation lifecycle is complete. No commit, staging, or push
+was performed, as requested; phase-specific rollback was not exercised.
+
+## 15. Rejected alternatives
 
 - **Per-drawer files (11 modules).** Import sprawl for ~25–300-line classes
   sharing one shell, one triage helper set, and one floor policy; multiplies

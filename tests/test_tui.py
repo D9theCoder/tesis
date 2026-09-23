@@ -14,10 +14,80 @@ import json
 from dataclasses import fields
 from pathlib import Path
 
-from tesis import tui
+from tesis import tui, tui_commands, tui_drawers, tui_forms, tui_mission, tui_security, tui_state
 from tesis.artifact_repository import ArtifactRepository
 from tesis.model_config import EngagementConfig, ModelConfig
 from tesis.runtime_events import RunEvent
+
+
+# ---------------------------------------------------------------- public contract
+
+def test_public_tui_exports_resolve():
+    expected = (
+        "AboutDrawer",
+        "COMMANDS",
+        "CONFIG_PATH",
+        "CommandLauncher",
+        "CommandSpec",
+        "CoordinateDrawer",
+        "CoordinateRow",
+        "DETAIL_LOG_MAX_LINES",
+        "DETAIL_RENDER_MAX_CHARS",
+        "DoctorDrawer",
+        "EvidenceDrawer",
+        "FailureDrawer",
+        "FailureSummary",
+        "HelpDrawer",
+        "LaunchDrawer",
+        "MissionControlScreen",
+        "PlanDrawer",
+        "ResultsDrawer",
+        "RunStatus",
+        "SettingsDrawer",
+        "StageRow",
+        "StageStatus",
+        "SHELL_MONO_THEME",
+        "SHELL_MONO_THEME_NAME",
+        "TesisApp",
+        "TraceDrawer",
+        "TuiRunState",
+        "apply_run_event",
+        "run_tui",
+    )
+    assert tuple(tui.__all__) == expected
+    for name in expected:
+        assert getattr(tui, name) is not None, f"tesis.tui.{name} missing"
+    for name in (
+        "CONFIG_PATH",
+        "CoordinateRow",
+        "FailureSummary",
+        "RunStatus",
+        "StageRow",
+        "StageStatus",
+        "TuiRunState",
+        "apply_run_event",
+    ):
+        assert getattr(tui, name) is getattr(tui_state, name), f"{name} must be re-exported by identity"
+    assert tui.REPOSITORY_ROOT is tui_state.REPOSITORY_ROOT
+    for name in ("COMMANDS", "CommandSpec", "CommandLauncher"):
+        assert getattr(tui, name) is getattr(tui_commands, name), f"{name} must be re-exported by identity"
+    assert tui.MissionControlScreen is tui_mission.MissionControlScreen
+    for name in ("LaunchDrawer", "SettingsDrawer"):
+        assert getattr(tui, name) is getattr(tui_forms, name), f"{name} must be re-exported by identity"
+    for name in (
+        "AboutDrawer",
+        "CoordinateDrawer",
+        "DETAIL_LOG_MAX_LINES",
+        "DETAIL_RENDER_MAX_CHARS",
+        "DoctorDrawer",
+        "EvidenceDrawer",
+        "FailureDrawer",
+        "HelpDrawer",
+        "PlanDrawer",
+        "ResultsDrawer",
+        "TraceDrawer",
+    ):
+        assert getattr(tui, name) is getattr(tui_drawers, name), f"{name} must be re-exported by identity"
 
 
 # ---------------------------------------------------------------- helpers
@@ -72,6 +142,14 @@ async def _drain(screen) -> None:
     if callable(drain):
         drain()
         await asyncio.sleep(0)
+
+
+async def _wait_for_thread(pilot, thread, timeout: float = 5.0) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while thread.is_alive() and loop.time() < deadline:
+        await pilot.pause(0.01)
+    assert not thread.is_alive(), f"{thread.name} did not stop within {timeout:g} seconds"
 
 
 def _pane_text(screen, selector: str) -> str:
@@ -168,7 +246,7 @@ def test_context_bar_redacts_target_credentials_and_query_tokens(monkeypatch):
         f"http://admin:{leaked}@localhost/dvwa"
         f"?api_key={secret}&debug=1#token={secret}"
     )
-    monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kw: config)
+    monkeypatch.setattr(tui_mission, "load_and_resolve_config", lambda **_kw: config)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -192,7 +270,7 @@ def test_context_bar_redacts_target_credentials_and_query_tokens(monkeypatch):
 def test_chrome_shows_context_status_and_navigation_footer():
     MissionControlScreen = _require("MissionControlScreen")
     COMMANDS = _require("COMMANDS")
-    NAVIGATION_KEYS = _require("NAVIGATION_KEYS")
+    NAVIGATION_KEYS = tui_commands.NAVIGATION_KEYS
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -232,12 +310,12 @@ def test_paused_notice_badge_grows_past_the_cap_and_coalescing_counts_repeats():
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, MissionControlScreen)
-            for i in range(tui.NOTICE_MAX_ENTRIES + 60):
+            for i in range(tui_state.NOTICE_MAX_ENTRIES + 60):
                 screen._post_event(RunEvent("graph.node.completed", node="recon", message=f"evt-{i}"))
             await _drain(screen)
             await pilot.pause()
             capped = len(screen.state.notices)
-            assert capped == tui.NOTICE_MAX_ENTRIES, f"notices must stay bounded, got {capped}"
+            assert capped == tui_state.NOTICE_MAX_ENTRIES, f"notices must stay bounded, got {capped}"
 
             body = screen.query_one("#notice-body")
             body.scroll_to(y=0, animate=False)
@@ -354,7 +432,7 @@ def test_context_bar_shows_target_condition_and_provider_model(monkeypatch):
     config.experiment_condition = "akg_guided_hybrid"
     config.provider = "openai_compatible"
     config.models = {"openai_compatible": ModelConfig("openai_compatible", "", "test-model")}
-    monkeypatch.setattr(tui, "load_and_resolve_config", lambda **kwargs: config)
+    monkeypatch.setattr(tui_mission, "load_and_resolve_config", lambda **kwargs: config)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -375,7 +453,7 @@ def test_status_strip_reports_containment_method_elapsed_and_artifacts(monkeypat
     MissionControlScreen = _require("MissionControlScreen")
     config = _config()
     config.output_dir = "results/runs"
-    monkeypatch.setattr(tui, "load_and_resolve_config", lambda **kwargs: config)
+    monkeypatch.setattr(tui_mission, "load_and_resolve_config", lambda **kwargs: config)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -512,7 +590,7 @@ def test_compact_readiness_keeps_every_fact_visible_at_60_columns(monkeypatch):
     config.provider = "openai_compatible"
     config.models = {"openai_compatible": ModelConfig(
         "openai_compatible", "", "a-deliberately-long-coordinate-model-name")}
-    monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kw: config)
+    monkeypatch.setattr(tui_mission, "load_and_resolve_config", lambda **_kw: config)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -579,7 +657,7 @@ def test_footer_is_contextual_for_idle_and_active_runs():
 
 def test_help_lists_navigation_keys_and_registry_commands():
     COMMANDS = _require("COMMANDS")
-    NAVIGATION_KEYS = _require("NAVIGATION_KEYS")
+    NAVIGATION_KEYS = tui_commands.NAVIGATION_KEYS
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -1102,7 +1180,7 @@ def test_launcher_lists_registry_with_per_command_gating_while_active():
     async def scenario() -> None:
         from unittest.mock import patch
 
-        with patch.object(tui, "run_single_engagement", blocked_single):
+        with patch.object(tui_mission, "run_single_engagement", blocked_single):
             app = tui.TesisApp()
             async with app.run_test(size=(120, 36)) as pilot:
                 await pilot.pause()
@@ -1176,7 +1254,7 @@ def test_launcher_displays_all_idle_commands_when_idle():
 
 def test_launch_drawer_has_four_steps_and_frozen_review_count(monkeypatch):
     LaunchDrawer = _require("LaunchDrawer")
-    monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kw: _config())
+    monkeypatch.setattr(tui_forms, "load_and_resolve_config", lambda **_kw: _config())
 
     async def scenario() -> None:
         from textual.widgets import Button, Input, Select
@@ -1245,8 +1323,8 @@ def test_launch_start_freezes_request_until_terminal(monkeypatch):
         release.wait(timeout=5)
         return {"status": "cancelled"}
 
-    monkeypatch.setattr(tui, "run_single_engagement", blocked_single)
-    monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kw: _config())
+    monkeypatch.setattr(tui_mission, "run_single_engagement", blocked_single)
+    monkeypatch.setattr(tui_forms, "load_and_resolve_config", lambda **_kw: _config())
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -1576,7 +1654,7 @@ def test_overlays_dismiss_below_the_floor_but_help_stays():
             await app.push_screen(drawer_factory())
             await pilot.pause()
             active = type(app.screen).__name__
-            if isinstance(app.screen, tui.BaseDrawer):
+            if isinstance(app.screen, tui_commands.BaseDrawer):
                 await pilot.press("escape")
                 await pilot.pause()
             return active
@@ -1808,15 +1886,15 @@ def test_yaml_round_trip_preserves_comments_order_and_env_placeholders(tmp_path)
 
 
 def test_masked_secrets_restore_and_blank_stays_blank():
-    masked, preserved = tui._mask_yaml_secrets({
+    masked, preserved = tui_security._mask_yaml_secrets({
         "models": {"gemini": {"api_key": "literal-secret-value", "model_name": "m"}},
     })
     assert "literal-secret-value" not in json.dumps(masked)
     assert preserved, "literal secret must produce a restorable placeholder"
-    restored = tui._restore_yaml_secrets(masked, preserved)
+    restored = tui_security._restore_yaml_secrets(masked, preserved)
     assert restored["models"]["gemini"]["api_key"] == "literal-secret-value"
 
-    masked_blank, preserved_blank = tui._mask_yaml_secrets(
+    masked_blank, preserved_blank = tui_security._mask_yaml_secrets(
         {"models": {"gemini": {"api_key": ""}}})
     assert preserved_blank == {}
     assert masked_blank["models"]["gemini"]["api_key"] == ""
@@ -1830,7 +1908,7 @@ def test_settings_two_save_literal_secret_warning(tmp_path, monkeypatch):
         "models:\n  gemini:\n    model_name: test-model\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(tui, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(tui_state, "CONFIG_PATH", config_path)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -1867,7 +1945,7 @@ def test_settings_rejects_bad_yaml_and_bad_concurrency(tmp_path, monkeypatch):
     config_path = tmp_path / "config.yaml"
     original = "# keep\ntarget_url: http://localhost/dvwa\nprovider: gemini\nlevel: low\n"
     config_path.write_text(original, encoding="utf-8")
-    monkeypatch.setattr(tui, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(tui_state, "CONFIG_PATH", config_path)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -1893,7 +1971,7 @@ def test_settings_rejects_bad_yaml_and_bad_concurrency(tmp_path, monkeypatch):
 
 
 def test_config_error_text_redacts_secrets():
-    text = tui._safe_config_error_text(RuntimeError("boom sk-live-abc123"))
+    text = tui_security._safe_config_error_text(RuntimeError("boom sk-live-abc123"))
     assert "sk-live-abc123" not in text
 
 
@@ -1911,7 +1989,7 @@ def test_ctrl_c_cancels_and_second_ctrl_c_exits(tmp_path, monkeypatch):
         release.wait(timeout=5)
         return {"status": "cancelled"}
 
-    monkeypatch.setattr(tui, "run_single_engagement", blocked_single)
+    monkeypatch.setattr(tui_mission, "run_single_engagement", blocked_single)
     thread_ref: dict = {}
 
     async def scenario() -> None:
@@ -1973,7 +2051,7 @@ def test_q_refused_while_run_active(tmp_path, monkeypatch):
         release.wait(timeout=5)
         return {"status": "cancelled"}
 
-    monkeypatch.setattr(tui, "run_single_engagement", blocked_single)
+    monkeypatch.setattr(tui_mission, "run_single_engagement", blocked_single)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -2008,7 +2086,7 @@ def test_natural_run_completion_reaches_terminal_status(tmp_path, monkeypatch):
     def silent_single(**kwargs):
         return {"status": "success"}
 
-    monkeypatch.setattr(tui, "run_single_engagement", silent_single)
+    monkeypatch.setattr(tui_mission, "run_single_engagement", silent_single)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -2019,7 +2097,7 @@ def test_natural_run_completion_reaches_terminal_status(tmp_path, monkeypatch):
             screen.start_run(_config(tmp_path), mode="single")
             thread = screen._runtime_thread
             assert thread is not None
-            await asyncio.to_thread(thread.join, 5)
+            await _wait_for_thread(pilot, thread)
             await _drain(screen)
             await pilot.pause()
             assert not screen.run_active
@@ -2049,7 +2127,7 @@ def test_single_runner_receives_serialized_model_config(tmp_path, monkeypatch):
             extra={"nested": {"enabled": True}},
         )
     }
-    monkeypatch.setattr(tui, "run_single_engagement", boundary_single)
+    monkeypatch.setattr(tui_mission, "run_single_engagement", boundary_single)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -2060,7 +2138,7 @@ def test_single_runner_receives_serialized_model_config(tmp_path, monkeypatch):
             screen.start_run(config, mode="single")
             thread = screen._runtime_thread
             assert thread is not None
-            await asyncio.to_thread(thread.join, 5)
+            await _wait_for_thread(pilot, thread)
             await _drain(screen)
             await pilot.pause()
             assert screen.state.status == "succeeded"
@@ -2083,7 +2161,7 @@ def test_sink_emitted_terminal_event_drives_succeeded(tmp_path, monkeypatch):
             sink.emit(RunEvent("run.finished", message="done"))
         return {"status": "success"}
 
-    monkeypatch.setattr(tui, "run_single_engagement", emitting_single)
+    monkeypatch.setattr(tui_mission, "run_single_engagement", emitting_single)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -2094,7 +2172,7 @@ def test_sink_emitted_terminal_event_drives_succeeded(tmp_path, monkeypatch):
             screen.start_run(_config(tmp_path), mode="single")
             thread = screen._runtime_thread
             assert thread is not None
-            await asyncio.to_thread(thread.join, 5)
+            await _wait_for_thread(pilot, thread)
             await _drain(screen)
             await pilot.pause()
             assert screen.state.status == "succeeded"
@@ -2109,7 +2187,7 @@ def test_run_journal_records_terminal_status(tmp_path, monkeypatch):
     def instant_single(**kwargs):
         return {"status": "success"}
 
-    monkeypatch.setattr(tui, "run_single_engagement", instant_single)
+    monkeypatch.setattr(tui_mission, "run_single_engagement", instant_single)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -2119,7 +2197,7 @@ def test_run_journal_records_terminal_status(tmp_path, monkeypatch):
             assert isinstance(screen, MissionControlScreen)
             screen.start_run(_config(tmp_path), mode="single")
             thread = screen._runtime_thread
-            await asyncio.to_thread(thread.join, 5)
+            await _wait_for_thread(pilot, thread)
             await _drain(screen)
             await pilot.pause()
             journal = screen._journal_path
@@ -2139,7 +2217,7 @@ def test_run_mode_matrix_propagates_to_state(tmp_path, monkeypatch):
             sink.emit(RunEvent("matrix.finished", message="done"))
         return {"status": "success"}
 
-    monkeypatch.setattr(tui, "run_provider_matrix", instant_matrix)
+    monkeypatch.setattr(tui_mission, "run_provider_matrix", instant_matrix)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -2150,7 +2228,7 @@ def test_run_mode_matrix_propagates_to_state(tmp_path, monkeypatch):
             screen.start_run(_config(tmp_path), mode="matrix")
             assert screen.state.run_mode == "matrix"
             thread = screen._runtime_thread
-            await asyncio.to_thread(thread.join, 5)
+            await _wait_for_thread(pilot, thread)
             await _drain(screen)
             await pilot.pause()
             assert screen.state.run_mode == "matrix"
@@ -2196,7 +2274,7 @@ def test_results_drawer_lists_scanned_rows_promptly(tmp_path, monkeypatch):
     artifact_dir.mkdir()
     for i in range(5):
         _write_artifact(artifact_dir, f"run-{i}")
-    monkeypatch.setattr(tui, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(tui_state, "CONFIG_PATH", tmp_path / "config.yaml")
     (tmp_path / "config.yaml").write_text(
         "target_url: http://localhost/dvwa\nprovider: gemini\nlevel: low\n"
         f"output_dir: {artifact_dir}\n",
@@ -2238,9 +2316,9 @@ def test_results_detail_is_triage_only_truncated_and_redacted(tmp_path, monkeypa
                     prompt="sk-live-prompt-secret",
                     chain_of_thought="think step by step")
     _write_artifact(artifact_dir, "run-nonscore", scores={})
-    monkeypatch.setattr(tui, "DETAIL_LOG_MAX_LINES", 64, raising=False)
-    monkeypatch.setattr(tui, "DETAIL_RENDER_MAX_CHARS", 256, raising=False)
-    monkeypatch.setattr(tui, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(tui_drawers, "DETAIL_LOG_MAX_LINES", 64)
+    monkeypatch.setattr(tui_drawers, "DETAIL_RENDER_MAX_CHARS", 256)
+    monkeypatch.setattr(tui_state, "CONFIG_PATH", tmp_path / "config.yaml")
     (tmp_path / "config.yaml").write_text(
         "target_url: http://localhost/dvwa\nprovider: gemini\nlevel: low\n"
         f"output_dir: {artifact_dir}\n",
@@ -2288,7 +2366,7 @@ def test_results_drawer_offers_filters_and_export(tmp_path, monkeypatch):
     artifact_dir = tmp_path / "results"
     artifact_dir.mkdir()
     _write_artifact(artifact_dir, "run-1", provider="gemini")
-    monkeypatch.setattr(tui, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(tui_state, "CONFIG_PATH", tmp_path / "config.yaml")
     (tmp_path / "config.yaml").write_text(
         "target_url: http://localhost/dvwa\nprovider: gemini\nlevel: low\n"
         f"output_dir: {artifact_dir}\n",
@@ -2315,7 +2393,7 @@ def test_stale_results_scan_never_overwrites_newer_render(tmp_path, monkeypatch)
     artifact_dir = tmp_path / "results"
     artifact_dir.mkdir()
     _write_artifact(artifact_dir, "run-new")
-    monkeypatch.setattr(tui, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(tui_state, "CONFIG_PATH", tmp_path / "config.yaml")
     (tmp_path / "config.yaml").write_text(
         "target_url: http://localhost/dvwa\nprovider: gemini\nlevel: low\n"
         f"output_dir: {artifact_dir}\n",
@@ -2354,7 +2432,7 @@ def test_unmount_drops_pending_events_without_crash(tmp_path, monkeypatch):
         _time.sleep(0.2)
         return {"status": "success"}
 
-    monkeypatch.setattr(tui, "run_single_engagement", blocked_single)
+    monkeypatch.setattr(tui_mission, "run_single_engagement", blocked_single)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -2370,7 +2448,7 @@ def test_unmount_drops_pending_events_without_crash(tmp_path, monkeypatch):
             await _drain(screen)
             await pilot.pause()
             if thread is not None:
-                await asyncio.to_thread(thread.join, 5)
+                await _wait_for_thread(pilot, thread)
             await pilot.press("ctrl+c")
             await pilot.pause()
             assert not app.is_running
@@ -2399,7 +2477,7 @@ def test_doctor_offline_renders_structured_checks_with_counts(monkeypatch):
         }
 
     monkeypatch.setattr(doctor_mod, "run_doctor", fake_doctor)
-    monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kw: _config())
+    monkeypatch.setattr(tui_drawers, "load_and_resolve_config", lambda **_kw: _config())
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -2409,7 +2487,7 @@ def test_doctor_offline_renders_structured_checks_with_counts(monkeypatch):
             await pilot.pause()
             thread = app.screen._doctor_thread
             if thread is not None:
-                await asyncio.to_thread(thread.join, 5)
+                await _wait_for_thread(pilot, thread)
             await pilot.pause()
             svg = _svg_text(app)
             assert "AKG topology is valid" in svg
@@ -2432,7 +2510,7 @@ def test_doctor_live_requires_explicit_confirmation(monkeypatch):
                 "checks": [{"id": "live", "category": "target", "status": "passed", "summary": "ok"}]}
 
     monkeypatch.setattr(doctor_mod, "run_doctor", fake_doctor)
-    monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kw: _config())
+    monkeypatch.setattr(tui_drawers, "load_and_resolve_config", lambda **_kw: _config())
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -2451,7 +2529,7 @@ def test_doctor_live_requires_explicit_confirmation(monkeypatch):
             drawer.run_live_pressed()
             thread = drawer._doctor_thread
             if thread is not None:
-                await asyncio.to_thread(thread.join, 5)
+                await _wait_for_thread(pilot, thread)
             await pilot.pause()
             assert any(calls), "second live press must run live checks"
             await pilot.press("escape")
@@ -2559,7 +2637,7 @@ def test_launch_inputs_resolve_into_the_review(monkeypatch):
             cfg.provider = cli_args["provider"]
         return cfg
 
-    monkeypatch.setattr(tui, "load_and_resolve_config", resolver)
+    monkeypatch.setattr(tui_forms, "load_and_resolve_config", resolver)
 
     async def scenario() -> None:
         from textual.widgets import Input, Select
@@ -2596,7 +2674,7 @@ def test_settings_drawer_exposes_named_collapsible_sections(tmp_path, monkeypatc
         "models:\n  gemini:\n    model_name: test-model\n    api_key: sk-live-section-secret\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(tui, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(tui_state, "CONFIG_PATH", config_path)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -2719,7 +2797,7 @@ def test_results_drawer_stacks_filters_at_eighty_columns(tmp_path, monkeypatch):
     artifact_dir = tmp_path / "results"
     artifact_dir.mkdir()
     _write_artifact(artifact_dir, "run-1")
-    monkeypatch.setattr(tui, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(tui_state, "CONFIG_PATH", tmp_path / "config.yaml")
     (tmp_path / "config.yaml").write_text(
         "target_url: http://localhost/dvwa\nprovider: gemini\nlevel: low\n"
         f"output_dir: {artifact_dir}\n",
@@ -2778,7 +2856,7 @@ def test_doctor_offline_checks_do_not_block_the_event_loop(monkeypatch):
                             "summary": "ok"}]}
 
     monkeypatch.setattr(doctor_mod, "run_doctor", slow_doctor)
-    monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kw: _config())
+    monkeypatch.setattr(tui_drawers, "load_and_resolve_config", lambda **_kw: _config())
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -2801,7 +2879,7 @@ def test_doctor_offline_checks_do_not_block_the_event_loop(monkeypatch):
 def test_help_and_plan_drawers_render_aligned_registry_content(monkeypatch):
     HelpDrawer = _require("HelpDrawer")
     PlanDrawer = _require("PlanDrawer")
-    monkeypatch.setattr(tui, "load_and_resolve_config", lambda **_kw: _config())
+    monkeypatch.setattr(tui_drawers, "load_and_resolve_config", lambda **_kw: _config())
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -2870,7 +2948,8 @@ def test_target_query_credentials_are_hidden_in_drawer_displays(tmp_path, monkey
         cfg.target_url = secret_url
         return cfg
 
-    monkeypatch.setattr(tui, "load_and_resolve_config", resolver)
+    monkeypatch.setattr(tui_forms, "load_and_resolve_config", resolver)
+    monkeypatch.setattr(tui_drawers, "load_and_resolve_config", resolver)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -2910,7 +2989,7 @@ def test_target_query_credentials_are_hidden_in_drawer_displays(tmp_path, monkey
         "models:\n  gemini:\n    model_name: test-model\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(tui, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(tui_state, "CONFIG_PATH", config_path)
 
     async def settings_scenario() -> None:
         app = tui.TesisApp()
@@ -2947,7 +3026,8 @@ def test_url_query_and_fragment_values_are_all_redacted_and_round_trip(tmp_path,
         cfg.target_url = url
         return cfg
 
-    monkeypatch.setattr(tui, "load_and_resolve_config", resolver)
+    monkeypatch.setattr(tui_forms, "load_and_resolve_config", resolver)
+    monkeypatch.setattr(tui_drawers, "load_and_resolve_config", resolver)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -2979,7 +3059,7 @@ def test_url_query_and_fragment_values_are_all_redacted_and_round_trip(tmp_path,
         "models:\n  gemini:\n    model_name: test-model\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(tui, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(tui_state, "CONFIG_PATH", config_path)
 
     async def settings_scenario() -> None:
         app = tui.TesisApp()
@@ -3019,7 +3099,7 @@ def test_launch_target_input_masks_configured_endpoint_and_omits_untouched_overr
         cfg.target_url = cli_args.get("target", configured)
         return cfg
 
-    monkeypatch.setattr(tui, "load_and_resolve_config", resolver)
+    monkeypatch.setattr(tui_forms, "load_and_resolve_config", resolver)
 
     async def scenario() -> None:
         app = tui.TesisApp()
@@ -3060,7 +3140,7 @@ def test_launch_target_edit_keeps_visible_masked_and_overrides_with_raw(monkeypa
         cfg.target_url = cli_args.get("target", "http://localhost/dvwa")
         return cfg
 
-    monkeypatch.setattr(tui, "load_and_resolve_config", resolver)
+    monkeypatch.setattr(tui_forms, "load_and_resolve_config", resolver)
     monkeypatch.setattr(tui.MissionControlScreen, "start_run",
                         lambda self, config, mode="single": frozen.append(config))
 
@@ -3121,7 +3201,7 @@ def test_launch_guardrail_controls_use_canonical_names_and_resolved_values(monke
         cfg.evasion_cooldown_threshold = 4
         return cfg
 
-    monkeypatch.setattr(tui, "load_and_resolve_config", resolver)
+    monkeypatch.setattr(tui_forms, "load_and_resolve_config", resolver)
 
     async def scenario() -> None:
         from textual.widgets import Checkbox, Input, Select
@@ -3163,7 +3243,7 @@ def test_launch_off_registry_select_value_degrades_to_blank(monkeypatch):
         cfg.surface = "legacy_surface"
         return cfg
 
-    monkeypatch.setattr(tui, "load_and_resolve_config", resolver)
+    monkeypatch.setattr(tui_forms, "load_and_resolve_config", resolver)
 
     async def scenario() -> None:
         from textual.widgets import Select

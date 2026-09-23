@@ -14,7 +14,7 @@ from threading import Event
 from time import monotonic
 
 from evaluation.runner import _RuntimeCallbackHandler
-from tesis import tui
+from tesis import tui, tui_mission, tui_state
 from tesis.model_config import EngagementConfig, ModelConfig
 from tesis.runtime_events import RunEvent
 
@@ -73,7 +73,7 @@ def test_results_drawer_lists_many_artifacts_promptly(tmp_path: Path) -> None:
 
         from textual.widgets import DataTable
 
-        with patch.object(tui, "CONFIG_PATH", tmp_path / "config.yaml"):
+        with patch.object(tui_state, "CONFIG_PATH", tmp_path / "config.yaml"):
             app = tui.TesisApp()
             started = monotonic()
             async with app.run_test(size=(120, 36)) as pilot:
@@ -130,7 +130,7 @@ def test_blocked_runtime_shutdown_is_prompt_and_worker_is_daemon(tmp_path: Path)
 
     async def scenario() -> None:
         nonlocal runtime_thread
-        with patch.object(tui, "run_single_engagement", blocked_engagement):
+        with patch.object(tui_mission, "run_single_engagement", blocked_engagement):
             config = EngagementConfig(
                 target_url="http://localhost/dvwa", provider="gemini", level="low",
                 output_dir=str(tmp_path / "results"),
