@@ -1905,9 +1905,12 @@ def test_settings_two_save_literal_secret_warning(tmp_path, monkeypatch):
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "target_url: http://localhost/dvwa\nprovider: gemini\nlevel: low\n"
+        "owner_patch_marker: only-in-patched-file\n"
         "models:\n  gemini:\n    model_name: test-model\n",
         encoding="utf-8",
     )
+    # tui_state.CONFIG_PATH is the canonical patch point: the drawer must read
+    # this file on mount and write back to it on save.
     monkeypatch.setattr(tui_state, "CONFIG_PATH", config_path)
 
     async def scenario() -> None:
@@ -1917,6 +1920,9 @@ def test_settings_two_save_literal_secret_warning(tmp_path, monkeypatch):
             await app.push_screen(SettingsDrawer())
             await pilot.pause()
             screen = app.screen
+            assert "only-in-patched-file" in screen.query_one("#yaml-editor").text, (
+                "the settings editor must load the patched owner config path"
+            )
             screen.query_one("#yaml-editor").text = (
                 "target_url: http://localhost/dvwa\nprovider: gemini\nlevel: low\n"
                 "models:\n  gemini:\n    model_name: test-model\n    api_key: literal-secret-value\n"

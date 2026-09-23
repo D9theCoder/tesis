@@ -1,4 +1,11 @@
-"""Stable public import facade for the mission-control Textual interface."""
+"""Stable public import facade for the mission-control Textual interface.
+
+Re-exports are import-compatible snapshot bindings taken once at import, not
+synchronized views. The config path is owned by ``tesis.tui_state``: after the
+owner is rebound, a facade read still returns the original default, and
+assigning to ``tesis.tui.CONFIG_PATH`` is not a supported override
+(see ``docs/reference/architecture.md``).
+"""
 
 from __future__ import annotations
 

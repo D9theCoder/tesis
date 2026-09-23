@@ -92,6 +92,20 @@ method-local imports, keeping the top-level TUI import graph acyclic. Public
 exports remain available through `tesis.tui`; moved private helpers are
 imported from their owning module.
 
+`tui_state.CONFIG_PATH` is the single owner of the config path; forms,
+drawers, and the mission screen read `tesis.tui_state.CONFIG_PATH` at use
+time, so rebinding that attribute redirects every TUI reader.
+`tesis.tui.CONFIG_PATH` is an import-compatible snapshot binding, not a
+synchronized view: it is bound once when the facade imports, so after the owner
+is rebound the facade name still reads the original default; assigning to the
+facade attribute rebinds only that facade name, and the owner and TUI readers
+remain unchanged. Facade assignment is not a supported override and the facade
+never forwards it; no duplicate path state exists to emulate one. The explicit
+`config_path` argument of `tesis.config_loader` serves direct loader callers
+only and is not a TUI-wide override, because TUI readers pass
+`tui_state.CONFIG_PATH` themselves. A caller that needs runtime-reconfigurable
+TUI paths needs a designed config-path API, not an implicit alias.
+
 ## Cancellation
 
 `CancellationToken` is cooperative and thread-safe. Ctrl+C sets the token; a

@@ -13,6 +13,9 @@ import tesis.tui_security as tui_security
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+# Canonical owner of the config path: every TUI reader resolves it here at use
+# time, so tests redirect config files by patching this attribute. The facade
+# re-export in tesis.tui is read-compatible only; assignment there is unsupported.
 CONFIG_PATH = REPOSITORY_ROOT / "config.yaml"
 
 NOTICE_MAX_ENTRIES = 500
