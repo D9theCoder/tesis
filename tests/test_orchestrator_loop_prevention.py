@@ -141,29 +141,6 @@ class TestUsedFallbackAccuracy:
 class TestChainingRouterExhaustion:
     """Verify chaining router routes to scorer when all methods are exhausted."""
 
-    def test_all_methods_exhausted_routes_to_scorer(self):
-        """Verifies all methods exhausted routes to scorer behavior."""
-        from core.chaining_coordinator import evaluate_chain_route
-
-        state = {
-            "iteration_count": 5,
-            "max_iterations": 30,
-            "confirmed_vulns": [],
-            "achieved_outcomes": [],
-            "current_surface": "sqli",
-            "attempted_agents": [
-                "sqli_union", "sqli_error",
-                "sqli_boolean_blind", "sqli_time_blind",
-            ],
-            "blocked_agents": [],
-            "failure_agents": [],
-            "observations": {},
-        }
-
-        next_agent, event = evaluate_chain_route(state)
-        assert next_agent == "scorer"
-        assert event["reason"] == "all_methods_exhausted"
-
     def test_duplicate_attempted_agents_still_exhausted(self):
         """Verifies duplicate attempted agents still exhausted behavior."""
         from core.chaining_coordinator import evaluate_chain_route

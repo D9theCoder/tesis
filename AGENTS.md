@@ -1,386 +1,139 @@
 # AGENTS.md
 
-# Running the Framework
+TESIS is an LLM-assisted penetration-testing framework for authorized DVWA
+sandbox experiments. Keep the research scope and containment rules below intact.
 
-Run these commands from the repository root. `uv sync` creates or updates the
-project environment from `pyproject.toml` and `uv.lock`:
+## Commands
+
+Run from the repository root; `uv sync` installs the locked environment:
 
 ```bash
 uv sync
-source .venv/bin/activate
-python -m tesis run --dry-run --config config.yaml
-python -m tesis run --config config.yaml
+.venv/bin/python -m tesis run --dry-run --config config.yaml
+.venv/bin/python -m pytest -q
+.venv/bin/python -m tesis run
 ```
 
-If activation points to an old repository path after the checkout was moved,
-open a fresh shell (or run `deactivate`) and recreate the environment before
-activating it:
-
-```bash
-mv .venv .venv-relocated-backup
-uv sync
-source .venv/bin/activate
-```
-
-The framework entry point is `python -m tesis run`. `main.py` is a separate
-sample LLM-query runner and does not load `config.yaml`.
-
-# AI Implementation Guide
-
-This repository implements an LLM-assisted autonomous penetration testing framework for authorized DVWA sandbox testing.
-
-This file is intentionally concise. Detailed research design, experiment matrix, scoring rubrics, artifact schema, AKG semantics, and thesis alignment are documented in `docs/reference/summary_en.md`. If a topic is not specified here, follow `docs/reference/summary_en.md`.
-
-## Source of Truth
-
-Use the following priority:
-
-1. Runtime topology: `core/graph_builder.py`
-2. State schema: `core/state.py`
-3. Attack Knowledge Graph: `core/knowledge_graph.py`
-4. Runtime behavior: `foundation/`, `agents/`, `llm/`, `evaluation/`
-5. Research design and methodology: `docs/reference/summary_en.md`
-6. User-facing thesis draft: latest thesis document
-
-## Documentation Lifecycle
-
-Place new Markdown documentation under exactly one lifecycle folder:
-
-* `docs/active/`: handoffs for implementation work currently in progress.
-* `docs/completed/`: handoffs whose implementation and required verification are complete.
-* `docs/upcoming/`: proposed, unstarted, or incomplete handoffs and remediation work.
-* `docs/reference/`: durable architecture, methodology, research, acceptance, and fixed-guideline documents that are not task-status handoffs.
-
-Move a handoff from `upcoming` to `active` when implementation starts, and from
-`active` to `completed` only after its acceptance checks pass. Update links when
-moving a document. Do not place generated TUI captures in these folders;
-`docs/tui_baseline_*`, `docs/tui_shell_*`, and `docs/tui_mission_control_*` are ignored.
-
-## Research Scope
-
-The framework is restricted to DVWA.
-
-In-scope surfaces:
-
-* SQL Injection
-* Access Control
-* Brute Force
-
-In-scope methods:
-
-```text
-sqli_union
-sqli_error
-sqli_boolean_blind
-sqli_time_blind
-ac_idor
-ac_vertical_escalation
-ac_force_browse
-bf_dictionary
-bf_spray
-```
-
-Out of scope:
-
-```text
-XSS
-CSRF
-LFI
-File Upload
-Command Injection
-Weak Session IDs
-JavaScript attacks
-CAPTCHA bypass
-HTTP redirect attacks
-Credential stuffing
-Targets outside DVWA
-```
-
-Do not add new vulnerability surfaces unless the thesis scope is explicitly changed.
-
-## Active Experiment Design
-
-The main thesis experiment uses two conditions:
-
-```text
-linear_hybrid
-akg_guided_hybrid
-```
-
-Both conditions use hybrid payloads.
-
-`static_only` and `llm_mutation_only` may exist for debugging or optional ablation, but they are not the primary thesis conditions.
-
-Required experiment fields:
-
-```text
-experiment_condition
-target_method
-payload_mode
-repeat_index
-```
-
-The framework must support method-level evaluation. If `target_method` is set, the run evaluates that method explicitly. Do not silently replace it with another method unless the run is marked as fallback or infeasible.
-
-## Runtime Flow
-
-Canonical LangGraph flow:
-
-```text
-START
--> recon
--> orchestrator
--> payload_candidate_builder
--> payload_validator
--> selected method agent or chaining_router
--> chaining_router
--> orchestrator or payload_candidate_builder or scorer
--> END
-```
-
-Important rules:
-
-* There is no standalone LangGraph verifier node.
-* Verification is performed inside method agents using `foundation/verifier.py`.
-* The orchestrator selects a method. It does not execute the method directly.
-* Method execution must happen after payload candidate building and validation.
-* Method agents are static modules. The LLM must not create agents dynamically.
-
-## State Rules
-
-Follow `core/state.py`.
-
-Implementation rules:
-
-* Return partial state updates.
-* Do not mutate state directly.
-* Keep observations monotonic.
-* Preserve payload provenance.
-* Store viable methods, selected method, and AKG path.
-* Append confirmed KG nodes to `confirmed_vulns`.
-* Append chain-enabling outcomes to `achieved_outcomes`.
-* Keep individual score dimensions. Do not report only a composite score.
-
-Required state concepts:
-
-```text
-experiment_condition
-target_method
-viable_methods
-selected_method
-akg_path
-confirmed_vulns
-achieved_outcomes
-payload_candidates
-payload_validation_results
-payload_provenance
-method_scores
-payload_scores
-exploitation_scores
-chain_scores
-output_scores
-composite_scores
-guardrail_activations
-invalid_json_events
-fallback_events
-containment_events
-```
-
-## AKG Rules
-
-Follow `core/knowledge_graph.py`.
-
-The AKG must remain:
-
-```text
-static
-predefined
-prevalidated
-payload-aware
-```
-
-The LLM must not modify the AKG at runtime.
-
-Chain routing must evaluate both:
-
-```python
-known = set(confirmed_vulns) | set(achieved_outcomes)
-```
-
-Correct chain semantics are documented in `summary_en.md`. Do not treat an enabling outcome as a confirmed exploit. For example, `credentials_extracted` may enable credential validation or brute force workflow, but it is not the same as `brute_force_confirmed`.
-
-## Payload Rules
-
-Payload execution must follow this pipeline:
-
-```text
-static seed loading
--> optional constrained LLM candidate generation
--> payload validation
--> ranking and budgeting
--> method agent execution
--> verifier evidence
--> scoring
-```
-
-Payload validator must enforce:
-
-```text
-schema validity
-method family alignment
-target parameter alignment
-allowed mutation types
-forbidden mutation rejection
-provenance requirement
-deduplication
-candidate budget
-DVWA scope containment
-```
-
-Do not execute invalid payloads.
-
-## Guardrail Handling
-
-Use `guardrail_handling` and `guardrail_retry` naming in new code and docs.
-
-Legacy `evasion` naming may be supported temporarily only for backward compatibility.
-
-Allowed behavior:
-
-```text
-schema retry
-structure-only clarification
-authorized DVWA sandbox clarification
-deterministic fallback
-static seed fallback
-controlled stop
-```
-
-Forbidden behavior:
-
-```text
-jailbreak
-roleplay deception
-adversarial prompt injection
-policy bypass prompting
-external target adaptation
-```
-
-## Containment
-
-Containment is mandatory.
-
-All HTTP requests must be restricted to the configured DVWA base URL or allowed same host.
-
-Required behavior:
-
-* Block external hosts.
-* Block external redirects.
-* Block payload candidates that introduce external targets.
-* Log containment violations.
-* Do not let LLM output override target scope.
-
-Containment must be enforced at both the payload validation layer and the HTTP client layer.
-
-## Scoring
-
-Use the thesis scoring model documented in `docs/reference/summary_en.md`.
-
-Required score dimensions:
-
-```text
-Smethod
-Spayload
-Sexploit
-Schain
-Soutput
-Srun
-```
-
-Composite score:
-
-```text
-Srun = 0.20*Smethod + 0.20*Spayload + 0.30*Sexploit + 0.10*Schain + 0.20*Soutput
-```
-
-Preserve each individual dimension in artifacts.
-
-## Artifact Rules
-
-Each experiment run must produce enough evidence for reproducibility and manual audit.
-
-At minimum, artifacts must include:
-
-```text
-run_id
-experiment_condition
-provider
-model
-surface
-target_method
-security_level
-payload_mode
-repeat_index
-viable_methods
-selected_method
-akg_path
-payload_candidates
-payload_validation_results
-payload_provenance
-execution_log
-response_evidence
-timing_evidence
-verifier_decision
-confirmed_vulns
-achieved_outcomes
-guardrail_activations
-invalid_json_events
-fallback_events
-containment_events
-method_score
-payload_scores
-exploitation_score
-chain_score
-output_score
-composite_score
-final_state
-```
-
-Manual scoring must rely on artifacts, not intuition or model claims.
-
-## Testing and Validation
-
-* Never write unit tests after you write code.
-* Highly prefer E2E tests as the sole testing mechanism. Use them to verify
+`run` opens the TUI and reads repository-root `config.yaml`; it does not accept
+`--config`. Automation uses `run --headless --mode single|matrix --config PATH`.
+The dry run checks local configuration, graph compilation, and static payloads
+without HTTP or provider calls. `main.py` is a separate sample LLM-query runner.
+If a moved checkout leaves a stale environment, deactivate it, rename `.venv`
+to a backup, and recreate it with `uv sync`.
+
+## Where to work
+
+Use these sources for the area being changed; read only the relevant docs:
+
+| Area | Source of truth |
+| --- | --- |
+| Runtime topology | `core/graph_builder.py` |
+| State schema, reducers, method registry | `core/state.py` |
+| Static Attack Knowledge Graph (AKG) | `core/knowledge_graph.py` |
+| HTTP, sessions, recon, payloads, verification | `foundation/` |
+| Method execution and orchestration | `agents/` |
+| Providers, prompts, guardrail handling | `llm/` |
+| Runners, scoring, reports, artifacts | `evaluation/`, `core/scorer.py` |
+| CLI, configuration, TUI | `tesis/`; [runtime architecture](docs/reference/architecture.md) |
+| Research design, scoring rubrics, full artifact schema | [methodology](docs/reference/summary_en.md) |
+
+Use runtime code to establish implemented behavior and the methodology for
+research requirements; the thesis draft is downstream documentation. For TUI
+changes, preserve `tesis.tui` as the public facade and use
+`tesis.tui_state.CONFIG_PATH` as the shared configuration-path owner.
+
+## Research and containment boundaries
+
+- Only DVWA is in scope. Supported surfaces are SQL Injection, Access Control,
+  and Brute Force, with these methods:
+  `sqli_union`, `sqli_error`, `sqli_boolean_blind`, `sqli_time_blind`, `ac_idor`,
+  `ac_vertical_escalation`, `ac_force_browse`, `bf_dictionary`, `bf_spray`.
+- Do not add other surfaces or methods without an explicit thesis-scope change.
+  XSS, CSRF, LFI, file upload, command injection, weak session IDs, JavaScript
+  attacks, CAPTCHA bypass, HTTP redirect attacks, and credential stuffing are
+  out of scope.
+- Enforce containment in both payload validation and the HTTP client. Restrict
+  every request and redirect hop to the configured DVWA target/allowed same
+  host; reject external targets introduced by payloads and log violations.
+  LLM output must never override target scope.
+- Main experiment conditions are `linear_hybrid` and `akg_guided_hybrid`, both
+  with hybrid payloads. `static_only` and `llm_mutation_only` are debugging or
+  optional ablation modes, not primary thesis conditions.
+- Preserve `experiment_condition`, `target_method`, `payload_mode`, and
+  `repeat_index`. Evaluate an explicit target method; any substitution must be
+  marked as fallback or infeasible.
+
+## Runtime invariants
+
+- Follow `core/graph_builder.py`: recon → orchestrator → payload candidate
+  builder → payload validator → selected method agent or chaining router →
+  chaining router → orchestrator, payload candidate builder, or scorer → END.
+  The orchestrator selects methods; it does not execute them. Agents are static
+  modules, never dynamically generated by the LLM.
+- Verification stays inside method agents via `foundation/verifier.py`; there
+  is no standalone verifier node.
+- Return partial state updates without mutating input. Keep observations
+  monotonic, payload provenance intact, and viable/selected methods and AKG
+  paths available in state.
+- Keep the AKG static, predefined, prevalidated, and payload-aware. Route chains
+  using `set(confirmed_vulns) | set(achieved_outcomes)`. Append confirmed KG nodes
+  to `confirmed_vulns` and enabling outcomes to `achieved_outcomes`; an outcome
+  such as `credentials_extracted` is not `brute_force_confirmed`.
+- Payload flow is static seeds → optional constrained LLM candidates →
+  validation → ranking/budgeting → method execution → verifier evidence →
+  scoring. Reject invalid schema, method/parameter mismatch, forbidden mutations,
+  missing provenance, duplicates, budget excess, and scope violations. Invalid
+  payloads must never execute.
+- Use `guardrail_handling` and `guardrail_retry` in new code/docs; retain legacy
+  `evasion` names only for compatibility. Allowed responses are schema retry,
+  structure-only or authorized-sandbox clarification, deterministic/static-seed
+  fallback, or controlled stop. Never use jailbreaks, roleplay deception,
+  adversarial prompt injection, policy-bypass prompts, or external adaptation.
+- Preserve every score dimension (`Smethod`, `Spayload`, `Sexploit`, `Schain`,
+  `Soutput`, `Srun`), with
+  `Srun = 0.20*Smethod + 0.20*Spayload + 0.30*Sexploit + 0.10*Schain + 0.20*Soutput`.
+- Follow the [artifact schema](docs/reference/summary_en.md#11-artifact-schema).
+  Retain experiment identity, method selection/AKG path, candidate provenance
+  and validation, execution/response/timing evidence, verifier decisions,
+  confirmed nodes/outcomes, guardrail/invalid-JSON/fallback/containment events,
+  individual scores, and final state. Manual scoring must rely on these artifacts.
+
+## Testing and validation
+
+- Never write unit tests after you write code.
+- Highly prefer E2E tests as the sole testing mechanism. Use them to verify
   complex features work. At the end of E2E tests, produce a verifiable and
   repeatable artifact.
-* If you must test a system in isolation, first write down all the ways it
+- If you must test a system in isolation, first write down all the ways it
   could fail, then write the code.
+- Keep an isolated test only when it catches a concrete failure the broader
+  tests do not assert. Before deleting a redundant test, identify the surviving
+  assertion that catches the same bug; merely executing the same code is not
+  enough. Avoid constructor, constant, and implementation-mirroring checks.
+- Run checks appropriate to the change. Record the command, relevant config,
+  expected and observed result, and artifact paths for repeatable E2E evidence.
+  Distinguish offline/mocked validation from live DVWA/provider E2E; report
+  skipped or blocked checks as incomplete.
+- For an offline suite report, use
+  `.venv/bin/python -m pytest -q --junitxml=results/validation/junit.xml`.
+  Generated evidence belongs under `results/` (gitignored).
+- Before main experiments, validate AKG structure/preconditions/profiles,
+  prompt schemas/JSON parsing, payload validation, chain routing, containment,
+  and artifact completeness; run at least one dry run per surface. Do not start
+  main experiments while core validation fails.
 
-Before main experiments:
+## Documentation
 
-* Validate AKG nodes, edges, preconditions, and payload profiles.
-* Validate prompt schemas and JSON parsing.
-* Validate payload validator behavior.
-* Validate chain routing.
-* Validate containment.
-* Run at least one dry run per surface.
-* Confirm artifact completeness.
+Place new Markdown documentation in one lifecycle folder:
 
-Do not start main experiments if core validation fails.
+- `docs/upcoming/`: proposed or unstarted work, including incomplete remediation.
+- `docs/active/`: handoffs whose implementation is in progress.
+- `docs/completed/`: handoffs whose implementation and required acceptance checks pass.
+- `docs/reference/`: durable architecture, methodology, research, and acceptance guidance.
 
-## Development Checklist
-
-Before finalizing a change:
-
-* Runtime flow still matches `core/graph_builder.py`.
-* State updates follow `core/state.py`.
-* AKG changes are reflected in `core/knowledge_graph.py`.
-* `docs/reference/summary_en.md` and `docs/reference/summary_id.md` are updated if methodology or architecture changes.
-* Payload candidates preserve provenance.
-* Invalid payloads cannot execute.
-* Guardrail and invalid JSON events are logged.
-* Containment is enforced.
-* Method-level evaluation still works.
-* Individual score dimensions are preserved.
-* Tests or validation checks are updated.
+Move handoffs as their status changes and update links. Generated TUI captures
+stay outside these lifecycle folders; the existing `docs/tui_baseline_*`,
+`docs/tui_shell_*`, and `docs/tui_mission_control_*` paths are ignored.
+When methodology or architecture changes, update both
+[summary_en.md](docs/reference/summary_en.md) and
+[summary_id.md](docs/reference/summary_id.md), plus affected architecture docs.

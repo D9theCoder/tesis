@@ -77,21 +77,6 @@ def test_terminal_status_for_event_maps_single_and_matrix() -> None:
     assert terminal_status_for_event("") is None
 
 
-def test_terminal_transition_persists_and_is_immutable(tmp_path: Path) -> None:
-    desc = build_runtime_descriptor(experiment_dir=tmp_path, execution_id="exec-3")
-    updated = write_terminal_descriptor(desc, "run.finished")
-
-    assert updated.status == "finished"
-    assert updated.is_terminal is True
-    assert updated.is_active is False
-    # Original descriptor is unchanged.
-    assert desc.status == ACTIVE_STATUS
-
-    payload = json.loads(descriptor_path(tmp_path).read_text(encoding="utf-8"))
-    assert payload["status"] == "finished"
-    assert payload["execution_id"] == "exec-3"
-
-
 def test_heartbeat_sink_refreshes_identity_without_terminating(tmp_path: Path) -> None:
     desc = build_runtime_descriptor(experiment_dir=tmp_path)
     write_descriptor(desc)

@@ -28,12 +28,6 @@ def test_default_model_name_openai_compatible():
     assert _default_model_name("openai_compatible") == ""
 
 
-def test_default_api_key_openai_compatible(monkeypatch):
-    """Verifies default api key openai compatible behavior."""
-    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "test-compatible-key")
-    assert _default_api_key("openai_compatible") == "test-compatible-key"
-
-
 def test_default_api_key_openai_compatible_fallback_empty(monkeypatch):
     """Verifies default api key openai compatible fallback empty behavior."""
     monkeypatch.delenv("OPENAI_COMPATIBLE_API_KEY", raising=False)

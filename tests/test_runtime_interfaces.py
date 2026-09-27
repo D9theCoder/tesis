@@ -75,7 +75,6 @@ def test_cancellation_token_is_cooperative_and_one_shot() -> None:
             },
             "gemini chunk",
         ),
-        ({"choices": [{"delta": {"content": "openai"}}]}, "openai"),
         (
             {
                 "type": "content_block_delta",

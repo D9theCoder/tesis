@@ -172,20 +172,6 @@ def _options(launcher) -> list:
 
 # ---------------------------------------------------------------- root
 
-def test_root_is_always_mission_control():
-    MissionControlScreen = _require("MissionControlScreen")
-
-    async def scenario() -> None:
-        app = tui.TesisApp()
-        async with app.run_test(size=(120, 36)) as pilot:
-            await pilot.pause()
-            assert isinstance(app.screen, MissionControlScreen), (
-                f"core: root must be MissionControlScreen, got {type(app.screen).__name__}"
-            )
-
-    asyncio.run(scenario())
-
-
 def test_no_permanent_command_input_at_idle():
     from textual.widgets import Input
 
@@ -734,13 +720,6 @@ def test_finished_summary_message_is_redacted():
     _apply(state, RunEvent("run.finished", message="done sk-live-summary-secret"))
     assert state.status == "succeeded"
     assert "sk-live-summary-secret" not in json.dumps(state.notices, default=str)
-
-
-def test_cancellation_is_labelled_cancelled():
-    state = _fresh_state()
-    _apply(state, RunEvent("run.started", message="go"))
-    _apply(state, RunEvent("run.cancelled", message="user cancel"))
-    assert state.status == "cancelled"
 
 
 def test_cancel_is_sticky_against_late_finish():

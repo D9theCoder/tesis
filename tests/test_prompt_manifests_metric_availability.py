@@ -12,16 +12,6 @@ from foundation.payload_generator import (
 from llm.prompts.orchestrator_prompt import build_orchestrator_prompt
 from llm.prompts.payload_generation_prompt import build_payload_generation_prompt
 
-REQUIRED_MANIFEST_KEYS = {
-    "prompt_id",
-    "version",
-    "template_hash",
-    "input_schema_hash",
-    "output_schema_hash",
-    "validator_version",
-    "eval_suite_version",
-}
-
 _SEEDS = [{
     "source_seed_id": "seed-1",
     "candidate_id": "seed-1",
