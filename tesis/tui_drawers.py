@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import sys
 from pathlib import Path
 from threading import Thread
 from typing import Any
 
-from textual import on
+from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -779,109 +781,194 @@ class ResultsDrawer(BaseDrawer):
 
 
 class DoctorDrawer(BaseDrawer):
+    BINDINGS = [
+        Binding("escape", "back", "Stop and close", priority=True),
+        Binding("r", "rerun", "Run again"),
+        Binding("l", "services", "Check services"),
+        Binding("d", "details", "Details"),
+    ]
+
+    _CHECK_NAMES = {
+        "coverage.scope": ("Supported tests", "Check the supported test methods."),
+        "akg.integrity": ("Attack map", "Check the attack map definitions."),
+        "graph.compilation": ("Test workflow", "Check how the test steps connect."),
+        "payload.static_seeds": ("Built-in test inputs", "Check the saved test inputs."),
+        "containment.http": ("Target safety", "Check the allowed target address."),
+        "config.profiles_roles": ("AI settings", "Review your models in Settings."),
+        "config.credentials": ("API keys", "Add the missing API key in Settings."),
+        "config.endpoints": ("Service addresses", "Check the DVWA and AI service addresses."),
+        "config.load": ("Saved settings", "Check config.yaml, then try again."),
+        "config.redaction": ("Keeping secrets private", "Review your saved API keys."),
+        "environment.dependencies": ("Installed packages", "Run uv sync to install the required packages."),
+        "output.writability": ("Saving results", "Check the results folder and available disk space."),
+        "reasoning.controls": ("AI reasoning settings", "Review the reasoning settings for your models."),
+        "live.dvwa.authentication": ("DVWA sign-in", "Check that DVWA is running and the login is correct."),
+        "live.dvwa.levels": ("DVWA difficulty levels", "Check the security settings in DVWA."),
+        "live.dvwa.surfaces": ("DVWA test pages", "Check that the required DVWA pages are available."),
+        "live.model.orchestrator": ("Planning model", "Check the model, API key, and service connection."),
+        "live.model.payload_generator": ("Payload model", "Check the model, API key, and service connection."),
+    }
+
     def __init__(self) -> None:
         super().__init__()
         self._doctor_generation = 0
         self._tesis_closing = False
-        self._closing_guard = False
         self._live_armed = False
-        self._doctor_thread: Thread | None = None
+        self._doctor_worker = None
+        self._doctor_process: asyncio.subprocess.Process | None = None
+        self._report: dict | None = None
+        self._show_details = False
 
     def compose(self) -> ComposeResult:
-        yield Label("Doctor (Esc to close)", id="doctor-title")
-        yield Static("Doctor checks — offline by default", id="doctor-summary", markup=False)
-        yield Static("press R to run offline checks", id="doctor-results", markup=False)
-        with Vertical(id="doctor-actions"):
-            yield Button("Run offline checks", id="doctor-run")
-            yield Button("Live checks (needs confirmation)", id="doctor-live")
+        yield Label("Doctor", id="doctor-title", classes="drawer-title")
+        yield Static("Checking this computer…", id="doctor-summary", markup=False)
+        yield Static("Local checks only. Service connections are not checked.", id="doctor-note", markup=False)
+        with VerticalScroll(id="doctor-scroll", classes="drawer-body"):
+            yield Static("Starting checks…", id="doctor-results", markup=False)
+        with Horizontal(id="doctor-actions"):
+            yield Button("Run again", id="doctor-run")
+            yield Button("Check services", id="doctor-live")
+            yield Button("Details", id="doctor-details", disabled=True)
+        yield Static("R rerun · L services · D details · Esc stop/close", classes="drawer-hint")
 
     def on_mount(self) -> None:
-        # Offline checks run on a daemon thread: opening Doctor must never block
-        # the event loop. Results return through app.call_from_thread.
         self.run_offline_pressed()
 
     def on_unmount(self) -> None:
         self.prepare_shutdown()
 
-    def _config(self) -> Any:
-        return load_and_resolve_config(config_path=str(tui_state.CONFIG_PATH), cli_args={})
+    def _stop_checks(self) -> None:
+        process = self._doctor_process
+        if process is not None and process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+        worker, self._doctor_worker = self._doctor_worker, None
+        if worker is not None:
+            worker.cancel()
 
     def _start_checks(self, live: bool) -> None:
-        """Queue offline/live Doctor checks on one daemon worker."""
+        self._stop_checks()
         self._doctor_generation += 1
-        generation = self._doctor_generation
-        self._doctor_thread = Thread(
-            target=self._run_checks, args=(generation, live),
-            name="tesis-doctor", daemon=True)
-        self._doctor_thread.start()
+        self._report = None
+        self.query_one("#doctor-details", Button).disabled = True
+        self.query_one("#doctor-summary", Static).update("Checking services…" if live else "Checking this computer…")
+        self.query_one("#doctor-note", Static).update(
+            "Testing DVWA and AI connections. Esc stops these checks." if live else
+            "Local checks only. Service connections are not checked."
+        )
+        self._render_text("This may take a moment. You can close this panel at any time.")
+        self._doctor_worker = self._run_checks(self._doctor_generation, live)
 
-    def _run_checks(self, generation: int, live: bool) -> None:
-        """Worker thread: no widget access; rendering hops back via the app."""
+    @work(group="doctor")
+    async def _run_checks(self, generation: int, live: bool) -> None:
+        # A separate process can be stopped even during a blocking provider call.
+        # Capture both streams so SDK logging cannot overwrite the terminal UI.
+        process = None
         try:
-            cfg = self._config()
-            from tesis.doctor import run_doctor
-            result = run_doctor(cfg, live=live)
+            command = [sys.executable, "-m", "tesis", "doctor", "--config", str(tui_state.CONFIG_PATH), "--json"]
+            if live:
+                command.append("--live")
+            process = await asyncio.create_subprocess_exec(
+                *command, cwd=str(tui_state.REPOSITORY_ROOT),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            self._doctor_process = process
+            output, _logs = await process.communicate()
+            result = json.loads(output)
+            if not isinstance(result, dict) or "checks" not in result:
+                raise ValueError("Doctor returned an unreadable report. Please try again.")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
-            result = {"checks": [], "summary": {}, "error": tui_security._safe_config_error_text(exc)}
-        if self._tesis_closing or generation != self._doctor_generation:
-            return
-        try:
-            self.app.call_from_thread(self._render_result, result)
-        except Exception:
-            pass
+            result = {"error": tui_security._safe_config_error_text(exc)}
+        finally:
+            if process is not None:
+                if process.returncode is None:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                await process.wait()
+                if self._doctor_process is process:
+                    self._doctor_process = None
+        self._render_result(result, generation)
 
     def _render_text(self, text: str) -> None:
-        for selector in ("#doctor-results", "#doctor-summary"):
-            try:
-                self.query_one(selector, Static).update(str(redact_secrets(text))[:8000])
-                return
-            except Exception:
-                continue
+        self.query_one("#doctor-results", Static).update(str(redact_secrets(text)))
 
-    def _render_result(self, result: Any) -> None:
-        if not isinstance(result, dict):
-            self._render_text(f"Doctor\n{redact_secrets(result)}")
+    def _render_result(self, result: dict, generation: int | None = None) -> None:
+        if self._tesis_closing or (generation is not None and generation != self._doctor_generation):
             return
-        checks = result.get("checks", []) if isinstance(result.get("checks"), list) else []
-        lines = ["Doctor"]
-        for check in checks:
-            if not isinstance(check, dict):
-                continue
-            mark = {"passed": "✓", "failed": "×", "skipped": "○"}.get(
-                str(check.get("status", "")), "•")
-            lines.append(f"{mark} {check.get('category', '')}/{check.get('id', '')} "
-                         f"{check.get('summary', '')}")
-            details = str(check.get("details") or "").strip()
-            if details:
-                lines.append(f"  {details}"[:300])
-            remediation = str(check.get("remediation") or "").strip()
-            if remediation:
-                lines.append(f"  Remediation: {remediation}"[:300])
+        self._report = result
+        self.query_one("#doctor-details", Button).disabled = False
+        if result.get("error"):
+            self.query_one("#doctor-summary", Static).update("Checks couldn’t finish")
+            self._render_text(str(result["error"]) if self._show_details else
+                              "Try again. Open Details if this keeps happening.")
+            return
         summary = result.get("summary", {})
-        if isinstance(summary, dict):
-            lines.append(f"Doctor summary: {summary.get('passed', 0)} passed, "
-                         f"{summary.get('failed', 0)} failed, {summary.get('skipped', 0)} skipped")
+        failed = summary.get("failed", 0)
+        headline = f"{failed} check{'s need' if failed != 1 else ' needs'} attention" if failed else "Checks finished"
+        counts = f"{summary.get('passed', 0)} passed"
+        if summary.get("skipped", 0):
+            counts += f" · {summary['skipped']} not checked"
+        self.query_one("#doctor-summary", Static).update(f"{headline}\n{counts}")
+        lines = []
+        for check in result.get("checks", []):
+            status = check.get("status", "skipped")
+            name, advice = self._CHECK_NAMES.get(check.get("id"), (check.get("summary", "Check"), "Open Details for more information."))
+            mark = {"passed": "OK", "failed": "Fix", "skipped": "Not checked"}.get(status, "Not checked")
+            lines.append(f"{mark}  {name}")
+            if status == "failed":
+                lines.append(f"  {advice}")
+            if self._show_details:
+                lines.extend(f"  {check[key]}" for key in ("summary", "details", "remediation") if check.get(key))
+                lines.append("")
         self._render_text("\n".join(lines))
 
     @on(Button.Pressed, "#doctor-run")
     def run_offline_pressed(self) -> None:
         self._live_armed = False
+        self.query_one("#doctor-live", Button).label = "Check services"
         self._start_checks(live=False)
 
     @on(Button.Pressed, "#doctor-live")
     def run_live_pressed(self) -> None:
         if not self._live_armed:
             self._live_armed = True
-            self._render_text("Doctor\nLive checks hit the network. Press again to confirm.")
+            self.query_one("#doctor-live", Button).label = "Confirm checks"
+            self.query_one("#doctor-note", Static).update("This contacts DVWA and your AI providers and may use credits. Press again to confirm.")
             return
         self._live_armed = False
+        self.query_one("#doctor-live", Button).label = "Check services"
         self._start_checks(live=True)
 
-    def prepare_shutdown(self) -> None:
-        self._tesis_closing = True
-        self._closing_guard = True
-        self._doctor_generation += 1
+    @on(Button.Pressed, "#doctor-details")
+    def action_details(self) -> None:
+        if self._report is not None:
+            self._show_details = not self._show_details
+            self.query_one("#doctor-details", Button).label = "Less detail" if self._show_details else "Details"
+            self._render_result(self._report)
 
+    def action_rerun(self) -> None:
+        self.run_offline_pressed()
+
+    def action_services(self) -> None:
+        self.run_live_pressed()
+
+    def action_back(self) -> None:
+        self.prepare_shutdown()
+        super().action_back()
+
+    def prepare_shutdown(self) -> None:
+        if self._tesis_closing:
+            return
+        self._tesis_closing = True
+        self._doctor_generation += 1
+        self._stop_checks()
 
 class PlanDrawer(BaseDrawer):
     def __init__(self, config: Any = None) -> None:

@@ -346,37 +346,6 @@ def checkpoint_safe_state(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def validate_checkpoint_compatibility(
-    stored: dict[str, Any],
-    *,
-    expected_state_version: str = STATE_SCHEMA_VERSION,
-    expected_checkpoint_version: str = CHECKPOINT_SCHEMA_VERSION,
-    expected_graph_version: str | None = None,
-    expected_config_fingerprint: str | None = None,
-) -> tuple[bool, str]:
-    """Fail closed when stored checkpoint identity is missing or mismatched."""
-    state_version = stored.get("state_schema_version")
-    if state_version != expected_state_version:
-        return False, (
-            f"unsupported state_schema_version {state_version!r}; "
-            f"expected {expected_state_version!r}; refusing resume"
-        )
-    checkpoint_version = stored.get("checkpoint_schema_version")
-    if checkpoint_version != expected_checkpoint_version:
-        return False, (
-            f"unsupported checkpoint_schema_version {checkpoint_version!r}; "
-            f"expected {expected_checkpoint_version!r}; refusing resume"
-        )
-    if expected_graph_version is not None and stored.get("graph_build_version") != expected_graph_version:
-        return False, (
-            f"graph_build_version {stored.get('graph_build_version')!r} "
-            f"does not match {expected_graph_version!r}; refusing resume"
-        )
-    if expected_config_fingerprint is not None and stored.get("config_fingerprint") != expected_config_fingerprint:
-        return False, "config fingerprint changed since checkpoint; refusing resume"
-    return True, "compatible"
-
-
 # Surfaces
 SURFACES: list[str] = ["sqli", "access_control", "brute_force"]
 

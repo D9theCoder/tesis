@@ -432,6 +432,44 @@ BaseDrawer.drawer-full .drawer {
 
 /* ---- trace / results / doctor specifics ---- */
 
+#doctor-summary {
+    height: auto;
+    text-style: bold;
+}
+
+#doctor-title {
+    margin-bottom: 0;
+}
+
+DoctorDrawer .drawer-hint {
+    margin-top: 0;
+}
+
+#doctor-note {
+    height: auto;
+    color: $text-muted;
+}
+
+#doctor-scroll {
+    min-height: 1;
+    overflow-x: hidden;
+}
+
+#doctor-actions {
+    height: 3;
+}
+
+#doctor-actions Button {
+    width: 1fr;
+    min-width: 0;
+    margin-right: 1;
+}
+
+#doctor-details {
+    width: 14;
+    margin-right: 0;
+}
+
 #trace-body {
     height: 1fr;
     scrollbar-size: 1 1;

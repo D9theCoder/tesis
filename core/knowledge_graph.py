@@ -490,11 +490,6 @@ class AttackKnowledgeGraph:
                 viable.append(method)
         return viable
 
-    def check_preconditions(self, method_node: str, observations: dict) -> bool:
-        """Checks whether observations satisfy preconditions for a method node."""
-        preconditions = self.METHOD_PRECONDITIONS.get(method_node, [])
-        return all(observations.get(p, False) for p in preconditions)
-
     def get_payload_profile(self, method_node: str) -> dict:
         """Returns the AKG payload profile associated with a method node."""
         if method_node not in self.graph:
@@ -520,36 +515,3 @@ class AttackKnowledgeGraph:
             ))
         ordered = sorted(actions, key=lambda item: (item[0], item[1]["target"], item[1]["target_agent"] or ""))
         return [action for _, action in ordered]
-
-    def _path_is_viable(self, path: list[str], known_nodes: set[str]) -> bool:
-        has_chain_edge = False
-        reachable = set(known_nodes)
-        for source, target in zip(path, path[1:]):
-            edge = self.graph[source][target]
-            if bool(edge.get("is_chain", False)):
-                has_chain_edge = True
-            required = set(edge.get("preconditions", []))
-            if not required.issubset(reachable):
-                return False
-            reachable.add(target)
-        return has_chain_edge
-
-    def get_viable_chains(self, confirmed_vulns: list[str], achieved_outcomes: list[str] | None = None, max_paths: int = 5) -> list[list[str]]:
-        """Returns chain transitions whose source has been confirmed in the current state."""
-        if max_paths <= 0:
-            return []
-        achieved = set(achieved_outcomes or [])
-        known = set(confirmed_vulns) | achieved
-        targets = [outcome for outcome in self.HIGH_IMPACT_OUTCOMES if outcome not in achieved]
-        candidates: set[tuple[str, ...]] = set()
-        for start in sorted(set(confirmed_vulns)):
-            if start not in self.graph:
-                continue
-            for target in sorted(targets):
-                if target not in self.graph or start == target:
-                    continue
-                for path in nx.all_simple_paths(self.graph, source=start, target=target, cutoff=6):
-                    if self._path_is_viable(path, known):
-                        candidates.add(tuple(path))
-        ordered = sorted(candidates, key=lambda path: (len(path), path))
-        return [list(path) for path in ordered[:max_paths]]

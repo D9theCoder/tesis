@@ -78,20 +78,29 @@ Offline Doctor performs 11 local checks: fixed coverage (3 surfaces, 9 methods,
 invariants, LangGraph compilation, all 81 static-seed method/level/mode
 coordinates, HTTP request-and-redirect containment, profile/role resolution,
 credentials, endpoints, dependencies, output-directory writability, and
-reasoning controls. `--live` additionally makes one benign structured model
-probe per role, then checks contained DVWA authentication, all security levels,
-and all in-scope surfaces; provider calls can consume credits. A model response
-without provider usage is `skipped`, with reasoning-token usage reported as
-unknown rather than passed. Usage without a reasoning-token field can pass the
-structured probe, but provider-side reasoning remains unverified.
+reasoning controls. Offline success does not mean DVWA is running or a provider
+is reachable; those checks are explicitly marked skipped. `--live` additionally
+makes one benign structured model probe per role, then checks contained DVWA
+authentication, all security levels, and all in-scope surfaces at the requested
+high level; provider calls can consume credits. DVWA passes require
+successful authenticated pages, server-rendered security settings, and matching
+surface headings; local cookies alone are not server evidence. Valid structured
+model output passes even when usage telemetry is absent; missing usage or
+reasoning-token fields leave provider-side reasoning explicitly unverified.
+Probes respect the effective role/profile token budget. Artifact checks inspect
+`output_dir/runs` and create, flush, and remove a temporary file at its nearest
+existing directory; they cannot guarantee capacity for a later experiment.
 
 `--json` prints one object with top-level `status`, `summary` (`passed`,
 `failed`, `skipped`, `total`), and `checks`; every check has `id`, `category`,
 `status`, `summary`, `details`, and `remediation`. Top-level status is failed
 only when at least one check fails; skipped checks remain separate. Exit codes
 are 0 for a passed report, 1 for a failed report, and 2 for CLI usage errors.
-The Doctor drawer
-exposes offline and live Doctor actions. Doctor is standalone: it never runs
+Opening Doctor starts fresh local checks. The panel shows a compact summary;
+press `D` for technical details, `R` to rerun, or `L` to confirm service checks.
+Escape stops the local checking process and closes the panel. Reopening starts
+again. Provider requests already received by a remote service may still finish.
+Doctor is standalone: it never runs
 automatically, gates a run, performs provider quarantine, or changes runtime
 topology.
 

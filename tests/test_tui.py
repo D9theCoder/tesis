@@ -2278,86 +2278,8 @@ def test_unmount_drops_pending_events_without_crash(tmp_path, monkeypatch):
     asyncio.run(asyncio.wait_for(scenario(), timeout=15))
 
 
-def test_doctor_offline_renders_structured_checks_with_counts(monkeypatch):
-    DoctorDrawer = _require("DoctorDrawer")
-    import tesis.doctor as doctor_mod
-
-    def fake_doctor(_config, *, live=False):
-        assert live is False
-        return {
-            "status": "failed",
-            "summary": {"passed": 1, "failed": 1, "skipped": 1, "total": 3},
-            "checks": [
-                {"id": "akg", "category": "graph", "status": "passed",
-                 "summary": "AKG topology is valid", "details": "9 methods covered"},
-                {"id": "provider", "category": "llm", "status": "failed",
-                 "summary": "Provider configuration is incomplete",
-                 "remediation": "Set the provider API key"},
-                {"id": "reach", "category": "target", "status": "skipped",
-                 "summary": "Reachability skipped offline"},
-            ],
-        }
-
-    monkeypatch.setattr(doctor_mod, "run_doctor", fake_doctor)
-    monkeypatch.setattr(tui_drawers, "load_and_resolve_config", lambda **_kw: _config())
-
-    async def scenario() -> None:
-        app = tui.TesisApp()
-        async with app.run_test(size=(120, 36)) as pilot:
-            await pilot.pause()
-            await app.push_screen(DoctorDrawer())
-            await pilot.pause()
-            thread = app.screen._doctor_thread
-            if thread is not None:
-                await _wait_for_thread(pilot, thread)
-            await pilot.pause()
-            svg = _svg_text(app)
-            assert "AKG topology is valid" in svg
-            assert "Set the provider API key" in svg
-            assert "1 passed" in svg and "1 failed" in svg and "1 skipped" in svg
-            await pilot.press("escape")
-            await pilot.pause()
-
-    asyncio.run(scenario())
 
 
-def test_doctor_live_requires_explicit_confirmation(monkeypatch):
-    DoctorDrawer = _require("DoctorDrawer")
-    calls: list[bool] = []
-    import tesis.doctor as doctor_mod
-
-    def fake_doctor(_config, *, live=False):
-        calls.append(live)
-        return {"status": "passed", "summary": {"passed": 1, "failed": 0, "skipped": 0, "total": 1},
-                "checks": [{"id": "live", "category": "target", "status": "passed", "summary": "ok"}]}
-
-    monkeypatch.setattr(doctor_mod, "run_doctor", fake_doctor)
-    monkeypatch.setattr(tui_drawers, "load_and_resolve_config", lambda **_kw: _config())
-
-    async def scenario() -> None:
-        app = tui.TesisApp()
-        async with app.run_test(size=(120, 36)) as pilot:
-            await pilot.pause()
-            await app.push_screen(DoctorDrawer())
-            await pilot.pause()
-            drawer = app.screen
-            assert isinstance(drawer, DoctorDrawer)
-            live_calls_before = len([c for c in calls if c])
-            drawer.run_live_pressed()
-            await pilot.pause()
-            svg = _svg_text(app)
-            assert "confirm" in svg.lower(), "first live press must warn and require confirmation"
-            assert len([c for c in calls if c]) == live_calls_before
-            drawer.run_live_pressed()
-            thread = drawer._doctor_thread
-            if thread is not None:
-                await _wait_for_thread(pilot, thread)
-            await pilot.pause()
-            assert any(calls), "second live press must run live checks"
-            await pilot.press("escape")
-            await pilot.pause()
-
-    asyncio.run(asyncio.wait_for(scenario(), timeout=15))
 
 
 def test_failure_drawer_leads_with_remediation_and_request_id():
@@ -2660,42 +2582,6 @@ def test_results_drawer_stacks_filters_at_eighty_columns(tmp_path, monkeypatch):
     asyncio.run(asyncio.wait_for(scenario(), timeout=30))
 
 
-def test_doctor_offline_checks_do_not_block_the_event_loop(monkeypatch):
-    DoctorDrawer = _require("DoctorDrawer")
-    from threading import Event
-
-    import tesis.doctor as doctor_mod
-
-    started = Event()
-    release = Event()
-
-    def slow_doctor(_config, *, live=False):
-        started.set()
-        release.wait(timeout=5)
-        return {"status": "passed",
-                "summary": {"passed": 1, "failed": 0, "skipped": 0, "total": 1},
-                "checks": [{"id": "cfg", "category": "config", "status": "passed",
-                            "summary": "ok"}]}
-
-    monkeypatch.setattr(doctor_mod, "run_doctor", slow_doctor)
-    monkeypatch.setattr(tui_drawers, "load_and_resolve_config", lambda **_kw: _config())
-
-    async def scenario() -> None:
-        app = tui.TesisApp()
-        async with app.run_test(size=(120, 36)) as pilot:
-            await pilot.pause()
-            await app.push_screen(DoctorDrawer())
-            # Opening Doctor must not block the loop even while checks are running.
-            await asyncio.wait_for(pilot.pause(), timeout=3)
-            assert started.wait(2), "offline checks must run on a worker thread"
-            await asyncio.wait_for(pilot.press("escape"), timeout=3)
-            await pilot.pause()
-            release.set()
-
-    try:
-        asyncio.run(asyncio.wait_for(scenario(), timeout=15))
-    finally:
-        release.set()
 
 
 def test_failure_drawer_shows_production_failure_summary():
@@ -3089,5 +2975,178 @@ def test_no_secret_in_screenshot_from_live_state():
             svg = _svg_text(app)
             assert secret not in svg
             assert "TESIS" in svg
+
+    asyncio.run(scenario())
+
+
+
+
+
+
+# Doctor failure modes: clipped controls, noisy default text, leaking logs,
+# blocked UI, hidden load errors, overlapping/stale runs, and work surviving Escape.
+# Real child processes exercise cancellation; the child is a deterministic fixture
+# except in the config-error case, which uses the actual Doctor CLI.
+def _doctor_child(monkeypatch, tmp_path, reports, delays=()):
+    import sys
+    import asyncio as aio
+
+    original = aio.create_subprocess_exec
+    launched = []
+
+    async def launch(*args, **kwargs):
+        index = len(launched)
+        report = reports[min(index, len(reports) - 1)]
+        delay = delays[index] if index < len(delays) else 0
+        receipt = tmp_path / f'finished-{index}'
+        code = (
+            'import sys,time,pathlib; '
+            'print("background diagnostic log", file=sys.stderr); '
+            f'time.sleep({delay}); pathlib.Path({str(receipt)!r}).write_text("finished"); '
+            f'print({json.dumps(report)!r})'
+        )
+        process = await original(sys.executable, '-c', code, **kwargs)
+        launched.append((args, process, receipt))
+        return process
+
+    monkeypatch.setattr(aio, 'create_subprocess_exec', launch)
+    return launched
+
+
+async def _doctor_finished(pilot, drawer):
+    await asyncio.wait_for(drawer._doctor_worker.wait(), timeout=15)
+    await pilot.pause()
+
+
+def test_doctor_panel_is_compact_scrollable_and_has_details(monkeypatch, tmp_path):
+    from textual.widgets import Static
+    report = {
+        'summary': {'passed': 11, 'failed': 0, 'skipped': 5},
+        'checks': [
+            {'id': 'coverage.scope', 'status': 'passed', 'summary': 'fixed axes validated',
+             'details': 'INTERNAL_DIAGNOSTIC ' * 30},
+            {'id': 'live.dvwa.authentication', 'status': 'skipped', 'summary': 'offline'},
+        ] + [{'id': f'custom-{n}', 'status': 'passed', 'summary': f'Additional check {n}'} for n in range(40)],
+    }
+    _doctor_child(monkeypatch, tmp_path, [report])
+
+    async def scenario():
+        for width, height in ((120, 36), (80, 24), (60, 18)):
+            app = tui.TesisApp()
+            async with app.run_test(size=(width, height)) as pilot:
+                await app.push_screen(tui.DoctorDrawer())
+                drawer = app.screen
+                await _doctor_finished(pilot, drawer)
+                text = str(drawer.query_one('#doctor-results', Static).content)
+                assert 'Supported tests' in text and 'DVWA sign-in' in text
+                assert 'coverage.scope' not in text and 'INTERNAL_DIAGNOSTIC' not in text
+                assert 'background diagnostic log' not in _svg_text(app)
+                body = drawer.query_one('#doctor-scroll')
+                actions = drawer.query_one('#doctor-actions')
+                assert body.region.bottom <= actions.region.y
+                assert actions.region.bottom <= height
+                assert body.max_scroll_y > 0
+                evidence = Path('results/validation/doctor-ui')
+                evidence.mkdir(parents=True, exist_ok=True)
+                (evidence / f'doctor-{width}x{height}.svg').write_text(app.export_screenshot())
+                await pilot.press('d')
+                await pilot.pause()
+                assert 'INTERNAL_DIAGNOSTIC' in str(drawer.query_one('#doctor-results', Static).content)
+                if width == 120:
+                    await pilot.resize_terminal(60, 18)
+                    await pilot.pause()
+                    panel = drawer.query_one('.drawer')
+                    assert panel.region.x == 0 and panel.region.width == 60
+                    await pilot.resize_terminal(120, 36)
+                    await pilot.pause()
+                    assert panel.region.width == 76
+                await pilot.press('escape')
+                assert not isinstance(app.screen, tui.DoctorDrawer)
+
+    asyncio.run(scenario())
+
+
+def test_doctor_escape_stops_process_and_reopening_reruns(monkeypatch, tmp_path):
+    report = {'summary': {'passed': 1}, 'checks': [{'id': 'fresh', 'status': 'passed', 'summary': 'Fresh results'}]}
+    launched = _doctor_child(monkeypatch, tmp_path, [report], delays=(60, 0))
+
+    async def scenario():
+        app = tui.TesisApp()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await app.push_screen(tui.DoctorDrawer())
+            old = app.screen
+            for _ in range(100):
+                if launched:
+                    break
+                await pilot.pause(0.02)
+            assert launched, 'Doctor must launch without blocking the UI'
+            process = launched[0][1]
+            await asyncio.wait_for(pilot.press('escape'), timeout=2)
+            await asyncio.wait_for(process.wait(), timeout=2)
+            assert process.returncode != 0
+            assert not launched[0][2].exists(), 'cancelled check must not finish'
+            app.screen.action_open_doctor()
+            await pilot.pause()
+            assert app.screen is not old
+            await _doctor_finished(pilot, app.screen)
+            assert len(launched) == 2
+            assert launched[1][1].pid != process.pid
+            assert launched[1][2].exists()
+            assert 'Fresh results' in _svg_text(app)
+            Path('results/validation/doctor-ui/lifecycle.json').write_text(json.dumps({
+                'cancelled_pid': process.pid, 'cancelled_exit': process.returncode,
+                'fresh_pid': launched[1][1].pid, 'fresh_exit': launched[1][1].returncode,
+            }, indent=2))
+
+    asyncio.run(scenario())
+
+
+def test_doctor_live_confirmation_and_rerun_stop_previous_process(monkeypatch, tmp_path):
+    report = {'summary': {'passed': 1}, 'checks': [{'id': 'new', 'status': 'passed', 'summary': 'Newest result'}]}
+    launched = _doctor_child(monkeypatch, tmp_path, [report], delays=(0, 60, 0))
+
+    async def scenario():
+        app = tui.TesisApp()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await app.push_screen(tui.DoctorDrawer())
+            drawer = app.screen
+            await _doctor_finished(pilot, drawer)
+            await pilot.press('l')
+            assert len(launched) == 1
+            assert 'credits' in _svg_text(app)
+            await pilot.press('l')
+            for _ in range(100):
+                if len(launched) == 2:
+                    break
+                await pilot.pause(0.02)
+            assert '--live' in launched[1][0]
+            old_process = launched[1][1]
+            await pilot.press('r')
+            await asyncio.wait_for(old_process.wait(), timeout=2)
+            assert old_process.returncode != 0
+            await _doctor_finished(pilot, drawer)
+            assert len(launched) == 3 and '--live' not in launched[2][0]
+            assert 'Newest result' in _svg_text(app)
+
+    asyncio.run(scenario())
+
+
+def test_doctor_load_failure_is_visible_and_redacted(monkeypatch, tmp_path):
+    config_path = tmp_path / 'invalid.yaml'
+    config_path.write_text('models:\n  openai:\n    api_key: doctor-private-key\n    api_key: duplicate-private-key\n')
+    monkeypatch.setattr(tui_state, 'CONFIG_PATH', config_path)
+
+    async def scenario():
+        app = tui.TesisApp()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await app.push_screen(tui.DoctorDrawer())
+            await _doctor_finished(pilot, app.screen)
+            svg = _svg_text(app)
+            assert 'needs attention' in svg
+            assert 'doctor-private-key' not in svg
+            assert 'duplicate-private-key' not in svg
+            await pilot.press('d')
+            assert 'Invalid YAML' in _svg_text(app)
+            assert 'doctor-private-key' not in _svg_text(app)
 
     asyncio.run(scenario())

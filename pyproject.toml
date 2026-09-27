@@ -23,7 +23,6 @@ dependencies = [
     "rich>=15.0.0",
     "textual>=6.0.0",
     "ruamel-yaml>=0.18.0",
-    "scipy>=1.17.1",
     "langgraph-checkpoint-sqlite>=3.1.1",
 ]
 

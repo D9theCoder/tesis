@@ -14,7 +14,11 @@ from tesis.model_config import EngagementConfig, LLMRuntimeConfig, ModelConfig, 
 
 
 @pytest.fixture
-def valid_config(tmp_path: Path) -> EngagementConfig:
+def valid_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> EngagementConfig:
+    # Keep offline/fault tests independent of credentials loaded from the real .env.
+    for name in ("OPENAI_API_KEY", "OPENAI_COMPATIBLE_API_KEY", "GOOGLE_API_KEY",
+                 "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
     profile = ModelConfig(
         provider="openai",
         api_key="unit-test-provider-secret",
@@ -48,9 +52,9 @@ def test_offline_report_shape_and_status_aggregation(valid_config: EngagementCon
     assert set(report) == {"status", "summary", "checks"}
     assert report["status"] == "passed"
     assert report["summary"] == {
-        "passed": len(report["checks"]),
+        "passed": len(report["checks"]) - 5,
         "failed": 0,
-        "skipped": 0,
+        "skipped": 5,
         "total": len(report["checks"]),
     }
     assert report["checks"]
@@ -556,3 +560,226 @@ def test_endpoints_accept_environment_provided_base_url(
     assert with_environment.status == "passed"
     assert "configured_model_endpoints=1" in with_environment.details
     assert "openai=environment" in with_environment.details
+
+
+# Regression failure modes: offline success mistaken for reachability; connection
+# refusal; unrelated/error pages accepted as login; local cookies accepted as
+# server evidence; login redirects/navigation accepted as surfaces; containment.
+# Exercise the real Doctor/session/HTTP stack with only HTTP responses simulated.
+@pytest.mark.parametrize(
+    ("scenario", "expected"),
+    [
+        ("healthy", ("passed", "passed", "passed")),
+        ("down", ("failed", "skipped", "skipped")),
+        ("wrong_service", ("failed", "skipped", "skipped")),
+        ("error_page", ("failed", "skipped", "skipped")),
+        ("levels_down", ("passed", "failed", "passed")),
+        ("levels_missing", ("passed", "failed", "passed")),
+        ("surface_login", ("passed", "passed", "failed")),
+        ("surface_navigation", ("passed", "passed", "failed")),
+        ("surface_index", ("passed", "passed", "passed")),
+        ("external_redirect", ("failed", "skipped", "skipped")),
+    ],
+)
+def test_doctor_dvwa_http_evidence(valid_config, monkeypatch, scenario, expected):
+    import httpx
+    from urllib.parse import parse_qs
+
+    level = "low"
+    requests = []
+    home = '<title>DVWA</title><a href="logout.php">Logout</a>'
+
+    def respond(request):
+        nonlocal level
+        requests.append(str(request.url))
+        assert request.url.host == "localhost", "redirect escaped containment"
+        path = request.url.path
+        if scenario == "down":
+            raise httpx.ConnectError("simulated connection refused", request=request)
+        if scenario == "external_redirect":
+            return httpx.Response(302, headers={"location": "https://example.invalid/login.php"})
+        if scenario == "wrong_service":
+            return httpx.Response(200, text='<title>Other app</title><a href="logout.php">Logout</a>')
+        if scenario == "error_page":
+            return httpx.Response(503, text=home)
+        if path.endswith("login.php"):
+            if request.method == "POST":
+                return httpx.Response(302, headers={"location": "/dvwa/index.php"})
+            return httpx.Response(200, text='<title>DVWA Login</title><input name="password">')
+        if path.endswith("security.php"):
+            if scenario == "levels_down":
+                raise httpx.ConnectError("security service unavailable", request=request)
+            if scenario == "levels_missing":
+                return httpx.Response(200, text=home)
+            if request.method == "POST":
+                level = parse_qs(request.content.decode())["security"][0]
+            return httpx.Response(200, text=home +
+                f'<select name="security"><option selected value="{level}">{level}</option></select>')
+        if "/vulnerabilities/" in path:
+            if scenario == "surface_index" and not path.endswith("index.php"):
+                return httpx.Response(302, headers={"location": path + "index.php"})
+            path = path.removesuffix("index.php")
+            if scenario == "surface_login":
+                return httpx.Response(302, headers={"location": "/dvwa/login.php"})
+            if scenario == "surface_navigation":
+                return httpx.Response(200, text=home + '<nav>SQL Injection | Access Control | Brute Force</nav>')
+            heading = {"sqli": "SQL Injection", "authbypass": "Authorisation Bypass", "brute": "Brute Force"}[path.strip("/").split("/")[-1]]
+            return httpx.Response(200, text=home + f'<h1>Vulnerability: {heading}</h1>')
+        return httpx.Response(200, text=home)
+
+    def timed_response(request):
+        from datetime import timedelta
+
+        response = respond(request)
+        response.elapsed = timedelta(milliseconds=1)
+        return response
+
+    real_client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: real_client(**kw, transport=httpx.MockTransport(timed_response)))
+    monkeypatch.setattr(doctor, "_model_probe_checks", lambda _config: [])
+    report = doctor.run_doctor(valid_config, live=True)
+    checks = [check_by_id(report, f"live.dvwa.{name}") for name in ("authentication", "levels", "surfaces")]
+    evidence = Path("results/validation/doctor")
+    evidence.mkdir(parents=True, exist_ok=True)
+    (evidence / f"{scenario}.json").write_text(json.dumps({"report": report, "requests": requests}, indent=2))
+    assert tuple(check["status"] for check in checks) == expected
+
+
+def test_offline_explicitly_skips_service_verification(valid_config, monkeypatch):
+    import httpx
+
+    def unexpected_request(*_args, **_kwargs):
+        pytest.fail("offline Doctor attempted network access")
+
+    monkeypatch.setattr(httpx.Client, "request", unexpected_request)
+    report = doctor.run_doctor(valid_config)
+    for check_id in ("live.dvwa.authentication", "live.dvwa.levels", "live.dvwa.surfaces",
+                     "live.model.orchestrator", "live.model.payload_generator"):
+        check = check_by_id(report, check_id)
+        assert check["status"] == "skipped"
+        assert "not checked" in check["summary"].lower()
+
+
+@pytest.mark.parametrize('fault,check_id', [
+    ('swapped_methods', 'coverage.scope'),
+    ('missing_seed_evidence', 'payload.static_seeds'),
+    ('blocks_target', 'containment.http'),
+    ('invalid_port', 'config.endpoints'),
+    ('whitespace_host', 'config.endpoints'),
+    ('missing_sqlite', 'environment.dependencies'),
+    ('runs_is_file', 'output.writability'),
+    ('dangling_output', 'output.writability'),
+    ('disk_full', 'output.writability'),
+])
+def test_doctor_audit_local_faults(valid_config, monkeypatch, tmp_path, fault, check_id):
+    # Each fault breaks a real prerequisite that existing baseline checks missed.
+    if fault == 'swapped_methods':
+        methods = {k: list(v) for k, v in doctor.METHODS_BY_SURFACE.items()}
+        methods['sqli'][0], methods['brute_force'][0] = methods['brute_force'][0], methods['sqli'][0]
+        monkeypatch.setattr(doctor, 'METHODS_BY_SURFACE', methods)
+    elif fault == 'missing_seed_evidence':
+        monkeypatch.setattr(doctor, 'validate_payload_candidates', lambda state: {
+            'payload_candidates': state['payload_candidates'], 'payload_validation_results': {}})
+    elif fault == 'blocks_target':
+        def reject_all(self, url, *, kind='request'):
+            raise doctor.ContainmentError('all blocked', kind=kind)
+        monkeypatch.setattr(doctor.HTTPClient, '_assert_in_scope', reject_all)
+    elif fault == 'invalid_port':
+        valid_config.models['openai'].base_url = 'http://localhost:70000/v1'
+    elif fault == 'whitespace_host':
+        valid_config.models['openai'].base_url = 'https://bad host/v1'
+    elif fault == 'missing_sqlite':
+        original = doctor.importlib.import_module
+        def missing(name):
+            if name == 'langgraph.checkpoint.sqlite':
+                raise ModuleNotFoundError('missing sqlite checkpointer')
+            return original(name)
+        monkeypatch.setattr(doctor.importlib, 'import_module', missing)
+    elif fault == 'runs_is_file':
+        root = Path(valid_config.output_dir)
+        root.mkdir()
+        (root / 'runs').write_text('blocking file')
+    elif fault == 'dangling_output':
+        Path(valid_config.output_dir).symlink_to(tmp_path / 'nonexistent')
+    elif fault == 'disk_full':
+        import tempfile
+        def full(*args, **kwargs):
+            raise OSError(28, 'No space left on device')
+        monkeypatch.setattr(tempfile, 'TemporaryFile', full)
+    report = doctor.run_doctor(valid_config)
+    root = Path('results/validation/doctor-audit')
+    root.mkdir(parents=True, exist_ok=True)
+    (root / f'{fault}.json').write_text(json.dumps(report, indent=2))
+    assert check_by_id(report, check_id)['status'] == 'failed'
+
+
+@pytest.mark.parametrize('scenario,expected', [
+    ('no_usage', 'passed'), ('extra_schema_key', 'failed'),
+    ('profile_budget', 'passed'), ('selected_profile', 'passed'),
+    ('provider_rejected', 'failed'),
+])
+def test_doctor_audit_provider_flow(valid_config, monkeypatch, scenario, expected):
+    # Exercise Doctor -> real LLMRuntime -> simulated SDK client; no paid calls.
+    from types import SimpleNamespace
+
+    profile = valid_config.models['openai']
+    profile.max_tokens = 1024
+    if scenario == 'selected_profile':
+        from dataclasses import replace
+        valid_config.models['chosen'] = replace(profile, model_name='chosen-model')
+        valid_config.model_profile = 'chosen'
+        for role in valid_config.llm_runtime.roles.values():
+            role.model_profile = None
+
+    def client_factory(provider, **kwargs):
+        class Client:
+            def invoke(self, messages):
+                if scenario == 'provider_rejected':
+                    raise RuntimeError('simulated unauthorized')
+                if scenario == 'selected_profile' and kwargs['model_name'] != 'chosen-model':
+                    raise RuntimeError('Doctor probed the wrong model')
+                truncated = scenario == 'profile_budget' and kwargs['max_tokens'] < 1024
+                return SimpleNamespace(
+                    content='{"status":"ok","extra":true}' if scenario == 'extra_schema_key' else '{"status":"ok"}',
+                    usage_metadata=None if scenario == 'no_usage' else {'input_tokens': 5, 'output_tokens': 5},
+                    response_metadata={'finish_reason': 'length' if truncated else 'stop'},
+                )
+        return Client()
+
+    monkeypatch.setattr('llm.runtime.get_llm', client_factory)
+    monkeypatch.setattr(doctor, '_dvwa_live_checks', lambda _config: [])
+    report = doctor.run_doctor(valid_config, live=True)
+    root = Path('results/validation/doctor-audit')
+    root.mkdir(parents=True, exist_ok=True)
+    (root / f'{scenario}.json').write_text(json.dumps(report, indent=2))
+    for role in valid_config.llm_runtime.roles:
+        assert check_by_id(report, f'live.model.{role}')['status'] == expected
+
+
+@pytest.mark.parametrize('source', ['environment', 'extra'])
+def test_doctor_uses_and_redacts_effective_credentials(valid_config, monkeypatch, source):
+    secret = 'effective-doctor-private-key'
+    valid_config.models['openai'].api_key = ''
+    if source == 'environment':
+        monkeypatch.setenv('OPENAI_API_KEY', secret)
+    else:
+        monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+        valid_config.models['openai'].extra['api_key'] = secret
+    monkeypatch.setattr(doctor, '_check_graph', lambda _config: (_ for _ in ()).throw(RuntimeError(secret)))
+    report = doctor.run_doctor(valid_config)
+    assert check_by_id(report, 'config.credentials')['status'] == 'passed'
+    assert secret not in json.dumps(report)
+
+
+def test_doctor_checks_effective_endpoint_override(valid_config):
+    valid_config.models['openai'].extra['base_url'] = 'http://localhost:invalid/v1'
+    report = doctor.run_doctor(valid_config)
+    assert check_by_id(report, 'config.endpoints')['status'] == 'failed'
+
+
+def test_doctor_rejects_missing_method_preconditions(valid_config, monkeypatch):
+    preconditions = dict(doctor.AttackKnowledgeGraph.METHOD_PRECONDITIONS)
+    preconditions.pop('sqli_union')
+    monkeypatch.setattr(doctor.AttackKnowledgeGraph, 'METHOD_PRECONDITIONS', preconditions)
+    report = doctor.run_doctor(valid_config)
+    assert check_by_id(report, 'akg.integrity')['status'] == 'failed'

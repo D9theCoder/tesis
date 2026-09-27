@@ -132,15 +132,3 @@ def write_events_jsonl(path: str | Path, events: list[dict]) -> Path:
         content += "\n"
     out_path.write_text(content, encoding="utf-8")
     return out_path
-
-
-def write_rich_report(path: str | Path, payload: dict) -> Path:
-    """Handles write rich report behavior for this module.
-
-    Args:
-        path: Value used by this function.
-        payload: Value used by this function."""
-    out_path = Path(path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    return out_path

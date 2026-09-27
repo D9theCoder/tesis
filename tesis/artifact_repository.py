@@ -682,94 +682,16 @@ class ArtifactMetadata:
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @property
-    def artifact_type(self) -> str:
-        """Compatibility alias for :attr:`artifact_kind`."""
-
-        return self.artifact_kind
-
-    @property
-    def kind(self) -> str:
-        """Short alias for :attr:`artifact_kind`."""
-
-        return self.artifact_kind
-
-    @property
     def is_matrix(self) -> bool:
         """Whether this record originated in a matrix artifact."""
 
         return self.artifact_kind == "matrix"
 
     @property
-    def artifact_path(self) -> Path:
-        """Compatibility alias for :attr:`path`."""
-
-        return self.path
-
-    @property
-    def file_path(self) -> Path:
-        """Compatibility alias for :attr:`path`."""
-
-        return self.path
-
-    @property
-    def source_path(self) -> Path:
-        """Compatibility alias for :attr:`path`."""
-
-        return self.path
-
-    @property
-    def filename(self) -> str:
-        """The source filename without requiring a UI-specific path type."""
-
-        return self.path.name
-
-    @property
-    def relative_path(self) -> str:
-        """Return the path as a stable display string."""
-
-        return str(self.path)
-
-    @property
-    def identifier(self) -> str | None:
-        """Return the new ID when present, otherwise the legacy run ID."""
-
-        return self.execution_id or self.run_id
-
-    @property
-    def id(self) -> str | None:
-        """Compatibility alias for :attr:`identifier`."""
-
-        return self.identifier
-
-    @property
-    def raw_artifact(self) -> Mapping[str, Any]:
-        """Compatibility alias for :attr:`raw`."""
-
-        return self.raw
-
-    @property
-    def artifact(self) -> Mapping[str, Any]:
-        """Compatibility alias for the original JSON record."""
-
-        return self.raw
-
-    @property
     def sort_timestamp(self) -> float:
         """Timestamp used for newest-first ordering."""
 
         return self.timestamp if self.timestamp is not None else self.modified_at
-
-    @property
-    def mtime(self) -> float:
-        """Compatibility alias for :attr:`modified_at`."""
-
-        return self.modified_at
-
-    @property
-    def last_modified(self) -> float:
-        """Compatibility alias for :attr:`modified_at`."""
-
-        return self.modified_at
 
 
 def _metadata_from_record(
@@ -1047,78 +969,6 @@ class ArtifactRepository:
         self._cache = tuple(items)
         return [item for item in items if _matches_filters(item, options)]
 
-    def refresh(
-        self,
-        filters: Mapping[str, object] | None = None,
-        **kwargs: object,
-    ) -> list[ArtifactMetadata]:
-        """Alias for :meth:`scan` useful to callers that prefer cache wording."""
-
-        return self.scan(filters, **kwargs)
-
-    def list_artifacts(
-        self,
-        filters: Mapping[str, object] | None = None,
-        **kwargs: object,
-    ) -> list[ArtifactMetadata]:
-        """Return artifact metadata using the same filters as :meth:`scan`."""
-
-        return self.scan(filters, **kwargs)
-
-    def list_runs(
-        self,
-        filters: Mapping[str, object] | None = None,
-        **kwargs: object,
-    ) -> list[ArtifactMetadata]:
-        """Return run metadata, including flattened matrix members."""
-
-        return self.scan(filters, **kwargs)
-
-    def discover(
-        self,
-        filters: Mapping[str, object] | None = None,
-        **kwargs: object,
-    ) -> list[ArtifactMetadata]:
-        """Alias for :meth:`scan` used by discovery-oriented callers."""
-
-        return self.scan(filters, **kwargs)
-
-    def load(
-        self,
-        filters: Mapping[str, object] | None = None,
-        **kwargs: object,
-    ) -> list[ArtifactMetadata]:
-        """Alias for :meth:`scan` used by repository-oriented callers."""
-
-        return self.scan(filters, **kwargs)
-
-    def all(
-        self,
-        filters: Mapping[str, object] | None = None,
-        **kwargs: object,
-    ) -> list[ArtifactMetadata]:
-        """Return all readable records, optionally filtered."""
-
-        return self.scan(filters, **kwargs)
-
-    def list(
-        self,
-        filters: Mapping[str, object] | None = None,
-        **kwargs: object,
-    ) -> list[ArtifactMetadata]:
-        """Return readable artifact metadata using a concise method name."""
-
-        return self.scan(filters, **kwargs)
-
-    def get_artifacts(
-        self,
-        filters: Mapping[str, object] | None = None,
-        **kwargs: object,
-    ) -> list[ArtifactMetadata]:
-        """Alias for :meth:`scan`."""
-
-        return self.scan(filters, **kwargs)
-
     @property
     def artifacts(self) -> tuple[ArtifactMetadata, ...]:
         """Return the most recently scanned unfiltered metadata snapshot."""
@@ -1144,64 +994,6 @@ class ArtifactRepository:
 
         wanted = str(run_id)
         return next((item for item in self.scan() if item.run_id == wanted), None)
-
-    def get_by_execution_id(self, execution_id: str) -> ArtifactMetadata | None:
-        """Alias for :meth:`find_by_execution_id`."""
-
-        return self.find_by_execution_id(execution_id)
-
-    def get_by_run_id(self, run_id: str) -> ArtifactMetadata | None:
-        """Alias for :meth:`find_by_run_id`."""
-
-        return self.find_by_run_id(run_id)
-
-    def find_all_by_execution_id(self, execution_id: str) -> list[ArtifactMetadata]:
-        """Find all records sharing an execution ID, newest first."""
-
-        wanted = str(execution_id)
-        return [item for item in self.scan() if item.execution_id == wanted]
-
-    def find_all_by_run_id(self, run_id: str) -> list[ArtifactMetadata]:
-        """Find all records sharing a legacy run ID, newest first."""
-
-        wanted = str(run_id)
-        return [item for item in self.scan() if item.run_id == wanted]
-
-    def lookup(self, identifier: str) -> ArtifactMetadata | None:
-        """Look up an execution ID first, then a legacy run ID."""
-
-        return self.find_by_execution_id(identifier) or self.find_by_run_id(identifier)
-
-    def find_by_id(self, identifier: str) -> ArtifactMetadata | None:
-        """Alias for :meth:`lookup`."""
-
-        return self.lookup(identifier)
-
-    def get(
-        self,
-        identifier: str | None = None,
-        *,
-        execution_id: str | None = None,
-        run_id: str | None = None,
-    ) -> ArtifactMetadata | None:
-        """Alias for :meth:`lookup`."""
-
-        return self.find(identifier, execution_id=execution_id, run_id=run_id)
-
-    def find(
-        self,
-        identifier: str | None = None,
-        *,
-        execution_id: str | None = None,
-        run_id: str | None = None,
-    ) -> ArtifactMetadata | None:
-        """Find a record by execution ID, legacy run ID, or either identifier."""
-
-        if execution_id is not None:
-            return self.find_by_execution_id(execution_id)
-        if run_id is not None:
-            return self.find_by_run_id(run_id)
-        return self.lookup(identifier) if identifier is not None else None
 
     def duplicate_config_fingerprints(
         self,
@@ -1234,11 +1026,6 @@ class ArtifactRepository:
         if duplicates_only:
             return {key: value for key, value in groups.items() if len(value) > 1}
         return groups
-
-    # A compact name is convenient for UI adapters and keeps compatibility
-    # with callers that call this operation simply ``duplicates``.
-    duplicates = duplicate_config_fingerprints
-    duplicate_groups = duplicate_config_fingerprints
 
 
 def _matches_filter(value: str | None, requested: object) -> bool:
@@ -1278,15 +1065,7 @@ def _matches_filters(item: ArtifactMetadata, filters: Mapping[str, object]) -> b
 
 __all__ = [
     "ArtifactMetadata",
-    "ArtifactRecord",
     "ArtifactRepository",
-    "RunArtifactMetadata",
     "config_fingerprint",
     "new_execution_id",
 ]
-
-
-# Lightweight naming aliases keep integrations from having to care whether a
-# caller calls the returned value a metadata record or an artifact record.
-ArtifactRecord = ArtifactMetadata
-RunArtifactMetadata = ArtifactMetadata

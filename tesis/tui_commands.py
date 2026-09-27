@@ -153,6 +153,7 @@ class BaseDrawer(Screen):
         def resized(self: Screen, event: Any) -> None:
             if _dismisses_below_floor(self):
                 return
+            self.set_class(self.app.size.width < 80, "drawer-full")
             if on_resize is not None:
                 on_resize(self, event)
 

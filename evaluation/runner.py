@@ -36,7 +36,7 @@ from core.state import (
 from evaluation.diagnostics import diagnose_quality
 from evaluation.failure_logger import write_failure_artifact
 from evaluation.manual_scoring_sheet import manual_scoring_rows
-from evaluation.reporter import write_events_jsonl, write_json_report, write_rich_report
+from evaluation.reporter import write_events_jsonl, write_json_report
 from evaluation.telemetry import RunTelemetry, stable_sha256
 from llm.diagnostics import format_failure_line
 from llm.runtime import (
@@ -1187,7 +1187,7 @@ def run_single_engagement(
         }
         try:
             write_events_jsonl(base_dir / f"{execution_id}.events.jsonl", events)
-            write_rich_report(base_dir / f"{execution_id}.rich.json", rich_payload)
+            write_json_report(base_dir / f"{execution_id}.rich.json", rich_payload)
         except Exception as exc:
             # Sidecar generation must never break primary artifact generation.
             summary = report.get("summary") if isinstance(report, dict) else None

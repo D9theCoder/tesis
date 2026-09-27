@@ -10,11 +10,14 @@ import logging
 import os
 import re
 import sys
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit
+
+from bs4 import BeautifulSoup
 
 from core.graph_builder import RUNTIME_AGENT_NODE_NAMES, build_framework
 from core.knowledge_graph import AKGValidationError, AttackKnowledgeGraph
@@ -22,7 +25,7 @@ from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS, SURFACES, new_defaul
 from foundation.http_client import ContainmentError, HTTPClient
 from foundation.payload_library import PayloadLibrary
 from foundation.payload_validator import validate_payload_candidates
-from llm.provider import SUPPORTED_PROVIDERS, supports_reasoning_effort
+from llm.provider import DEFAULT_MAX_OUTPUT_TOKENS, SUPPORTED_PROVIDERS, supports_reasoning_effort
 from tesis.model_config import (
     EngagementConfig,
     LLM_RUNTIME_ROLES,
@@ -41,6 +44,7 @@ _EXPERIMENT_CONDITIONS = ("linear_hybrid", "akg_guided_hybrid")
 _REQUIRED_IMPORTS: tuple[tuple[str, str], ...] = (
     ("langchain", "langchain"),
     ("langgraph", "langgraph"),
+    ("langgraph-checkpoint-sqlite", "langgraph.checkpoint.sqlite"),
     ("langchain-google-genai", "langchain_google_genai"),
     ("langchain-openai", "langchain_openai"),
     ("langchain-anthropic", "langchain_anthropic"),
@@ -53,7 +57,6 @@ _REQUIRED_IMPORTS: tuple[tuple[str, str], ...] = (
     ("rich", "rich"),
     ("textual", "textual"),
     ("ruamel-yaml", "ruamel.yaml"),
-    ("scipy", "scipy"),
 )
 
 
@@ -162,6 +165,10 @@ def _check_coverage() -> DoctorCheck:
         for name in expected
         if actual[name] != expected[name]
     ]
+    for surface, prefix in (("sqli", "sqli_"), ("access_control", "ac_"), ("brute_force", "bf_")):
+        expected_group = {method for method in expected_methods if method.startswith(prefix)}
+        if set(METHODS_BY_SURFACE.get(surface, ())) != expected_group:
+            mismatches.append(f"incorrect method mapping for surface {surface}")
     if mismatches or set(RUNTIME_AGENT_NODE_NAMES) != expected_methods:
         if set(RUNTIME_AGENT_NODE_NAMES) != expected_methods:
             mismatches.append(
@@ -185,6 +192,16 @@ def _check_coverage() -> DoctorCheck:
 
 def _check_akg() -> DoctorCheck:
     graph = AttackKnowledgeGraph()
+    if set(graph.METHOD_PRECONDITIONS) != set(RUNTIME_AGENT_NODE_NAMES) or any(
+        not isinstance(values, list) or not values
+        or not all(isinstance(value, str) and value for value in values)
+        for values in graph.METHOD_PRECONDITIONS.values()
+    ):
+        raise AKGValidationError(
+            "Every method must declare nonempty observation preconditions",
+            invariant="method_preconditions",
+            repair="restore the static METHOD_PRECONDITIONS registry",
+        )
     method_profiles = sum(
         isinstance(graph.graph.nodes[method].get("payload_profile"), dict)
         for method in RUNTIME_AGENT_NODE_NAMES
@@ -235,8 +252,8 @@ def _check_static_seeds() -> DoctorCheck:
                 rejected = [row for row in validation_rows if not row.get("valid", False)]
                 checked += 1
                 candidates_checked += len(validation_rows)
-                if not accepted or rejected:
-                    reason = rejected or "no accepted candidates"
+                if not accepted or rejected or len(validation_rows) != len(seeds):
+                    reason = rejected or "missing accepted candidates or validation evidence"
                     failures.append(f"{method}/{level}/{payload_mode}: {reason}")
     details = f"validated_coordinates={checked}; validation_rows={candidates_checked}"
     if failures:
@@ -276,6 +293,10 @@ def _check_containment(config: EngagementConfig) -> DoctorCheck:
     was_disabled = containment_logger.disabled
     containment_logger.disabled = True
     try:
+        try:
+            client._assert_in_scope(config.target_url, kind="request")
+        except ContainmentError:
+            failures.append("configured target was blocked")
         for kind in ("request", "redirect"):
             try:
                 client._assert_in_scope("https://example.invalid/doctor-containment", kind=kind)
@@ -348,8 +369,23 @@ def _check_profiles_and_roles(config: EngagementConfig) -> DoctorCheck:
     )
 
 
+def _credential_for_profile(profile: Any) -> str:
+    """Mirror the runtime's extra overrides and get_llm environment fallback."""
+    configured = profile.extra.get("api_key", profile.api_key)
+    if configured:
+        return str(configured)
+    variables = {
+        "openai": ("OPENAI_API_KEY",),
+        "openai_compatible": ("OPENAI_COMPATIBLE_API_KEY",),
+        "gemini": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+        "claude": ("ANTHROPIC_API_KEY",),
+    }
+    provider = str(profile.provider).strip().lower()
+    return next((os.environ[name] for name in variables.get(provider, ()) if os.getenv(name)), "")
+
+
 def _check_credentials(config: EngagementConfig) -> DoctorCheck:
-    missing = [name for name, profile in config.models.items() if not str(profile.api_key).strip()]
+    missing = [name for name, profile in config.models.items() if not _credential_for_profile(profile).strip()]
     if not config.models:
         missing.append("<no model profiles>")
     if missing:
@@ -369,8 +405,16 @@ def _check_credentials(config: EngagementConfig) -> DoctorCheck:
 
 
 def _valid_http_url(value: str) -> bool:
-    parsed = urlparse(value)
-    return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+    try:
+        parsed = urlparse(value)
+        port = parsed.port  # Reject malformed/out-of-range ports before the SDK does.
+        return (
+            parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+            and not any(char.isspace() or ord(char) < 32 for char in value)
+            and (port is None or port > 0)
+        )
+    except (TypeError, ValueError):
+        return False
 
 
 def _effective_base_url(profile: Any) -> tuple[str, str]:
@@ -381,9 +425,9 @@ def _effective_base_url(profile: Any) -> tuple[str, str]:
     Doctor must accept the same environment-provided endpoint.
     """
 
-    configured = str(profile.base_url or "").strip()
+    configured = str(profile.extra.get("base_url", profile.base_url) or "").strip()
     if configured:
-        return configured, "config"
+        return configured, "extra" if "base_url" in profile.extra else "config"
     if str(profile.provider).strip().lower() == "openai_compatible":
         from_environment = os.getenv(_OPENAI_COMPATIBLE_BASE_URL_ENV, "").strip()
         if from_environment:
@@ -458,18 +502,19 @@ def _check_dependencies() -> DoctorCheck:
 def _path_is_writable(path: Path) -> tuple[bool, Path]:
     """Check an output path without creating or rewriting user files."""
 
-    candidate = path.expanduser()
+    candidate = path
     if candidate.exists():
         return candidate.is_dir() and os.access(candidate, os.W_OK | os.X_OK), candidate
     ancestor = candidate
-    while not ancestor.exists() and ancestor != ancestor.parent:
+    while not ancestor.exists() and not ancestor.is_symlink() and ancestor != ancestor.parent:
         ancestor = ancestor.parent
     return ancestor.is_dir() and os.access(ancestor, os.W_OK | os.X_OK), ancestor
 
 
 def _check_output(config: EngagementConfig) -> DoctorCheck:
     output = Path(config.output_dir)
-    writable, checked_path = _path_is_writable(output)
+    layout_root = output / "runs"
+    writable, checked_path = _path_is_writable(layout_root)
     if not writable:
         return _failed(
             "output.writability",
@@ -478,12 +523,18 @@ def _check_output(config: EngagementConfig) -> DoctorCheck:
             f"output_dir={output}; nearest_existing_path={checked_path}",
             "Create the output directory or grant write and traversal permission to its nearest existing parent.",
         )
-    state = "exists" if output.expanduser().exists() else "creatable"
+    # Probe actual I/O as permission bits alone miss read-only mounts and ENOSPC.
+    # The temporary file is removed automatically; no run directory is created.
+    with tempfile.TemporaryFile(dir=checked_path) as probe:
+        probe.write(b"TESIS Doctor write probe\n")
+        probe.flush()
+        os.fsync(probe.fileno())
+    state = "exists" if layout_root.exists() else "creatable"
     return _passed(
         "output.writability",
         "artifacts",
-        "Configured artifact directory is writable",
-        f"output_dir={output}; state={state}; layout_root={output / 'runs'}",
+        "Artifact layout parent accepted a temporary write",
+        f"output_dir={output}; state={state}; layout_root={layout_root}; checked_path={checked_path}",
     )
 
 
@@ -521,8 +572,8 @@ def _check_reasoning(config: EngagementConfig) -> DoctorCheck:
     return _passed(
         "reasoning.controls",
         "models",
-        "Reasoning effort settings are valid for their providers",
-        details,
+        "Provider adapters can forward the configured reasoning settings",
+        f"{details}; model_support=unverified offline",
     )
 
 
@@ -535,7 +586,9 @@ def _model_probe_checks(config: EngagementConfig) -> list[DoctorCheck]:
     role_settings = {
         name: dataclasses.asdict(settings) for name, settings in config.llm_runtime.roles.items()
     }
-    default_model = profiles.get(config.provider, {})
+    for role_name, settings in role_settings.items():
+        settings["model_profile"] = _profile_for_role(config, role_name)[0]
+    default_model = profiles.get(config.model_profile or config.provider, {})
     runtime = LLMRuntime(max_concurrency=1)
     checks: list[DoctorCheck] = []
     schema = {
@@ -547,8 +600,8 @@ def _model_probe_checks(config: EngagementConfig) -> list[DoctorCheck]:
     }
 
     def validate(payload: dict[str, Any]) -> dict[str, Any]:
-        if payload.get("status") != "ok":
-            raise ValueError("provider probe did not return status=ok")
+        if payload != {"status": "ok"}:
+            raise ValueError("provider probe did not return exactly the requested status schema")
         return {"status": "ok"}
 
     try:
@@ -563,7 +616,7 @@ def _model_probe_checks(config: EngagementConfig) -> list[DoctorCheck]:
                     f"role={role_name}; profile={profile_name}",
                 ))
                 continue
-            if not str(profile.api_key).strip():
+            if not _credential_for_profile(profile).strip():
                 checks.append(_skipped(
                     check_id,
                     "live-model",
@@ -572,6 +625,11 @@ def _model_probe_checks(config: EngagementConfig) -> list[DoctorCheck]:
                 ))
                 continue
             try:
+                budget = (
+                    config.llm_runtime.roles[role_name].max_tokens or profile.max_tokens
+                    or (8192 if _effective_reasoning(config, role_name)[0] != "provider-default"
+                        else DEFAULT_MAX_OUTPUT_TOKENS)
+                )
                 with runtime.coordinate(
                     coordinate_id=f"doctor-{role_name}",
                     default_provider=config.provider,
@@ -588,21 +646,21 @@ def _model_probe_checks(config: EngagementConfig) -> list[DoctorCheck]:
                         schema=schema,
                         schema_version="doctor-probe.v1",
                         validator=validate,
-                        max_tokens=32,
+                        max_tokens=budget,
                     )
                 usage = result.performance.get("provider_usage") or {}
                 evidence = result.performance.get("reasoning_token_evidence")
                 effort = result.performance.get("reasoning_effort_requested") or "provider-default"
                 common = (
                     f"role={role_name}; profile={profile_name}; provider={profile.provider}; "
-                    f"requested_effort={effort}; provider_responded=true"
+                    f"requested_effort={effort}; provider_responded=true; max_tokens={budget}"
                 )
                 if not usage:
-                    checks.append(_skipped(
+                    checks.append(_passed(
                         check_id,
                         "live-model",
-                        "Provider responded, but usage telemetry is unavailable",
-                        f"{common}; reasoning_tokens=unknown (provider usage missing)",
+                        "Provider returned valid structured output; usage telemetry unavailable",
+                        f"{common}; reasoning_tokens=unknown; provider_side_reasoning=unverified",
                     ))
                 elif not evidence:
                     checks.append(_passed(
@@ -630,6 +688,25 @@ def _model_probe_checks(config: EngagementConfig) -> list[DoctorCheck]:
     finally:
         runtime.close()
     return checks
+
+
+def _read_dvwa_page(session: Any, path: str) -> BeautifulSoup:
+    """Require a successful protected DVWA page, not a redirect or error shell."""
+    response = session.http.get(path)
+    expected_path = urlparse(urljoin(session.http.base_url, path)).path.removesuffix("index.php").rstrip("/")
+    if response.status_code != 200:
+        raise ValueError(f"{path}: HTTP {response.status_code}")
+    if urlparse(response.url).path.removesuffix("index.php").rstrip("/") != expected_path:
+        raise ValueError(f"{path}: redirected away from the expected page")
+    soup = BeautifulSoup(response.text, "html.parser")
+    branded = re.search(r"\bdvwa\b|damn vulnerable web app", soup.get_text(" ").lower())
+    logout = any(
+        urlparse(str(link.get("href", ""))).path.split("/")[-1] == "logout.php"
+        for link in soup.select("a[href]")
+    )
+    if not branded or not logout:
+        raise ValueError(f"{path}: authenticated DVWA page markers missing")
+    return soup
 
 
 def _dvwa_live_checks(config: EngagementConfig) -> list[DoctorCheck]:
@@ -665,6 +742,8 @@ def _dvwa_live_checks(config: EngagementConfig) -> list[DoctorCheck]:
     try:
         try:
             authenticated = bool(session.login(username, password))
+            if authenticated:
+                _read_dvwa_page(session, "index.php")
         except Exception as exc:
             checks.append(_failed(
                 ids[0],
@@ -700,7 +779,9 @@ def _dvwa_live_checks(config: EngagementConfig) -> list[DoctorCheck]:
         for level in SECURITY_LEVELS:
             try:
                 session.set_security_level(level)
-                detected = session.detect_security_level()
+                page = _read_dvwa_page(session, "security.php")
+                selected = page.select_one("select[name='security'] option[selected]")
+                detected = str(selected.get("value", "")).lower() if selected else None
                 if detected == level:
                     available_levels.append(level)
                 else:
@@ -725,20 +806,20 @@ def _dvwa_live_checks(config: EngagementConfig) -> list[DoctorCheck]:
 
         surface_specs = {
             "sqli": ("vulnerabilities/sqli/", ("sql injection", "user id")),
-            "access_control": ("vulnerabilities/authbypass/", ("auth", "user id", "access control")),
+            "access_control": ("vulnerabilities/authbypass/", ("authorisation bypass", "authorization bypass", "access control")),
             "brute_force": ("vulnerabilities/brute/", ("brute force", "username")),
         }
         available_surfaces: list[str] = []
         surface_failures: list[str] = []
         for surface, (path, markers) in surface_specs.items():
             try:
-                response = session.http.get(path)
-                body = str(response.text).lower()
-                if response.status_code == 200 and any(marker in body for marker in markers):
+                page = _read_dvwa_page(session, path)
+                headings = " ".join(tag.get_text(" ").lower() for tag in page.select("title, h1, h2"))
+                if any(marker in headings for marker in markers):
                     available_surfaces.append(surface)
                 else:
                     surface_failures.append(
-                        f"{surface}: status={response.status_code}, expected_marker=false"
+                        f"{surface}: expected page heading missing"
                     )
             except Exception as exc:
                 surface_failures.append(f"{surface}: {type(exc).__name__}: {exc}")
@@ -754,8 +835,8 @@ def _dvwa_live_checks(config: EngagementConfig) -> list[DoctorCheck]:
             checks.append(_passed(
                 ids[2],
                 "live-dvwa",
-                "All in-scope DVWA surfaces returned expected markers",
-                f"surfaces={','.join(available_surfaces)}; count={len(available_surfaces)}",
+                "All in-scope DVWA surfaces returned expected markers at the requested high level",
+                f"surfaces={','.join(available_surfaces)}; count={len(available_surfaces)}; requested_level=high; level_check={checks[1].status}",
             ))
     finally:
         session.close()
@@ -764,6 +845,7 @@ def _dvwa_live_checks(config: EngagementConfig) -> list[DoctorCheck]:
 
 def _known_secrets(config: EngagementConfig) -> tuple[str, ...]:
     values = [str(profile.api_key) for profile in config.models.values() if profile.api_key]
+    values.extend(_credential_for_profile(profile) for profile in config.models.values())
     password = getattr(config, "dvwa_password", None)
     if password:
         values.append(str(password))
@@ -961,6 +1043,21 @@ def run_doctor(config: EngagementConfig, *, live: bool = False) -> dict[str, Any
                 f"error={type(exc).__name__}: {exc}",
                 "Verify the contained target URL, DVWA service, and local session configuration.",
             ))
+    else:
+        checks.extend(
+            _skipped(
+                f"live.dvwa.{name}", "live-dvwa", f"DVWA {name} not checked (offline)",
+                "Server availability is unverified. Run confirmed Live checks or doctor --live.",
+            )
+            for name in ("authentication", "levels", "surfaces")
+        )
+        checks.extend(
+            _skipped(
+                f"live.model.{role_name}", "live-model", f"Provider for {role_name} not checked (offline)",
+                "Credentials and URL configuration do not verify connectivity or model availability.",
+            )
+            for role_name in sorted(config.llm_runtime.roles)
+        )
     secrets, redaction_check = _safe_known_secrets(config)
     if redaction_check.status == "failed":
         checks.append(redaction_check)

@@ -225,12 +225,19 @@ mengganti keduanya. Klik pointer hanya dipetakan ke marker track yang dirender.
 offline mencakup scope tetap 3 surface/9 method/3 level/3 payload mode/2
 condition, invariant AKG, kompilasi LangGraph, seluruh 81 koordinat static-seed,
 containment request dan redirect, profile/role, credentials, endpoint,
-dependency, output writability, serta reasoning controls. `--live` menambahkan
+dependency (termasuk SQLite checkpoint), output writability, serta reasoning
+controls. Check layanan pada mode offline dinyatakan skipped; keberhasilan lokal
+tidak membuktikan server tersedia. Check artefak memeriksa `output_dir/runs` dan
+write/flush file sementara pada direktori terdekat yang sudah ada. `--live` menambahkan
 satu probe model terstruktur yang benign per role dan check contained DVWA untuk
-authentication, security level, serta surface. Response model tanpa penggunaan
-provider berstatus `skipped` dengan penggunaan reasoning-token unknown, tidak
-pernah passed; penggunaan tanpa field reasoning-token dapat melewati probe
-terstruktur, tetapi reasoning di sisi provider tetap unverified.
+authentication, security level, serta surface. Halaman surface diperiksa pada
+level high yang diminta, dengan hasil check level dilaporkan terpisah. Probe model
+menggunakan role/profile serta token budget efektif. Output terstruktur yang valid
+berstatus passed meskipun telemetry penggunaan tidak tersedia; tanpa bukti usage
+atau reasoning-token, reasoning di sisi provider tetap unverified. Check reasoning
+offline hanya memverifikasi kemampuan adapter meneruskan pengaturan, bukan
+penerimaan model tertentu. Probe kesiapan ini tidak membuktikan semua koordinat
+eksperimen atau serangan akan berhasil.
 
 Output JSON Doctor berupa satu objek berisi `status`,
 `summary{passed,failed,skipped,total}`, dan `checks`; setiap check berisi `id`,
@@ -240,6 +247,10 @@ terpisah. Exit code adalah 0 untuk passed, 1 untuk failed, dan 2 untuk usage
 error. Failure dikumpulkan beserta saran perbaikan dan live check yang dilewati
 tetap eksplisit. Doctor tidak pernah berjalan otomatis, menjadi gate run,
 mengarantina provider, atau mengubah topology runtime.
+Membuka panel Doctor memulai check offline baru. Escape menghentikan subprocess
+lokal dan menutup panel; membuka kembali memulai check baru. Request yang sudah
+diterima layanan jarak jauh mungkin tetap selesai di sisi layanan. Panel memakai
+bahasa ringkas dengan detail teknis sesuai kebutuhan; JSON CLI tetap memuat laporan lengkap.
 Error provider mempertahankan konteks
 role/coordinate/model dan remediation yang sudah disensor, menelusuri exception
 chain untuk status serta request ID, dan menyensor setiap nilai query dan

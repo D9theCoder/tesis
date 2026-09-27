@@ -318,21 +318,6 @@ class CancellationToken:
             reason = self.reason
             raise CancellationRequested(message or reason or "Runtime execution was cancelled", reason=reason)
 
-    def raise_if_cancelled(self) -> None:
-        """Alias for :meth:`check`."""
-
-        self.check()
-
-    def throw_if_cancelled(self) -> None:
-        """Alias for :meth:`check` used by worker loops."""
-
-        self.check()
-
-    def raise_if_cancellation_requested(self) -> None:
-        """Explicitly named alias for :meth:`check`."""
-
-        self.check()
-
     def wait(self, timeout: float | None = None) -> bool:
         """Wait for cancellation, returning ``True`` when it is requested."""
 

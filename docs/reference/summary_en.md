@@ -221,12 +221,18 @@ Standalone `python -m tesis doctor` runs only when requested. Its 11 offline
 checks cover the fixed 3-surface/9-method/3-level/3-payload-mode/2-condition
 scope, AKG invariants, LangGraph compilation, all 81 static-seed coordinates,
 request and redirect containment, profiles/roles, credentials, endpoints,
-dependencies, output writability, and reasoning controls. `--live` adds one
+dependencies (including SQLite checkpoints), output writability, and reasoning
+controls. Offline service checks are explicitly skipped; local success does not
+prove server availability. The artifact check tests `output_dir/runs` and a
+temporary write/flush at its nearest existing directory. `--live` adds one
 benign structured model probe per role and contained DVWA authentication,
-security-level, and surface checks. A model response with no provider usage is
-`skipped` with reasoning-token usage unknown, never passed; usage with no
-reasoning-token field may pass the structured probe but leaves provider-side
-reasoning unverified.
+security-level, and surface checks. Surface pages are probed at the requested
+high level, with the level-check result reported separately. Model probes use
+the effective role/profile and token budget. Valid structured output passes
+without optional usage telemetry; absent usage or reasoning-token evidence
+leaves provider-side reasoning unverified. Offline reasoning checks establish
+adapter forwarding support, not model-specific acceptance. These are readiness
+probes, not proof that every experiment coordinate or attack will succeed.
 
 JSON Doctor output is one object containing `status`, a
 `summary{passed,failed,skipped,total}`, and `checks`; each check contains `id`,
@@ -236,6 +242,10 @@ Exit codes are 0 for passed, 1 for failed, and 2 for usage errors. Failures
 accumulate with repair guidance and skipped live checks remain explicit. Doctor
 never runs automatically, gates runs, quarantines providers, or alters runtime
 topology.
+Opening the Doctor panel starts fresh offline checks. Escape stops its local
+subprocess and closes the panel; reopening starts again. Remote requests already
+submitted may still finish at the service. The panel shows plain-language results
+with technical details available on demand, while CLI JSON keeps the full report.
 Provider failures retain redacted role/coordinate/model context and remediation,
 walk exception chains for status and request IDs, and redact every URL query and
 fragment value. AKG validation failures identify the invalid graph contract.

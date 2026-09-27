@@ -7,17 +7,13 @@ Central provider capability registry: all assumptions about structured output,
 reasoning fields, token parameters, and retry ownership live here. Runtime
 call sites MUST resolve through :func:`provider_capabilities` instead of
 scattering provider-name checks."""
-import copy
 import os
-import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Any, Mapping
 
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage
 SUPPORTED_PROVIDERS = ["gemini", "openai", "claude", "openai_compatible"]
-SAMPLE_QUERY = "What model are you? Reply with your model name only."
 # Provider APIs treat an omitted output limit as unbounded.  That is unsafe for
 # streamed experiment calls: a model can keep the HTTP response open long
 # enough to outlive the runner's per-request read timeout.  Callers may still
@@ -26,7 +22,6 @@ SAMPLE_QUERY = "What model are you? Reply with your model name only."
 DEFAULT_MAX_OUTPUT_TOKENS = 512
 REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 REASONING_EFFORT_PROVIDERS = frozenset({"openai", "openai_compatible"})
-logger = logging.getLogger(__name__)
 
 # NOTE: Callers must load env vars before importing if needed (e.g. via load_dotenv())
 
@@ -206,61 +201,6 @@ def get_llm(provider_name: str, **kwargs):
         )
     else:
         raise ValueError(f"Unsupported LLM provider: {provider_name}")
-
-
-def invoke_sample_query(provider_name: str, **kwargs) -> dict[str, str]:
-    """Run the standalone provider smoke query used by development tests."""
-    llm = get_llm(provider_name, **kwargs)
-    response = llm.invoke([HumanMessage(content=SAMPLE_QUERY)])
-    model = getattr(llm, "model_name", None) or getattr(llm, "model", "unknown")
-    return {
-        "provider": provider_name,
-        "model": str(model),
-        "query": SAMPLE_QUERY,
-        "response": str(getattr(response, "content", response)),
-    }
-
-
-def get_simulator_llm(simulator_model: str = "gpt-4o-mini", provider: str | None = None, **kwargs):
-    """Return a simulator LLM for the evasion pipeline.
-
-    The simulator model rewrites baseline seeds into schema-preserving retry candidates.
-    When *provider* is given, it is used directly; otherwise the function
-    guesses from the model name and falls back to gemini.
-    """
-    if "temperature" not in kwargs:
-        kwargs["temperature"] = 0.7
-
-    if provider:
-        try:
-            kwargs_copy = copy.deepcopy(kwargs)
-            return get_llm(provider, model_name=simulator_model, **kwargs_copy)
-        except Exception as exc:
-            logger.warning(
-                "Simulator provider '%s' unavailable; falling back to gemini",
-                provider,
-                exc_info=exc,
-            )
-            kwargs_copy = copy.deepcopy(kwargs)
-            return get_llm("gemini", model_name="gemini-3-flash-preview", **kwargs_copy)
-
-    normalized = simulator_model.strip().lower()
-    if "gpt" in normalized or normalized.startswith("openai"):
-        try:
-            kwargs_copy = copy.deepcopy(kwargs)
-            return get_llm("openai", model_name=simulator_model, **kwargs_copy)
-        except Exception as exc:
-            logger.warning(
-                "OpenAI simulator client unavailable; falling back to gemini simulator",
-                exc_info=exc,
-            )
-
-    kwargs_copy = copy.deepcopy(kwargs)
-    return get_llm(
-        "gemini",
-        model_name=kwargs_copy.pop("model_name", "gemini-3-flash-preview"),
-        **kwargs_copy,
-    )
 
 
 def get_llm_from_model_config(config: "ModelConfig", **kwargs):

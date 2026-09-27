@@ -88,25 +88,3 @@ class ScorerReport:
             },
             "summary": dataclasses.asdict(self.summary),
         }
-
-
-@dataclass(frozen=True, slots=True)
-class RunArtifact:
-    """Serializable artifact produced by one framework run."""
-    schema_version: str
-    run_id: str
-    status: str
-    config: dict[str, Any]
-    timing: dict[str, Any]
-    final_state: dict[str, Any]
-    report: dict[str, Any]
-    error: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class AggregateReport:
-    """Aggregate report across multiple framework runs or model configurations."""
-    schema_version: str
-    matrix: dict[str, Any]
-    totals: dict[str, Any]
-    by_provider_level: dict[str, dict[str, Any]] = field(default_factory=dict)

@@ -116,6 +116,13 @@ The active LLM or HTTP request is not interrupted unsafely; when it returns,
 the graph iterator closes, the latest safe state becomes a `cancelled`
 artifact, and matrix scheduling stops before the next coordinate.
 
+Doctor uses a separate CLI subprocess, managed by a Textual async worker, so
+Escape or a rerun can stop even a blocked check. Both output streams are captured
+to keep SDK logs out of the terminal display. Closing kills the local subprocess;
+reopening creates a new one and rereads `tui_state.CONFIG_PATH`. Already submitted
+remote requests may still finish at the service. Its result list scrolls inside
+the drawer, with controls kept visible and technical details hidden by default.
+
 ## Configuration
 
 `tesis/config_fields.py` declares field types, categories, choices, aliases,
