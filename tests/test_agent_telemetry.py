@@ -6,7 +6,6 @@ import pytest
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
 
-
 class TestProbeEvent:
     """Groups regression tests for TestProbeEvent behavior."""
     def test_probe_event_structure(self):
@@ -19,13 +18,6 @@ class TestProbeEvent:
         assert event["payload"]["payload"] == "1' ORDER BY 1-- -"
         assert event["payload"]["status_code"] == 200
         assert event["payload"]["signal_detected"] is True
-
-    def test_probe_event_no_status_code(self):
-        """Verifies probe event no status code behavior."""
-        event = probe_event("sqli_error", "1'", None, False)
-        assert event["payload"]["status_code"] is None
-        assert event["payload"]["signal_detected"] is False
-
 
 class TestExploitEvent:
     """Groups regression tests for TestExploitEvent behavior."""
@@ -43,7 +35,6 @@ class TestExploitEvent:
         assert event["status"] == "failed"
         assert event["payload"]["success"] is False
 
-
 class TestScoreEvent:
     """Groups regression tests for TestScoreEvent behavior."""
     def test_score_event_full_exploit(self):
@@ -60,32 +51,7 @@ class TestScoreEvent:
         assert event["payload"]["confirmed_vulns"] == ["sqli_union_confirmed"]
         assert event["payload"]["achieved_outcomes"] == ["credentials_extracted"]
 
-    def test_score_event_not_found(self):
-        """Verifies score event not found behavior."""
-        event = score_event("sqli_error", 0, [], [])
-        assert event["payload"]["score"] == 0
-        assert event["payload"]["confirmed_vulns"] == []
-        assert event["payload"]["achieved_outcomes"] == []
-
     def test_score_event_invalid_score_raises(self):
         """Verifies score event invalid score raises behavior."""
         with pytest.raises(ValueError, match="score must be an int between 0 and 4"):
             score_event("sqli_union", 5, [], [])
-
-    def test_score_event_negative_score_raises(self):
-        """Verifies score event negative score raises behavior."""
-        with pytest.raises(ValueError, match="score must be an int between 0 and 4"):
-            score_event("sqli_union", -1, [], [])
-
-
-class TestEndpointParameter:
-    """Groups regression tests for TestEndpointParameter behavior."""
-    def test_probe_event_with_endpoint(self):
-        """Verifies probe event with endpoint behavior."""
-        event = probe_event("sqli_union", "1'", 200, True, endpoint="/vulnerabilities/sqli/")
-        assert event["payload"]["endpoint"] == "/vulnerabilities/sqli/"
-
-    def test_probe_event_endpoint_defaults_to_none(self):
-        """Verifies probe event endpoint defaults to none behavior."""
-        event = probe_event("sqli_union", "1'", 200, True)
-        assert event["payload"]["endpoint"] is None

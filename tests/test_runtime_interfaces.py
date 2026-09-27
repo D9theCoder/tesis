@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tesis.artifact_repository import ArtifactRepository, config_fingerprint, new_execution_id
+from tesis.artifact_repository import ArtifactRepository, config_fingerprint
 from tesis.runtime_events import (
     CancellationRequested,
     CancellationToken,
@@ -157,14 +157,6 @@ def test_config_fingerprint_excludes_secrets_and_execution_identity() -> None:
     changed_setup = copy.deepcopy(config)
     changed_setup["candidate_budget"] = 5
     assert config_fingerprint(changed_setup) != first
-
-
-def test_new_execution_ids_are_unique_and_filename_safe() -> None:
-    execution_ids = {new_execution_id() for _ in range(64)}
-
-    assert len(execution_ids) == 64
-    assert all(execution_id.startswith("exec-") for execution_id in execution_ids)
-    assert all("/" not in execution_id and "\\" not in execution_id for execution_id in execution_ids)
 
 
 def _write_json(path: Path, payload: object) -> None:

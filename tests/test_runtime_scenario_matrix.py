@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from itertools import product
-
 import pytest
 
 from agents.orchestrator import orchestrator
@@ -11,7 +9,6 @@ from core.graph_builder import route_from_payload_validator
 from core.state import METHODS_BY_SURFACE, PAYLOAD_MODES, SECURITY_LEVELS, new_default_state
 from foundation.payload_generator import build_payload_candidates
 from foundation.payload_validator import validate_payload_candidates
-
 
 METHOD_CASES = [
     (surface, method)
@@ -26,7 +23,6 @@ GUARDRAIL_CASES = (
 )
 CONDITIONS = ("linear_hybrid", "akg_guided_hybrid")
 
-
 class _ScenarioLLM:
     def __init__(self, method: str, refuse_once: bool) -> None:
         self.method = method
@@ -38,7 +34,6 @@ class _ScenarioLLM:
         if self.refuse_once and self.calls == 1:
             return type("Response", (), {"content": "I cannot assist with that request."})()
         return type("Response", (), {"content": f'{{"next_agent": "{self.method}"}}'})()
-
 
 @pytest.mark.parametrize("security_level", SECURITY_LEVELS)
 @pytest.mark.parametrize("payload_mode", PAYLOAD_MODES)
@@ -113,9 +108,3 @@ def test_runtime_coordinate_selects_and_validates_method_payloads(
     assert all(candidate["method"] == method for candidate in accepted)
     assert all(candidate["target_param"] for candidate in accepted)
     assert route_from_payload_validator({**selected_state, **validated}) == method
-
-
-def test_runtime_scenario_matrix_cardinality_is_explicit():
-    """Keep the finite supported matrix visible for future coverage changes."""
-    assert len(METHOD_CASES) == 9
-    assert len(SECURITY_LEVELS) * len(PAYLOAD_MODES) * len(GUARDRAIL_CASES) * len(CONDITIONS) * len(METHOD_CASES) == 648

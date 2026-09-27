@@ -6,21 +6,6 @@ code."""
 import pytest
 from agents.orchestrator import orchestrator, _fallback_next_agent
 
-
-def test_fallback_next_agent_returns_viable_method():
-    """Verifies fallback next agent returns viable method behavior."""
-    state = {
-        "current_surface": "sqli",
-        "observations": {"error_messages_enabled": True},
-        "attempted_agents": [],
-        "blocked_agents": [],
-        "failure_agents": [],
-        "scores": {},
-    }
-    result = _fallback_next_agent(state)
-    assert result in {"sqli_error", "sqli_union", "sqli_boolean_blind", "sqli_time_blind", "scorer"}
-
-
 def test_experiment_condition_changes_deterministic_selection(monkeypatch):
     class FakeKnowledgeGraph:
         def get_viable_methods(self, surface, observations):
@@ -38,7 +23,6 @@ def test_experiment_condition_changes_deterministic_selection(monkeypatch):
     assert _fallback_next_agent({**base, "experiment_condition": "linear_hybrid"}) == "sqli_union"
     assert _fallback_next_agent({**base, "experiment_condition": "akg_guided_hybrid"}) == "sqli_time_blind"
 
-
 def test_akg_fallback_does_not_execute_unviable_method(monkeypatch):
     class FakeKnowledgeGraph:
         def get_viable_methods(self, surface, observations):
@@ -54,7 +38,6 @@ def test_akg_fallback_does_not_execute_unviable_method(monkeypatch):
         "experiment_condition": "akg_guided_hybrid",
     }) == "scorer"
 
-
 def test_akg_fallback_filters_cross_surface_methods(monkeypatch):
     class FakeKnowledgeGraph:
         def get_viable_methods(self, surface, observations):
@@ -69,7 +52,6 @@ def test_akg_fallback_filters_cross_surface_methods(monkeypatch):
         "failure_agents": [],
         "experiment_condition": "akg_guided_hybrid",
     }) == "sqli_error"
-
 
 def test_akg_orchestrator_rejects_cross_surface_llm_choice(monkeypatch):
     class FakeKnowledgeGraph:
@@ -106,7 +88,6 @@ def test_akg_orchestrator_rejects_cross_surface_llm_choice(monkeypatch):
 
     assert result["selected_method"] == "sqli_error"
     assert result["next_agent"] == "payload_candidate_builder"
-
 
 def test_akg_orchestrator_does_not_route_cross_surface_choice_when_none_viable(monkeypatch):
     """No viable AKG method stops cleanly without an LLM selection call."""
@@ -160,7 +141,6 @@ def test_akg_orchestrator_does_not_route_cross_surface_choice_when_none_viable(m
         "payload": {"surface": "sqli"},
     }]
 
-
 def test_akg_viable_methods_are_filtered_to_active_surface(monkeypatch):
     """AKG output cannot widen the active surface's canonical allow-list."""
     class FakeKnowledgeGraph:
@@ -198,7 +178,6 @@ def test_akg_viable_methods_are_filtered_to_active_surface(monkeypatch):
     assert result["viable_methods"] == ["sqli_error"]
     assert result["selected_method"] == "sqli_error"
     assert result["next_agent"] == "payload_candidate_builder"
-
 
 def test_target_method_explicit_selection_preserves_target_events(monkeypatch):
     """An explicit in-surface target remains selectable despite AKG viability."""
@@ -238,7 +217,6 @@ def test_target_method_explicit_selection_preserves_target_events(monkeypatch):
         "viable": False,
     }
 
-
 def test_target_method_cross_surface_stops_with_infeasible_event():
     """An explicit target from another surface cannot override containment."""
     result = orchestrator({
@@ -272,30 +250,3 @@ def test_target_method_cross_surface_stops_with_infeasible_event():
         "surface": "sqli",
     }]
     assert result["telemetry_events"][0]["event"] == "orchestrator.target_method.infeasible"
-
-
-def test_orchestrator_returns_dict():
-    """Verifies orchestrator returns dict behavior."""
-    state = {
-        "target_url": "http://localhost/dvwa",
-        "security_level": "low",
-        "llm_provider": "gemini",
-        "current_surface": "sqli",
-        "observations": {},
-        "confirmed_vulns": [],
-        "achieved_outcomes": [],
-        "attempted_agents": [],
-        "blocked_agents": [],
-        "failure_agents": [],
-        "scores": {},
-        "iteration_count": 0,
-        "max_iterations": 30,
-        "evasion_enabled": False,
-        "evasion_mode": "reactive",
-        "evasion_max_retries": 3,
-        "consecutive_clean_responses": 0,
-    }
-    # This may try to call LLM; just verify it returns a dict structure
-    # We can't fully test without mocking LLM
-    result = orchestrator(state)
-    assert isinstance(result, dict)

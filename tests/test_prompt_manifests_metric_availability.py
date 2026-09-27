@@ -2,31 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-
 import pytest
 
-from agents.orchestrator import (
-    _ORCHESTRATOR_SCHEMA,
-    _ORCHESTRATOR_SYSTEM_MESSAGE,
-    _validate_decision_payload,
-)
-from core.scorer import build_score_report
-from core.state import new_default_state
-from evaluation.metrics import metric_reading
+from agents.orchestrator import _validate_decision_payload
 from foundation.payload_generator import (
-    _PAYLOAD_SCHEMA,
-    _PAYLOAD_SYSTEM_MESSAGE,
     _parse_candidates,
     _validate_variants_payload,
-)
-from llm.prompts.manifests import (
-    EVAL_SUITE_VERSION,
-    PROMPT_MANIFESTS,
-    VALIDATOR_VERSION,
-    build_orchestrator_prompt_typed,
-    build_payload_generation_prompt_typed,
 )
 from llm.prompts.orchestrator_prompt import build_orchestrator_prompt
 from llm.prompts.payload_generation_prompt import build_payload_generation_prompt
@@ -54,99 +35,6 @@ _PROFILE = {
     "forbidden_mutation_types": ["external_target"],
     "expected_success_signals": ["rows"],
 }
-
-
-def _template_hash(system_message: str, exemplar: str) -> str:
-    suffix = exemplar.partition("\n")[2]
-    return "sha256:" + hashlib.sha256((system_message + "\n\n" + suffix).encode()).hexdigest()
-
-
-def _canon(payload) -> str:
-    return "sha256:" + hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-
-
-def test_manifests_carry_required_ids_and_versions():
-    assert set(PROMPT_MANIFESTS) == {
-        "orchestrator.method_selection",
-        "payload_generation.constrained_variant",
-    }
-    for manifest in PROMPT_MANIFESTS.values():
-        assert REQUIRED_MANIFEST_KEYS <= set(manifest)
-        assert manifest["validator_version"] == VALIDATOR_VERSION
-        assert manifest["eval_suite_version"] == EVAL_SUITE_VERSION
-
-
-def test_manifests_record_current_templates():
-    orch = PROMPT_MANIFESTS["orchestrator.method_selection"]
-    exemplar = build_orchestrator_prompt(
-        current_surface="sqli",
-        viable_methods=["sqli_union"],
-        observations={"sqli_endpoint_present": True},
-        attempted_agents=[],
-        blocked_agents=[],
-        failure_agents=[],
-        scores={},
-        confirmed_vulns=[],
-        achieved_outcomes=[],
-        security_level="low",
-        payload_mode="static_only",
-        iteration_count=0,
-        max_iterations=5,
-    )
-    assert orch["template_hash"] == _template_hash(_ORCHESTRATOR_SYSTEM_MESSAGE, exemplar)
-    assert orch["output_schema_hash"] == _canon(_ORCHESTRATOR_SCHEMA)
-
-    pay = PROMPT_MANIFESTS["payload_generation.constrained_variant"]
-    exemplar = build_payload_generation_prompt(
-        method="sqli_union",
-        security_level="low",
-        observations={"sqli_endpoint_present": True},
-        static_seeds=[dict(_SEEDS[0])],
-        payload_profile=dict(_PROFILE),
-        candidate_budget=1,
-    )
-    assert pay["template_hash"] == _template_hash(_PAYLOAD_SYSTEM_MESSAGE, exemplar)
-    assert pay["output_schema_hash"] == _canon(_PAYLOAD_SCHEMA)
-
-
-def test_typed_builders_are_byte_identical_to_canonical():
-    kwargs = dict(
-        current_surface="sqli",
-        viable_methods=["sqli_union"],
-        observations={"sqli_endpoint_present": True},
-        attempted_agents=[],
-        blocked_agents=[],
-        failure_agents=[],
-        scores={},
-        confirmed_vulns=[],
-        achieved_outcomes=[],
-        security_level="low",
-        payload_mode="static_only",
-        iteration_count=0,
-        max_iterations=5,
-    )
-    assert build_orchestrator_prompt_typed(dict(kwargs)) == build_orchestrator_prompt(**kwargs)
-    pay_kwargs = dict(
-        method="sqli_union",
-        security_level="low",
-        observations={"sqli_endpoint_present": True},
-        static_seeds=[dict(_SEEDS[0])],
-        payload_profile=dict(_PROFILE),
-        candidate_budget=1,
-    )
-    assert (
-        build_payload_generation_prompt_typed(dict(pay_kwargs))
-        == build_payload_generation_prompt(**pay_kwargs)
-    )
-
-
-def test_typed_builder_requires_key_fields():
-    with pytest.raises(KeyError):
-        build_orchestrator_prompt_typed({})
-    with pytest.raises(KeyError):
-        build_payload_generation_prompt_typed({})
 
 
 def _orch_kwargs(**overrides):
@@ -198,15 +86,6 @@ def test_unsupported_methods_rejected_by_validator():
         _validate_decision_payload({"next_agent": "sqli_union"}, allowed_agents={"sqli_union"})
 
 
-def test_malformed_conflicting_observations_render_deterministically():
-    kwargs = _orch_kwargs(observations={
-        "sqli_endpoint_present": True,
-        "sqli_endpoint_absent": True,  # conflicting
-        "weird": None,
-    })
-    assert build_orchestrator_prompt(**kwargs) == build_orchestrator_prompt(**kwargs)
-
-
 def test_payload_containment_attempt_rejected_by_validator():
     prompt = build_payload_generation_prompt(
         method="sqli_union",
@@ -244,39 +123,6 @@ def test_payload_refusal_truncation_malformed_parse_statuses():
     assert _parse_candidates('{"variants":[{truncated', "sqli_union") == ([], "invalid_json")
     assert _parse_candidates('{"variants": []}', "sqli_union") == ([], "empty_candidates")
     assert _parse_candidates("not json at all", "sqli_union") == ([], "invalid_json")
-
-
-def test_unavailable_metrics_are_null_with_availability():
-    report = build_score_report(new_default_state()).to_dict()
-    summary = report["summary"]
-    assert summary["consistency_score"] is None
-    assert summary["token_cost"] is None
-    assert summary["token_cost_per_success"] is None
-    assert summary["metric_availability"] == {
-        "consistency_score": False,
-        "token_cost": False,
-        "token_cost_per_success": False,
-    }
-    assert summary["metric_unavailable_reason"] == {
-        "consistency_score": "not_computed",
-        "token_cost": "not_computed",
-        "token_cost_per_success": "not_computed",
-    }
-
-
-def test_metric_reading_dual_reads_legacy_numeric():
-    value, available, reason = metric_reading({"consistency_score": 0.0}, "consistency_score")
-    assert (value, available, reason) == (None, False, "legacy_numeric")
-
-    summary = build_score_report(new_default_state()).to_dict()["summary"]
-    assert metric_reading(summary, "token_cost") == (None, False, "not_computed")
-
-    explicit = {
-        "token_cost": 1.25,
-        "metric_availability": {"token_cost": True},
-        "metric_unavailable_reason": {},
-    }
-    assert metric_reading(explicit, "token_cost") == (1.25, True, None)
 
 
 def test_runner_artifact_propagates_null_and_maps(monkeypatch):

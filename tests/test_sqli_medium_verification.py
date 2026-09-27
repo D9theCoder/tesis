@@ -13,20 +13,17 @@ from agents.sqli.sqli_union_agent import sqli_union_agent
 from core.state import new_default_state
 from foundation.payload_library import PayloadLibrary
 
-
 def _make_response(text: str, status_code: int = 200) -> MagicMock:
     response = MagicMock()
     response.text = text
     response.status_code = status_code
     return response
 
-
 def _make_session() -> MagicMock:
     session = MagicMock()
     session.login.return_value = True
     session.set_security_level.return_value = None
     return session
-
 
 def _make_state(method: str, security_level: str, candidates: list[dict]) -> dict:
     state = new_default_state()
@@ -36,7 +33,6 @@ def _make_state(method: str, security_level: str, candidates: list[dict]) -> dic
         "payload_candidates": {method: candidates},
     })
     return state
-
 
 def test_union_medium_bypass_confirms_with_limit_variant():
     """A medium-only LIMIT seed reaches the existing credential evidence gate."""
@@ -73,7 +69,6 @@ def test_union_medium_bypass_confirms_with_limit_variant():
     assert limit_seed["payload_or_logic"] in result["tried_payloads"]["sqli_union"]
     assert session.post.call_count > 0
 
-
 def test_error_medium_updatexml_tilde_is_enough():
     """A truncated medium XPath envelope is confirmed by its tilde marker."""
     library = PayloadLibrary()
@@ -101,7 +96,6 @@ def test_error_medium_updatexml_tilde_is_enough():
     assert result["confirmed_vulns"] == ["sqli_error_confirmed"]
     assert result["verifier_decision"]["decision"] == "confirmed"
     assert session.post.call_count > 0
-
 
 @pytest.mark.parametrize("security_level,expected_score,confirmed", [
     ("medium", 3, True),
@@ -140,7 +134,6 @@ def test_boolean_medium_single_true_confirms_but_high_requires_two(
     assert ("sqli_boolean_blind_confirmed" in result.get("confirmed_vulns", [])) is confirmed
     assert (session.post.call_count > 0) is (security_level in {"medium", "high"})
 
-
 def _time_monotonic_values(delay: float) -> list[float]:
     values: list[float] = []
     for index in range(3):
@@ -152,7 +145,6 @@ def _time_monotonic_values(delay: float) -> list[float]:
         values.extend([start, start + 0.04])
     values.extend([30.0, 30.0 + delay])
     return values
-
 
 @pytest.mark.parametrize("security_level,delay,expected_confirmed", [
     ("medium", 2.0, True),
@@ -187,7 +179,6 @@ def test_time_medium_threshold_and_single_delay_are_level_scoped(
         assert result["scores"]["sqli_time_blind"] < 3
         assert "sqli_time_blind_confirmed" not in result.get("confirmed_vulns", [])
     assert (session.post.call_count > 0) is (security_level in {"medium", "high"})
-
 
 def test_medium_bypass_seeds_do_not_enter_high_candidates():
     """The evidence additions are isolated to medium payload loading."""

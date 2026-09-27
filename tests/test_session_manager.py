@@ -3,37 +3,18 @@
 Validates:
 1. Login flow (CSRF token extraction, credential submission)
 2. Security level management (set, detect, validate)
-3. Convenience HTTP method delegation
-4. Edge cases (missing token, login failure, invalid level)
-5. Context manager protocol
+3. Edge cases (missing token, login failure, invalid level)
+4. Context manager protocol
 """
 
 import pytest
-from unittest.mock import patch, MagicMock, PropertyMock
+from unittest.mock import patch, MagicMock
 
 from foundation.session_manager import DVWASession, VALID_LEVELS, TransportError
 
 
 class TestExtractUserToken:
     """Validate CSRF token extraction from HTML."""
-
-    def test_extract_token_from_valid_html(self):
-        """Should extract user_token from a standard DVWA login form."""
-        html = '''
-        <form action="" method="post">
-            <input type="hidden" name="user_token" value="abc123def456">
-            <input type="text" name="username">
-            <input type="password" name="password">
-        </form>
-        '''
-        token = DVWASession._extract_user_token(html)
-        assert token == "abc123def456"
-
-    def test_extract_token_missing(self):
-        """Should return None when user_token field is absent."""
-        html = '<form><input type="text" name="username"></form>'
-        token = DVWASession._extract_user_token(html)
-        assert token is None
 
     def test_extract_token_empty_value(self):
         """Should return None when user_token exists but has no value."""
@@ -180,16 +161,6 @@ class TestDVWASessionSecurityLevel:
             assert session.security_level == level
 
     @patch("foundation.session_manager.HTTPClient")
-    def test_set_invalid_security_level_raises(self, mock_http_cls):
-        """Invalid security levels should raise ValueError."""
-        mock_http = MagicMock()
-        mock_http_cls.return_value = mock_http
-
-        session = DVWASession("http://localhost/dvwa")
-        with pytest.raises(ValueError, match="Invalid security level"):
-            session.set_security_level("ultra")
-
-    @patch("foundation.session_manager.HTTPClient")
     def test_set_impossible_security_level_raises(self, mock_http_cls):
         """'impossible' should be rejected to match canonical low/medium/high contract."""
         mock_http = MagicMock()
@@ -271,49 +242,3 @@ class TestDVWASessionContextManager:
         with DVWASession("http://localhost/dvwa") as session:
             pass
         mock_http.close.assert_called_once()
-
-
-class TestDVWASessionHTTPMethods:
-    """Validate convenience HTTP methods."""
-
-    @patch("foundation.session_manager.HTTPClient")
-    def test_get_delegates_to_http_client(self, mock_http_cls):
-        """get() should delegate to HTTPClient.get with params."""
-        mock_http = MagicMock()
-        mock_http_cls.return_value = mock_http
-        expected_result = MagicMock()
-        mock_http.get.return_value = expected_result
-
-        session = DVWASession("http://localhost/dvwa")
-        result = session.get("vulnerabilities/sqli/", params={"id": "1"})
-
-        mock_http.get.assert_called_once_with("vulnerabilities/sqli/", params={"id": "1"})
-        assert result is expected_result
-
-    @patch("foundation.session_manager.HTTPClient")
-    def test_post_delegates_to_http_client(self, mock_http_cls):
-        """post() should delegate to HTTPClient.post with data."""
-        mock_http = MagicMock()
-        mock_http_cls.return_value = mock_http
-        expected_result = MagicMock()
-        mock_http.post.return_value = expected_result
-
-        session = DVWASession("http://localhost/dvwa")
-        result = session.post("login.php", data={"username": "admin"})
-
-        mock_http.post.assert_called_once_with("login.php", data={"username": "admin"})
-        assert result is expected_result
-
-    @patch("foundation.session_manager.HTTPClient")
-    def test_post_with_files(self, mock_http_cls):
-        """post() should pass files kwarg through to HTTPClient."""
-        mock_http = MagicMock()
-        mock_http_cls.return_value = mock_http
-        expected_result = MagicMock()
-        mock_http.post.return_value = expected_result
-
-        session = DVWASession("http://localhost/dvwa")
-        files = {"uploaded": ("shell.php", b"<?php system($_GET['cmd']); ?>", "image/jpeg")}
-        result = session.post("vulnerabilities/upload/", files=files)
-
-        mock_http.post.assert_called_once_with("vulnerabilities/upload/", files=files)

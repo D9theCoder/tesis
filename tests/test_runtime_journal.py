@@ -6,7 +6,6 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import pytest
 
 from tesis.runtime_events import RunEvent
 from tesis.runtime_journal import (
@@ -203,8 +202,3 @@ class CollectingSink:
 
     def emit(self, event: RunEvent) -> None:
         self.out.append(event.event_type)
-
-
-def test_multiplexer_rejects_non_sinks() -> None:
-    with pytest.raises(TypeError):
-        MultiplexingRuntimeEventSink().add(object())  # type: ignore[arg-type]

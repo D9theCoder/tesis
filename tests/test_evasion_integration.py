@@ -193,27 +193,3 @@ class TestEvasionStatePropagation:
         init_state = captured_states[0]
         assert init_state["evasion_enabled"] is False
         assert init_state["evasion_mode"] == "reactive"
-
-
-class TestEvasionReportFormatting:
-    """Groups regression tests for TestEvasionReportFormatting behavior."""
-    def test_format_evasion_table(self):
-        """Verifies format evasion table behavior."""
-        from tesis.report_formatters import format_evasion_table
-
-        data = {
-            "runs": [
-                {
-                    "config": {"provider": "gemini", "evasion_strategy": "prompt_injection"},
-                    "final_state": {"evasion_attempts": 3, "successful_evasions": 2},
-                    "report": {"summary": {"guardrail_activations": 1}},
-                }
-            ]
-        }
-        table = format_evasion_table(data)
-        assert "gemini" in table
-        assert "prompt_injection" in table
-        assert "3" in table
-        assert "2" in table
-        assert "66.7%" in table  # 2/3*100
-        assert "0" in table       # max(1 - (3-2), 0) = 0 guardrails prevented

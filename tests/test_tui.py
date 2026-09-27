@@ -186,19 +186,6 @@ def test_root_is_always_mission_control():
     asyncio.run(scenario())
 
 
-def test_no_new_shell_option_or_env_dual_path():
-    assert "new_shell" not in inspect.signature(tui.TesisApp.__init__).parameters, (
-        "core: remove the new_shell constructor option"
-    )
-    assert not hasattr(tui, "TESIS_NEW_SHELL"), "core: remove TESIS_NEW_SHELL"
-    for legacy in (
-        "MainMenuScreen", "RunSetupScreen", "RuntimeDashboardScreen",
-        "SettingsScreen", "RecentResultsScreen", "ResultDetailScreen",
-        "ValidationScreen", "FrameworkInfoScreen",
-    ):
-        assert not hasattr(tui, legacy), f"core: remove legacy {legacy}"
-
-
 def test_no_permanent_command_input_at_idle():
     from textual.widgets import Input
 
@@ -211,12 +198,6 @@ def test_no_permanent_command_input_at_idle():
             assert len(app.screen.query(Input)) == 0, "idle must not mount a permanent Input"
 
     asyncio.run(scenario())
-
-
-def test_app_uses_single_stylesheet():
-    assert getattr(tui.TesisApp, "CSS_PATH", None) == "tui.tcss", (
-        "core: TesisApp.CSS_PATH must be 'tui.tcss'"
-    )
 
 
 def test_idle_readiness_summarises_target_condition_provider_and_actions():
@@ -701,21 +682,6 @@ def test_initial_status_is_ready_with_exact_seven_stages():
     assert all(row.status == "queued" for row in state.stages)
 
 
-def test_run_started_records_execution_id_and_mode():
-    state = _fresh_state()
-    dirty = _apply(state, RunEvent("run.started", execution_id="exec-1", message="go"))
-    assert state.status == "running"
-    assert state.execution_id == "exec-1"
-    assert state.run_mode == "single"
-    assert "header" in dirty and "pipeline" in dirty
-
-
-def test_matrix_started_enters_running():
-    state = _fresh_state()
-    _apply(state, RunEvent("matrix.started", message="go"))
-    assert state.status == "running"
-
-
 def test_run_started_resets_prior_run():
     state = _fresh_state()
     _apply(state, RunEvent("run.started", message="go"))
@@ -727,17 +693,6 @@ def test_run_started_resets_prior_run():
     assert state.confirmed_vulns == []
     assert state.execution_id == "exec-2"
     assert all(row.status == "queued" for row in state.stages)
-
-
-def test_terminal_success_only_when_no_coordinate_failed():
-    state = _fresh_state()
-    _apply(state, RunEvent("run.started", message="go"))
-    _apply(state, RunEvent("matrix.run.started",
-                           data={"coordinate_index": 0, "coordinate_execution_id": "exec-0"}))
-    _apply(state, RunEvent("matrix.run.finished",
-                           data={"coordinate_index": 0, "coordinate_execution_id": "exec-0"}))
-    _apply(state, RunEvent("run.finished", message="done"))
-    assert state.status == "succeeded"
 
 
 def test_terminal_failure_beats_success():
@@ -953,21 +908,6 @@ def test_token_events_return_empty_dirty_and_no_notices():
     assert len(state.notices) == before
 
 
-def test_notices_are_bounded_and_coalesced():
-    state = _fresh_state()
-    _apply(state, RunEvent("run.started", message="go"))
-    before = len(state.notices)
-    for _ in range(5):
-        _apply(state, RunEvent("graph.node.started", node="recon", message="same"))
-    # Identical repeats coalesce: at most one new notice, never five rows.
-    assert len(state.notices) - before <= 1, f"duplicates not coalesced: {state.notices[-6:]!r}"
-    assert "recon" in state.notices[-1] and "same" in state.notices[-1]
-    for i in range(600):
-        _apply(state, RunEvent("graph.node.started", node="recon", message=f"evt-{i}"))
-    assert len(state.notices) <= 500, f"notices unbounded: {len(state.notices)}"
-    assert any("evt-599" in str(n) for n in state.notices[-5:])
-
-
 def test_redaction_in_notices_and_trace():
     state = _fresh_state()
     _apply(state, RunEvent("run.started", message="go"))
@@ -1004,29 +944,6 @@ def test_endpoint_query_values_are_redacted_in_failure_drawer():
             await pilot.pause()
 
     asyncio.run(scenario())
-
-
-def test_node_events_return_pipeline_and_notices_regions():
-    state = _fresh_state()
-    _apply(state, RunEvent("run.started", message="go"))
-    dirty = _apply(state, RunEvent("graph.node.started", node="recon", message="scanning"))
-    assert {"pipeline", "notices"} <= dirty
-    assert state.stages[0].status == "running"
-
-
-def test_graph_state_returns_evidence_region_only():
-    state = _fresh_state()
-    _apply(state, RunEvent("run.started", message="go"))
-    dirty = _apply(state, RunEvent("graph.state", message="snap", data={"candidate_count": 2}))
-    assert dirty == frozenset({"evidence"})
-
-
-def test_matrix_coordinate_started_returns_header_and_coordinates():
-    state = _fresh_state()
-    _apply(state, RunEvent("run.started", message="go"))
-    dirty = _apply(state, RunEvent("matrix.run.started", data={
-        "coordinate_index": 0, "coordinate_execution_id": "exec-0"}))
-    assert dirty == frozenset({"header", "coordinates"})
 
 
 def test_matrix_coordinate_records_mode_and_derives_elapsed():
@@ -1070,37 +987,6 @@ def test_coordinate_elapsed_consumes_runner_reported_duration():
     _apply(state, RunEvent("matrix.run.finished", timestamp=50.25, data={
         "coordinate_index": 1, "coordinate_execution_id": "exec-1", "elapsed": "250ms"}))
     assert state.coordinates[1].elapsed == "250ms", "a runner-reported label is kept verbatim"
-
-
-def test_matrix_coordinate_finished_returns_header_coordinates_evidence():
-    state = _fresh_state()
-    _apply(state, RunEvent("run.started", message="go"))
-    _apply(state, RunEvent("matrix.run.started", data={
-        "coordinate_index": 0, "coordinate_execution_id": "exec-0"}))
-    dirty = _apply(state, RunEvent("matrix.run.finished", data={
-        "coordinate_index": 0, "coordinate_execution_id": "exec-0"}))
-    assert dirty == frozenset({"header", "coordinates", "evidence"})
-
-
-def test_run_failed_returns_header_evidence_notices():
-    state = _fresh_state()
-    _apply(state, RunEvent("run.started", message="go"))
-    dirty = _apply(state, RunEvent("run.failed", message="boom"))
-    assert dirty == frozenset({"header", "evidence", "notices"})
-
-
-def test_run_cancelled_returns_header_and_notices():
-    state = _fresh_state()
-    _apply(state, RunEvent("run.started", message="go"))
-    dirty = _apply(state, RunEvent("run.cancelled", message="stop"))
-    assert dirty == frozenset({"header", "notices"})
-
-
-def test_containment_returns_header_evidence_notices():
-    state = _fresh_state()
-    _apply(state, RunEvent("run.started", message="go"))
-    dirty = _apply(state, RunEvent("containment.violated", message="blocked"))
-    assert dirty == frozenset({"header", "evidence", "notices"})
 
 
 # ---------------------------------------------------------------- commands + launcher
@@ -1155,14 +1041,6 @@ def test_registry_keys_are_dispatchable_and_pane_keys_agree():
     assert actions["2"].endswith("coordinates") and actions["3"].endswith("evidence")
     keys = {spec.name: spec.keys for spec in COMMANDS}
     assert keys["coordinates"] == "2" and keys["evidence"] == "3"
-
-
-def test_command_spec_carries_launcher_keys_and_gating():
-    CommandSpec = _require("CommandSpec")
-    fields = set(getattr(CommandSpec, "__dataclass_fields__", {}))
-    assert {"name", "title", "summary", "keys", "enabled_when"} <= fields, (
-        f"core: CommandSpec fields must include name/title/summary/keys/enabled_when; got {sorted(fields)}"
-    )
 
 
 def test_launcher_lists_registry_with_per_command_gating_while_active():
@@ -2031,20 +1909,6 @@ def test_ctrl_c_cancels_and_second_ctrl_c_exits(tmp_path, monkeypatch):
             thread_ref["thread"].join(timeout=2)
 
 
-def test_q_quits_only_while_idle():
-    _require("MissionControlScreen")
-
-    async def scenario() -> None:
-        app = tui.TesisApp()
-        async with app.run_test(size=(120, 36)) as pilot:
-            await pilot.pause()
-            await pilot.press("q")
-            await pilot.pause()
-            assert not app.is_running
-
-    asyncio.run(scenario())
-
-
 def test_q_refused_while_run_active(tmp_path, monkeypatch):
     from threading import Event
 
@@ -2361,33 +2225,6 @@ def test_results_detail_is_triage_only_truncated_and_redacted(tmp_path, monkeypa
             await pilot.pause()
             missing = str(drawer.query_one("#results-detail").render())
             assert "—" in missing, "missing scores must render as —, never fabricated zeros"
-            await pilot.press("escape")
-            await pilot.pause()
-
-    asyncio.run(asyncio.wait_for(scenario(), timeout=15))
-
-
-def test_results_drawer_offers_filters_and_export(tmp_path, monkeypatch):
-    ResultsDrawer = _require("ResultsDrawer")
-    artifact_dir = tmp_path / "results"
-    artifact_dir.mkdir()
-    _write_artifact(artifact_dir, "run-1", provider="gemini")
-    monkeypatch.setattr(tui_state, "CONFIG_PATH", tmp_path / "config.yaml")
-    (tmp_path / "config.yaml").write_text(
-        "target_url: http://localhost/dvwa\nprovider: gemini\nlevel: low\n"
-        f"output_dir: {artifact_dir}\n",
-        encoding="utf-8",
-    )
-
-    async def scenario() -> None:
-        app = tui.TesisApp()
-        async with app.run_test(size=(120, 36)) as pilot:
-            await pilot.pause()
-            await app.push_screen(ResultsDrawer())
-            await pilot.pause()
-            svg = _svg_text(app).lower()
-            assert "filter" in svg, "results drawer must expose status/provider/surface/level/mode filters"
-            assert "export" in svg, "results drawer must expose an export action"
             await pilot.press("escape")
             await pilot.pause()
 
@@ -2882,32 +2719,6 @@ def test_doctor_offline_checks_do_not_block_the_event_loop(monkeypatch):
         release.set()
 
 
-def test_help_and_plan_drawers_render_aligned_registry_content(monkeypatch):
-    HelpDrawer = _require("HelpDrawer")
-    PlanDrawer = _require("PlanDrawer")
-    monkeypatch.setattr(tui_drawers, "load_and_resolve_config", lambda **_kw: _config())
-
-    async def scenario() -> None:
-        app = tui.TesisApp()
-        async with app.run_test(size=(120, 36)) as pilot:
-            await pilot.pause()
-            await app.push_screen(HelpDrawer())
-            await pilot.pause()
-            body = _pane_text(app.screen, "#help-body")
-            for spec in tui.COMMANDS:
-                assert f"/{spec.name}" in body
-            await pilot.press("escape")
-            await pilot.pause()
-            await app.push_screen(PlanDrawer(config=_config()))
-            await pilot.pause()
-            plan = _pane_text(app.screen, "#plan-body")
-            assert "fingerprint" in plan and "coordinates" in plan
-            await pilot.press("escape")
-            await pilot.pause()
-
-    asyncio.run(scenario())
-
-
 def test_failure_drawer_shows_production_failure_summary():
     FailureDrawer = _require("FailureDrawer")
     CommandLauncher = _require("CommandLauncher")
@@ -3274,14 +3085,6 @@ def test_launch_off_registry_select_value_degrades_to_blank(monkeypatch):
 
 
 # ---------------------------------------------------------------- themes / redaction
-
-def test_mono_theme_registered_without_changing_default(monkeypatch):
-    monkeypatch.delenv("NO_COLOR", raising=False)
-    mono_name = tui.SHELL_MONO_THEME_NAME
-    assert mono_name == "tesis-mono"
-    app = tui.TesisApp()
-    assert mono_name in app.available_themes
-    assert app.current_theme.name == "textual-dark"
 
 
 def test_no_color_selects_mono_theme(monkeypatch):

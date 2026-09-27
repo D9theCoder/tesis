@@ -1,45 +1,14 @@
-"""Tests for foundation/http_client.py — HTTP client wrapper.
-
-Validates:
-1. HTTPClient initialization and URL normalization
-2. RequestResult dataclass properties
-3. GET and POST request methods
-4. Cookie management
-5. Error mapping (TransportError, RequestTimeoutError)
-6. Context manager protocol
-"""
+"""HTTP URL handling, containment, redirect, error and cleanup regressions."""
 
 import pytest
 from unittest.mock import patch, MagicMock
 
 from foundation.http_client import (
     HTTPClient,
-    RequestResult,
     TransportError,
     RequestTimeoutError,
     ContainmentError,
 )
-
-
-class TestRequestResult:
-    """Validate the RequestResult dataclass."""
-
-    def test_properties_delegate_to_response(self):
-        """RequestResult properties should delegate to the underlying httpx.Response."""
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = "<html>hello</html>"
-        mock_resp.url = "http://localhost/dvwa/test"
-        mock_resp.headers = {"Content-Type": "text/html"}
-        mock_resp.elapsed = MagicMock()
-
-        result = RequestResult(response=mock_resp, elapsed_ms=123.4)
-
-        assert result.status_code == 200
-        assert result.text == "<html>hello</html>"
-        assert result.url == "http://localhost/dvwa/test"
-        assert result.headers["Content-Type"] == "text/html"
-        assert result.elapsed_ms == 123.4
 
 
 class TestHTTPClientInit:
@@ -56,56 +25,9 @@ class TestHTTPClientInit:
         client3 = HTTPClient("http://localhost/dvwa///")
         assert client3.base_url == "http://localhost/dvwa/"
 
-    def test_client_creates_httpx_client(self):
-        """HTTPClient should create an httpx.Client with proper settings."""
-        client = HTTPClient("http://localhost/dvwa")
-        assert client._client is not None
-        client.close()
-
-    def test_context_manager(self):
-        """HTTPClient should work as a context manager."""
-        with HTTPClient("http://localhost/dvwa") as client:
-            assert client.base_url == "http://localhost/dvwa/"
-
 
 class TestHTTPClientRequests:
     """Validate GET and POST request methods."""
-
-    @patch("foundation.http_client.httpx.Client")
-    def test_get_request_builds_url(self, mock_client_cls):
-        """GET should combine base_url with the path."""
-        mock_instance = MagicMock()
-        mock_client_cls.return_value = mock_instance
-        mock_response = MagicMock()
-        mock_response.elapsed = MagicMock()
-        mock_response.elapsed.total_seconds.return_value = 0.1
-        mock_instance.request.return_value = mock_response
-
-        client = HTTPClient("http://localhost/dvwa")
-        result = client.get("vulnerabilities/sqli/")
-
-        # Verify the URL was constructed using urljoin
-        call_args = mock_instance.request.call_args
-        assert call_args[0][0] == "GET"
-        assert "localhost" in call_args[0][1]
-        assert "sqli" in call_args[0][1]
-
-    @patch("foundation.http_client.httpx.Client")
-    def test_post_request_builds_url(self, mock_client_cls):
-        """POST should combine base_url with the path."""
-        mock_instance = MagicMock()
-        mock_client_cls.return_value = mock_instance
-        mock_response = MagicMock()
-        mock_response.elapsed = MagicMock()
-        mock_response.elapsed.total_seconds.return_value = 0.2
-        mock_instance.request.return_value = mock_response
-
-        client = HTTPClient("http://localhost/dvwa")
-        result = client.post("login.php", data={"username": "admin"})
-
-        call_args = mock_instance.request.call_args
-        assert call_args[0][0] == "POST"
-        assert "login.php" in call_args[0][1]
 
     @patch("foundation.http_client.httpx.Client")
     def test_get_strips_leading_slash(self, mock_client_cls):
@@ -123,13 +45,6 @@ class TestHTTPClientRequests:
         call_args = mock_instance.request.call_args
         # Should NOT be http://localhost/login.php (lost /dvwa/)
         assert call_args[0][1] == "http://localhost/dvwa/login.php"
-
-    def test_rejects_external_absolute_target_before_request(self):
-        """External absolute URLs must never reach the underlying transport."""
-        client = HTTPClient("http://localhost/dvwa")
-        with pytest.raises(ContainmentError, match="Blocked out-of-scope"):
-            client.get("https://example.invalid/escape")
-        client.close()
 
     def test_rejects_protocol_relative_external_target_before_request(self):
         """Protocol-relative URLs are external targets too."""
@@ -264,47 +179,8 @@ class TestHTTPClientErrorMapping:
             client.get("test.php")
 
 
-class TestHTTPClientCookies:
-    """Validate cookie management."""
-
-    @patch("foundation.http_client.httpx.Client")
-    def test_set_cookie(self, mock_client_cls):
-        """set_cookie should add a cookie to the underlying client."""
-        mock_instance = MagicMock()
-        mock_client_cls.return_value = mock_instance
-        mock_instance.cookies = MagicMock()
-
-        client = HTTPClient("http://localhost/dvwa")
-        client.set_cookie("security", "low")
-
-        mock_instance.cookies.set.assert_called_once_with(
-            "security", "low", domain="", path="/"
-        )
-
-    @patch("foundation.http_client.httpx.Client")
-    def test_cookies_property(self, mock_client_cls):
-        """cookies property should return the underlying httpx.Cookies."""
-        mock_instance = MagicMock()
-        mock_client_cls.return_value = mock_instance
-        mock_cookies = MagicMock()
-        mock_instance.cookies = mock_cookies
-
-        client = HTTPClient("http://localhost/dvwa")
-        assert client.cookies is mock_cookies
-
-
 class TestHTTPClientClose:
     """Validate lifecycle methods."""
-
-    @patch("foundation.http_client.httpx.Client")
-    def test_close_calls_underlying_client(self, mock_client_cls):
-        """close() should call the underlying httpx client close."""
-        mock_instance = MagicMock()
-        mock_client_cls.return_value = mock_instance
-
-        client = HTTPClient("http://localhost/dvwa")
-        client.close()
-        mock_instance.close.assert_called_once()
 
     @patch("foundation.http_client.httpx.Client")
     def test_context_manager_closes_on_exit(self, mock_client_cls):

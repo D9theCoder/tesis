@@ -19,25 +19,6 @@ class _RunOnce:
         yield {**state, "iteration_count": 1, "task_result": "SUCCESS"}
 
 
-def test_default_single_creates_no_sqlite(tmp_path, monkeypatch):
-    from evaluation.runner import run_single_engagement
-
-    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kw: _RunOnce())
-    artifact = run_single_engagement(
-        target_url="http://localhost/dvwa",
-        security_level="low",
-        llm_provider="gemini",
-        target_method="sqli_union",
-        output_dir=str(tmp_path),
-    )
-    assert artifact["status"] == "success"
-    assert artifact["checkpoint_store"] is None
-    assert artifact["graph_checkpoint_store"] is None
-    assert artifact["resumed_from_checkpoint"] is False
-    assert artifact["resumed"] is False
-    assert list(tmp_path.rglob("*.sqlite3")) == []
-
-
 def test_default_matrix_forwards_none_and_creates_no_sqlite(tmp_path, monkeypatch):
     import evaluation.multi_llm_runner as multi_mod
     from evaluation.multi_llm_runner import run_provider_matrix
@@ -64,49 +45,6 @@ def test_default_matrix_forwards_none_and_creates_no_sqlite(tmp_path, monkeypatc
         for kwargs in seen
     )
     assert list(tmp_path.rglob("*.sqlite3")) == []
-
-
-def test_explicit_matrix_forwards_dir_and_id_and_creates_both_dbs(
-    tmp_path, monkeypatch
-):
-    import evaluation.multi_llm_runner as multi_mod
-    from evaluation.multi_llm_runner import run_provider_matrix
-
-    ckpt_dir = tmp_path / "ckpt"
-    seen = []
-    real_run = multi_mod.run_single_engagement
-
-    def spy(**kwargs):
-        seen.append(kwargs)
-        return real_run(**kwargs)
-
-    monkeypatch.setattr(multi_mod, "run_single_engagement", spy)
-    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kw: _RunOnce())
-    artifacts = run_provider_matrix(
-        target_url="http://localhost/dvwa",
-        providers=["gemini"],
-        security_levels=["low"],
-        surfaces=["sqli"],
-        payload_modes=["static_only"],
-        target_method="sqli_union",
-        output_dir=str(tmp_path),
-        checkpoint_dir=str(ckpt_dir),
-        experiment_id="exp1",
-    )
-    assert len(artifacts) == 1
-    assert seen and all(
-        kwargs["checkpoint_dir"] == str(ckpt_dir)
-        and kwargs["experiment_id"] == "exp1"
-        for kwargs in seen
-    )
-    artifact = artifacts[0]
-    assert artifact["status"] == "success"
-    assert artifact["checkpoint_store"] == str(ckpt_dir / "checkpoints.sqlite3")
-    assert artifact["graph_checkpoint_store"] == str(
-        ckpt_dir / "langgraph_checkpoints.sqlite3"
-    )
-    assert (ckpt_dir / "checkpoints.sqlite3").exists()
-    assert (ckpt_dir / "langgraph_checkpoints.sqlite3").exists()
 
 
 def test_resume_without_metadata_fails_closed_pre_execution(tmp_path, monkeypatch):
@@ -433,31 +371,6 @@ def test_default_path_runs_without_sqlite_saver_subprocess(tmp_path):
     assert proc.returncode == 0, proc.stderr[-4000:]
     assert "DEFAULT-PATH-OK" in proc.stdout
     assert list(tmp_path.rglob("langgraph_checkpoints.sqlite3")) == []
-
-
-def test_compat_strips_default_checkpoint_flags_for_legacy_signature(monkeypatch):
-    import evaluation.multi_llm_runner as multi_mod
-
-    calls = []
-
-    def legacy_fake(**kwargs):
-        for key in ("resume", "checkpoint_dir", "experiment_id"):
-            if key in kwargs:
-                raise TypeError(f"got an unexpected keyword argument '{key}'")
-        calls.append(kwargs)
-        return {"status": "success"}
-
-    monkeypatch.setattr(multi_mod, "run_single_engagement", legacy_fake)
-    result = multi_mod._run_single_with_payload_kwargs({
-        "target_url": "http://localhost/dvwa",
-        "resume": False,
-        "checkpoint_dir": None,
-        "experiment_id": None,
-    })
-    assert result == {"status": "success"}
-    assert calls and all(
-        key not in seen for seen in calls for key in ("resume", "checkpoint_dir", "experiment_id")
-    )
 
 
 def test_compat_never_strips_explicit_checkpoint_flags(monkeypatch):

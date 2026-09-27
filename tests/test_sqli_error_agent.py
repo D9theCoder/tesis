@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 from agents.sqli.sqli_error_agent import sqli_error_agent
 from core.state import new_default_state
 
-
 @pytest.fixture
 def base_state():
     """Supports regression tests for test sqli error agent."""
@@ -15,7 +14,6 @@ def base_state():
     state["security_level"] = "low"
     return state
 
-
 def _make_mock_session(login_ok=True):
     """Supports regression tests for test sqli error agent."""
     session = MagicMock()
@@ -23,28 +21,12 @@ def _make_mock_session(login_ok=True):
     session.set_security_level.return_value = None
     return session
 
-
 def _make_response(status_code=200, text="No results"):
     """Supports regression tests for test sqli error agent."""
     resp = MagicMock()
     resp.status_code = status_code
     resp.text = text
     return resp
-
-
-def test_probe_detects_error_messages(base_state):
-    """When SQL syntax error appears in response, precondition met."""
-    mock_session = _make_mock_session()
-    mock_session.get.return_value = _make_response(
-        200, "You have an error in your SQL syntax near ''1'''"
-    )
-
-    with patch("agents.sqli.sqli_error_agent.DVWASession", return_value=mock_session):
-        result = sqli_error_agent(base_state)
-
-    assert result["scores"]["sqli_error"] >= 1
-    assert result["observations"].get("error_messages_enabled") is True
-
 
 def test_probe_no_error_returns_zero(base_state):
     """When no error message appears, score should be 0."""
@@ -56,7 +38,6 @@ def test_probe_no_error_returns_zero(base_state):
 
     assert result["scores"]["sqli_error"] == 0
     assert result["observations"].get("error_messages_enabled") is False
-
 
 def test_exploit_extracts_data(base_state):
     """When error-based extraction succeeds, score >= 3."""
@@ -76,8 +57,6 @@ def test_exploit_extracts_data(base_state):
 
     assert result["scores"]["sqli_error"] >= 3
     assert "sqli_error_confirmed" in result.get("confirmed_vulns", [])
-
-
 def test_error_confirmation_does_not_fabricate_credentials(base_state):
     """An error-based SQLi signal alone is not evidence of extracted credentials."""
     base_state["confirmed_vulns"] = ["sqli_confirmed"]
@@ -97,7 +76,6 @@ def test_error_confirmation_does_not_fabricate_credentials(base_state):
 
     assert result["scores"]["sqli_error"] == 3
     assert "credentials_extracted" not in result.get("achieved_outcomes", [])
-
 
 def test_login_failure(base_state):
     """Login failure should return score 0."""

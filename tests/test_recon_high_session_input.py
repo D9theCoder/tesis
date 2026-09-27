@@ -6,11 +6,9 @@ import pytest
 
 from foundation.recon import recon
 
-
 BASE_URL = "http://localhost/dvwa/"
 SQLI_URL = f"{BASE_URL}vulnerabilities/sqli/"
 SESSION_INPUT_URL = f"{SQLI_URL}session-input.php"
-
 
 def _response(text: str, *, status_code: int = 200, headers: dict | None = None) -> MagicMock:
     response = MagicMock()
@@ -18,7 +16,6 @@ def _response(text: str, *, status_code: int = 200, headers: dict | None = None)
     response.status_code = status_code
     response.headers = headers or {}
     return response
-
 
 def _mock_session(sqli_body: str, security_level: str) -> MagicMock:
     session = MagicMock()
@@ -48,7 +45,6 @@ def _mock_session(sqli_body: str, security_level: str) -> MagicMock:
     session.http.get.side_effect = get
     return session
 
-
 def _run_recon(sqli_body: str, security_level: str) -> tuple[dict, MagicMock]:
     session = _mock_session(sqli_body, security_level)
     with patch("foundation.recon.DVWASession", return_value=session):
@@ -59,7 +55,6 @@ def _run_recon(sqli_body: str, security_level: str) -> tuple[dict, MagicMock]:
             }
         )
     return update, session
-
 
 def test_high_sqli_popup_markup_registers_contained_post_endpoint():
     """A popup/JS reference should add the high-SQLi POST endpoint."""
@@ -82,7 +77,6 @@ def test_high_sqli_popup_markup_registers_contained_post_endpoint():
     ]
     session.http.get.assert_any_call(SESSION_INPUT_URL)
 
-
 def test_high_sqli_without_session_input_marker_does_not_register_endpoint():
     """A high SQLi page without the marker must not invent the endpoint."""
     update, session = _run_recon(
@@ -93,7 +87,6 @@ def test_high_sqli_without_session_input_marker_does_not_register_endpoint():
     assert all(endpoint["url"] != SESSION_INPUT_URL for endpoint in update["endpoints"])
     requested_urls = [str(call.args[0]) for call in session.http.get.call_args_list]
     assert SESSION_INPUT_URL not in requested_urls
-
 
 @pytest.mark.parametrize("security_level", ["low", "medium"])
 def test_low_and_medium_sqli_do_not_probe_session_input(security_level: str):

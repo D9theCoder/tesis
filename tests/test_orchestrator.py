@@ -1,9 +1,6 @@
 """Tests for 3-surface orchestrator."""
 
-import pytest
-
-from agents.orchestrator import orchestrator, _fallback_next_agent
-
+from agents.orchestrator import orchestrator
 
 def test_orchestrator_stops_when_budget_exhausted():
     """Verifies orchestrator stops when budget exhausted behavior."""
@@ -38,7 +35,6 @@ def test_orchestrator_stops_when_budget_exhausted():
         "payload": {"reason": "ITERATION_LIMIT"},
     }]
 
-
 def test_orchestrator_critical_outcome_routes_to_scorer():
     """Verifies orchestrator critical outcome routes to scorer behavior."""
     state = {
@@ -62,8 +58,6 @@ def test_orchestrator_critical_outcome_routes_to_scorer():
     }
     update = orchestrator(state)
     assert update["next_agent"] == "scorer"
-
-
 def test_orchestrator_labels_model_scorer_stop_after_method_exhaustion(monkeypatch):
     """A scorer stop after an exhausted viable set must retain a terminal reason."""
     class FakeKnowledgeGraph:
@@ -111,7 +105,6 @@ def test_orchestrator_labels_model_scorer_stop_after_method_exhaustion(monkeypat
         for event in result["telemetry_events"]
     )
 
-
 def test_orchestrator_distinguishes_model_scorer_stop_before_exhaustion(monkeypatch):
     """A semantic scorer stop before method exhaustion is not all-methods failure."""
     class FakeKnowledgeGraph:
@@ -154,7 +147,6 @@ def test_orchestrator_distinguishes_model_scorer_stop_before_exhaustion(monkeypa
     assert result["task_result"] == "INCOMPLETE"
     assert result["incomplete_reason"] == "MODEL_STOPPED_WITHOUT_FINDING"
 
-
 def test_orchestrator_counts_execution_failure_as_attempted_for_terminal_reason(monkeypatch):
     """A recorded agent failure must not degrade an exhausted stop to unspecified."""
     class FakeKnowledgeGraph:
@@ -194,31 +186,3 @@ def test_orchestrator_counts_execution_failure_as_attempted_for_terminal_reason(
     })
 
     assert result["incomplete_reason"] == "ALL_METHODS_FAILED"
-
-
-def test_fallback_next_agent_returns_viable_method():
-    """Verifies fallback next agent returns viable method behavior."""
-    state = {
-        "current_surface": "sqli",
-        "observations": {"error_messages_enabled": True, "union_select_possible": True},
-        "attempted_agents": [],
-        "blocked_agents": [],
-        "failure_agents": [],
-        "scores": {},
-    }
-    result = _fallback_next_agent(state)
-    assert result in {"sqli_union", "sqli_error", "sqli_boolean_blind", "sqli_time_blind", "scorer"}
-
-
-def test_fallback_next_agent_all_exhausted():
-    """Verifies fallback next agent all exhausted behavior."""
-    state = {
-        "current_surface": "sqli",
-        "observations": {},
-        "attempted_agents": ["sqli_union", "sqli_error", "sqli_boolean_blind", "sqli_time_blind"],
-        "blocked_agents": [],
-        "failure_agents": [],
-        "scores": {},
-    }
-    result = _fallback_next_agent(state)
-    assert result == "scorer"

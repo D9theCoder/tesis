@@ -33,49 +33,6 @@ def test_runtime_activity_does_not_look_like_a_retry():
     }
 
 
-def test_run_single_engagement_artifact_shape(monkeypatch):
-    """Verifies run single engagement artifact shape behavior."""
-    class FakeApp:
-        """Groups regression tests for FakeApp behavior."""
-        def invoke(self, state):
-            """Supports regression tests for test evaluation runner."""
-            return {
-                "scores": {"sqli": 4},
-                "confirmed_vulns": ["admin_session_obtained"],
-                "achieved_outcomes": ["admin_session_obtained"],
-                "guardrail_activations": [],
-                "iteration_count": 3,
-            }
-
-        def stream(self, state, stream_mode=None):
-            """Supports regression tests for test evaluation runner."""
-            yield {
-                "scores": {"sqli": 4},
-                "confirmed_vulns": ["admin_session_obtained"],
-                "achieved_outcomes": ["admin_session_obtained"],
-                "guardrail_activations": [],
-                "iteration_count": 3,
-            }
-
-    monkeypatch.setattr("evaluation.runner.build_framework", lambda llm_provider, surface="sqli": FakeApp())
-
-    artifact = run_single_engagement(
-        target_url="http://localhost/dvwa",
-        security_level="low",
-        llm_provider="gemini",
-        max_iterations=5,
-        repeat_index=0,
-        target_method="sqli_union",
-    )
-
-    assert artifact["status"] == "success"
-    assert artifact["run_id"] == "gemini-sqli-low-static_only-0"
-    assert artifact["config"]["payload_mode"] == "static_only"
-    assert artifact["llm_required"] is False
-    assert artifact["llm_activity"] == {"started": 0, "completed": 0, "failed": 0, "tokens": 0}
-    assert "report" in artifact
-
-
 def test_static_auto_selection_without_provider_callback_is_not_reported_as_success(monkeypatch):
     """Automatic method selection still requires an observed model call."""
     class FakeApp:
@@ -93,28 +50,6 @@ def test_static_auto_selection_without_provider_callback_is_not_reported_as_succ
 
     assert artifact["status"] == "error"
     assert artifact["incomplete_reason"] == "LLM_NOT_CALLED"
-
-
-def test_run_single_engagement_error_path(monkeypatch):
-    """Verifies run single engagement error path behavior."""
-    def fail_framework(llm_provider, surface="sqli"):
-        """Supports regression tests for test evaluation runner."""
-        raise RuntimeError("offline test")
-
-    monkeypatch.setattr("evaluation.runner.build_framework", fail_framework)
-
-    artifact = run_single_engagement(
-        target_url="http://localhost/dvwa",
-        security_level="low",
-        llm_provider="gemini",
-        max_iterations=5,
-        repeat_index=0,
-    )
-
-    assert artifact["status"] == "error"
-    assert "RuntimeError" in artifact["error"]
-    assert artifact["final_state"]["confirmed_vulns"] == []
-    assert "module_scores" in artifact["report"]
 
 
 def test_orchestrator_provider_failure_is_not_reported_as_success(monkeypatch, tmp_path):

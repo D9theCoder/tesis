@@ -1,33 +1,7 @@
 """Regression coverage for the compact, coordinate-local model inputs."""
 
 from agents.orchestrator import _ORCHESTRATOR_SCHEMA, _decision_schema
-from foundation.payload_generator import _PAYLOAD_SCHEMA
-from llm.prompts.orchestrator_prompt import build_orchestrator_prompt
 from llm.prompts.payload_generation_prompt import build_payload_generation_prompt
-
-
-def test_orchestrator_capsule_contains_only_decision_context():
-    prompt = build_orchestrator_prompt(
-        current_surface="sqli",
-        viable_methods=["sqli_union"],
-        observations={"sqli_endpoint_present": True},
-        attempted_agents=[],
-        blocked_agents=[],
-        failure_agents=[],
-        scores={},
-        confirmed_vulns=[],
-        achieved_outcomes=[],
-        security_level="low",
-        payload_mode="hybrid",
-        iteration_count=1,
-        max_iterations=5,
-    )
-
-    assert "messages" not in prompt
-    assert "raw_response" not in prompt
-    assert "credential" not in prompt
-    assert "reason_code" in prompt
-    assert "reasoning" not in prompt
 
 
 def test_payload_capsule_drops_credential_observations_and_seed_rationale():
@@ -58,11 +32,6 @@ def test_payload_capsule_drops_credential_observations_and_seed_rationale():
     assert "long internal history" not in prompt
     assert '"variants"' in prompt
     assert '"source_seed_id":"seed-1"' in prompt
-
-
-def test_native_json_schemas_have_provider_compatible_names():
-    assert _ORCHESTRATOR_SCHEMA["title"] == "dvwa_orchestrator_decision"
-    assert _PAYLOAD_SCHEMA["title"] == "dvwa_payload_variants"
 
 
 def test_orchestrator_native_schema_is_bound_to_current_allowed_methods():

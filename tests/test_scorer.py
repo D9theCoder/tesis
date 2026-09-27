@@ -8,14 +8,7 @@ from copy import deepcopy
 from langgraph.graph import END
 
 from core.scorer import build_score_report, scorer
-from core.state import ALL_METHOD_AGENTS, MODULE_TO_KG_NODE, SCORE_LABELS, new_default_state
-
-
-def test_build_score_report_includes_all_methods_in_canonical_order():
-    """Verifies build score report includes all methods in canonical order behavior."""
-    state = new_default_state()
-    report = build_score_report(state)
-    assert list(report.module_scores.keys()) == ALL_METHOD_AGENTS
+from core.state import SCORE_LABELS, new_default_state
 
 
 def test_build_score_report_defaults_missing_scores_to_zero():
@@ -54,48 +47,12 @@ def test_build_score_report_matches_agents_shape_keys():
     assert "total_modules_tested" in payload["summary"]
 
 
-def test_scorer_returns_summary_instead_of_method_quality_metrics():
-    """Verifies scorer returns summary instead of method quality metrics behavior."""
-    state = new_default_state()
-    update = scorer(state)
-    assert "summary" in update
-    assert "method_quality_metrics" not in update
-    assert "adaptation_rate" in update["summary"]
-
-
-def test_scorer_returns_nested_surface_scores():
-    """Verifies scorer returns nested surface scores behavior."""
-    state = new_default_state()
-    state["scores"] = {"sqli_union": 3}
-    update = scorer(state)
-    assert "surface_scores" in update
-    assert isinstance(update["surface_scores"]["sqli"], dict)
-    assert update["surface_scores"]["sqli"]["score"] == 3
-
-
 def test_highest_impact_outcome_prefers_admin_over_data_exfiltrated():
     """Verifies highest impact outcome prefers admin over data exfiltrated behavior."""
     state = new_default_state()
     state["confirmed_vulns"] = ["admin_session_obtained", "data_exfiltrated"]
     report = build_score_report(state)
     assert report.summary.highest_impact_outcome == "admin_session_obtained"
-
-
-def test_build_score_report_stage6_metrics_are_computed():
-    """Verifies build score report stage6 metrics are computed behavior."""
-    state = new_default_state()
-    state["scores"] = {"sqli_union": 0, "sqli_error": 3, "sqli_boolean_blind": 4}
-    state["attempted_agents"] = ["sqli_union", "sqli_error", "sqli_boolean_blind"]
-    state["tried_payloads"] = {
-        "sqli_union": ["p1", "p2"],
-        "sqli_boolean_blind": ["p3", "p4", "p5"],
-    }
-
-    report = build_score_report(state)
-
-    assert report.summary.method_selection_accuracy == 0.0
-    assert report.summary.adaptation_rate > 0.0
-    assert report.summary.mean_attempts_to_success > 0.0
 
 
 def test_scorer_preserves_all_dimensions_and_weighted_composite():

@@ -5,27 +5,22 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
-
 BRUTE_AGENT_MODULES = (
     "agents.brute_force.bf_dictionary_agent",
     "agents.brute_force.bf_spray_agent",
 )
 
-
 def _response(text: str, *, status_code: int = 200) -> SimpleNamespace:
     return SimpleNamespace(text=text, status_code=status_code, elapsed_ms=1.0)
 
-
 def _token_page(token: str) -> SimpleNamespace:
     return _response(f'<input type="hidden" name="user_token" value="{token}">')
-
 
 def _session(*responses: SimpleNamespace) -> MagicMock:
     session = MagicMock()
     session.get.side_effect = list(responses)
     session._extract_user_token.side_effect = lambda html: html.split('value="', 1)[1].split('"', 1)[0]
     return session
-
 
 @pytest.mark.parametrize("module_name", BRUTE_AGENT_MODULES)
 def test_high_credential_request_refreshes_token_and_retries_csrf_rejection(module_name):
@@ -73,7 +68,6 @@ def test_high_credential_request_refreshes_token_and_retries_csrf_rejection(modu
         ),
     ]
 
-
 @pytest.mark.parametrize("module_name", BRUTE_AGENT_MODULES)
 def test_high_credential_request_does_not_retry_more_than_once(module_name):
     """Repeated CSRF rejection is bounded and cannot loop indefinitely."""
@@ -95,7 +89,6 @@ def test_high_credential_request_does_not_retry_more_than_once(module_name):
 
     assert len(responses) == 2
     assert session.get.call_count == 4
-
 
 @pytest.mark.parametrize("module_name", BRUTE_AGENT_MODULES)
 def test_high_retry_telemetry_marks_stale_response_failed(module_name):
@@ -123,7 +116,6 @@ def test_high_retry_telemetry_marks_stale_response_failed(module_name):
     assert [event["status"] for event in events] == ["failed", "ok"]
     assert events[0]["payload"]["success"] is False
     assert events[1]["payload"]["success"] is True
-
 
 @pytest.mark.parametrize("module_name", BRUTE_AGENT_MODULES)
 def test_low_credential_request_keeps_shared_token_without_refresh(module_name):

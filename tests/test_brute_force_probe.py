@@ -7,13 +7,10 @@ import pytest
 
 from core.state import new_default_state
 
-
 dictionary_module = import_module("agents.brute_force.bf_dictionary_agent")
 spray_module = import_module("agents.brute_force.bf_spray_agent")
 
-
 PROBE_MODULES = (dictionary_module, spray_module)
-
 
 def _response(*, status_code: int = 200, text: str = "Incorrect", elapsed_ms: float = 1_200.0):
     response = MagicMock()
@@ -22,7 +19,6 @@ def _response(*, status_code: int = 200, text: str = "Incorrect", elapsed_ms: fl
     response.headers = {}
     response.elapsed_ms = elapsed_ms
     return response
-
 
 @pytest.mark.parametrize("module", PROBE_MODULES, ids=["dictionary", "spray"])
 def test_uniformly_slow_dvwa_is_not_classified_as_rate_limited(module):
@@ -39,7 +35,6 @@ def test_uniformly_slow_dvwa_is_not_classified_as_rate_limited(module):
     assert probe_ok is True
     assert tried == ["rate_test:test", "probe:probe"]
     assert observations["no_rate_limit"] is True
-
 
 @pytest.mark.parametrize("module", PROBE_MODULES, ids=["dictionary", "spray"])
 def test_explicit_rate_limit_response_stops_probe(module):
@@ -61,7 +56,6 @@ def test_explicit_rate_limit_response_stops_probe(module):
     assert observations["no_rate_limit"] is False
     assert events[0]["payload"]["signal_detected"] is False
 
-
 @pytest.mark.parametrize("module", PROBE_MODULES, ids=["dictionary", "spray"])
 def test_relative_latency_increase_remains_rate_limit_signal(module):
     """A throttle that only delays follow-up responses is still detected."""
@@ -79,7 +73,6 @@ def test_relative_latency_increase_remains_rate_limit_signal(module):
 
     assert probe_ok is False
     assert observations["no_rate_limit"] is False
-
 
 @pytest.mark.parametrize("module", PROBE_MODULES, ids=["dictionary", "spray"])
 def test_high_random_latency_is_not_classified_as_rate_limited(module):
@@ -110,7 +103,6 @@ def test_high_random_latency_is_not_classified_as_rate_limited(module):
 
     assert probe_ok is True
     assert observations["no_rate_limit"] is True
-
 
 @pytest.mark.parametrize(
     ("module", "agent", "agent_id"),
@@ -154,7 +146,6 @@ def test_slow_probe_does_not_skip_exploit_stage(module, agent, agent_id):
         (call.kwargs.get("params") or {}).get("username") == "admin"
         for call in session.get.call_args_list
     )
-
 
 @pytest.mark.parametrize("module", PROBE_MODULES, ids=["dictionary", "spray"])
 def test_invalid_credentials_are_not_reported_as_exploit_success(module):

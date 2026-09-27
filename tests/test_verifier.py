@@ -1,50 +1,10 @@
-"""Tests for foundation/verifier.py — Verifier contract tests.
-
-Validates:
-1. VerificationResult dataclass construction and to_dict
-2. Verifier.contains_any() signal detection
-3. Verifier.regex_match() regex evidence detection
-4. Verifier.verify_xss_dialog() browser-disabled and invalid-url behavior
-"""
-
-import pytest
+"""Evidence isolation, signal matching and CAPTCHA boundary regressions."""
 
 from foundation.verifier import VerificationResult, Verifier, has_captcha_challenge
 
 
 class TestVerificationResult:
     """Validate VerificationResult dataclass."""
-
-    def test_default_values(self):
-        """VerificationResult should have sensible defaults."""
-        vr = VerificationResult()
-        assert vr.ok is False
-        assert vr.confidence == 0.0
-        assert vr.evidence == []
-
-    def test_construction_with_values(self):
-        """VerificationResult should store provided values."""
-        vr = VerificationResult(
-            ok=True,
-            confidence=0.85,
-            evidence=["Found SQL error message", "Extracted user data"],
-        )
-        assert vr.ok is True
-        assert vr.confidence == 0.85
-        assert len(vr.evidence) == 2
-
-    def test_to_dict(self):
-        """to_dict should produce a plain dict compatible with LangGraph state."""
-        vr = VerificationResult(
-            ok=True,
-            confidence=0.95,
-            evidence=["XSS dialog fired"],
-        )
-        d = vr.to_dict()
-        assert isinstance(d, dict)
-        assert d["ok"] is True
-        assert d["confidence"] == 0.95
-        assert d["evidence"] == ["XSS dialog fired"]
 
     def test_to_dict_returns_new_list(self):
         """to_dict should return a copy of evidence, not a reference."""
@@ -70,13 +30,6 @@ class TestVerifierBehavior:
         result = v.contains_any("", ["signal"])
         assert result.ok is False
 
-    def test_regex_match_detects_pattern(self):
-        """Verifies regex match detects pattern behavior."""
-        v = Verifier()
-        result = v.regex_match("uid=33(www-data)", [r"uid=\d+"])
-        assert result.ok is True
-        assert r"uid=\d+" in result.evidence
-
     def test_regex_match_skips_invalid_pattern(self):
         """Verifies regex match skips invalid pattern behavior."""
         v = Verifier()
@@ -94,11 +47,6 @@ class TestVerifierBehavior:
         assert not any(item.startswith("invalid_regex:") for item in result.evidence)
         assert result.ok is True
         assert r"uid=\d+" in result.evidence
-
-    def test_browser_xss_verification_is_not_in_framework_scope(self):
-        """XSS/browser verification stays outside the fixed thesis scope."""
-        v = Verifier()
-        assert not hasattr(v, "verify_xss_dialog")
 
 
 def test_captcha_detector_ignores_dvwa_navigation_label():

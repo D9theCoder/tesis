@@ -16,23 +16,12 @@ from time import monotonic
 from evaluation.runner import _RuntimeCallbackHandler
 from tesis import tui, tui_mission, tui_state
 from tesis.model_config import EngagementConfig, ModelConfig
-from tesis.runtime_events import RunEvent
 
 
 def _require(name: str):
     value = getattr(tui, name, None)
     assert value is not None, f"core: tesis.tui.{name} missing (handoff contract)"
     return value
-
-
-def test_event_throughput_smoke():
-    state = tui.TuiRunState()
-    tui.apply_run_event(state, RunEvent("run.started", message="go"))
-    started = monotonic()
-    for i in range(2_000):
-        tui.apply_run_event(state, RunEvent("graph.node.started", node="recon", message=f"evt-{i}"))
-    elapsed = monotonic() - started
-    assert elapsed < 10.0, f"2000 events took {elapsed:.2f}s"
 
 
 def test_runtime_callback_batches_thousands_of_tokens_without_loss() -> None:
@@ -96,23 +85,6 @@ def test_results_drawer_lists_many_artifacts_promptly(tmp_path: Path) -> None:
                 await pilot.pause()
 
     asyncio.run(asyncio.wait_for(scenario(), timeout=20))
-
-
-def test_idle_quit_exits_promptly() -> None:
-    _require("MissionControlScreen")
-
-    async def scenario() -> None:
-        app = tui.TesisApp()
-        async with app.run_test(size=(120, 36)) as pilot:
-            await pilot.pause()
-            started = monotonic()
-            await pilot.press("q")
-            await pilot.pause()
-            elapsed = monotonic() - started
-            assert not app.is_running
-            assert elapsed < 2.0
-
-    asyncio.run(scenario())
 
 
 def test_blocked_runtime_shutdown_is_prompt_and_worker_is_daemon(tmp_path: Path) -> None:

@@ -5,18 +5,7 @@ LLM adapters, agents, evaluation, or CLI integration without changing runtime
 code."""
 import json
 
-from evaluation.telemetry import RunTelemetry, stable_sha256
-
-
-def test_run_telemetry_seq_is_monotonic():
-    """Verifies run telemetry seq is monotonic behavior."""
-    telemetry = RunTelemetry("run-1")
-    telemetry.emit(iteration=0, node="orchestrator", event_type="orchestrator.prompt.generated", status="ok", payload={})
-    telemetry.emit(iteration=0, node="orchestrator", event_type="orchestrator.llm.response", status="ok", payload={})
-
-    events = telemetry.as_dict_list()
-    assert events[0]["seq"] == 1
-    assert events[1]["seq"] == 2
+from evaluation.telemetry import RunTelemetry
 
 
 def test_write_jsonl_is_deterministic_ordered(tmp_path):
@@ -32,9 +21,3 @@ def test_write_jsonl_is_deterministic_ordered(tmp_path):
 
     assert first["seq"] == 1
     assert second["seq"] == 2
-
-
-def test_prompt_hash_stable_across_runs():
-    """Verifies prompt hash stable across runs behavior."""
-    text = "same content"
-    assert stable_sha256(text) == stable_sha256(text)

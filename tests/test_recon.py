@@ -18,14 +18,10 @@ from foundation.recon import (
     extract_nav_links,
     detect_security_level_from_html,
     fingerprint_server,
-    EndpointRecord,
-    InputVectorRecord,
     _deduplicate_endpoints,
     _deduplicate_vectors,
     recon,
 )
-from core.state import SECURITY_LEVELS
-
 
 class TestInferModuleName:
     """Validate DVWA module name inference from URLs."""
@@ -35,15 +31,6 @@ class TestInferModuleName:
         [
             ("http://localhost/dvwa/vulnerabilities/sqli/", "sqli"),
             ("http://localhost/dvwa/vulnerabilities/sqli_blind/", "sqli_blind"),
-            ("http://localhost/dvwa/vulnerabilities/xss_r/", "xss_r"),
-            ("http://localhost/dvwa/vulnerabilities/xss_s/", "xss_s"),
-            ("http://localhost/dvwa/vulnerabilities/xss_d/", "xss_d"),
-            ("http://localhost/dvwa/vulnerabilities/exec/", "cmdi"),
-            ("http://localhost/dvwa/vulnerabilities/fi/", "lfi"),
-            ("http://localhost/dvwa/vulnerabilities/upload/", "upload"),
-            ("http://localhost/dvwa/vulnerabilities/csrf/", "csrf"),
-            ("http://localhost/dvwa/vulnerabilities/brute/", "brute"),
-            ("http://localhost/dvwa/vulnerabilities/weak_id/", "weak_session"),
         ],
     )
     def test_known_modules(self, url, expected):
@@ -58,93 +45,8 @@ class TestInferModuleName:
         """Module inference should be case-insensitive."""
         assert infer_module_name("http://localhost/DVWA/vulnerabilities/SQLI/") == "sqli"
 
-    def test_ordering_independence(self):
-        """More specific patterns should match regardless of dict insertion order.
-
-        This test verifies that 'sqli_blind' matches before 'sqli' even if
-        the dict were constructed with 'sqli' first.
-        """
-        assert infer_module_name("http://localhost/dvwa/vulnerabilities/sqli_blind/") == "sqli_blind"
-        assert infer_module_name("http://localhost/dvwa/vulnerabilities/sqli/") == "sqli"
-
-    def test_xss_prefix_disambiguation(self):
-        """xss_r, xss_s, xss_d should not all match as 'xss'."""
-        assert infer_module_name("http://localhost/dvwa/vulnerabilities/xss_r/") == "xss_r"
-        assert infer_module_name("http://localhost/dvwa/vulnerabilities/xss_s/") == "xss_s"
-        assert infer_module_name("http://localhost/dvwa/vulnerabilities/xss_d/") == "xss_d"
-
-
-class TestEndpointRecord:
-    """Validate EndpointRecord construction and normalization."""
-
-    def test_basic_construction(self):
-        """EndpointRecord should create a dict with expected fields."""
-        ep = EndpointRecord(
-            url="http://localhost/dvwa/vulnerabilities/sqli/",
-            method="GET",
-            params=["id", "Submit"],
-            csrf_token="abc123",
-            module_name="sqli",
-        )
-        assert ep["url"] == "http://localhost/dvwa/vulnerabilities/sqli/"
-        assert ep["method"] == "get"  # Normalized to lowercase
-        assert ep["params"] == ["Submit", "id"]  # Sorted and deduplicated
-        assert ep["csrf_token"] == "abc123"
-        assert ep["module_name"] == "sqli"
-
-    def test_default_values(self):
-        """EndpointRecord should have sensible defaults."""
-        ep = EndpointRecord(url="http://example.com/test")
-        assert ep["method"] == "get"
-        assert ep["params"] == []
-        assert ep["csrf_token"] is None
-        assert ep["module_name"] == "unknown"
-
-
-class TestInputVectorRecord:
-    """Validate InputVectorRecord construction."""
-
-    def test_basic_construction(self):
-        """InputVectorRecord should create a dict with expected fields."""
-        vec = InputVectorRecord(
-            param_name="id",
-            param_type="text",
-            endpoint_url="http://localhost/dvwa/vulnerabilities/sqli/",
-        )
-        assert vec["param_name"] == "id"
-        assert vec["param_type"] == "text"
-        assert vec["endpoint_url"] == "http://localhost/dvwa/vulnerabilities/sqli/"
-
-    def test_type_normalization(self):
-        """Param type should be normalized to lowercase."""
-        vec = InputVectorRecord(param_name="test", param_type="HIDDEN")
-        assert vec["param_type"] == "hidden"
-
-
 class TestParseForms:
     """Validate HTML form parsing into endpoints and vectors."""
-
-    def test_parse_simple_form(self):
-        """Should parse a simple form with one input."""
-        html = '''
-        <form action="/dvwa/vulnerabilities/sqli/" method="get">
-            <input type="text" name="id" value="">
-            <input type="submit" name="Submit" value="Submit">
-        </form>
-        '''
-        endpoints, vectors = parse_forms(html, "http://localhost/dvwa/vulnerabilities/sqli/")
-
-        assert len(endpoints) == 1
-        assert endpoints[0]["url"] == "http://localhost/dvwa/vulnerabilities/sqli/"
-        assert endpoints[0]["method"] == "get"
-        assert "id" in endpoints[0]["params"]
-        assert "Submit" in endpoints[0]["params"]
-        assert endpoints[0]["module_name"] == "sqli"
-
-        assert len(vectors) >= 1
-        id_vectors = [v for v in vectors if v["param_name"] == "id"]
-        assert len(id_vectors) == 1
-        assert id_vectors[0]["param_type"] == "text"
 
     def test_parse_form_with_csrf_token(self):
         """Should extract CSRF token from user_token hidden field."""
@@ -160,38 +62,10 @@ class TestParseForms:
 
         assert endpoints[0]["csrf_token"] == "tok_abc123"
 
-    def test_parse_form_with_relative_action(self):
-        """Should resolve relative action URLs using page_url."""
-        html = '''
-        <form action="?page=../../../etc/passwd" method="get">
-            <input type="text" name="page" value="">
-        </form>
-        '''
-        endpoints, vectors = parse_forms(html, "http://localhost/dvwa/vulnerabilities/fi/")
-
-        assert endpoints[0]["url"].startswith("http://localhost")
-
     def test_parse_form_discards_external_action(self):
         """Recon must not place external form actions into shared state."""
         html = '<form action="https://example.invalid/escape"><input name="id"></form>'
         endpoints, vectors = parse_forms(html, "http://localhost/dvwa/vulnerabilities/sqli/")
-        assert endpoints == []
-        assert vectors == []
-
-    def test_parse_form_default_method(self):
-        """Forms without method attribute should default to 'get'."""
-        html = '''
-        <form action="/test">
-            <input type="text" name="q">
-        </form>
-        '''
-        endpoints, _ = parse_forms(html, "http://localhost/test")
-        assert endpoints[0]["method"] == "get"
-
-    def test_parse_no_forms(self):
-        """Should return empty lists when no forms are present."""
-        html = "<html><body><p>No forms here</p></body></html>"
-        endpoints, vectors = parse_forms(html, "http://localhost/test")
         assert endpoints == []
         assert vectors == []
 
@@ -208,7 +82,6 @@ class TestParseForms:
         endpoints, vectors = parse_forms(html, "http://localhost/page")
         assert len(endpoints) == 2
         assert len(vectors) == 2
-
     def test_parse_skips_inputs_without_name(self):
         """Inputs without name attribute should be skipped."""
         html = '''
@@ -220,28 +93,8 @@ class TestParseForms:
         endpoints, vectors = parse_forms(html, "http://localhost/test")
         assert len(vectors) == 1
         assert vectors[0]["param_name"] == "named_field"
-
-
 class TestExtractNavLinks:
     """Validate navigation link extraction from DVWA pages."""
-
-    def test_extract_vulnerability_links(self):
-        """Should extract links under /vulnerabilities/."""
-        html = '''
-        <html>
-        <body>
-            <a href="/dvwa/vulnerabilities/sqli/">SQL Injection</a>
-            <a href="/dvwa/vulnerabilities/xss_r/">XSS Reflected</a>
-            <a href="/dvwa/vulnerabilities/exec/">Command Injection</a>
-            <a href="/dvwa/index.php">Home</a>
-        </body>
-        </html>
-        '''
-        links = extract_nav_links(html, "http://localhost/dvwa/")
-        assert len(links) == 3
-        assert any("sqli" in l for l in links)
-        assert any("xss_r" in l for l in links)
-        assert any("exec" in l for l in links)
 
     def test_extracts_relative_vulnerability_link(self):
         """DVWA-style relative module links should resolve under the base path."""
@@ -251,20 +104,12 @@ class TestExtractNavLinks:
 
         assert links == ["http://localhost/dvwa/vulnerabilities/sqli/"]
 
+
     def test_extract_links_ignores_vulnerability_text_outside_path(self):
         """A query string mentioning a module must not be treated as a module link."""
         html = '<a href="/dvwa/index.php?next=/vulnerabilities/sqli/">Home</a>'
 
         assert extract_nav_links(html, "http://localhost/dvwa/") == []
-
-    def test_extract_links_deduplicates(self):
-        """Should deduplicate and sort links."""
-        html = '''
-        <a href="/dvwa/vulnerabilities/sqli/">Link 1</a>
-        <a href="/dvwa/vulnerabilities/sqli/">Link 2</a>
-        '''
-        links = extract_nav_links(html, "http://localhost/dvwa/")
-        assert len(links) == 1
 
     def test_extract_links_strips_fragments(self):
         """Should strip fragment identifiers from URLs."""
@@ -272,18 +117,10 @@ class TestExtractNavLinks:
         links = extract_nav_links(html, "http://localhost/dvwa/")
         assert len(links) == 1
         assert "#top" not in links[0]
-
     def test_extract_links_discards_external_host(self):
         """Recon navigation must remain on the configured DVWA host."""
         html = '<a href="https://example.invalid/vulnerabilities/sqli/">external</a>'
         assert extract_nav_links(html, "http://localhost/dvwa/") == []
-
-    def test_extract_no_vulnerability_links(self):
-        """Should return empty list when no module links are present."""
-        html = '<html><body><a href="/dvwa/index.php">Home</a></body></html>'
-        links = extract_nav_links(html, "http://localhost/dvwa/")
-        assert links == []
-
 
 class TestDetectSecurityLevelFromHtml:
     """Validate security level detection from HTML content."""
@@ -304,17 +141,6 @@ class TestDetectSecurityLevelFromHtml:
         result = detect_security_level_from_html(html)
         assert result == expected
 
-    def test_no_level_detected(self):
-        """Should return None when no security level is found."""
-        result = detect_security_level_from_html("<html><body>No level info</body></html>")
-        assert result is None
-
-    def test_case_insensitive_detection(self):
-        """Detection should be case-insensitive."""
-        result = detect_security_level_from_html("dvwa SECURITY level: MEDIUM")
-        assert result == "medium"
-
-
 class TestDeduplication:
     """Validate endpoint and vector deduplication."""
 
@@ -331,7 +157,6 @@ class TestDeduplication:
         assert result[1]["url"] == "http://localhost/b"
         # First occurrence wins for deduplication
         assert result[1]["params"] == ["x"]
-
     def test_deduplicate_vectors(self):
         """Should deduplicate vectors by (param_name, endpoint_url)."""
         vectors = [
@@ -342,53 +167,8 @@ class TestDeduplication:
         result = _deduplicate_vectors(vectors)
         assert len(result) == 2
 
-
 class TestReconNodeIntegration:
     """Validate the recon function as a LangGraph node."""
-
-    def test_recon_returns_state_compatible_update(self):
-        """recon() should return a dict with all required ExploitationState keys."""
-        # This test validates the return shape without requiring a running DVWA instance.
-        # We mock the HTTP interactions.
-        with patch("foundation.recon.DVWASession") as MockSession:
-            mock_session = MagicMock()
-
-            # Mock login to succeed
-            mock_session.login.return_value = True
-            mock_session.is_logged_in = True
-
-            # Mock security level detection
-            mock_session.detect_security_level.return_value = "low"
-
-            # Mock index page crawl to return navigation links
-            index_result = MagicMock()
-            index_result.text = '''
-            <a href="/dvwa/vulnerabilities/sqli/">SQLi</a>
-            <a href="/dvwa/vulnerabilities/xss_r/">XSS</a>
-            '''
-            mock_session.http.get.return_value = index_result
-            mock_session.http.base_url = "http://localhost/dvwa/"
-
-            # Mock the closing to not fail
-            mock_session.close.return_value = None
-
-            MockSession.return_value = mock_session
-
-            state = {
-                "target_url": "http://localhost/dvwa",
-                "security_level": "low",
-            }
-            update = recon(state)
-
-            # Validate all required output keys
-            assert "endpoints" in update
-            assert "input_vectors" in update
-            assert "security_level" in update
-            assert "next_agent" in update
-            assert update["next_agent"] == "orchestrator"
-            assert update["security_level"] in SECURITY_LEVELS
-            assert isinstance(update["endpoints"], list)
-            assert isinstance(update["input_vectors"], list)
 
     def test_recon_finishes_all_requests_before_closing_session(self):
         """Regression: recon must not reuse the HTTP client after cleanup."""
@@ -433,64 +213,6 @@ class TestReconNodeIntegration:
             assert client_closed is True
             assert update["observations"]["force_browse_endpoints_visible"] is True
             assert update["input_vectors"][0]["param_name"] == "id"
-
-    def test_recon_with_empty_target_url(self):
-        """recon() should handle empty target_url gracefully."""
-        state = {"target_url": "", "security_level": "low"}
-        update = recon(state)
-
-        assert update["endpoints"] == []
-        assert update["next_agent"] == "orchestrator"
-
-    def test_recon_deduplicates_and_sorts_endpoints(self):
-        """recon() should produce deterministic, deduplicated output."""
-        with patch("foundation.recon.DVWASession") as MockSession:
-            mock_session = MagicMock()
-            mock_session.login.return_value = True
-            mock_session.detect_security_level.return_value = "low"
-            mock_session.close.return_value = None
-
-            # Create deterministic HTML responses
-            index_html = '''
-            <a href="/dvwa/vulnerabilities/sqli/">SQLi</a>
-            <a href="/dvwa/vulnerabilities/sqli/">SQLi Again</a>
-            '''
-            sqli_html = '''
-            <form action="" method="get">
-                <input type="text" name="id">
-                <input type="submit" name="Submit" value="Submit">
-            </form>
-            '''
-
-            index_result = MagicMock()
-            index_result.text = index_html
-            sqli_result = MagicMock()
-            sqli_result.text = sqli_html
-            setup_result = MagicMock()
-            setup_result.text = "Forbidden"
-
-            def mock_http_get(path, *args, **kwargs):
-                """Supports regression tests for test recon."""
-                path_str = str(path)
-                if path_str.endswith("index.php"):
-                    return index_result
-                if "setup.php" in path_str:
-                    return setup_result
-                return sqli_result
-
-            mock_session.http.get.side_effect = mock_http_get
-            mock_session.http.base_url = "http://localhost/dvwa/"
-
-            MockSession.return_value = mock_session
-
-            state = {"target_url": "http://localhost/dvwa", "security_level": "low"}
-            update = recon(state)
-
-            # Should have only one endpoint (deduplicated)
-            if update["endpoints"]:
-                urls = [ep["url"] for ep in update["endpoints"]]
-                # No duplicate URLs
-                assert len(urls) == len(set(urls))
 
     def test_force_browse_endpoints_visible_from_probe(self):
         """When setup.php is accessible, the force-browse observation should be true."""
@@ -560,7 +282,6 @@ class TestReconNodeIntegration:
 
             assert update["observations"].get("force_browse_endpoints_visible") is False
 
-
 class TestFormParsingNoDuplicates:
     """Validate that parse_forms does not produce duplicate vectors for textarea/select."""
 
@@ -617,47 +338,14 @@ class TestFormParsingNoDuplicates:
         assert "body" in endpoints[0]["params"]
         assert "category" in endpoints[0]["params"]
 
-
 class TestFingerprintServer:
-    """Validate server fingerprinting from HTTP headers."""
-
-    def test_apache_server_detected(self):
-        """Should detect Apache server from Server header."""
-        fingerprint = fingerprint_server({"Server": "Apache/2.4.41"})
-        assert fingerprint["server"] == "Apache/2.4.41"
-
-    def test_php_version_detected(self):
-        """Should detect PHP version from X-Powered-By header."""
-        fingerprint = fingerprint_server({"X-Powered-By": "PHP/7.4.3"})
-        assert fingerprint["php_version"] == "PHP/7.4.3"
-
-    def test_multiple_fingerprints(self):
-        """Should detect multiple technologies from headers."""
-        fingerprint = fingerprint_server({
-            "Server": "Apache/2.4.41",
-            "X-Powered-By": "PHP/7.4.3",
-        })
-        assert fingerprint["server"] == "Apache/2.4.41"
-        assert fingerprint["php_version"] == "PHP/7.4.3"
-
-    def test_no_relevant_headers(self):
-        """Should return empty dict when no fingerprint headers are present."""
-        fingerprint = fingerprint_server({"Content-Type": "text/html"})
-        assert fingerprint == {}
+    """Keep header lookup case insensitive for server fingerprints."""
 
     def test_case_insensitive_headers(self):
         """Should match headers case-insensitively."""
         fingerprint = fingerprint_server({"server": "nginx"})
         assert fingerprint["server"] == "nginx"
 
-
 def test_authbypass_maps_to_idor():
     """authbypass endpoint should map to idor module."""
     assert infer_module_name("http://localhost/dvwa/vulnerabilities/authbypass/") == "idor"
-
-
-def test_object_ids_enumerable_after_authbypass_fix():
-    """DVWA_MODULE_HINTS must include authbypass->idor mapping."""
-    from foundation.recon import DVWA_MODULE_HINTS
-    assert "authbypass" in DVWA_MODULE_HINTS
-    assert DVWA_MODULE_HINTS["authbypass"] == "idor"

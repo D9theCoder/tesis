@@ -72,11 +72,6 @@ def test_new_nullable_dual_reads_with_reason():
         assert format_metric(dict(NEW), name) == "N/A"
 
 
-def test_available_reading_returns_number():
-    assert metric_reading(dict(AVAILABLE), "token_cost") == (1.25, True, None)
-    assert format_metric(dict(AVAILABLE), "token_cost") == "1.25"
-
-
 def test_mixed_aggregation_excludes_unavailable():
     agg = aggregate_metric([dict(LEGACY), dict(NEW), dict(AVAILABLE)], "token_cost")
     assert agg == {

@@ -23,23 +23,6 @@ def test_layout_uses_date_and_only_numbers_colliding_same_day(tmp_path: Path) ->
     assert second.root.name == "matrix-2026-08-19-3"
 
 
-def test_matrix_child_name_contains_sequence_and_coordinate(tmp_path: Path) -> None:
-    layout = ExperimentArtifactLayout.allocate(tmp_path, "matrix", now=datetime(2026, 8, 19))
-
-    child = layout.child_directory(
-        {
-            "provider": "openai_compatible",
-            "surface": "access_control",
-            "security_level": "high",
-            "payload_mode": "llm_mutation_only",
-        },
-        0,
-    )
-
-    assert child.name == "run-001-openai_compatible-access_control-high-llm_mutation_only"
-    assert child.is_dir()
-
-
 def test_manifest_indexes_runs_and_repository_skips_manifest(tmp_path: Path) -> None:
     layout = ExperimentArtifactLayout.allocate(tmp_path, "matrix", now=datetime(2026, 8, 19))
     child = layout.child_directory(

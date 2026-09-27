@@ -7,7 +7,6 @@ from core.chaining_coordinator import (
 )
 from core.scorer import scorer
 
-
 def _brute_force_chain_state(**overrides):
     state = {
         "iteration_count": 5,
@@ -24,7 +23,6 @@ def _brute_force_chain_state(**overrides):
     state.update(overrides)
     return state
 
-
 def test_confirmed_vulnerability_is_terminal_success_after_chain_exhaustion():
     """A failed follow-up chain must not erase a verifier-backed finding."""
     next_agent, event = evaluate_chain_route(_brute_force_chain_state())
@@ -33,7 +31,6 @@ def test_confirmed_vulnerability_is_terminal_success_after_chain_exhaustion():
     assert event["reason"] == "confirmed_success"
     assert event["task_result"] == "SUCCESS"
     assert "incomplete_reason" not in event
-
 
 def test_chaining_router_node_clears_stale_exhaustion_status():
     """The state update must persist success for the scorer and artifact."""
@@ -48,7 +45,6 @@ def test_chaining_router_node_clears_stale_exhaustion_status():
     assert update["task_result"] == "SUCCESS"
     assert update["incomplete_reason"] is None
 
-
 def test_scorer_preserves_confirmed_success_terminal_status():
     """The scorer/artifact boundary must retain the router's success result."""
     state = _brute_force_chain_state(
@@ -62,7 +58,6 @@ def test_scorer_preserves_confirmed_success_terminal_status():
     assert scored["task_result"] == "SUCCESS"
     assert scored["incomplete_reason"] is None
 
-
 def test_achieved_outcome_without_confirmed_vulnerability_is_not_success():
     """An enabling outcome must not be promoted to a confirmed vulnerability."""
     state = _brute_force_chain_state(confirmed_vulns=[])
@@ -73,7 +68,6 @@ def test_achieved_outcome_without_confirmed_vulnerability_is_not_success():
     assert next_agent == "scorer"
     assert event["reason"] == "all_methods_exhausted"
     assert event["incomplete_reason"] == "ALL_METHODS_FAILED"
-
 
 def test_confirmed_success_does_not_prevent_an_unattempted_chain():
     """A confirmed finding still gets its available AKG follow-up attempt."""
