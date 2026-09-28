@@ -1,5 +1,20 @@
 # Remaining tasks (2026-09-17)
 
+## Current status (2026-09-28)
+
+**R3 live matrix execution and artifact acceptance are complete.** Quota was
+restored, live Doctor passed 16/16, and the documented matrix completed all
+18 coordinates using only `openai_compatible`. The final evidence export
+passed the schema/link audit with zero issues across 364 manual-scoring rows.
+After review repairs, the latest offline suite passed 1,334 tests. The stricter
+export audit restores 75 historical verifier decisions and passes with zero
+issues; the original live artifacts remain preserved. See the
+[matrix acceptance record](HANDOFF_MATRIX_ACCEPTANCE_2026-09-28.md) for raw
+artifacts, export provenance, exact commands, and remaining telemetry limits.
+Local commits were approved on 2026-09-29; no push was performed. The dated
+sections below preserve prior evidence;
+their quota block and incomplete-matrix statements are historical.
+
 Continuation implementation is complete for R1, R2, and the selected R4
 repairs. Full offline suite green (`1389 passed`), focused routing/config suite
 green (`79 passed`), focused doctor/CLI/TUI/reasoning/diagnostics suite green
@@ -35,7 +50,7 @@ uncommitted and nothing was pushed. Detailed earlier verified/not-verified recor
   security levels (`low`, `medium`, `high`) passed, and all three in-scope
   surfaces (`sqli`, `access_control`, `brute_force`) passed. This command called
   `_dvwa_live_checks` directly so it did not contact the model provider.
-- **R3 is explicitly INCOMPLETE**: the final `doctor --live`, real experiment
+- **R3 was explicitly INCOMPLETE on 2026-09-19**: the final `doctor --live`, real experiment
   matrix, completed-run artifact audit, and provider-side reasoning evidence were
   **not tested because the currently selected API endpoint has no quota**. Do not
   treat the offline routing/failure simulations as a completed experiment. Run
@@ -43,8 +58,8 @@ uncommitted and nothing was pushed. Detailed earlier verified/not-verified recor
 
 ## Current hazards (read first)
 
-- The selected model endpoint has no quota. Do not run the real matrix or use
-  failed provider probes as experiment evidence until quota is restored.
+- The quota block was lifted and verified on 2026-09-28. Keep failed historical
+  probes separate from the completed live matrix and its audited evidence.
 - The old plaintext `test.py` probe is no longer present or tracked. Do not
   recreate or commit a probe containing a literal bearer token.
 - V1 is fixed and regression-tested: rejected duplicate-key YAML no longer
@@ -239,9 +254,15 @@ still work. Deliberately **not** now: per-coordinate error rows in the matrix ag
 (`evaluation/multi_llm_runner.py:145-230`) and merging the thin UUID-keyed `llm.failed` record (touches the counting
 semantics documented in the detailed handoff).
 
-### R3 — INCOMPLETE: restore provider budget, then complete the evidence
+### R3 — COMPLETED (2026-09-28): live matrix and artifact acceptance
 
-**Why**: no successful experiment exists. Live doctor and a completed matrix were never finished. Both matrices are
+Current evidence is in the [matrix acceptance record](HANDOFF_MATRIX_ACCEPTANCE_2026-09-28.md).
+It covers the documented 18-coordinate handoff matrix, including the optional
+static-only ablation. The main method-level thesis comparison remains a
+separate research dataset. Provider-side reasoning remains unverified because
+the endpoint did not report reasoning-token telemetry.
+
+**Historical blocker (2026-09-17)**: no successful experiment existed. Live doctor and a completed matrix had not finished. Both matrices were
 `status=active` with `manifest_path: null` (`heartbeat_at` `2026-09-17T14:58:21.983513+00:00` / `…:19.969377+00:00`);
 33 coordinate artifacts exist, of which 29 are `LLM_RUNTIME_FAILURE` and 4 `success`; 51 provider calls died as
 `cause_type=ReadTimeout` after 60012–75662 ms against a 60 s configured timeout. A probe proved a 401
@@ -282,7 +303,11 @@ Then audit the newest `results/runs/` matrix directory against the AGENTS.md art
 - **Slider re-selection — accepted**: re-selecting the current slider value
   does not emit `Changed`; consumers already recompute from widget state.
 
-### R5 — Unverified items that remain after the continuation
+### R5 — Historical unverified items after the 2026-09-19 continuation
+
+The 2026-09-28 acceptance record supersedes the matrix, artifact-audit, and live
+Doctor gaps below. Provider-side reasoning remains unverified for the same
+telemetry reason.
 
 - **Provider-side reasoning execution is unproven.** The one live probe reported `reasoning_tokens=not_reported` /
   `provider_side_reasoning=unverified`; only request-side serialization is asserted. A setting proves the request, not
