@@ -1071,6 +1071,21 @@ score_0_4
 scoring_reason
 ```
 
+Ketiga field referensi bukti berisi daftar JSON Pointer ke artefak yang sama.
+Telemetri request dan bukti respons/waktu baru mempertahankan `candidate_id`
+yang dicoba; tautan mensyaratkan kecocokan identitas, metode, dan tahap dengan
+kandidat yang valid. Rekaman lama tanpa ID menggunakan representasi payload
+sesuai metode: prefiks `userId=` hanya untuk IDOR/escalasi vertikal, termasuk ID
+tanpa spasi tepi. Path force-browse dinormalisasi, sedangkan SQL/brute-force
+tetap literal. Alias hasil normalisasi hanya
+ditautkan jika satu skor kandidat tercatat dapat membedakannya; kecocokan yang
+ambigu tetap tanpa tautan. Duplikat yang ditolak tidak mendapat tautan eksekusi.
+Kandidat yang belum dieksekusi mempertahankan skor dan keputusan verifier null. Keputusan verifier
+terakhir yang tercatat untuk setiap metode diambil dari riwayat
+`graph.state.data.latest_verifier` atau field verifier akhir; keputusan metode
+lain tidak digunakan. Field `score_0_4` menyalin skor payload yang tercatat,
+sedangkan `scoring_reason` tetap kosong untuk peninjauan manual.
+
 ## 12. Consistency Handling
 
 Inkonsistensi antar run tidak dipilih secara selektif. Semua run tetap dicatat.

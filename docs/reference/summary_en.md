@@ -1063,6 +1063,21 @@ score_0_4
 scoring_reason
 ```
 
+The three evidence-reference fields contain JSON Pointer lists into the same
+artifact. New request telemetry and response/timing evidence retain the
+attempted `candidate_id`; links require that identity, method, and stage to
+match a validated candidate. Legacy records without IDs match method-specific
+payload representations: only IDOR/vertical access control accepts `userId=`
+prefixes (including stripped IDs), force-browse accepts normalized paths, and
+SQL/brute-force stays literal. Normalized aliases require a unique
+recorded candidate score to disambiguate; unresolved matches remain unlinked.
+Rejected duplicates receive no execution links. Unexecuted candidates
+retain null scores and verifier decisions. Each executed method's latest
+recorded verifier decision is recovered from `graph.state.data.latest_verifier`
+history or the final verifier field; another method's decision is never used. The
+`score_0_4` field copies the recorded payload score, while `scoring_reason`
+remains blank for manual review.
+
 ## 12. Consistency Handling
 
 Inconsistencies across runs are not selected selectively. All runs remain recorded.

@@ -38,6 +38,24 @@ def already_tried_payloads(state: dict[str, Any], module_name: str) -> set[str]:
     return {str(payload) for payload in module_payloads}
 
 
+def normalize_force_browse_path(path: str) -> str:
+    """Keep legacy double-slash path candidates relative to DVWA."""
+    value = str(path or "").strip()
+    if value.startswith("//") and "://" not in value:
+        return value.lstrip("/")
+    return value
+
+
+def candidate_evidence_payloads(module_name: str, payload: Any) -> tuple:
+    """Match literal candidate text and only formats emitted by its method."""
+    values = (payload,)
+    if module_name == "ac_force_browse":
+        values += (normalize_force_browse_path(payload),)
+    elif module_name in {"ac_idor", "ac_vertical_escalation"}:
+        values += (f"userId={payload}", f"userId={str(payload).strip()}")
+    return values
+
+
 def validated_candidate_ids(state: dict[str, Any], module_name: str) -> set[str] | None:
     """Return validated candidate IDs, or ``None`` before validation runs.
 
@@ -253,15 +271,9 @@ def payload_score_updates(
     invocation explicitly so the first method call is scored in artifacts.
     """
     updates = dict(state.get("payload_scores", {}))
-    tried_payloads = {
-        str(payload)
-        for payload in [
-            *state.get("tried_payloads", {}).get(module_name, []),
-            *(tried_payloads or []),
-        ]
-        if payload is not None
-    }
-    for candidate in state.get("payload_candidates", {}).get(module_name, []):
+    attempted = state.get("tried_payloads", {}).get(module_name, []) if tried_payloads is None else tried_payloads
+    tried_payloads = {str(payload) for payload in attempted if payload is not None}
+    for candidate in validated_payload_candidates(state, module_name):
         if not isinstance(candidate, dict):
             continue
         candidate_id = candidate.get("candidate_id")
@@ -275,6 +287,7 @@ def _materialize_request_evidence(
     state: dict[str, Any],
     module_name: str,
     telemetry_events: list[dict],
+    tried_payloads: list[str],
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """Normalize method telemetry into auditable response/timing evidence.
 
@@ -291,6 +304,9 @@ def _materialize_request_evidence(
     response_evidence: list[dict] = []
     timing_evidence: list[dict] = []
     normalized_events: list[dict] = []
+    candidates = validated_payload_candidates(state, module_name)
+    attempted = set(tried_payloads)
+    assigned: set[tuple[str, str]] = set()
     for event in telemetry_events:
         if not isinstance(event, dict):
             normalized_events.append(event)
@@ -305,6 +321,21 @@ def _materialize_request_evidence(
             continue
 
         payload_copy = dict(payload)
+        stage = "probe" if event_copy["event"] == "agent.probe.sent" else "exploit"
+        matches = [
+            candidate for candidate in candidates
+            if (
+                candidate.get("candidate_id") and candidate.get("payload_or_logic") in attempted
+                and candidate.get("stage", stage) in ({"exploit", "bypass"} if stage == "exploit" else {stage})
+                and payload_copy.get("payload") in candidate_evidence_payloads(module_name, candidate.get("payload_or_logic"))
+            )
+        ]
+        available = [candidate for candidate in matches if (stage, candidate["candidate_id"]) not in assigned]
+        # Multiple events can describe a bounded token retry of one candidate.
+        selected = available[0] if available else (matches[0] if len(matches) == 1 else None)
+        if selected:
+            payload_copy["candidate_id"] = selected["candidate_id"]
+            assigned.add((stage, selected["candidate_id"]))
         event_endpoint = str(payload_copy.get("endpoint") or endpoint or "")
         if event_endpoint.startswith("/") and target_url:
             event_endpoint = f"{target_url}{event_endpoint}"
@@ -312,7 +343,6 @@ def _materialize_request_evidence(
         event_copy["payload"] = payload_copy
         normalized_events.append(event_copy)
 
-        stage = "probe" if event_copy["event"] == "agent.probe.sent" else "exploit"
         evidence = {
             "agent_id": str(payload_copy.get("agent_id") or module_name),
             "stage": stage,
@@ -320,6 +350,8 @@ def _materialize_request_evidence(
             "payload": payload_copy.get("payload"),
             "status_code": payload_copy.get("status_code"),
         }
+        if payload_copy.get("candidate_id"):
+            evidence["candidate_id"] = payload_copy["candidate_id"]
         if "signal_detected" in payload_copy:
             evidence["signal_detected"] = payload_copy["signal_detected"]
         if "success" in payload_copy:
@@ -435,7 +467,7 @@ def make_update(
     # so we must return ONLY the new events, not existing + new.
     if telemetry_events:
         normalized_events, response_evidence, timing_evidence = _materialize_request_evidence(
-            state, module_name, list(telemetry_events)
+            state, module_name, list(telemetry_events), tried_payloads
         )
         update["telemetry_events"] = normalized_events
         if response_evidence:

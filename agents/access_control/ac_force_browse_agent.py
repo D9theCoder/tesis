@@ -7,6 +7,7 @@ from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
 from agents.state_utils import already_tried_payloads, candidate_payloads_for_stage, chain_check as _chain_check, make_update, normalize_security_level
+from agents.state_utils import normalize_force_browse_path as _normalize_probe_path
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.session_manager import DVWASession
 from foundation.verifier import Verifier
@@ -49,14 +50,6 @@ def _signals_for_path(path: str) -> list[str]:
     return _EXPLOIT_SIGNALS
 
 
-def _normalize_probe_path(path: str) -> str:
-    """Keep legacy double-slash path candidates relative to DVWA."""
-    value = str(path or "").strip()
-    if value.startswith("//") and "://" not in value:
-        return value.lstrip("/")
-    return value
-
-
 def _probe_preconditions(
     session: DVWASession, payloads: list[str], already_tried: set[str]
 ) -> tuple[bool, list[str], dict[str, bool], list[dict]]:
@@ -67,12 +60,13 @@ def _probe_preconditions(
     verifier = Verifier()
     sent_any = False
 
-    for path in payloads:
-        path = _normalize_probe_path(path)
+    already_tried = {_normalize_probe_path(value) for value in already_tried}
+    for payload in payloads:
+        path = _normalize_probe_path(payload)
         if path in already_tried:
             continue
         sent_any = True
-        tried.append(path)
+        tried.append(payload)
         try:
             resp = session.get(path)
             events.append(probe_event(AGENT_ID, path, resp.status_code, True))
@@ -107,11 +101,12 @@ def _attempt_exploit(
     score = 0
     verifier = Verifier()
 
-    for path in payloads:
-        path = _normalize_probe_path(path)
+    already_tried = {_normalize_probe_path(value) for value in already_tried}
+    for payload in payloads:
+        path = _normalize_probe_path(payload)
         if path in already_tried:
             continue
-        tried.append(path)
+        tried.append(payload)
         try:
             resp = session.get(path)
             events.append(exploit_event(AGENT_ID, path, resp.status_code, True))
