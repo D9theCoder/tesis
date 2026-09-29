@@ -8,6 +8,7 @@ import sqlite3
 from collections import Counter
 from collections.abc import Mapping
 from contextlib import ExitStack
+from copy import deepcopy
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -26,6 +27,7 @@ from core.checkpoint_store import (
     validate_resume,
 )
 from core.graph_builder import GRAPH_BUILD_VERSION, build_framework
+from agents.state_utils import validated_payload_candidates
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.scorer import build_score_report
 from core.state import (
@@ -457,6 +459,8 @@ def run_single_engagement(
     execution_id = execution_id or new_execution_id()
     cancellation_token = cancellation_token or CancellationToken()
     runtime_events: list[dict[str, Any]] = []
+    method_execution_inputs: list[dict[str, Any]] = []
+    captured_inputs: set[tuple[str, int]] = set()
     # Opt-in durable resume (handoff slice 2). Defaults are unchanged: without
     # resume/checkpoint flags the run uses a random execution_id thread on the
     # process-local MemorySaver and never touches SQLite.
@@ -786,6 +790,9 @@ def run_single_engagement(
                     f"no graph checkpoint for thread {graph_thread_id!r} at {graph_store_path}; "
                     "re-run without --resume; refusing resume"
                 )
+            # The resumed initial snapshot includes receipts for completed work.
+            # Only newly appended validation events can freeze a method input.
+            seen_events = len(snapshot.values.get("telemetry_events", []))
             pending = set(getattr(snapshot, "next", None) or ())
             unsafe = sorted(n for n in pending if n not in SAFE_RESUME_NODES)
             if unsafe:
@@ -817,6 +824,20 @@ def run_single_engagement(
                 events = final_state.get("telemetry_events", [])
                 new_events = events[seen_events:]
                 seen_events = len(events)
+                method = final_state.get("selected_method")
+                queue = validated_payload_candidates(final_state, str(method))
+                identity = (str(method), int(final_state.get("iteration_count", 0)))
+                if (queue and identity not in captured_inputs
+                        and any(event.get("event") == "payload.validation.completed"
+                                and event.get("payload", {}).get("method") == method
+                                for event in new_events)):
+                    # Save the validated queue before execution, without tokens
+                    # or message objects, for diagnostic replay without a model.
+                    frozen = deepcopy({key: value for key, value in final_state.items()
+                                       if key not in {"messages", "model_config", "endpoints"}})
+                    frozen["payload_candidates"] = {str(method): deepcopy(queue)}
+                    method_execution_inputs.append({"method": method, "state": redact_secrets(frozen, known_secrets)})
+                    captured_inputs.add(identity)
                 for event in new_events:
                     event_name = str(event.get("event") or event.get("event_type") or "runtime.event")
                     emit(
@@ -1339,6 +1360,7 @@ def run_single_engagement(
             "duration_ms": duration_ms,
         },
         "final_state": {
+            "observations": dict(final_state.get("observations", {})),
             "iteration_count": final_state.get("iteration_count", 0),
             "task_result": final_state.get("task_result"),
             "incomplete_reason": final_state.get("incomplete_reason"),
@@ -1384,6 +1406,7 @@ def run_single_engagement(
         "response_evidence": list(final_state.get("response_evidence", [])),
         "timing_evidence": list(final_state.get("timing_evidence", [])),
         "verifier_decision": final_state.get("verifier_decision"),
+        "method_execution_inputs": method_execution_inputs,
         "output_score": dict(final_state.get("output_scores", {})).get(selected_method, 0),
         "composite_score": dict(final_state.get("composite_scores", {})).get(selected_method, 0),
         "error": error,

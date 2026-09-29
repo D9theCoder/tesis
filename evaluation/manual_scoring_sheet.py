@@ -69,6 +69,9 @@ def manual_scoring_rows(artifact: dict[str, Any]) -> list[dict[str, Any]]:
         ), None)
         links = {f"{field}_ref": references.get(candidate_id, {}).get(f"{field}_ref", [])
                  for field in ("execution_log", "response_evidence", "timing_evidence")}
+        # Replay response evidence describes the fresh attempt; state also holds history.
+        if artifact.get("kind") == "diagnostic_replay" and not links["response_evidence_ref"]:
+            continue
         verifier = verifiers.get(method) if links["response_evidence_ref"] else None
         score = final_state.get("payload_scores", {}).get(candidate_id)
         rows.append({
