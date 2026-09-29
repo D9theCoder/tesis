@@ -106,12 +106,12 @@ def _probe_preconditions(
                 AGENT_ID,
                 payload,
                 resp.status_code,
-                usable_blind_response(resp, allow_missing=True),
+                usable_blind_response(resp, allow_missing=True) and elapsed - baseline_elapsed > threshold,
                 endpoint=HIGH_RESULT_PATH if security_level == "high" else MODULE_PATH,
                 elapsed_ms=elapsed_ms,
                 baseline_elapsed_ms=baseline_ms,
                 delay_ms=elapsed_ms - baseline_ms,
-            ))
+             response=resp))
             # Check if response time significantly exceeds baseline
             if usable_blind_response(resp, allow_missing=True) and elapsed - baseline_elapsed > threshold:
                 observations[_PROBE_OBSERVATION_KEY] = True
@@ -167,7 +167,9 @@ def _attempt_exploit(
                 elapsed_ms=elapsed_ms,
                 baseline_elapsed_ms=baseline_ms,
                 delay_ms=elapsed_ms - baseline_ms,
-            ))
+             response=resp))
+            events[-1]["payload"].update(verified_grade=2 if valid_delay else 0,
+                verification_reason="bounded_delay_signal" if valid_delay else "timing_not_verified")
             if valid_delay:
                 # A second transaction with the same validated candidate rules
                 # out a single slow response, including medium's single seed.
@@ -184,11 +186,12 @@ def _attempt_exploit(
                     elapsed_ms=repeated_elapsed * 1000,
                     baseline_elapsed_ms=control * 1000,
                     delay_ms=(repeated_elapsed - control) * 1000,
-                ))
+                 response=repeated))
                 if not repeat_ok:
                     continue
                 # Two bounded transactions of this candidate, each compared
                 # with successful harmless controls, establish repeatability.
+                events[-1]["payload"].update(verified_grade=3, verification_reason="verified_repeatable_bounded_delay")
                 score = 3
                 confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
                 break

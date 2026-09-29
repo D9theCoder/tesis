@@ -33,7 +33,7 @@ _OUT_OF_SCOPE_MARKERS = (
     "bash -",
     "powershell",
 )
-_CREDENTIAL_PREFIX = re.compile(r"^\s*[^:,;\s]+\s*:\s*[^,;\s]+")
+_CREDENTIAL_PREFIX = re.compile(r"^\s*([^:,;\s]+)\s*:\s*([^,;\s]+)")
 _SQL_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _BENCHMARK_CALL = re.compile(r"\bbenchmark\s*\(", re.IGNORECASE)
 _SLEEP_CALL = re.compile(r"\bsleep\s*\(\s*([^,)]*)", re.IGNORECASE)
@@ -330,6 +330,14 @@ def validate_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
             "payload_mode": str(state.get("payload_mode", "static_only")),
             "reason": "no_valid_generated_candidates",
         }]
+    scope_rejections = [row for row in rejected if row.get("reason") == "out_of_scope_target"]
+    if scope_rejections:
+        update["containment_events"] = [{**row, "kind": "payload",
+            "classification": "scope_violation", "origin": "payload_validator", "scope": "method",
+            "method": method, "visit_id": state.get("selected_visit_id")} for row in scope_rejections]
+    if update.get("fallback_events"):
+        update["fallback_events"] = [{**row, "origin": "payload_validator", "scope": "method",
+            "visit_id": state.get("selected_visit_id")} for row in update["fallback_events"]]
     if not ranked and state.get("target_method") == method:
         update.update({
             "next_agent": "scorer",
@@ -364,6 +372,23 @@ def payload_validator_node(state: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Partial state update with validation results."""
     update = validate_payload_candidates(state)
+    route = state.get("active_chain_route") or {}
+    if route.get("target_agent") == state.get("selected_method") == "bf_dictionary" and route.get("source") == "credentials_extracted":
+        bindings = []
+        for candidate in update.get("payload_candidates", {}).get("bf_dictionary", []):
+            if candidate.get("stage") not in {"exploit", "bypass"}:
+                continue
+            parsed = _CREDENTIAL_PREFIX.match(str(candidate.get("payload_or_logic", "")))
+            if not parsed:
+                continue
+            source = next((c for c in state.get("found_credentials", [])
+                if c.get("representation") == "plaintext" and c.get("source_evidence_id")
+                and (c.get("username"), c.get("password")) == parsed.groups()), None)
+            if source:
+                bindings.append({"candidate_id": candidate["candidate_id"],
+                    "source_evidence_id": source["source_evidence_id"],
+                    "source_visit_id": source["source_visit_id"], "representation": "plaintext"})
+        update["active_chain_route"] = {**route, "source_bindings": bindings}
     update["telemetry_events"] = [{
         "node": "payload_validator",
         "event": "payload.validation.completed",

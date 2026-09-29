@@ -3,6 +3,16 @@
 from __future__ import annotations
 
 from typing import Any
+from hashlib import sha256
+
+
+def _response_receipt(response: Any) -> dict:
+    if response is None:
+        return {}
+    body = str(getattr(response, "text", ""))
+    # ponytail: bounded excerpt; retain the full-body hash and add matched snippets if 8 KiB falls short.
+    return {"response_sha256": sha256(body.encode()).hexdigest(),
+        "response_excerpt": body[:8192], "response_truncated": len(body) > 8192}
 
 
 def probe_event(
@@ -14,6 +24,7 @@ def probe_event(
     elapsed_ms: float | None = None,
     baseline_elapsed_ms: float | None = None,
     delay_ms: float | None = None,
+    response: Any = None,
 ) -> dict[str, Any]:
     """Return a telemetry event for a PROBE stage HTTP request."""
     event_payload: dict[str, Any] = {
@@ -22,6 +33,9 @@ def probe_event(
         "endpoint": endpoint,
         "status_code": status_code,
         "signal_detected": signal_detected,
+        "verified_grade": 1 if signal_detected else 0,
+        "verification_reason": "probe_signal" if signal_detected else "probe_signal_absent",
+        **_response_receipt(response),
     }
     if elapsed_ms is not None:
         event_payload["elapsed_ms"] = float(elapsed_ms)
@@ -46,6 +60,7 @@ def exploit_event(
     elapsed_ms: float | None = None,
     baseline_elapsed_ms: float | None = None,
     delay_ms: float | None = None,
+    response: Any = None,
 ) -> dict[str, Any]:
     """Return a telemetry event for an EXPLOIT stage HTTP request."""
     event_payload: dict[str, Any] = {
@@ -54,6 +69,9 @@ def exploit_event(
         "endpoint": endpoint,
         "status_code": status_code,
         "success": success,
+        "verified_grade": 0,
+        "verification_reason": "no_verified_exploit_signal",
+        **_response_receipt(response),
     }
     if elapsed_ms is not None:
         event_payload["elapsed_ms"] = float(elapsed_ms)

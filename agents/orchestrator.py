@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.state import METHODS_BY_SURFACE
+from agents.state_utils import method_selection_update
 from llm.guardrail_monitor import is_guardrail_refusal, make_guardrail_event
 from llm.prompts.orchestrator_prompt import build_orchestrator_prompt
 from llm.provider import get_llm
@@ -17,6 +18,7 @@ from llm.runtime import (
     LLMOutputError,
     ORCHESTRATOR_SCHEMA_VERSION,
     current_call_context,
+    output_failure_kind,
 )
 
 logger = logging.getLogger(__name__)
@@ -204,7 +206,7 @@ def _run_evasion_pipeline(prompt: str, evasion_max_retries: int) -> tuple[str, b
     return prompt, False
 
 
-def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
+def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
     """Executes method selection for the LangGraph workflow.
 
     Reads:
@@ -529,6 +531,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         allowed_agents = set(selection_methods) | {"scorer"}
         next_agent = candidate if candidate in allowed_agents else fallback_agent
         used_fallback = not parse_ok or candidate != next_agent
+        failure_kind = output_failure_kind(performance or {}, text) if not parse_ok else None
         selected_method = next_agent if next_agent in surface_methods else None
         method_score = 3 if selected_method in viable_methods else (1 if selected_method in surface_methods else 0)
 
@@ -579,10 +582,14 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "invalid_json_events": ([{
                 "event": "orchestrator.invalid_json",
                 "provider": state.get("llm_provider", "gemini"),
-            }] if not parse_ok else []),
+            }] if failure_kind == "invalid_json" else []),
+            "output_failure_events": ([{
+                "event": "orchestrator.output_rejected", "failure_kind": failure_kind,
+                "performance": performance or {},
+            }] if failure_kind and failure_kind != "invalid_json" else []),
             "fallback_events": ([{
                 "event": "orchestrator.invalid_output_fallback",
-                "reason": "invalid_json" if not parse_ok else "disallowed_method",
+                "reason": failure_kind if not parse_ok else "disallowed_method",
                 "selected_method": selected_method,
             }] if used_fallback else []),
             "messages": [HumanMessage(content=prompt), AIMessage(content=text)],
@@ -627,3 +634,20 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "evasion_attempts": state.get("evasion_attempts", 0) + (retries_used if evasion_triggered else 0),
             "successful_evasions": state.get("successful_evasions", 0) + (1 if evasion_success else 0),
         }
+
+
+def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
+    """Attach selection and role-output context at the shared selection boundary."""
+    update = _orchestrator(state)
+    method = update.get("selected_method")
+    if method:
+        source = "forced" if state.get("target_method") else (
+            "deterministic_fallback" if update.get("fallback_events") or update.get("guardrail_activations") else "model_orchestrator")
+        update.update(method_selection_update(state, method, source, viable_methods=update.get("viable_methods", [])))
+    context_method = method or (state.get("verifier_decision") or {}).get("agent_id")
+    for field in ("invalid_json_events", "output_failure_events", "guardrail_activations", "fallback_events"):
+        update[field] = [{**event, "method": context_method,
+            "visit_id": update.get("selected_visit_id") or state.get("selected_visit_id"),
+            "origin": "orchestrator", "scope": "method" if context_method else "run"}
+            for event in update.get(field, [])]
+    return update

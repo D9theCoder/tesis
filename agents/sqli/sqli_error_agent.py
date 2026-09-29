@@ -83,9 +83,10 @@ def _probe_preconditions(
         tried.append(payload)
         try:
             resp = _request(session, security_level, payload)
-            events.append(probe_event(AGENT_ID, payload, resp.status_code, True))
+            events.append(probe_event(AGENT_ID, payload, resp.status_code, False, response=resp))
             result = verifier.contains_any(resp.text, _ERROR_SIGNALS)
             if resp.status_code == 200 and result.ok:
+                events[-1]["payload"].update(signal_detected=True, verified_grade=1, verification_reason="probe_signal")
                 observations[_PROBE_OBSERVATION_KEY] = True
                 return True, tried, observations, events
         except Exception as exc:
@@ -118,11 +119,12 @@ def _attempt_exploit(
         tried.append(payload)
         try:
             resp = _request(session, security_level, payload)
-            events.append(exploit_event(AGENT_ID, payload, resp.status_code, True))
+            events.append(exploit_event(AGENT_ID, payload, resp.status_code, True, response=resp))
             if resp.status_code == 200:
                 # Keep truncated XPath data, but reject bare tildes and prose.
                 result = verifier.regex_match(resp.text, _EXPLOIT_PATTERNS)
                 if result.ok:
+                    events[-1]["payload"].update(verified_grade=3, verification_reason="verified_error_extraction")
                     score = max(score, 3)
                     confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
                     break

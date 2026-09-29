@@ -220,7 +220,7 @@ def _probe_preconditions(
                     resp.status_code,
                     not response_rate_limited and response_accepted,
                     elapsed_ms=elapsed_seconds * 1000,
-                ))
+                 response=resp))
         except Exception as exc:
             logger.warning("[%s] PROBE request failed: %s", AGENT_ID, exc)
             events.append(probe_event(AGENT_ID, cred, None, False))
@@ -262,6 +262,7 @@ def _parse_credential(payload: str) -> tuple[str, str]:
 def _attempt_exploit(
     session: DVWASession, payloads: list[str], already_tried: set[str],
     security_level: str, user_token: str | None = None,
+    source_credentials: dict[str, dict] | None = None,
 ) -> tuple[int, list[str], list[str], list[dict], list[dict[str, str]], bool]:
     """Try credential pairs. Returns (score, tried, confirmed, events, found_credentials)."""
     tried: list[str] = []
@@ -279,6 +280,9 @@ def _attempt_exploit(
             continue
         tried.append(payload)
         username, password = _parse_credential(payload)
+        source_credential = (source_credentials or {}).get(payload)
+        if source_credential:
+            username, password = source_credential["username"], source_credential["password"]
         if not username:
             continue
 
@@ -302,7 +306,11 @@ def _attempt_exploit(
                     payload,
                     resp.status_code,
                     semantic_success,
-                ))
+                 response=resp))
+                events[-1]["payload"].update(verified_grade=3 if semantic_success else 0,
+                    verification_reason="verified_login" if semantic_success else "login_not_confirmed")
+                if source_credential:
+                    events[-1]["payload"]["consumed_source_evidence_id"] = source_credential["source_evidence_id"]
             resp = responses[-1]
 
             # Check for CAPTCHA (out of scope)
@@ -394,6 +402,20 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
 
         # Stage 2: EXPLOIT
         all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit")
+        route = state.get("active_chain_route") or {}
+        source_credentials = {}
+        if route.get("source") == "credentials_extracted" and route.get("target_agent") == AGENT_ID:
+            # The validator bound only recovered plaintext to a validated pair.
+            # Candidate IDs survive sanitized frozen-input replay without a secret.
+            for payload in all_exploit:
+                pair = _parse_credential(payload)
+                candidate = next((c for c in state.get("payload_candidates", {}).get(AGENT_ID, [])
+                    if c.get("payload_or_logic") == payload), None)
+                binding = next((b for b in route.get("source_bindings", [])
+                    if candidate and b.get("candidate_id") == candidate.get("candidate_id")), None)
+                if binding:
+                    source_credentials[payload] = {"username": pair[0], "password": pair[1],
+                        "source_evidence_id": binding["source_evidence_id"]}
 
         exploit_score, tried, confirmed, exploit_events, creds, captcha_boundary = _attempt_exploit(
             session,
@@ -401,6 +423,7 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
             already_tried | set(all_tried),
             security_level,
             user_token=user_token,
+            source_credentials=source_credentials,
         )
         if captcha_boundary:
             all_tried.extend(tried)

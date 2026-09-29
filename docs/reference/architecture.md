@@ -192,6 +192,34 @@ with `manual_scoring_scope: fresh_replay_execution`. Historical scores and
 evidence remain in the reduced final state and linked source artifact; a rejected
 replay queue produces no manual rows. The export helper is included in code hashes.
 
+## Scoring evidence and route completion
+
+Rubric `scoring.v2` uses the existing scorer and six-dimensional formula. Common
+selection grading records forced, model/orchestrator, deterministic fallback and
+AKG route origins before execution, with destination-surface viability and a
+visit ID. Agents emit candidate-specific verified grades at their existing
+verification boundaries. Shared updates append verifier and scoring decisions,
+preserving winning candidate/exploitation evidence and later negative decisions.
+The post-method router reads merged outcomes and records route lifecycle and
+dependency receipts. Actual source consumption plus downstream confirmation
+earns destination chain credit; hashes, unrelated static logins, and visibility
+without a permission oracle retain zero.
+
+Output events carry producer and method/visit scope. Discarded recon navigation
+and external page references remain observable without an output penalty.
+Payload/request/redirect violations
+stay blocked; the HTTP wrapper captures violations even if an agent handles the
+exception. Output aggregation uses minimum within a method, including run-wide
+HTTP penalties. Composite entries are recomputed from stored components.
+`state.v2` identifies the changed reducer/checkpoint contract.
+
+Terminal exports retain sanitized chain, credential, attempt and payload inputs,
+scoring decisions, verifier history and response/timing evidence. Route metadata
+uses telemetry `payload`. Manual rows point to the receipt and verifier earning
+a candidate maximum, with later decisions separate. Fresh diagnostic replay rows
+remain limited to fresh evidence. `evaluation.scoring_repair` links pure repairs
+to source hashes and explicitly retains missing legacy terminal inputs as gaps.
+
 Error SQLi recognizes the complete DVWA `<pre>` duplicate-entry envelope for
 `dvwa0` or `dvwa1` and `group_key`, alongside XPath and structured credential
 leaks. Generic duplicate values, other keys, prose, and failed HTTP responses

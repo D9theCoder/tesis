@@ -72,8 +72,26 @@ def manual_scoring_rows(artifact: dict[str, Any]) -> list[dict[str, Any]]:
         # Replay response evidence describes the fresh attempt; state also holds history.
         if artifact.get("kind") == "diagnostic_replay" and not links["response_evidence_ref"]:
             continue
-        verifier = verifiers.get(method) if links["response_evidence_ref"] else None
         score = final_state.get("payload_scores", {}).get(candidate_id)
+        decisions = artifact.get("scoring_decisions", final_state.get("scoring_decisions", []))
+        candidate_decisions = [d for d in decisions if d.get("dimension") == "Spayload"
+            and d.get("candidate_id") == candidate_id and d.get("method") == method]
+        earning = next((d for d in candidate_decisions if d.get("score") == score), None)
+        if artifact.get("kind") == "diagnostic_replay" and candidate_decisions:
+            earning = max(candidate_decisions, key=lambda d: d['score'])
+            score = earning['score']
+        history = final_state.get("verifier_history", [])
+        verifier = next((d for d in history if earning and d.get("verifier_id") == earning.get("verifier_id")), None)
+        if earning and not verifier:
+            legacy_ref = next((ref for ref in earning.get("evidence_refs", [])
+                if ref.startswith("source:#/execution_log/") and ref.endswith("/data/latest_verifier")), None)
+            if legacy_ref:
+                verifier = artifact.get("execution_log", [])[int(legacy_ref.split('/')[2])].get("data", {}).get("latest_verifier")
+        if not decisions and links["response_evidence_ref"]:
+            verifier = verifiers.get(method)
+        later = [d for d in history if earning and d.get("agent_id") == method
+                 and d.get("visit_id") != earning.get("visit_id")
+                 and history.index(d) > next((i for i, v in enumerate(history) if v is verifier), len(history))]
         rows.append({
             "run_id": artifact.get("run_id"),
             "provider": config.get("provider"),
@@ -94,7 +112,12 @@ def manual_scoring_rows(artifact: dict[str, Any]) -> list[dict[str, Any]]:
             "validator_result": validation,
             **links,
             "verifier_decision": verifier,
+            "scoring_decision": earning,
+            "score_evidence_status": "linked_decision" if earning else ("legacy_unresolved" if score is not None else "unscored"),
+            "scoring_decision_ref": f"#/scoring_decisions/{decisions.index(earning)}" if earning and artifact.get("scoring_decisions") is not None
+                else (f"#/final_state/scoring_decisions/{decisions.index(earning)}" if earning else None),
+            "later_verifier_decisions": later,
             "score_0_4": score,
-            "scoring_reason": "",
+            "scoring_reason": earning.get("reason", "") if earning else "",
         })
     return rows

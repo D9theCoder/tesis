@@ -136,6 +136,8 @@ class TestUsedFallbackAccuracy:
             "event": "orchestrator.llm_failure",
             "error_type": "RuntimeError",
             "next_agent": "sqli_union",
+            "method": "sqli_union", "visit_id": "sqli_union:visit:1",
+            "origin": "orchestrator", "scope": "method",
         }]
 
 class TestChainingRouterExhaustion:

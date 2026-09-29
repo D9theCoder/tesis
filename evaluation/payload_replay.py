@@ -16,6 +16,8 @@ from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.reporter import write_json_report
 from foundation.payload_validator import validate_payload_candidates
 from llm.runtime import LLMRuntime
+from core.graph_builder import _serialized_http_handler
+from tesis.runtime_events import redact_secrets
 
 
 def _apply_state_update(state: dict, updates: dict) -> dict:
@@ -104,7 +106,7 @@ def replay_method_inputs(
                 state['payload_validation_results'] = {
                     **saved_results, method: [*history, *[receipts[c['candidate_id']] for c in queue]],
                 }
-                updates = RUNTIME_AGENT_HANDLERS[method](state)
+                updates = _serialized_http_handler(RUNTIME_AGENT_HANDLERS[method])(state)
             if context.records:
                 raise RuntimeError('Method replay unexpectedly called a provider')
     finally:
@@ -127,8 +129,9 @@ def replay_method_inputs(
                 Path('core/state.py'), Path(__file__),
             }
         },
-        'validation_rejections': rejections, 'final_state': final,
-        'response_evidence': updates.get('response_evidence', []),
+        'validation_rejections': rejections, 'final_state': redact_secrets(final),
+        'scoring_decisions': updates.get('scoring_decisions', []),
+        'response_evidence': redact_secrets(updates.get('response_evidence', [])),
         'timing_evidence': updates.get('timing_evidence', []),
         'verifier_decision': updates.get('verifier_decision'),
         'confirmed_vulns': final.get('confirmed_vulns', []),

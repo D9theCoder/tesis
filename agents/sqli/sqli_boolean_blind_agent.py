@@ -66,7 +66,7 @@ def _probe_preconditions(
         try:
             resp = _request(session, security_level, payload)
             usable = usable_blind_response(resp, allow_missing="1=2" in payload)
-            events.append(probe_event(AGENT_ID, payload, resp.status_code, usable))
+            events.append(probe_event(AGENT_ID, payload, resp.status_code, False, response=resp))
             if not usable:
                 continue
             lower_text = resp.text.lower()
@@ -82,6 +82,9 @@ def _probe_preconditions(
     if truthy_resp is not None and falsy_resp is not None:
         if (_TRUTHY_SIGNAL in truthy_resp and _FALSY_SIGNAL not in truthy_resp
                 and _FALSY_SIGNAL in falsy_resp and _TRUTHY_SIGNAL not in falsy_resp):
+            for event in events:
+                if event["payload"]["status_code"] is not None:
+                    event["payload"].update(signal_detected=True, verified_grade=1, verification_reason="verified_boolean_probe_pair")
             observations[_PROBE_OBSERVATION_KEY] = True
             return True, tried, observations, events
 
@@ -104,6 +107,7 @@ def _attempt_exploit(
     confirmed: list[str] = []
     score = 0
     repeatable_conditions = 0
+    repeatable_payloads: set[str] = set()
     required_confirms = 1 if security_level == "medium" else 2
 
     def branch(response):
@@ -123,7 +127,7 @@ def _attempt_exploit(
         try:
             resp = _request(session, security_level, payload)
             observed = branch(resp)
-            event = exploit_event(AGENT_ID, payload, resp.status_code, observed is True)
+            event = exploit_event(AGENT_ID, payload, resp.status_code, observed is True, response=resp)
             events.append(event)
             if observed is None:
                 continue
@@ -141,20 +145,27 @@ def _attempt_exploit(
                     events.append(probe_event(AGENT_ID, control_payload, None, False))
                     continue
                 evaluates = branch(control) is True
-                events.append(probe_event(AGENT_ID, control_payload, control.status_code, evaluates))
+                events.append(probe_event(AGENT_ID, control_payload, control.status_code, evaluates, response=control))
                 if not evaluates:
                     continue
+                event["payload"]["control_payload"] = control_payload
                 event['payload']['success'] = True
                 event['status'] = 'ok'
+            event["payload"].update(verified_grade=2, verification_reason="evaluated_boolean_branch")
             score = max(score, 2)
             # An evaluated branch carries information only if it repeats.
             repeated = _request(session, security_level, payload)
             consistent = branch(repeated) is observed
-            events.append(exploit_event(AGENT_ID, payload, repeated.status_code, consistent))
+            events.append(exploit_event(AGENT_ID, payload, repeated.status_code, consistent, response=repeated))
             if consistent:
+                repeatable_payloads.add(payload)
+                events[-1]["payload"].update(verified_grade=2, verification_reason="repeatable_boolean_branch")
                 repeatable_conditions += 1
                 if repeatable_conditions >= required_confirms:
                     score = 3
+                    for verified in events:
+                        if verified["event"] == "agent.exploit.sent" and verified["payload"]["payload"] in repeatable_payloads and verified["payload"].get("verified_grade") == 2:
+                            verified["payload"].update(verified_grade=3, verification_reason="verified_repeatable_boolean_extraction")
                     confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
                     break
         except Exception as exc:

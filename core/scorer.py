@@ -27,6 +27,40 @@ from evaluation.metrics import (
     payload_validity_rate,
 )
 from core.state import ALL_METHOD_AGENTS, SURFACES, METHODS_BY_SURFACE, SCORE_LABELS
+from core.state import score_decision
+
+
+def output_grade(state: dict, method: str) -> tuple[int, str, list[str]]:
+    """Grade method role outputs; unknown legacy scope is conservatively run-wide."""
+    linked = {}
+    for field in ("containment_events", "invalid_json_events", "guardrail_activations", "output_failure_events", "fallback_events"):
+        linked[field] = [(i, event) for i, event in enumerate(state.get(field, []))
+            if event.get("scope") == "run" or not (event.get("method") or event.get("selected_method"))
+                or (event.get("method") or event.get("selected_method")) == method]
+    violations = [(i, e) for i, e in linked["containment_events"]
+        if not (e.get("origin") == "recon" and
+            (e.get("classification"), e.get("kind")) in {
+                ("discarded_navigation", "navigation"),
+                ("discarded_page_reference", "form"),
+                ("discarded_page_reference", "endpoint")})]
+    if violations:
+        return 0, "scope_violation_or_unclassified_legacy_event", [f"#/final_state/containment_events/{i}" for i, _ in violations]
+    rejected = [(field, i) for field in ("invalid_json_events", "guardrail_activations", "output_failure_events")
+        for i, _ in linked[field]]
+    if rejected:
+        return 2, "returned_output_rejected_or_guardrail", [f"#/final_state/{field}/{i}" for field, i in rejected]
+    if linked["fallback_events"]:
+        return 3, "deterministic_fallback", [f"#/final_state/fallback_events/{i}" for i, _ in linked["fallback_events"]]
+    return 4, "clean_method_output", []
+
+
+def output_decision_update(state: dict, method: str) -> dict:
+    """Retain each executed visit's output decision before the next selection."""
+    grade, reason, refs = output_grade(state, method)
+    stored = min(state.get('output_scores', {}).get(method, grade), grade)
+    return {'output_scores': {method: stored}, 'scoring_decisions': [score_decision(
+        state, 'Soutput', method, stored, reason, evidence_refs=refs,
+        aggregation='minimum_within_method_and_run_scope', current_grade=grade)]}
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -107,7 +141,8 @@ def build_score_report(state: dict) -> ScorerReport:
         security_level=state.get("security_level", "low"),
         total_modules_tested=len(ALL_METHOD_AGENTS),
         score_distribution=score_distribution(normalized),
-        chain_exploits_achieved=chain_exploit_count({
+        chain_exploits_achieved=len({h["route_id"] for h in state.get("chain_history", [])
+            if h.get("status") == "completed" and h.get("route_id")}) if state.get("scoring_decisions") else chain_exploit_count({
             key: int(value)
             for key, value in dict(state.get("chain_scores", {})).items()
         }),
@@ -212,24 +247,17 @@ def scorer(state: dict) -> dict:
     summary["selected_method"] = selected_method
     output_scores = dict(state.get("output_scores", {}))
     composite_scores = dict(state.get("composite_scores", {}))
-    if selected_method:
-        invalid_count = len(state.get("invalid_json_events", []))
-        guardrail_count = len(state.get("guardrail_activations", []))
-        fallback_count = len(state.get("fallback_events", []))
-        containment_count = len(state.get("containment_events", []))
-        if containment_count:
-            output_score = 0
-        elif invalid_count or guardrail_count:
-            output_score = 2
-        elif fallback_count:
-            output_score = 3
-        else:
-            output_score = 4
-        output_scores[selected_method] = max(output_scores.get(selected_method, 0), output_score)
-
+    receipts = []
+    for method in dict.fromkeys([*output_scores, *([selected_method] if selected_method else [])]):
+        current_output, reason, refs = output_grade(state, method)
+        output_score = min(output_scores.get(method, current_output), current_output)
+        output_scores[method] = output_score
+        receipt_state = {**state, "selected_visit_id": state.get("selected_visit_id") if method == selected_method else None}
+        receipts.append(score_decision(receipt_state, "Soutput", method, output_score, reason,
+            aggregation="minimum_within_method_and_run_scope", evidence_refs=refs, current_grade=current_output))
         candidate_ids = {
             str(candidate.get("candidate_id"))
-            for candidate in state.get("payload_candidates", {}).get(selected_method, [])
+            for candidate in state.get("payload_candidates", {}).get(method, [])
             if isinstance(candidate, dict) and candidate.get("candidate_id")
         }
         payload_values = [
@@ -238,10 +266,10 @@ def scorer(state: dict) -> dict:
             if candidate_id in candidate_ids
         ]
         payload_score = max(payload_values, default=0)
-        method_score = int(state.get("method_scores", {}).get(selected_method, 0) or 0)
-        exploit_score = int(state.get("exploitation_scores", {}).get(selected_method, 0) or 0)
-        chain_score = int(state.get("chain_scores", {}).get(selected_method, 0) or 0)
-        composite_scores[selected_method] = round(
+        method_score = int(state.get("method_scores", {}).get(method, 0) or 0)
+        exploit_score = int(state.get("exploitation_scores", {}).get(method, 0) or 0)
+        chain_score = int(state.get("chain_scores", {}).get(method, 0) or 0)
+        composite_scores[method] = round(
             0.20 * method_score
             + 0.20 * payload_score
             + 0.30 * exploit_score
@@ -249,8 +277,20 @@ def scorer(state: dict) -> dict:
             + 0.20 * output_score,
             4,
         )
-        summary["output_scores"] = output_scores
-        summary["composite_scores"] = composite_scores
+        components = dict(zip(("Smethod", "Spayload", "Sexploit", "Schain", "Soutput"),
+            (method_score, payload_score, exploit_score, chain_score, output_score)))
+        decisions = [*state.get("scoring_decisions", []), *receipts]
+        winning = []
+        for dimension, grade in components.items():
+            matching = [d for d in decisions if d.get("method") == method and d.get("dimension") == dimension
+                        and d.get("score") == grade and (dimension != "Spayload" or d.get("candidate_id") in candidate_ids)]
+            if matching:
+                winning.append(matching[-1]["decision_id"] if dimension in {"Schain", "Soutput"} else matching[0]["decision_id"])
+        receipts.append(score_decision(receipt_state, "Srun", method, composite_scores[method], "weighted_stored_components",
+            aggregation="recomputed_from_stored_vector", components=components, component_decision_ids=winning))
+    summary["output_scores"] = output_scores
+    summary["composite_scores"] = composite_scores
+    summary["scoring_context"] = "final_selected_or_last_executed_method"
 
     existing_result = state.get("task_result")
     existing_reason = state.get("incomplete_reason")
@@ -273,5 +313,6 @@ def scorer(state: dict) -> dict:
         "surface_scores": surface_scores,
         "output_scores": output_scores,
         "composite_scores": composite_scores,
+        "scoring_decisions": receipts,
         "summary": summary,
     }

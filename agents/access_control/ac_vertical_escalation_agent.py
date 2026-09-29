@@ -59,10 +59,11 @@ def _probe_preconditions(
         try:
             test_id = payload.strip()
             resp = session.get(MODULE_PATH, params={"userId": test_id, "Submit": "Submit"})
-            events.append(probe_event(AGENT_ID, f"userId={test_id}", resp.status_code, True))
+            events.append(probe_event(AGENT_ID, f"userId={test_id}", resp.status_code, False, response=resp))
             if resp.status_code == 200:
                 result = verifier.contains_any(resp.text, _ADMIN_SIGNALS)
                 if result.ok:
+                    events[-1]["payload"].update(signal_detected=True, verified_grade=1, verification_reason="verified_probe_precondition")
                     observations[_PROBE_OBSERVATION_KEY] = True
                     return True, tried, observations, events
         except Exception as exc:
@@ -92,10 +93,11 @@ def _attempt_exploit(
         try:
             # Attempt to access admin user data
             resp = session.get(MODULE_PATH, params={"userId": payload, "Submit": "Submit"})
-            events.append(exploit_event(AGENT_ID, f"userId={payload}", resp.status_code, True))
+            events.append(exploit_event(AGENT_ID, f"userId={payload}", resp.status_code, True, response=resp))
             if resp.status_code == 200:
                 result = verifier.contains_any(resp.text, _EXPLOIT_SIGNALS)
                 if result.ok:
+                    events[-1]["payload"].update(verified_grade=2, verification_reason="visibility_without_permission_oracle")
                     score = max(score, 3)
                     confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
                     break

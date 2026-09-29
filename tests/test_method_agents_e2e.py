@@ -303,7 +303,9 @@ def test_truncated_error_envelope(monkeypatch, level):
 
 def test_runtime_schema_rejection_stays_rejected(monkeypatch):
     artifact, _ = run_control(monkeypatch, 'sqli_union', 'low', 'schema_rejected', automatic=True)
-    assert artifact['invalid_json_events']
+    assert not artifact['invalid_json_events']
+    assert artifact['final_state']['output_failure_events'][0]['failure_kind'] == 'schema_violation'
+    assert artifact['output_score'] == 2
     assert any(e['event'] == 'orchestrator.invalid_output_fallback' for e in artifact['fallback_events'])
     decisions = [e for e in artifact['execution_log'] if e['event_type'] == 'orchestrator.decision']
     assert all(e['data']['used_fallback'] is True for e in decisions)
@@ -411,6 +413,8 @@ def test_generated_external_target_never_reaches_transport(monkeypatch):
     assert any(r.get('reason') == 'out_of_scope_target' for r in artifact['payload_validation_results']['ac_force_browse'])
     assert all('external.invalid' not in r['url'] for r in fixture.requests)
     assert not artifact['confirmed_vulns']
+    assert artifact['output_score'] == 0
+    assert any(e['origin'] == 'payload_validator' for e in artifact['containment_events'])
 
 
 @pytest.mark.parametrize('method', ['bf_dictionary', 'bf_spray'])
@@ -541,6 +545,8 @@ def test_boolean_generated_false_requires_expression_control(monkeypatch, level,
     assert exploits and all(e['success'] is valid for e in exploits)
     controls = [e for e in replay['response_evidence'] if e['stage'] == 'probe' and 'NOT (' in e['payload']]
     assert len(controls) == len(generated) and all(e['signal_detected'] is valid for e in controls)
+    grades = replay['final_state']['payload_scores']
+    assert all(grades[c['candidate_id']] == (3 if valid else 0) for c in generated)
 
 
 @pytest.mark.parametrize('level', ['low', 'medium', 'high'])

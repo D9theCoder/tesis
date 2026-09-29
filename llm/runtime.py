@@ -27,6 +27,23 @@ ORCHESTRATOR_SCHEMA_VERSION = "orchestrator.v2"
 PAYLOAD_SCHEMA_VERSION = "payload-variants.v2"
 
 
+def output_failure_kind(performance: dict, text: str = "") -> str:
+    """Classify returned-output failures without manufacturing JSON syntax errors."""
+    if performance.get("parse_status") == "incomplete":
+        return "incomplete_response"
+    if performance.get("error_type") == "JSONDecodeError":
+        return "invalid_json"
+    if "native" in str(performance.get("structured_output_mode", "")) and "did not return an object" in str(performance.get("error_message", "")):
+        return "response_mode_mismatch"
+    if performance:
+        return "schema_violation"
+    try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        return "invalid_json"
+    return "schema_violation"
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 

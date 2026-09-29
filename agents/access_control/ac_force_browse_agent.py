@@ -69,10 +69,11 @@ def _probe_preconditions(
         tried.append(payload)
         try:
             resp = session.get(path)
-            events.append(probe_event(AGENT_ID, path, resp.status_code, resp.status_code == 200, endpoint=path))
+            events.append(probe_event(AGENT_ID, path, resp.status_code, False, endpoint=path, response=resp))
             if resp.status_code == 200:
                 result = verifier.contains_any(resp.text, _ACCESSIBLE_SIGNALS)
                 if result.ok:
+                    events[-1]["payload"].update(signal_detected=True, verified_grade=1, verification_reason="verified_probe_precondition")
                     observations[_PROBE_OBSERVATION_KEY] = True
                     return True, tried, observations, events
         except Exception as exc:
@@ -109,10 +110,11 @@ def _attempt_exploit(
         tried.append(payload)
         try:
             resp = session.get(path)
-            events.append(exploit_event(AGENT_ID, path, resp.status_code, resp.status_code == 200, endpoint=path))
+            events.append(exploit_event(AGENT_ID, path, resp.status_code, resp.status_code == 200, endpoint=path, response=resp))
             if resp.status_code == 200:
                 result = verifier.contains_any(resp.text, _signals_for_path(path))
                 if result.ok:
+                    events[-1]["payload"].update(verified_grade=2, verification_reason="visibility_without_permission_oracle")
                     score = max(score, 3)
                     confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
                     break

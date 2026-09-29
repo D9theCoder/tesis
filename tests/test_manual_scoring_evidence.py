@@ -190,7 +190,7 @@ def test_access_control_agent_exports_only_actual_candidate_attempts(monkeypatch
         row = rows[candidate_id]
         assert row["response_evidence_ref"] and row["execution_log_ref"]
         assert row["verifier_decision"]["decision"] == "unverified"
-        assert row["score_0_4"] == 2
+        assert row["score_0_4"] == (1 if candidate_id == "probe" else 2)
         for field in ["response_evidence", "execution_log"]:
             for pointer in row[f"{field}_ref"]:
                 record = artifact[field][int(pointer.rsplit("/", 1)[1])]

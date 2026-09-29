@@ -18,6 +18,7 @@ from llm.runtime import (
     LLMOutputError,
     PAYLOAD_SCHEMA_VERSION,
     current_call_context,
+    output_failure_kind,
 )
 
 logger = logging.getLogger(__name__)
@@ -276,8 +277,7 @@ def generate_llm_variants(
                 context="payload_generation",
                 response=text,
             )]
-        runtime_status = str(exc.performance.get("parse_status") or "invalid")
-        parse_status = "incomplete_response" if runtime_status == "incomplete" else "invalid_json"
+        parse_status = output_failure_kind(exc.performance, text)
         prompt_event["parse_status"] = parse_status
         prompt_event["fallback_reason"] = parse_status
         return [], prompt_event, []
@@ -336,6 +336,7 @@ def build_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
     prompt_event: dict[str, Any] | None = None
     guardrails: list[dict] = []
     invalid_json_events: list[dict] = []
+    output_failure_events: list[dict] = []
     fallback_events: list[dict] = []
     if mode in {"hybrid", "llm_mutation_only"}:
         generated, prompt_event, guardrails = generate_llm_variants(
@@ -360,6 +361,9 @@ def build_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
                 "method": method,
                 "provider": state.get("llm_provider", "gemini"),
             })
+        elif fallback_reason in {"invalid_schema", "schema_violation", "response_mode_mismatch", "incomplete_response"}:
+            output_failure_events.append({"event": "payload_generation.output_rejected",
+                "method": method, "failure_kind": fallback_reason, "performance": prompt_event.get("performance", {})})
 
     # `llm_mutation_only` is a preferred generation mode, not permission to
     # execute an unvalidated empty workflow.  A provider failure, refusal, or
@@ -377,6 +381,7 @@ def build_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
         "payload_guardrail_activations": guardrails,
         "guardrail_activations": guardrails,
         "invalid_json_events": invalid_json_events,
+        "output_failure_events": output_failure_events,
         "fallback_events": fallback_events,
         "payload_provenance": {
             str(candidate["candidate_id"]): {
@@ -412,4 +417,9 @@ def payload_candidate_builder_node(state: dict[str, Any]) -> dict[str, Any]:
 
     Returns:
         Partial state update with candidate and provenance fields."""
-    return build_payload_candidates(state)
+    update = build_payload_candidates(state)
+    for field in ("invalid_json_events", "output_failure_events", "guardrail_activations", "payload_guardrail_activations", "fallback_events"):
+        update[field] = [{**event, "method": state.get("selected_method"),
+            "visit_id": state.get("selected_visit_id"), "origin": "payload_generator", "scope": "method"}
+            for event in update.get(field, [])]
+    return update

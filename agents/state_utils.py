@@ -7,6 +7,35 @@ from urllib.parse import urljoin, urlparse
 
 from foundation.http_client import RequestTimeoutError, TransportError
 from foundation.payload_library import PayloadLibrary
+from core.state import METHODS_BY_SURFACE, score_decision
+from tesis.runtime_events import redact_secrets
+
+
+def method_selection_update(state: dict, method: str, source: str, *, preconditions: list[str] | None = None,
+                            viable_methods: list[str] | None = None) -> dict:
+    """Grade every selection at its boundary, before execution changes viability."""
+    from core.knowledge_graph import AttackKnowledgeGraph
+    kg = AttackKnowledgeGraph()
+    surface = next(s for s, methods in METHODS_BY_SURFACE.items() if method in methods)
+    viable = kg.get_viable_methods(surface, state.get("observations", {})) if viable_methods is None else viable_methods
+    viable = [m for m in viable if m in METHODS_BY_SURFACE[surface]]
+    known = set(state.get("confirmed_vulns", [])) | set(state.get("achieved_outcomes", []))
+    # Surface aliases are used for prerequisites only, never vulnerability confirmations.
+    for s, methods in METHODS_BY_SURFACE.items():
+        if any(f"{m}_confirmed" in known for m in methods):
+            known.add(f"{s}_confirmed")
+    requirements = list(preconditions or [])
+    is_viable = method in viable and all(p in known for p in requirements)
+    grade = 3 if is_viable else 1
+    ordinal = 1 + sum(d.get("dimension") == "Smethod" for d in state.get("scoring_decisions", []))
+    visit_id = f"{method}:visit:{ordinal}"
+    return {"selected_method": method, "selected_visit_id": visit_id,
+        "viable_methods": viable, "method_scores": {method: grade},
+        "scoring_decisions": [score_decision(state, "Smethod", method, grade,
+            "viable_at_selection" if is_viable else "prerequisites_not_proved_at_selection",
+            visit_id=visit_id, selection_source=source, surface=surface, viable=is_viable,
+            preconditions=requirements, observations=dict(state.get("observations", {})),
+            known_nodes=sorted(known))]}
 
 # Single source of truth: agent_id → DVWA endpoint path fragment.
 # Keep in sync with ALL_METHOD_AGENTS and foundation/payload_library endpoints.
@@ -260,26 +289,13 @@ def candidate_payloads_for_stage(
 
 def payload_score_updates(
     state: dict[str, Any],
-    module_name: str,
-    score: int,
-    tried_payloads: list[str] | None = None,
+    decisions: list[dict],
 ) -> dict[str, int]:
-    """Assign payload-quality scores only to candidates that were actually tried.
-
-    ``make_update`` receives the method invocation's payloads before the
-    LangGraph reducer merges them into shared state. Accept that current
-    invocation explicitly so the first method call is scored in artifacts.
-    """
+    """Retain candidate maxima only from that candidate's verifier receipts."""
     updates = dict(state.get("payload_scores", {}))
-    attempted = state.get("tried_payloads", {}).get(module_name, []) if tried_payloads is None else tried_payloads
-    tried_payloads = {str(payload) for payload in attempted if payload is not None}
-    for candidate in validated_payload_candidates(state, module_name):
-        if not isinstance(candidate, dict):
-            continue
-        candidate_id = candidate.get("candidate_id")
-        payload_value = candidate.get("payload_or_logic")
-        if candidate_id and payload_value is not None and str(payload_value) in tried_payloads:
-            updates[str(candidate_id)] = max(int(updates.get(str(candidate_id), 0)), int(score))
+    for decision in decisions:
+        candidate_id = decision["candidate_id"]
+        updates[candidate_id] = max(updates.get(candidate_id, 0), decision["score"])
     return updates
 
 
@@ -307,6 +323,7 @@ def _materialize_request_evidence(
     candidates = validated_payload_candidates(state, module_name)
     attempted = set(tried_payloads)
     assigned: set[tuple[str, str]] = set()
+    visit_id = state.get("selected_visit_id") or f"{module_name}:legacy:{state.get('iteration_count', 0)}"
     for event in telemetry_events:
         if not isinstance(event, dict):
             normalized_events.append(event)
@@ -321,6 +338,10 @@ def _materialize_request_evidence(
             continue
 
         payload_copy = dict(payload)
+        if payload_copy.get("credentials") and "response_excerpt" in payload_copy:
+            payload_copy["response_excerpt"] = redact_secrets(payload_copy["response_excerpt"],
+                [c.get("password") for c in payload_copy["credentials"]])
+        payload_copy["visit_id"] = visit_id
         stage = "probe" if event_copy["event"] == "agent.probe.sent" else "exploit"
         matches = [
             candidate for candidate in candidates
@@ -349,7 +370,13 @@ def _materialize_request_evidence(
             "endpoint": payload_copy["endpoint"],
             "payload": payload_copy.get("payload"),
             "status_code": payload_copy.get("status_code"),
+            "visit_id": visit_id,
+            "evidence_id": f"response:{len(state.get('response_evidence', [])) + len(response_evidence)}",
         }
+        for key in ("verified_grade", "verification_reason", "control_payload", "credentials", "consumed_source_evidence_id",
+                    "response_sha256", "response_excerpt", "response_truncated"):
+            if key in payload_copy:
+                evidence[key] = payload_copy[key]
         if payload_copy.get("candidate_id"):
             evidence["candidate_id"] = payload_copy["candidate_id"]
         if "signal_detected" in payload_copy:
@@ -425,13 +452,7 @@ def make_update(
     update: dict[str, Any] = {
         "scores": merge_scores(state, module_name, score),
         "exploitation_scores": merge_score_map(state, "exploitation_scores", module_name, min(score, 3)),
-        "chain_scores": merge_score_map(state, "chain_scores", module_name, 4 if score >= 4 else 0),
-        "payload_scores": payload_score_updates(
-            state,
-            module_name,
-            min(score, 4),
-            tried_payloads=tried_payloads,
-        ),
+        "chain_scores": {module_name: 0},
         "tried_payloads": merge_tried_payloads(state, module_name, tried_payloads),
         "iteration_count": state.get("iteration_count", 0) + 1,
         "next_agent": next_agent,
@@ -497,9 +518,55 @@ def make_update(
         "score": score,
         "evidence_count": len(update.get("response_evidence", [])),
         "source": "method_agent_evidence",
+        "visit_id": state.get("selected_visit_id") or f"{module_name}:legacy:{state.get('iteration_count', 0)}",
+        "evidence_refs": [f"#/final_state/response_evidence/{len(state.get('response_evidence', [])) + i}"
+                          for i in range(len(update.get("response_evidence", [])))],
+        "achieved_outcomes": list(achieved_outcomes or []),
     }
     if authorization_unverified:
         update["verifier_decision"]["reason"] = "missing_independent_authorization_control"
+
+    decision = update["verifier_decision"]
+    decision["verifier_id"] = f"verifier:{decision['visit_id']}:{len(state.get('verifier_history', []))}"
+    update["verifier_history"] = [decision]
+    payload_decisions = []
+    evidence = update.get("response_evidence", [])
+    for candidate in validated_payload_candidates(state, module_name):
+        candidate_id = candidate.get("candidate_id")
+        linked = [(i, row) for i, row in enumerate(evidence) if row.get("candidate_id") == candidate_id]
+        if not linked:
+            continue
+        grade = max((row.get("verified_grade", 0) for _, row in linked), default=0)
+        # Old/direct telemetry without a verifier grade proves execution only.
+        grade = min(int(grade), 2 if module_name.startswith("ac_") else 3)
+        best = next((row for _, row in linked if row.get("verified_grade", 0) == grade), linked[-1][1])
+        refs = [f"#/final_state/response_evidence/{len(state.get('response_evidence', [])) + i}" for i, _ in linked]
+        # Complementary Boolean controls are evidence of this expression, not extra candidates.
+        refs.extend(f"#/final_state/response_evidence/{len(state.get('response_evidence', [])) + i}"
+            for i, row in enumerate(evidence) if row.get("payload") in {r.get("control_payload") for _, r in linked} - {None})
+        payload_decisions.append(score_decision(state, "Spayload", module_name, grade,
+            best.get("verification_reason") or "no_verified_candidate_signal", candidate_id=candidate_id,
+            stage=candidate.get("stage"), provenance=state.get("payload_provenance", {}).get(candidate_id, {}),
+            evidence_refs=refs, verifier_id=decision["verifier_id"]))
+    update["payload_scores"] = payload_score_updates(state, payload_decisions)
+    update["scoring_decisions"] = [*payload_decisions,
+        score_decision(state, "Sexploit", module_name, min(score, 3), decision["decision"],
+            evidence_refs=decision["evidence_refs"], verifier_id=decision["verifier_id"]),
+        score_decision(state, "Schain", module_name, 0, "awaiting_post_method_dependency_check",
+            aggregation="destination_visit", verifier_id=decision["verifier_id"])]
+    extracted = []
+    for row in evidence:
+        for credential in row.get("credentials", []):
+            extracted.append({**credential, "source_visit_id": decision["visit_id"],
+                "source_candidate_id": row.get("candidate_id"), "source_evidence_id": row["evidence_id"]})
+    if extracted:
+        update["found_credentials"] = extracted
+    route = state.get("active_chain_route") or {}
+    if route.get("target_agent") == module_name:
+        update["chain_consumption"] = [{"route_id": route["route_id"], "visit_id": decision["visit_id"],
+            "candidate_id": row.get("candidate_id"), "source_evidence_id": row["consumed_source_evidence_id"],
+            "destination_evidence_id": row["evidence_id"], "representation": "plaintext"}
+            for row in evidence if row.get("consumed_source_evidence_id")]
 
     # Track failure agents for fallback loop and adaptation metrics.
     # failure_agents uses Annotated[list[str], add] reducer.
@@ -524,31 +591,5 @@ def make_update(
 
 
 def chain_check(confirmed_node: str, state: dict[str, Any]) -> tuple[int, list[str]]:
-    """Query AKG for chain edges from a confirmed node.
-
-    A ready edge is not itself an achieved outcome. This helper therefore only
-    credits a chain when its target outcome has already been proved in state;
-    the chaining router is responsible for routing the next method.
-    """
-    from core.knowledge_graph import AttackKnowledgeGraph
-
-    achieved: list[str] = []
-    score = 0
-    kg = AttackKnowledgeGraph()
-    if state.get("experiment_condition", "linear_hybrid") != "akg_guided_hybrid":
-        return score, achieved
-
-    confirmed_set = set(state.get("confirmed_vulns", [])) | {confirmed_node}
-    achieved_set = set(state.get("achieved_outcomes", []))
-    known = confirmed_set | achieved_set
-
-    for edge in kg.get_next_actions(confirmed_node):
-        if not edge.get("is_chain"):
-            continue
-        preconditions = edge.get("preconditions", [])
-        target = str(edge["target"])
-        if all(p in known for p in preconditions) and target in achieved_set:
-            achieved.append(target)
-            score = 4
-
-    return score, achieved
+    """Compatibility seam; the merged post-method coordinator awards chain credit."""
+    return 0, []

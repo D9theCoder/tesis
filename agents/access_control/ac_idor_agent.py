@@ -61,16 +61,18 @@ def _probe_preconditions(
                 continue
             tried.append(payload)
             resp = session.get(MODULE_PATH, params={"userId": test_id, "Submit": "Submit"})
-            events.append(probe_event(AGENT_ID, f"userId={test_id}", resp.status_code, True))
+            events.append(probe_event(AGENT_ID, f"userId={test_id}", resp.status_code, False, response=resp))
             if resp.status_code == 200:
                 responses.append((test_id, resp.text, len(resp.text)))
                 resp_signals = verifier.contains_any(resp.text, _DATA_SIGNALS)
                 # IDOR detected if different user data is returned
                 if baseline_text:
                     if resp_signals.ok and len(resp.text) != baseline_len:
+                        events[-1]["payload"].update(signal_detected=True, verified_grade=1, verification_reason="verified_probe_precondition")
                         observations[_PROBE_OBSERVATION_KEY] = True
                         return True, tried, observations, events
                     if resp.text != baseline_text and len(resp.text) > 100:
+                        events[-1]["payload"].update(signal_detected=True, verified_grade=1, verification_reason="verified_probe_precondition")
                         observations[_PROBE_OBSERVATION_KEY] = True
                         return True, tried, observations, events
                 else:
@@ -78,6 +80,7 @@ def _probe_preconditions(
                     if len(responses) >= 2:
                         first_text = responses[0][1]
                         if resp.text != first_text and resp_signals.ok:
+                            events[-1]["payload"].update(signal_detected=True, verified_grade=1, verification_reason="verified_probe_precondition")
                             observations[_PROBE_OBSERVATION_KEY] = True
                             return True, tried, observations, events
         except Exception as exc:
@@ -115,11 +118,12 @@ def _attempt_exploit(
         try:
             test_id = payload.strip()
             resp = session.get(MODULE_PATH, params={"userId": test_id, "Submit": "Submit"})
-            events.append(exploit_event(AGENT_ID, f"userId={test_id}", resp.status_code, True))
+            events.append(exploit_event(AGENT_ID, f"userId={test_id}", resp.status_code, True, response=resp))
             if resp.status_code == 200:
                 result = verifier.contains_any(resp.text, _DATA_SIGNALS)
                 # Require response to differ from baseline to confirm IDOR
                 if result.ok and resp.text != baseline_text:
+                    events[-1]["payload"].update(verified_grade=2, verification_reason="visibility_without_permission_oracle")
                     score = max(score, 3)
                     confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
                     break

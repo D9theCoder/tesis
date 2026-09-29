@@ -32,6 +32,29 @@ def _merge_scores(a: dict[str, int], b: dict[str, int]) -> dict[str, int]:
     return merged
 
 
+def _merge_output_scores(a: dict[str, int], b: dict[str, int]) -> dict[str, int]:
+    """An earlier clean visit cannot erase a penalty in the same method context."""
+    return {**a, **{k: min(a.get(k, v), v) for k, v in b.items()}}
+
+
+def _replace_score_entries(a: dict, b: dict) -> dict:
+    return {**a, **b}
+
+
+SCORING_RUBRIC_VERSION = "scoring.v2"
+
+
+def score_decision(state: dict, dimension: str, method: str, score: int | float,
+                   reason: str, *, aggregation: str = "maximum_with_evidence", **context) -> dict:
+    """Append-only receipt; callers supply the evidence that actually earned a grade."""
+    visit_id = context.pop("visit_id", None) or state.get("selected_visit_id") or f"{method}:legacy:{state.get('iteration_count', 0)}"
+    suffix = context.get("candidate_id") or context.get("route_id") or len(state.get("scoring_decisions", []))
+    return {"decision_id": f"{visit_id}:{dimension}:{suffix}", "dimension": dimension,
+        "rubric_version": SCORING_RUBRIC_VERSION, "method": method, "visit_id": visit_id,
+        "score": score, "reason": reason, "aggregation": aggregation,
+        "evidence_refs": context.pop("evidence_refs", []), **context}
+
+
 def _merge_tried_payloads(a: dict[str, list[str]], b: dict[str, list[str]]) -> dict[str, list[str]]:
     merged = {k: list(v) for k, v in a.items()}
     for k, payloads in b.items():
@@ -116,13 +139,18 @@ class ExploitationState(TypedDict):
     scores: Annotated[dict[str, int], _merge_scores]  # agent_id -> 0-4
     method_scores: Annotated[dict[str, int], _merge_scores]
     exploitation_scores: Annotated[dict[str, int], _merge_scores]
-    chain_scores: Annotated[dict[str, int], _merge_scores]
-    output_scores: Annotated[dict[str, int], _merge_scores]
-    composite_scores: Annotated[dict[str, float], _merge_scores]
+    chain_scores: Annotated[dict[str, int], _replace_score_entries]
+    output_scores: Annotated[dict[str, int], _merge_output_scores]
+    composite_scores: Annotated[dict[str, float], _replace_score_entries]
+    selected_visit_id: str | None
+    scoring_decisions: Annotated[list[dict], add]
+    verifier_history: Annotated[list[dict], add]
 
     # Chain tracking
     current_chain: list[str]
     chain_history: Annotated[list[dict], add]
+    active_chain_route: dict | None
+    chain_consumption: Annotated[list[dict], add]
 
     # LLM reasoning trace
     messages: Annotated[list[AnyMessage], add_messages]
@@ -130,6 +158,7 @@ class ExploitationState(TypedDict):
     # Guardrail monitoring (accumulate)
     guardrail_activations: Annotated[list[dict], add]
     invalid_json_events: Annotated[list[dict], add]
+    output_failure_events: Annotated[list[dict], add]
     fallback_events: Annotated[list[dict], add]
     containment_events: Annotated[list[dict], add]
     response_evidence: Annotated[list[dict], add]
@@ -203,11 +232,17 @@ def _default_state_template() -> dict[str, Any]:
         "chain_scores": {},
         "output_scores": {},
         "composite_scores": {},
+        "selected_visit_id": None,
+        "scoring_decisions": [],
+        "verifier_history": [],
         "current_chain": [],
         "chain_history": [],
+        "active_chain_route": None,
+        "chain_consumption": [],
         "messages": [],
         "guardrail_activations": [],
         "invalid_json_events": [],
+        "output_failure_events": [],
         "fallback_events": [],
         "containment_events": [],
         "response_evidence": [],
@@ -252,7 +287,7 @@ def new_default_state() -> dict[str, Any]:
     return deepcopy(_default_state_template())
 
 
-STATE_SCHEMA_VERSION = "state.v1"
+STATE_SCHEMA_VERSION = "state.v2"
 CHECKPOINT_SCHEMA_VERSION = "checkpoint.v1"
 
 # Persistent vs artifact-only inventory (handoff phase 1, design-only).
@@ -300,6 +335,12 @@ PERSISTENT_STATE_FIELDS = frozenset({
     "chain_scores",
     "output_scores",
     "composite_scores",
+    "selected_visit_id",
+    "scoring_decisions",
+    "verifier_history",
+    "active_chain_route",
+    "chain_consumption",
+    "output_failure_events",
     "current_chain",
     "chain_history",
     "guardrail_activations",

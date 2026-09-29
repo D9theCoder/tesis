@@ -142,6 +142,9 @@ def _recon_containment_event(
     """Build a bounded event for a recon target discarded before HTTP."""
     return {
         "kind": kind,
+        "classification": "discarded_navigation" if kind == "navigation" else "discarded_page_reference",
+        "origin": "recon",
+        "scope": "run",
         "blocked_url": blocked_url,
         "allowed_host": (urlparse(base_url).netloc or None),
         "reason": reason,

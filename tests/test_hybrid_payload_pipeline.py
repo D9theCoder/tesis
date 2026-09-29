@@ -14,7 +14,7 @@ from foundation.payload_generator import _filter_execution_ready_variants, _pars
 from foundation.payload_library import PayloadLibrary
 from foundation.payload_ranker import rank_candidates
 from foundation.payload_validator import validate_payload_candidates
-from agents.state_utils import candidate_payloads_for_stage, make_update, payload_score_updates
+from agents.state_utils import candidate_payloads_for_stage, make_update
 from llm.prompts.payload_generation_prompt import build_payload_generation_prompt
 
 def test_compact_variant_is_enriched_with_deterministic_provenance():
@@ -482,51 +482,6 @@ def test_validator_rejects_duplicate_payload_strings():
     results = update["payload_validation_results"]["sqli_union"]
     assert any(row["reason"] == "duplicate_payload_or_logic" for row in results)
     assert len(update["payload_candidates"]["sqli_union"]) == 1
-
-def test_payload_score_updates_only_attempted_candidates():
-    """Verifies payload score updates only attempted candidates behavior."""
-    state = {
-        **new_default_state(),
-        "tried_payloads": {"sqli_union": ["1' UNION SELECT user,password FROM users-- -"]},
-        "payload_candidates": {
-            "sqli_union": [
-                {
-                    "candidate_id": "seed-1",
-                    "payload_or_logic": "1' UNION SELECT user,password FROM users-- -",
-                },
-                {
-                    "candidate_id": "seed-2",
-                    "payload_or_logic": "1' AND 1=1-- -",
-                },
-            ]
-        },
-    }
-    updates = payload_score_updates(state, "sqli_union", 3)
-    assert updates["seed-1"] == 3
-    assert "seed-2" not in updates
-
-def test_make_update_scores_current_invocation_candidates():
-    """The first method invocation must score payloads in the returned update."""
-    state = {
-        **new_default_state(),
-        "payload_candidates": {
-            "sqli_union": [
-                {
-                    "candidate_id": "current-1",
-                    "payload_or_logic": "1' UNION SELECT user,password FROM users-- -",
-                }
-            ]
-        },
-    }
-
-    update = make_update(
-        state=state,
-        module_name="sqli_union",
-        score=3,
-        tried_payloads=["1' UNION SELECT user,password FROM users-- -"],
-    )
-
-    assert update["payload_scores"] == {"current-1": 3}
 
 def test_rank_candidates_seed_first_and_budgeted():
     """Verifies rank candidates seed first and budgeted behavior."""

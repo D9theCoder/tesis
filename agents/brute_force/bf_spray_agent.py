@@ -220,7 +220,7 @@ def _probe_preconditions(
                     resp.status_code,
                     not response_rate_limited and response_accepted,
                     elapsed_ms=elapsed_seconds * 1000,
-                ))
+                 response=resp))
         except Exception as exc:
             logger.warning("[%s] PROBE request failed: %s", AGENT_ID, exc)
             events.append(probe_event(AGENT_ID, cred, None, False))
@@ -301,7 +301,9 @@ def _attempt_exploit(
                     payload,
                     resp.status_code,
                     semantic_success,
-                ))
+                 response=resp))
+                events[-1]["payload"].update(verified_grade=3 if semantic_success else 0,
+                    verification_reason="verified_login" if semantic_success else "login_not_confirmed")
             resp = responses[-1]
 
             if has_captcha_challenge(resp.text):

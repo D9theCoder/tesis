@@ -132,6 +132,7 @@ def test_akg_orchestrator_does_not_route_cross_surface_choice_when_none_viable(m
         "event": "orchestrator.no_viable_methods",
         "surface": "sqli",
         "security_level": "high",
+        "method": None, "visit_id": None, "origin": "orchestrator", "scope": "run",
     }]
     assert result["telemetry_events"] == [{
         "node": "orchestrator",
@@ -248,5 +249,6 @@ def test_target_method_cross_surface_stops_with_infeasible_event():
         "event": "target_method.infeasible",
         "target_method": "ac_force_browse",
         "surface": "sqli",
+        "method": None, "visit_id": None, "origin": "orchestrator", "scope": "run",
     }]
     assert result["telemetry_events"][0]["event"] == "orchestrator.target_method.infeasible"

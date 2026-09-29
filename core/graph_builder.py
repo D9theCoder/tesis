@@ -23,6 +23,7 @@ from core.state import ExploitationState
 from foundation.payload_generator import payload_candidate_builder_node
 from foundation.payload_validator import payload_validator_node
 from foundation.recon import recon
+from foundation.http_client import capture_containment_events
 from llm.runtime import serialized_dvwa_node
 
 
@@ -57,8 +58,16 @@ def _serialized_http_handler(handler):
     """Wrap a complete recon/method node in the matrix-wide DVWA gate."""
     @wraps(handler)
     def wrapped(state):
-        with serialized_dvwa_node():
-            return handler(state)
+        with serialized_dvwa_node(), capture_containment_events() as events:
+            update = handler(state)
+        recorded = list(update.get("containment_events", []))
+        for event in events:
+            if event not in recorded:
+                recorded.append({**event, "method": state.get("selected_method"),
+                    "visit_id": state.get("selected_visit_id")})
+        if recorded:
+            update["containment_events"] = recorded
+        return update
 
     return wrapped
 

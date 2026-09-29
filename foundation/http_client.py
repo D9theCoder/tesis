@@ -7,12 +7,26 @@ and captures response metadata for verification and logging.
 
 import logging
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
 logger = logging.getLogger(__name__)
+_CONTAINMENT_RECEIPTS: ContextVar[list | None] = ContextVar("containment_receipts", default=None)
+
+
+@contextmanager
+def capture_containment_events():
+    """Collect even violations swallowed by method/session error handling."""
+    events: list[dict] = []
+    token = _CONTAINMENT_RECEIPTS.set(events)
+    try:
+        yield events
+    finally:
+        _CONTAINMENT_RECEIPTS.reset(token)
 
 
 class TransportError(Exception):
@@ -49,6 +63,9 @@ class ContainmentError(ValueError):
         """Return a JSON-safe containment event for state/artifact logging."""
         return {
             "kind": self.kind,
+            "classification": "scope_violation",
+            "origin": "http_client",
+            "scope": "run",
             "blocked_url": self.url,
             "allowed_host": self.allowed_host,
             "reason": str(self),
@@ -306,6 +323,9 @@ class HTTPClient:
             kind=kind,
         )
         self.containment_events.append(error.as_event())
+        receipts = _CONTAINMENT_RECEIPTS.get()
+        if receipts is not None:
+            receipts.append(error.as_event())
         raise error
 
     def _resolve_url(self, path_or_url: str, *, kind: str = "request") -> str:

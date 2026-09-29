@@ -11,6 +11,8 @@ import logging
 
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.state import METHODS_BY_SURFACE, MODULE_TO_KG_NODE
+from core.state import score_decision
+from agents.state_utils import method_selection_update
 
 _KG_SINGLETON: AttackKnowledgeGraph | None = None
 
@@ -56,17 +58,8 @@ def _find_next_unvisited(viable: list[str], attempted: list[str], blocked: list[
 
 def _derive_surface_confirmed(confirmed: set[str]) -> set[str]:
     """Map method-confirmed nodes to surface-confirmed nodes for chain precondition checks."""
-    surface_confirmed = set()
-    for node in confirmed:
-        mapped = MODULE_TO_KG_NODE.get(node, node)
-        # Method agents append nodes like "sqli_union_confirmed";
-        # MODULE_TO_KG_NODE maps the base name ("sqli_union"), so fall
-        # back to stripping the _confirmed suffix when needed.
-        if mapped == node and node.endswith("_confirmed"):
-            base = node[: -len("_confirmed")]
-            mapped = MODULE_TO_KG_NODE.get(base, node)
-        surface_confirmed.add(mapped)
-    return surface_confirmed
+    return {f"{surface}_confirmed" for surface, methods in METHODS_BY_SURFACE.items()
+        if any(MODULE_TO_KG_NODE[method] in confirmed for method in methods)}
 
 
 def route_after_agent(state: dict) -> str:
@@ -141,6 +134,7 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
                             "reason": "chain_ready",
                             "source": node,
                             "target": edge.get("target"),
+                            "preconditions": list(edge.get("preconditions", [])),
                         }
 
     # 2. Critical outcome check — route to scorer immediately if high-impact outcome achieved
@@ -223,6 +217,52 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
     }
 
 
+def _complete_routed_visit(state: dict) -> dict:
+    """Credit only a recorded route whose own destination consumed proved source data."""
+    route = state.get("active_chain_route") or {}
+    decision = state.get("verifier_decision") or {}
+    if not route or decision.get("visit_id") != route.get("target_visit_id"):
+        return {}
+    if any(h.get("route_id") == route["route_id"] and h.get("status") in {"completed", "failed", "unverified"}
+           for h in state.get("chain_history", [])):
+        return {}
+    method = route["target_agent"]
+    consumption = [c for c in state.get("chain_consumption", [])
+        if c.get("route_id") == route["route_id"] and c.get("visit_id") == decision["visit_id"]]
+    source_ids = set(route.get("source_evidence_ids", []))
+    source_proved = bool(route.get("source_verifier_ids")) and route.get("prerequisites_proved") is True
+    destination_rows = [r for r in state.get("response_evidence", [])
+        if r.get("visit_id") == decision["visit_id"] and r.get("verified_grade") == 3]
+    destination_ids = {r["evidence_id"] for r in destination_rows}
+    dependency = any(c["source_evidence_id"] in source_ids and c["destination_evidence_id"] in destination_ids for c in consumption)
+    downstream = decision.get("decision") == "confirmed" and MODULE_TO_KG_NODE[method] in decision.get("confirmed_vulns", [])
+    completed = source_proved and dependency and downstream
+    if completed:
+        status, reason = "completed", "source_consumed_and_downstream_verified"
+    elif decision.get("decision") == "unverified":
+        status, reason = "unverified", decision.get("reason", "downstream_unverified")
+    elif not downstream:
+        status, reason = "failed", "downstream_not_confirmed"
+    else:
+        status, reason = "unverified", "source_consumption_not_proved"
+        if route.get("source") == "credentials_extracted" and any(c.get("representation") == "password_hash" for c in state.get("found_credentials", [])):
+            reason = "extracted_password_hash_not_consumable_as_plaintext"
+    grade = 4 if completed else 0
+    receipt = {**route, "status": status, "reason": reason, "consumption": consumption,
+        "destination_verifier_id": decision.get("verifier_id"),
+        "destination_evidence_refs": list(decision.get("evidence_refs", [])),
+        "credited_method": method if completed else None, "score": grade}
+    update = {"chain_history": [{**route, "status": "executed", "destination_verifier_id": decision.get("verifier_id")}, receipt],
+        "chain_scores": {method: grade}, "active_chain_route": None,
+        "scoring_decisions": [score_decision(state, "Schain", method, grade, reason,
+            aggregation="destination_visit", route_id=route["route_id"],
+            evidence_refs=[*route.get("source_evidence_refs", []), *decision.get("evidence_refs", [])],
+            verifier_id=decision.get("verifier_id"), consumption=consumption)]}
+    if completed:
+        update["scores"] = {method: 4}
+    return update
+
+
 def chaining_router_node(state: dict) -> dict:
     """Executes the chaining-router stage of the LangGraph workflow.
 
@@ -244,9 +284,19 @@ def chaining_router_node(state: dict) -> dict:
     Returns:
         Partial state update merged into the LangGraph state."""
     next_agent, event = evaluate_chain_route(state)
-    updates: dict = {"next_agent": next_agent, "telemetry_events": [event]}
+    updates: dict = {**_complete_routed_visit(state), "next_agent": next_agent}
+    decision = state.get("verifier_decision") or {}
+    if decision.get("visit_id") and decision.get("visit_id") == state.get("selected_visit_id"):
+        from core.scorer import output_decision_update
+        output = output_decision_update(state, decision["agent_id"])
+        updates["output_scores"] = output["output_scores"]
+        updates["scoring_decisions"] = [*updates.get("scoring_decisions", []), *output["scoring_decisions"]]
     if next_agent in {method for methods in METHODS_BY_SURFACE.values() for method in methods}:
-        updates["selected_method"] = next_agent
+        selection = method_selection_update(state, next_agent,
+            "akg_route" if event.get("reason") == "chain_ready" else "deterministic_fallback",
+            preconditions=event.get("preconditions", []))
+        updates["scoring_decisions"] = [*updates.get("scoring_decisions", []), *selection.pop("scoring_decisions")]
+        updates.update(selection)
     if event.get("reason") == "chain_ready":
         source = str(event.get("source") or "")
         target = str(event.get("target") or next_agent)
@@ -255,13 +305,28 @@ def chaining_router_node(state: dict) -> dict:
         if additions:
             updates["akg_path"] = additions
         updates["current_chain"] = [*existing_path, *additions]
-        updates["chain_history"] = [{
+        source_decisions = [d for d in state.get("verifier_history", [])
+            if source in set(d.get("achieved_outcomes", [])) | set(d.get("confirmed_vulns", []))
+                | _derive_surface_confirmed(set(d.get("confirmed_vulns", [])))]
+        source_refs = list(dict.fromkeys(ref for d in source_decisions for ref in d.get("evidence_refs", [])))
+        source_rows = [state["response_evidence"][int(ref.rsplit('/', 1)[-1])] for ref in source_refs]
+        route = {
             "chain": [*existing_path, *additions],
-            "status": "routed",
+            "route_id": f"route:{len(state.get('chain_history', []))}",
             "source": source,
             "target": target,
             "target_agent": next_agent,
-        }]
+            "target_visit_id": updates["selected_visit_id"],
+            "preconditions": list(event.get("preconditions", [])),
+            "prerequisites_proved": True,
+            "source_verifier_ids": [d["verifier_id"] for d in source_decisions],
+            "source_evidence_refs": source_refs,
+            "source_evidence_ids": [r["evidence_id"] for r in source_rows],
+        }
+        updates["active_chain_route"] = route
+        updates["chain_history"] = [*updates.get("chain_history", []),
+            {**route, "status": "ready"}, {**route, "status": "routed"}]
+        event.update(route)
     if event.get("reason") == "all_methods_exhausted":
         updates["task_result"] = "INCOMPLETE"
         updates["incomplete_reason"] = event.get("incomplete_reason", "ALL_METHODS_FAILED")
@@ -272,4 +337,6 @@ def chaining_router_node(state: dict) -> dict:
         # the persisted artifact agree with the verifier-backed finding.
         updates["task_result"] = "SUCCESS"
         updates["incomplete_reason"] = None
+    event["payload"] = {k: v for k, v in event.items() if k not in {"node", "event", "iteration", "payload"}}
+    updates["telemetry_events"] = [event]
     return updates
