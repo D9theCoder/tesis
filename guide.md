@@ -421,3 +421,57 @@ Key metrics computed by `evaluation/metrics.py`:
 - **Chain exploit count** — number of method chain-score entries equal to 4
 - **Score distribution** — count per score bucket (0–4)
 - **Guardrail activation rate** — guardrail activations divided by iterations, capped at 1.0
+
+## 8.1. Replaying saved method inputs
+
+Diagnostic replay reruns one recorded method invocation using its saved,
+validated payload queue. Holding the input constant helps investigate whether
+a result comes from the generated payload or the agent's execution and
+verification code. Fixture conditions still need to be checked when comparing
+results from different runs.
+
+Normal TUI and headless runs automatically save the required
+`method_execution_inputs` in their per-run JSON artifacts. **Replay itself is
+currently a Python API: there is no TUI action or CLI subcommand for it.**
+
+| Code | Responsibility |
+| --- | --- |
+| [evaluation/runner.py](evaluation/runner.py) | Captures sanitized state and the validated queue before each method executes, including revisits; ignores historical validation receipts on checkpoint resume. |
+| [evaluation/payload_replay.py](evaluation/payload_replay.py) | `replay_method_inputs()` revalidates the saved queue, preserves its execution order, executes the selected method, applies state reducers, and writes a diagnostic artifact. |
+| [evaluation/manual_scoring_sheet.py](evaluation/manual_scoring_sheet.py) | Links replay manual-review rows to fresh response evidence. |
+
+Run this from the repository root, replacing the source path with a saved run
+JSON. The output path must be new and separate from the source:
+
+```bash
+.venv/bin/python - <<'PY'
+from evaluation.payload_replay import replay_method_inputs
+
+replay = replay_method_inputs(
+    "path/to/saved-run.json",
+    output_path="results/validation/my-replay.json",
+    input_index=0,
+)
+print(replay["verifier_decision"])
+print(replay["validation_rejections"])
+PY
+```
+
+`input_index` is the zero-based index in the source artifact's
+`method_execution_inputs` array; `0` selects the first saved invocation. Older
+artifacts without that array cannot be replayed. The optional `candidate_ids`
+argument selects only saved candidate IDs and must retain a probe plus an
+exploit or bypass stage. Changed, rejected, empty, or incomplete queues stop
+before HTTP without adding fallback payloads.
+
+**Replay opens fresh sessions and sends real HTTP requests to the DVWA target
+recorded in the source artifact. It makes zero new LLM calls.** It preserves
+accumulated observations, attempts, scores, and evidence in `final_state`.
+The manual sheet contains only candidates linked to fresh replay responses;
+historical evidence remains in final state and the linked source artifact.
+A replay rejected before execution has an empty manual sheet.
+
+The output records the source SHA-256, executing-code hashes, validation
+rejections, fresh response/timing evidence, verifier decision, final state, and
+manual-review rows. Keep these diagnostic outputs separate from the primary
+experiment dataset.

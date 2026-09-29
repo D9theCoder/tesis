@@ -566,9 +566,12 @@ history cannot be dispatched to a method agent.
 The static-only high-level acceptance path includes two deterministic DVWA
 transport accommodations. During authenticated reconnaissance, the framework
 looks for `session-input.php` in the high SQLi page and registers the contained
-POST endpoint with its `id` parameter. High SQLi method agents then POST the
-candidate to that session-input endpoint and reload the normal SQLi page before
-passing the response to the verifier. Low and medium SQLi request paths remain
+POST endpoint with its `id` parameter. High UNION and error SQLi agents POST the
+candidate to that session-input endpoint, require a successful submission, and
+reload the normal SQLi page before verification. High boolean/time-blind agents
+set the URL-encoded `id` cookie and GET `/vulnerabilities/sqli_blind/`, matching
+the deployed blind module. A blind false predicate or a SLEEP expression returning zero may return 404 with
+the documented missing-ID body; generic error pages remain negative evidence. Low and medium SQLi request paths remain
 unchanged. A high-level union profile also retains both `-- -` and `#` MySQL
 comment forms as static fallback seeds.
 
@@ -578,6 +581,12 @@ one bounded fresh-token retry for that same credential. DVWA high-level random
 sleep is not treated as a relative-latency rate-limit signal; explicit status,
 header, and body throttle markers remain authoritative. CAPTCHA solving remains
 out of scope.
+
+Low/medium brute-force timing probes require at least 100 ms absolute growth
+as well as the existing threefold latency ratio before inferring throttling.
+Tiny relative changes alone cannot stop credential execution. This remains a
+bounded heuristic; repeated matched controls are needed if jitter exceeds the
+floor. Explicit throttle markers remain authoritative.
 
 These are level-scoped HTTP/session and evidence-handling changes exercised by
 the `static_only` acceptance coordinate. They do not add AKG nodes, edges,
@@ -898,6 +907,12 @@ composite uses the selected method score, the best executed accepted-candidate
 payload score for that method, exploitation and chain scores for that method,
 and this output score. Every component remains stored separately.
 
+If an automatic orchestrator stop clears the active selection after execution,
+the scorer uses the last method's verifier decision to retain that method's
+identity and score dimensions. It does not execute another method or change
+the recorded routing/stop decision. A stop before any execution has no selected
+method to score.
+
 ### 7.2 Metric List
 
 | Metric                           | Function                                                 |
@@ -1013,6 +1028,7 @@ execution_log
 response_evidence
 timing_evidence
 verifier_decision
+method_execution_inputs
 confirmed_vulns
 achieved_outcomes
 guardrail_activations
@@ -1077,6 +1093,65 @@ recorded verifier decision is recovered from `graph.state.data.latest_verifier`
 history or the final verifier field; another method's decision is never used. The
 `score_0_4` field copies the recorded payload score, while `scoring_reason`
 remains blank for manual review.
+
+### Method verification and diagnostic replay
+
+Every method invocation records its decision, including failures and negatives;
+prior confirmations remain in graph-state history and confirmed-node reducers.
+Force-browse evidence uses the actual requested path. Brute-force confirmation
+and telemetry share the same status/token/content predicate; unavailable probes
+cannot establish `no_rate_limit`. Recon establishes that observation with bounded
+benign credential probes rather than endpoint discovery, and an admin session
+is not a low-privilege session.
+
+Error SQLi requires a database/XPath extraction envelope (including the truncated
+`~admin` case), the complete DVWA `<pre>` duplicate-entry envelope carrying
+`dvwa0` or `dvwa1` for `group_key`, or structured credential extraction. A generic
+duplicate value, different key, quoted prose, or failed HTTP response does not
+establish that duplicate-entry extraction. UNION requires account/hash
+result columns. Boolean probes require successful matched true/false evidence,
+not unrelated page-length changes. Time confirmation requires successful
+baselines/responses and two bounded delayed transactions of the same candidate
+with fresh harmless controls. Boolean extraction accepts either recognized
+branch when the repeated request returns that same branch; low/high require
+two distinct repeatable extraction predicates and medium requires one. A correct
+false predicate also requires a complementary true response proving the same
+expression evaluated: DVWA can suppress SQL exceptions into its missing-ID body.
+Unrecognized syntax or failed complementary controls receive no extraction
+credit. Timing verification uses the validator's bounded numeric `SLEEP` parser,
+including exponent, signed, decimal, and normalized-comment forms. Comments
+retain token separation: `AND/**/SLEEP(3)` uses the bounded delay, while an
+oversized argument with the same spelling is rejected before transport. These
+finite controls do not establish a universal zero false-positive rate.
+
+Validation also retains a `candidate_budget_exceeded` receipt for otherwise
+valid candidates excluded by profile ranking. They remain unexecuted with null
+manual scores; budget exclusion does not establish poor generated-input quality.
+
+The current access-control agents authenticate as admin and supply no independent
+permission control. Their content-only results are capped at score 2 and recorded
+as `unverified` with `missing_independent_authorization_control`; no confirmed
+node or enabling outcome is emitted from that evidence. Positive unauthorized
+access remains infeasible/unverified until a contained principal/permission
+fixture is independently established.
+
+`method_execution_inputs` retains the validated executable queue and sanitized
+pre-execution state after every validator completion receipt, including revisits. `evaluation.payload_replay.replay_method_inputs` revalidates
+that exact queue, optionally selects only saved IDs (with saved probe/exploit
+stages), preserves candidate IDs and saved execution order, and stops on rejected
+or changed membership/values/provenance or budget loss. Fresh ranking alone does
+not invalidate a frozen queue. Replay applies the same state reducers as the
+graph, retaining monotonic observations, earlier attempts, score maxima, and
+accumulated evidence. Checkpoint resume ignores historical validation receipts
+when capturing new inputs. Replay
+opens fresh sessions, and forbids new provider calls. Diagnostic outputs include
+the source SHA-256, executing code hashes, request/verifier/score evidence, and
+manual-scoring rows. They are separate from primary model-performance datasets.
+Replay declares `manual_scoring_scope: fresh_replay_execution`; its manual rows
+include only candidates linked to fresh response evidence. Historical scores
+and evidence remain in `final_state` and the linked source artifact. A replay
+that stops before execution has an empty manual sheet.
+Older artifacts without frozen inputs cannot be replayed by inventing a state.
 
 ## 12. Consistency Handling
 

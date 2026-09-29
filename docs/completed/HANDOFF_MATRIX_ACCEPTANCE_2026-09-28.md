@@ -229,7 +229,7 @@ issues. Source hashes, execution data, and scores remain unchanged. No live
 DVWA or provider calls were made for this repair.
 
 The subsequent complete folder review found seven additional defects, with
-offline reproductions in the [agents-review handoff](../upcoming/HANDOFF_AGENTS_REVIEW_2026-09-29.md).
+offline reproductions in the [agents-review handoff](HANDOFF_AGENTS_REVIEW_2026-09-29.md).
 Those findings remain open; the matrix audit validates artifact export and
 preservation, not the outstanding verifier semantics.
 

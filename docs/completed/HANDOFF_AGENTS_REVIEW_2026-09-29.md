@@ -1,10 +1,13 @@
 # Agents review (2026-09-29)
 
-Status: review complete; the seven findings below remain unfixed. The requested
-manual-scoring repairs are complete and validated separately. This handoff
-belongs in `upcoming` because acceptance of the additional remediation is pending.
-Local commits were approved on 2026-09-29; the evidence fixes are in `478bb9c`.
-No push was performed. The seven findings below remain open.
+Status: completed. A1–A7 remediation passes artifact-backed offline graph
+controls and the audited 81-coordinate live static gate. The original findings
+below describe the pre-fix implementation. Broader matrix/attribution acceptance is documented in the completed
+method-testing handoff and final testing report. No new commit or push was performed.
+
+The follow-on [rigorous method-agent testing handoff](HANDOFF_METHOD_AGENTS_RIGOROUS_TESTING_2026-09-29.md)
+covers E2E remediation gates, complete method-level matrices, and controlled
+model-versus-code failure attribution.
 
 ## Scope and evidence
 
@@ -15,14 +18,14 @@ chaining, partial state updates, candidate identity, and artifact evidence.
 
 | Files reviewed | Result |
 | --- | --- |
-| `sqli/sqli_union_agent.py`, `sqli/sqli_boolean_blind_agent.py` | No additional confirmed finding in this review |
+| `sqli/sqli_union_agent.py`, `sqli/sqli_boolean_blind_agent.py` | No additional original finding in the original review |
 | `sqli/sqli_error_agent.py`, `sqli/sqli_time_blind_agent.py` | A1, A2 |
 | `access_control/ac_idor_agent.py`, `access_control/ac_vertical_escalation_agent.py` | Stripped-ID evidence repaired; no additional confirmed finding |
 | `access_control/ac_force_browse_agent.py` | Candidate provenance repaired; A7 remains |
 | `brute_force/bf_dictionary_agent.py`, `brute_force/bf_spray_agent.py` | A3, A4; token-retry candidate identity repaired in the shared helper |
 | `orchestrator.py` | A5 |
 | `state_utils.py` | A6, A7; candidate identity repaired |
-| `agent_telemetry.py`, `__init__.py`, `sqli/__init__.py`, `access_control/__init__.py`, `brute_force/__init__.py` | No additional confirmed finding |
+| `agent_telemetry.py`, `__init__.py`, `sqli/__init__.py`, `access_control/__init__.py`, `brute_force/__init__.py` | No additional original finding |
 
 Repeatable reproduction command, run from the repository root:
 
@@ -202,3 +205,56 @@ PYTHONPATH=. .venv/bin/python results/validation/matrix-2026-09-28/audit.py resu
 
 Use an unused export destination. Remediation of A1–A7 is not included in these
 passing checks and must receive its own negative controls and acceptance record.
+
+## Remediation implementation and acceptance
+
+A1 now requires usable exploit baselines and repeated bounded delay evidence;
+403/503 and generic 404 pages cannot confirm. DVWA's independently documented
+missing-ID 404 is handled separately. A2 requires an extraction envelope or
+structured account/hash result, retaining the truncated XPath case. A3 uses
+one status/token/content success predicate. A4 requires accepted probe evidence,
+and recon no longer infers no throttling from a discovered form. A5 treats
+runtime schema rejection as authoritative. A6 records every invocation decision
+while graph history preserves earlier confirmations. A7 records and resolves
+the actual force-browse request path.
+
+Access-control visibility in the current admin session remains unverified
+(score at most 2), because the deployed fixture has no independent non-admin
+permission control. High blind SQLi now uses the deployed cookie transport;
+regular SQLi retains the checked POST/result-GET transaction. Validated queues
+follow validator ranking while rejected candidate history remains audit data.
+The runner records sanitized frozen inputs; diagnostic replay revalidates the
+exact queue, preserves candidate IDs, uses fresh sessions, forbids provider
+calls, and records source/code hashes plus manual evidence.
+
+Evidence root: `results/validation/method-agents-2026-09-29/`. The original
+12 bug reproductions remain under the old review directory. New failure
+inventories, pre-fix JUnit/logs, graph/fixture artifacts and corrected controls
+are retained separately. Commands and final totals are recorded in the linked
+method-testing handoff and its acceptance report. An offline pass is not a live
+matrix acceptance label.
+
+Acceptance on 2026-09-29: the full offline suite passed 1,536 tests with two
+inapplicable high-transaction cases skipped. The live static audit covered all
+81 declared coordinates, with 51 supported positives, 30 correctly unverified
+or infeasible outcomes, zero unexpected provider calls and zero audit issues.
+Seven preserved blind-method failures confirmed with identical frozen inputs
+on corrected code and zero fresh provider calls. These replays establish the
+additional predicate/repeatability repairs; they do not claim model quality.
+
+Repeatable commands and artifacts:
+
+```bash
+.venv/bin/python -m pytest -q --junitxml=results/validation/junit.xml
+PYTHONPATH=. .venv/bin/python results/validation/method-agents-2026-09-29/audit_phase.py static
+```
+
+JUnit/log: `offline-junit.xml`, `offline-suite-final.log`; accepted grid:
+`coverage-ledger.json`, `static-audit.json`; controls: `live-reference/`;
+frozen comparisons: `diagnostic-replay-attribution.json`, `diagnostic-replays/`.
+All paths above are relative to `results/validation/method-agents-2026-09-29/`.
+
+Final consolidated acceptance: 1,542 passing offline tests (two inapplicable
+skips), 297 declared live coordinates, 185 generated-queue replay comparisons
+and matching post-controls. Detailed limits and evidence:
+[METHOD_AGENTS_TESTING_REPORT_2026-09-29.md](METHOD_AGENTS_TESTING_REPORT_2026-09-29.md).

@@ -173,3 +173,57 @@ START → recon → orchestrator → payload_candidate_builder → payload_valid
       → selected method agent → chaining_router
       → orchestrator | payload_candidate_builder | scorer → END
 ```
+
+## Method verification and replay
+
+Method agents retain their own verification boundary. The shared update records
+every decision; the runner preserves graph history and sanitized validated
+`method_execution_inputs`. Replay uses `evaluation.payload_replay` to revalidate
+an unchanged queue against fresh sessions without provider calls. Rejected or
+changed queues stop before HTTP and diagnostic artifacts link the source/code
+hashes. The candidate history remains append-only; executable queues follow the
+ordered validation receipts. Replay compares membership, values, provenance,
+and budget independently of fresh ranking, retains saved execution order, and
+applies the `ExploitationState` reducers to method and scorer updates. Checkpoint
+resume starts its event cursor after historical receipts, so only fresh
+validation can capture another pre-execution input.
+Replay manual sheets contain only candidates linked to fresh response evidence,
+with `manual_scoring_scope: fresh_replay_execution`. Historical scores and
+evidence remain in the reduced final state and linked source artifact; a rejected
+replay queue produces no manual rows. The export helper is included in code hashes.
+
+Error SQLi recognizes the complete DVWA `<pre>` duplicate-entry envelope for
+`dvwa0` or `dvwa1` and `group_key`, alongside XPath and structured credential
+leaks. Generic duplicate values, other keys, prose, and failed HTTP responses
+receive no duplicate-entry extraction credit.
+
+Profile ranking records `candidate_budget_exceeded` for valid candidates that
+do not fit the executable queue. Their provenance remains available, execution
+is excluded, and manual scores remain null.
+
+Boolean false-branch extraction also requires a complementary true response
+from the same expression, because suppressed SQL errors share DVWA's missing-ID
+body. Unrecognized or failed complementary controls receive no extraction
+credit. Timing verification shares the validator's bounded numeric `SLEEP`
+parser, including exponents, signs, decimal forms, and normalized comments.
+Comments retain token separation, so `AND/**/SLEEP(3)` is measured correctly
+and an oversized delay with the same spelling is rejected before transport.
+
+High regular SQLi uses POST to `sqli/session-input.php` followed by GET of
+`sqli/`; failed submissions stop the transaction. High blind SQLi sets the
+encoded `id` cookie and GETs `sqli_blind/`. Brute-force confirmation requires
+HTTP 200, accepted tokens, and login content. Recon measures bounded credential
+probes before asserting `no_rate_limit`, and does not label admin low privilege.
+The current access-control agents lack an independent authorization control;
+content-only observations remain unverified (score at most 2) and do not emit
+confirmed nodes/outcomes.
+
+A terminal orchestrator stop can clear the active selection. The scorer uses
+the last method verifier decision in that case, retaining its selected-method
+identity and all six score dimensions without another execution. A stop before
+any method executes remains an empty result.
+
+Low/medium brute-force probes require both threefold relative latency and
+100 ms absolute growth for timing-based throttle inference. Explicit throttle
+responses still stop execution; high-level random delay is excluded from the
+relative heuristic.

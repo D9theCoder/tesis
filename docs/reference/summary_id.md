@@ -572,9 +572,13 @@ Jalur acceptance high yang memakai static-only memiliki dua penyesuaian
 transport DVWA yang deterministik. Saat reconnaissance terautentikasi,
 framework mencari `session-input.php` pada halaman SQLi high dan mendaftarkan
 endpoint POST yang tetap berada dalam scope, dengan parameter `id`. Method
-agent SQLi pada level high kemudian melakukan POST candidate ke endpoint
-session-input tersebut dan me-reload halaman SQLi normal sebelum response
-diserahkan kepada verifier. Jalur request SQLi low dan medium tetap sama.
+agent UNION dan error SQLi high melakukan POST candidate ke endpoint
+session-input, mensyaratkan submission berhasil, lalu me-reload halaman SQLi
+normal untuk verifikasi. Agent boolean/time-blind high memakai cookie `id` yang
+URL-encoded dan GET `/vulnerabilities/sqli_blind/`, sesuai modul DVWA aktual.
+Predicate false atau ekspresi SLEEP yang bernilai nol pada modul blind dapat
+mengembalikan 404 dengan body missing-ID;
+halaman error generik tetap menjadi evidence negatif. Jalur request SQLi low dan medium tetap sama.
 Profile union high juga mempertahankan dua bentuk komentar MySQL `-- -` dan `#`
 sebagai static fallback seed.
 
@@ -584,6 +588,12 @@ memicu satu retry terbatas dengan token baru untuk credential yang sama. Random
 sleep DVWA high tidak dianggap sebagai sinyal rate-limit berbasis perbandingan
 latency; marker throttle eksplisit pada status, header, dan body tetap menjadi
 otoritas. CAPTCHA solving tetap di luar scope.
+
+Probe timing brute-force low/medium mensyaratkan kenaikan absolut minimal
+100 ms selain rasio latency tiga kali sebelum menyimpulkan throttling.
+Perubahan relatif kecil saja tidak menghentikan eksekusi credential. Ini tetap
+heuristik terbatas; jika jitter melampaui batas tersebut, gunakan kontrol
+berulang yang sebanding. Marker throttle eksplisit tetap menjadi otoritas.
 
 Perubahan ini adalah perubahan HTTP/session dan evidence handling yang dibatasi
 oleh security level dan diuji pada coordinate acceptance `static_only`. Tidak
@@ -906,6 +916,12 @@ accepted candidate yang benar-benar dieksekusi untuk method tersebut,
 exploitation score, chain score, dan output score ini. Semua komponen tetap
 disimpan secara terpisah.
 
+Jika orchestrator otomatis berhenti dan menghapus pilihan aktif setelah
+eksekusi, scorer menggunakan keputusan verifier method terakhir untuk
+mempertahankan identitas method dan dimensi skornya. Scorer tidak mengeksekusi
+method lain atau mengubah keputusan routing/stop yang tercatat. Stop sebelum
+eksekusi tidak memiliki selected method untuk dinilai.
+
 ### 7.2 Metric List
 
 | Metric | Fungsi |
@@ -1021,6 +1037,7 @@ execution_log
 response_evidence
 timing_evidence
 verifier_decision
+method_execution_inputs
 confirmed_vulns
 achieved_outcomes
 guardrail_activations
@@ -1085,6 +1102,69 @@ terakhir yang tercatat untuk setiap metode diambil dari riwayat
 `graph.state.data.latest_verifier` atau field verifier akhir; keputusan metode
 lain tidak digunakan. Field `score_0_4` menyalin skor payload yang tercatat,
 sedangkan `scoring_reason` tetap kosong untuk peninjauan manual.
+
+### Verifikasi method dan diagnostic replay
+
+Setiap pemanggilan method mencatat keputusan, termasuk gagal dan negatif.
+Konfirmasi sebelumnya tetap tersimpan dalam history graph-state dan reducer
+confirmed-node. Evidence force-browse memakai path request aktual. Konfirmasi
+brute-force dan telemetry memakai predicate status/token/content yang sama;
+probe yang unavailable tidak membuktikan `no_rate_limit`. Recon menetapkan
+observation tersebut melalui probe credential benign yang terbatas, bukan
+penemuan endpoint. Session admin bukan session low-privilege.
+
+Error SQLi membutuhkan envelope ekstraksi database/XPath, termasuk kasus
+`~admin` terpotong, envelope duplicate-entry DVWA lengkap dalam `<pre>` dengan
+`dvwa0` atau `dvwa1` untuk `group_key`, atau ekstraksi credential terstruktur.
+Nilai duplicate generik, key berbeda, kutipan prose, atau response HTTP gagal
+tidak membuktikan ekstraksi duplicate-entry tersebut. UNION membutuhkan
+kolom hasil account/hash. Probe boolean membutuhkan evidence true/false yang
+matched dan berhasil, bukan perubahan panjang halaman yang tidak relevan.
+Konfirmasi time-blind membutuhkan baseline/response berhasil dan delay terbatas
+pada dua transaksi kandidat yang sama dengan harmless control baru. Ekstraksi
+boolean menerima salah satu branch yang dikenali jika request ulang menghasilkan
+branch yang sama; low/high membutuhkan dua predicate ekstraksi berbeda yang
+repeatable dan medium membutuhkan satu. Predicate false yang benar tetap
+merupakan informasi, tetapi memerlukan response true dari kontrol komplemen
+yang membuktikan ekspresi yang sama berhasil dievaluasi: DVWA dapat menyamarkan
+SQL exception sebagai body missing-ID. Sintaks yang tidak dikenali atau kontrol
+komplemen yang gagal tidak mendapat kredit ekstraksi. Verifikasi timing memakai
+parser numerik `SLEEP` terbatas yang sama dengan validator, termasuk bentuk
+eksponen, tanda, desimal, dan komentar yang dinormalisasi. Komentar tetap
+memisahkan token: `AND/**/SLEEP(3)` memakai delay terbatas, sedangkan argumen
+berlebihan dengan bentuk yang sama ditolak sebelum transport. Kontrol yang
+terbatas ini bukan bukti universal tanpa false positive.
+
+Validasi juga menyimpan receipt `candidate_budget_exceeded` bagi kandidat valid
+yang dikeluarkan oleh ranking profile. Kandidat tersebut tidak dieksekusi dan
+manual score tetap null; batas budget tidak membuktikan kualitas output buruk.
+
+Agent access-control saat ini login sebagai admin tanpa permission control
+independen. Hasil yang hanya menunjukkan content dibatasi pada score 2 dengan
+keputusan `unverified` dan alasan `missing_independent_authorization_control`;
+evidence tersebut tidak menghasilkan confirmed node atau enabling outcome.
+Positive unauthorized access tetap infeasible/unverified sampai fixture
+principal/permission di dalam scope dibuktikan secara independen.
+
+`method_execution_inputs` menyimpan queue executable tervalidasi dan state
+sebelum eksekusi yang disanitasi sesudah setiap receipt validator selesai,
+termasuk kunjungan ulang method. API
+`evaluation.payload_replay.replay_method_inputs` memvalidasi ulang queue yang
+sama, dapat memilih hanya ID tersimpan dengan stage probe/exploit tersimpan,
+mempertahankan candidate ID dan urutan eksekusi tersimpan, serta berhenti pada
+rejection, perubahan membership/nilai/provenance, atau kehilangan akibat budget.
+Perubahan urutan oleh ranking baru saja tidak membatalkan frozen queue. Replay
+memakai reducer state graph yang sama, sehingga observation monotonic, attempt
+sebelumnya, score maksimum, dan evidence terakumulasi tetap tersimpan. Checkpoint
+resume mengabaikan receipt validation historis saat menyimpan input baru. Replay
+membuka session baru, dan melarang provider call baru. Output diagnostic memuat
+SHA-256 sumber, hash code eksekusi, evidence request/verifier/score, dan baris
+manual-scoring. Dataset diagnostic terpisah dari primary model-performance.
+Replay mencatat `manual_scoring_scope: fresh_replay_execution`; baris manual
+hanya memuat candidate yang terhubung ke response evidence eksekusi baru.
+Score dan evidence historis tetap tersimpan di `final_state` dan artifact sumber
+yang ditautkan. Replay yang berhenti sebelum eksekusi memiliki lembar manual kosong.
+Artifact lama tanpa frozen input tidak dapat direplay dengan state rekaan.
 
 ## 12. Consistency Handling
 
