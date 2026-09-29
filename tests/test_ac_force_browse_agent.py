@@ -38,7 +38,7 @@ def test_probe_no_accessible_pages(base_state):
 
     assert result["scores"]["ac_force_browse"] == 0
 
-def test_exploit_confirms_force_browse(base_state):
+def test_visible_content_requires_independent_authorization_control(base_state):
     """When source code or setup page accessed, score >= 3."""
     mock_session = _make_mock_session()
 
@@ -53,8 +53,9 @@ def test_exploit_confirms_force_browse(base_state):
     with patch("agents.access_control.ac_force_browse_agent.DVWASession", return_value=mock_session):
         result = ac_force_browse_agent(base_state)
 
-    assert result["scores"]["ac_force_browse"] >= 3
-    assert "ac_force_browse_confirmed" in result.get("confirmed_vulns", [])
+    assert result["scores"]["ac_force_browse"] == 2
+    assert not result.get("confirmed_vulns")
+    assert result["verifier_decision"]["decision"] == "unverified"
 def test_login_failure(base_state):
     """Verifies login failure behavior."""
     mock_session = _make_mock_session(login_ok=False)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
@@ -29,7 +30,9 @@ _SIGNALS = _STRUCTURAL_SIGNALS + _CONTENT_SIGNALS
 
 def _request_high_via_session(session: DVWASession, payload: str):
     """Store a high-level payload, then reload the page that renders results."""
-    session.post(SESSION_INPUT_PATH, data={"id": payload})
+    submitted = session.post(SESSION_INPUT_PATH, data={"id": payload})
+    if submitted.status_code != 200:
+        return submitted
     return session.get(HIGH_RESULT_PATH)
 
 
@@ -108,8 +111,10 @@ def _attempt_exploit(
                 # Medium uses level-scoped UNION variants that cover the
                 # filtered column-count and LIMIT forms; the evidence gate
                 # remains identical for every security level.
-                if ("first name" in body or "surname" in body) and \
-                   ("admin" in body or "gordonb" in body or "pablo" in body):
+                data = re.sub(r"<[^>]*>", " ", body)
+                if verifier.regex_match(data, [
+                    r"first name\s*:\s*(?:admin|gordonb|pablo|smithy|1337)\s+surname\s*:\s*(?:[a-f0-9]{32}|password)\b",
+                ]).ok:
                     score = max(score, 3)
                     confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
                     break

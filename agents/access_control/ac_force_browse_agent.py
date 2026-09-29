@@ -69,7 +69,7 @@ def _probe_preconditions(
         tried.append(payload)
         try:
             resp = session.get(path)
-            events.append(probe_event(AGENT_ID, path, resp.status_code, True))
+            events.append(probe_event(AGENT_ID, path, resp.status_code, resp.status_code == 200, endpoint=path))
             if resp.status_code == 200:
                 result = verifier.contains_any(resp.text, _ACCESSIBLE_SIGNALS)
                 if result.ok:
@@ -77,7 +77,7 @@ def _probe_preconditions(
                     return True, tried, observations, events
         except Exception as exc:
             logger.warning("[%s] PROBE request failed for %s: %s", AGENT_ID, path, exc)
-            events.append(probe_event(AGENT_ID, path, None, False))
+            events.append(probe_event(AGENT_ID, path, None, False, endpoint=path))
 
     if not sent_any:
         return False, tried, {}, events
@@ -109,7 +109,7 @@ def _attempt_exploit(
         tried.append(payload)
         try:
             resp = session.get(path)
-            events.append(exploit_event(AGENT_ID, path, resp.status_code, True))
+            events.append(exploit_event(AGENT_ID, path, resp.status_code, resp.status_code == 200, endpoint=path))
             if resp.status_code == 200:
                 result = verifier.contains_any(resp.text, _signals_for_path(path))
                 if result.ok:
@@ -118,7 +118,7 @@ def _attempt_exploit(
                     break
         except Exception as exc:
             logger.warning("[%s] EXPLOIT request failed for %s: %s", AGENT_ID, path, exc)
-            events.append(exploit_event(AGENT_ID, path, None, False))
+            events.append(exploit_event(AGENT_ID, path, None, False, endpoint=path))
 
     return score, tried, confirmed, events
 

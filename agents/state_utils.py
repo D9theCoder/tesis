@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from foundation.http_client import RequestTimeoutError, TransportError
 from foundation.payload_library import PayloadLibrary
@@ -81,12 +81,12 @@ def validated_payload_candidates(state: dict[str, Any], module_name: str) -> lis
     valid_ids = validated_candidate_ids(state, module_name)
     if valid_ids is None:
         return [candidate for candidate in candidates if isinstance(candidate, dict)]
-    return [
-        candidate
-        for candidate in candidates
-        if isinstance(candidate, dict)
-        and str(candidate.get("candidate_id")) in valid_ids
-    ]
+    by_id = {str(candidate.get("candidate_id")): candidate
+             for candidate in candidates if isinstance(candidate, dict)}
+    # Candidate history is append-only; the validation rows carry the ranked
+    # execution order. Do not revive the builder's older unranked ordering.
+    return [by_id[candidate_id] for row in state["payload_validation_results"][module_name]
+            if (candidate_id := str(row.get("candidate_id"))) in valid_ids and candidate_id in by_id]
 
 
 def append_error_marker(target: list[str], context: str, exc: Exception) -> None:
@@ -337,8 +337,8 @@ def _materialize_request_evidence(
             payload_copy["candidate_id"] = selected["candidate_id"]
             assigned.add((stage, selected["candidate_id"]))
         event_endpoint = str(payload_copy.get("endpoint") or endpoint or "")
-        if event_endpoint.startswith("/") and target_url:
-            event_endpoint = f"{target_url}{event_endpoint}"
+        if event_endpoint and not urlparse(event_endpoint).scheme and target_url:
+            event_endpoint = urljoin(f"{target_url}/", event_endpoint.lstrip("/"))
         payload_copy["endpoint"] = event_endpoint
         event_copy["payload"] = payload_copy
         normalized_events.append(event_copy)
@@ -409,6 +409,19 @@ def make_update(
     Returns:
         Partial `ExploitationState` update suitable for LangGraph reducers.
     """
+    # These agents authenticate as admin and supply no independent permission
+    # control. Reachable account/page data cannot prove unauthorized access.
+    authorization_unverified = module_name.startswith("ac_") and bool(confirmed_vulns)
+    if authorization_unverified:
+        score = min(score, 2)
+        confirmed_vulns = None
+        achieved_outcomes = None
+        telemetry_events = [
+            {**event, "payload": {**event["payload"], "score": score,
+                                  "confirmed_vulns": [], "achieved_outcomes": []}}
+            if event.get("event") == "agent.score.final" else event
+            for event in (telemetry_events or [])
+        ]
     update: dict[str, Any] = {
         "scores": merge_scores(state, module_name, score),
         "exploitation_scores": merge_score_map(state, "exploitation_scores", module_name, min(score, 3)),
@@ -475,20 +488,18 @@ def make_update(
         if timing_evidence:
             update["timing_evidence"] = timing_evidence
 
-        # A method invocation with request telemetry is itself a verifier
-        # decision, even when its evidence did not confirm the vulnerability.
-        # Keep an existing confirmed decision when a later fallback invocation
-        # has no new confirmation, but never leave the artifact ambiguous for
-        # a first invocation that produced auditable negative evidence.
-        if confirmed_vulns or not state.get("verifier_decision"):
-            update["verifier_decision"] = {
-                "agent_id": module_name,
-                "decision": "confirmed" if confirmed_vulns else "not_confirmed",
-                "confirmed_vulns": list(confirmed_vulns or []),
-                "score": score,
-                "evidence_count": len(response_evidence),
-                "source": "method_agent_evidence",
-            }
+    # The runner records each graph snapshot, preserving prior confirmations
+    # while recording this invocation's negative/failed decision as well.
+    update["verifier_decision"] = {
+        "agent_id": module_name,
+        "decision": "unverified" if authorization_unverified else ("confirmed" if confirmed_vulns else "not_confirmed"),
+        "confirmed_vulns": list(confirmed_vulns or []),
+        "score": score,
+        "evidence_count": len(update.get("response_evidence", [])),
+        "source": "method_agent_evidence",
+    }
+    if authorization_unverified:
+        update["verifier_decision"]["reason"] = "missing_independent_authorization_control"
 
     # Track failure agents for fallback loop and adaptation metrics.
     # failure_agents uses Annotated[list[str], add] reducer.

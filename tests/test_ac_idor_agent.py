@@ -39,7 +39,7 @@ def test_probe_no_idor(base_state):
     assert result["scores"]["ac_idor"] == 0
     assert result["observations"].get("object_ids_enumerable") is False
 
-def test_exploit_confirms_unauthorized_access(base_state):
+def test_object_data_requires_independent_authorization_control(base_state):
     """When unauthorized data access confirmed, score >= 3."""
     mock_session = _make_mock_session()
 
@@ -55,8 +55,9 @@ def test_exploit_confirms_unauthorized_access(base_state):
     with patch("agents.access_control.ac_idor_agent.DVWASession", return_value=mock_session):
         result = ac_idor_agent(base_state)
 
-    assert result["scores"]["ac_idor"] >= 3
-    assert "ac_idor_confirmed" in result.get("confirmed_vulns", [])
+    assert result["scores"]["ac_idor"] == 2
+    assert not result.get("confirmed_vulns")
+    assert result["verifier_decision"]["decision"] == "unverified"
 def test_login_failure(base_state):
     """Verifies login failure behavior."""
     mock_session = _make_mock_session(login_ok=False)

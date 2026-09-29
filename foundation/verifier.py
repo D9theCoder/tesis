@@ -11,6 +11,31 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 
+def usable_blind_response(response, *, allow_missing: bool = False) -> bool:
+    """Accept DVWA's documented missing-ID 404, excluding generic HTTP errors."""
+    return response.status_code == 200 or (
+        allow_missing and response.status_code == 404
+        and "user id is missing from the database" in response.text.lower()
+    )
+
+
+def complementary_boolean_payload(payload: str) -> str | None:
+    """Negate a bounded DVWA AND predicate, preserving its ID and SQL suffix.
+
+    Unrecognized syntax cannot establish that a missing-ID response is a
+    successfully evaluated false predicate, so callers must leave it unverified.
+    """
+    match = re.fullmatch(
+        r"(\s*\d+\s*'?(?:\s|/\*.*?\*/)*AND(?:\s|/\*.*?\*/)*)"
+        r"(.+?)(\s*(?:--\s.*|#.*))?",
+        payload, re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return None
+    prefix, predicate, suffix = match.groups()
+    return f"{prefix}NOT ({predicate}){suffix or ''}"
+
+
 @dataclass
 class VerificationResult:
     """Structured result from a verification check.

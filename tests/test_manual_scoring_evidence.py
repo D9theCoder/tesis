@@ -185,12 +185,12 @@ def test_access_control_agent_exports_only_actual_candidate_attempts(monkeypatch
     evidence_dir.mkdir(parents=True, exist_ok=True)
     (evidence_dir / f"{method}-{'spaces' if first != first.strip() else 'plain'}-{probe.strip()}.json").write_text(json.dumps(artifact, indent=2) + "\n")
     rows = {row["candidate_id"]: row for row in artifact["manual_scoring_evidence"]}
-    assert update["scores"][method] == 3
+    assert update["scores"][method] == 2
     for candidate_id in ["probe", "attempted"]:
         row = rows[candidate_id]
         assert row["response_evidence_ref"] and row["execution_log_ref"]
-        assert row["verifier_decision"]["decision"] == "confirmed"
-        assert row["score_0_4"] == 3
+        assert row["verifier_decision"]["decision"] == "unverified"
+        assert row["score_0_4"] == 2
         for field in ["response_evidence", "execution_log"]:
             for pointer in row[f"{field}_ref"]:
                 record = artifact[field][int(pointer.rsplit("/", 1)[1])]

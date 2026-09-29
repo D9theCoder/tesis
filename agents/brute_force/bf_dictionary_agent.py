@@ -157,7 +157,9 @@ def _latency_indicates_rate_limit(elapsed_seconds: list[float]) -> bool:
     if baseline <= 0:
         return False
     return all(
-        elapsed >= baseline * _RATE_LIMIT_LATENCY_RATIO
+        # ponytail: 100 ms growth floor filters tiny jitter; use repeated
+        # matched controls if deployment jitter exceeds this floor.
+        elapsed - baseline >= 0.1 and elapsed >= baseline * _RATE_LIMIT_LATENCY_RATIO
         for elapsed in elapsed_seconds[1:]
     )
 
@@ -183,6 +185,7 @@ def _probe_preconditions(
     sent_any = False
     response_elapsed: list[float] = []
     rate_limit_detected = False
+    accepted_probes = 0
 
     # Use the provided payloads when present so callers control the probe set.
     # Fall back to dedicated rate-test credentials only when no payloads exist.
@@ -205,9 +208,11 @@ def _probe_preconditions(
             for response_index, resp in enumerate(responses):
                 elapsed_seconds = _request_elapsed_seconds(resp, request_started)
                 response_rate_limited = _response_indicates_rate_limit(resp)
-                response_accepted = not _response_indicates_csrf_token_error(resp)
+                response_accepted = resp.status_code == 200 and not _response_indicates_csrf_token_error(resp)
                 if response_index == len(responses) - 1:
-                    response_elapsed.append(elapsed_seconds)
+                    if response_accepted:
+                        accepted_probes += 1
+                        response_elapsed.append(elapsed_seconds)
                     rate_limit_detected = rate_limit_detected or response_rate_limited
                 events.append(probe_event(
                     AGENT_ID,
@@ -224,7 +229,7 @@ def _probe_preconditions(
         if cached_precondition is not None:
             observations[_PROBE_OBSERVATION_KEY] = bool(cached_precondition)
             return bool(cached_precondition), tried, observations, events
-        return True, tried, {}, events  # Assume no rate limit if already probed
+        return False, tried, {}, events  # No observed precondition.
 
     # DVWA high security intentionally sleeps for a random 0-3 seconds on
     # each request.  Relative latency is therefore not a reliable throttle
@@ -237,6 +242,8 @@ def _probe_preconditions(
         observations[_PROBE_OBSERVATION_KEY] = False
         return False, tried, observations, events
 
+    if not accepted_probes:
+        return False, tried, {}, events
     observations[_PROBE_OBSERVATION_KEY] = True
     return True, tried, observations, events
 
@@ -285,7 +292,9 @@ def _attempt_exploit(
             )
             for resp in responses:
                 semantic_success = (
-                    not _response_indicates_csrf_token_error(resp)
+                    resp.status_code == 200
+                    and not _response_indicates_csrf_token_error(resp)
+                    and not has_captcha_challenge(resp.text)
                     and verifier.contains_any(resp.text, _SUCCESS_SIGNALS).ok
                 )
                 events.append(exploit_event(
@@ -301,8 +310,7 @@ def _attempt_exploit(
                 return 0, tried, [], events, [], True
 
             # Full exploit: successful login
-            success_result = verifier.contains_any(resp.text, _SUCCESS_SIGNALS)
-            if success_result.ok:
+            if semantic_success:
                 score = max(score, 3)
                 confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
                 found_credentials.append({"username": username, "password": password})

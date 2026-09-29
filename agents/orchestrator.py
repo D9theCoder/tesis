@@ -519,7 +519,7 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                 "successful_evasions": state.get("successful_evasions", 0),
             }
 
-        parsed = structured_decision or _parse_decision_payload(text)
+        parsed = structured_decision if context is not None else _parse_decision_payload(text)
         # Direct legacy callers predate the compact reason_code schema and may
         # return only next_agent. The runtime path performs full schema
         # validation before this point; preserve the legacy direct contract

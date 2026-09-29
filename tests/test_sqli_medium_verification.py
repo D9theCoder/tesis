@@ -119,6 +119,9 @@ def test_boolean_medium_single_true_confirms_but_high_requires_two(
         if "id" in payload_data:
             current_payload["value"] = str(payload_data["id"])
         payload = current_payload["value"]
+        if security_level == "high":
+            from urllib.parse import unquote
+            payload = unquote(session.http.set_cookie.call_args.args[1])
         if "1=1" in payload or "1=2" not in payload:
             return _make_response("User ID exists in the database")
         return _make_response("User ID is missing from the database")
@@ -132,7 +135,7 @@ def test_boolean_medium_single_true_confirms_but_high_requires_two(
 
     assert result["scores"]["sqli_boolean_blind"] == expected_score
     assert ("sqli_boolean_blind_confirmed" in result.get("confirmed_vulns", [])) is confirmed
-    assert (session.post.call_count > 0) is (security_level in {"medium", "high"})
+    assert (session.post.call_count > 0) is (security_level == "medium")
 
 def _time_monotonic_values(delay: float) -> list[float]:
     values: list[float] = []
@@ -157,20 +160,29 @@ def test_time_medium_threshold_and_single_delay_are_level_scoped(
     delay: float,
     expected_confirmed: bool,
 ):
-    """Medium uses a 1.8s/single-hit gate while high remains at 2.5s/two-hit."""
+    """Medium uses a 1.8s gate with repeated evidence; high uses 2.5s."""
     seeds = PayloadLibrary().load_seed_candidates("sqli_time_blind", security_level)
     candidates = [seed for seed in seeds if seed["stage"] in {"probe", "exploit"}]
+    from importlib import import_module
+    from types import SimpleNamespace
+    module = import_module("agents.sqli.sqli_time_blind_agent")
     session = _make_session()
-    session.get.return_value = _make_response("User ID exists")
-    session.post.return_value = _make_response("User ID exists")
-    state = _make_state("sqli_time_blind", security_level, candidates)
+    clock = [0.0]
 
-    with patch(
-        "agents.sqli.sqli_time_blind_agent.time.monotonic",
-        side_effect=_time_monotonic_values(delay),
-    ):
-        with patch("agents.sqli.sqli_time_blind_agent.DVWASession", return_value=session):
-            result = sqli_time_blind_agent(state)
+    def request(_path, params=None, data=None):
+        payload = (params or data or {}).get("id", "")
+        if security_level == "high":
+            from urllib.parse import unquote
+            payload = unquote(session.http.set_cookie.call_args.args[1])
+        clock[0] += 0.1 if payload == "1" else 0.1 + delay
+        return _make_response("User ID exists")
+
+    session.get.side_effect = request
+    session.post.side_effect = request
+    state = _make_state("sqli_time_blind", security_level, candidates)
+    with patch.object(module, "time", SimpleNamespace(monotonic=lambda: clock[0])), \
+         patch.object(module, "DVWASession", return_value=session):
+        result = sqli_time_blind_agent(state)
 
     if expected_confirmed:
         assert result["scores"]["sqli_time_blind"] >= 3
@@ -178,7 +190,7 @@ def test_time_medium_threshold_and_single_delay_are_level_scoped(
     else:
         assert result["scores"]["sqli_time_blind"] < 3
         assert "sqli_time_blind_confirmed" not in result.get("confirmed_vulns", [])
-    assert (session.post.call_count > 0) is (security_level in {"medium", "high"})
+    assert (session.post.call_count > 0) is (security_level == "medium")
 
 def test_medium_bypass_seeds_do_not_enter_high_candidates():
     """The evidence additions are isolated to medium payload loading."""

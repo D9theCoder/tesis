@@ -493,6 +493,8 @@ def recon(state: ExploitationState) -> dict[str, Any]:
     login_success = False
     force_browse_endpoints_visible = False
     low_priv_session_available = False
+    rate_probe_observations: dict[str, bool] = {}
+    rate_probe_events: list[dict] = []
 
     try:
         # Step 1: Create session and login
@@ -589,7 +591,23 @@ def recon(state: ExploitationState) -> dict[str, Any]:
         # Step 6: Capture session-backed observations before releasing the
         # HTTP client. Probing after ``session.close()`` raises httpx's
         # ``RuntimeError: Cannot send a request, as the client has been closed``.
-        low_priv_session_available = bool(getattr(session, "is_logged_in", False))
+        principal = getattr(session, "_username", "")
+        low_priv_session_available = bool(
+            getattr(session, "is_logged_in", False)
+            and isinstance(principal, str) and principal and principal != "admin"
+        )
+        if state.get("current_surface") == "brute_force" and any(
+            endpoint.get("module_name") == "brute" for endpoint in all_endpoints
+        ):
+            # Discovery alone says nothing about throttling. Reuse the same
+            # bounded benign credential controls as the method agents.
+            from agents.brute_force.bf_dictionary_agent import _probe_preconditions
+            from foundation.payload_library import PayloadLibrary
+
+            probe_seeds = PayloadLibrary().get("bf_dictionary", requested_level).probe
+            _, _, rate_probe_observations, rate_probe_events = _probe_preconditions(
+                session, probe_seeds, set(), security_level=requested_level,
+            )
         try:
             probe_resp = session.http.get("setup.php")
             accessible_signals = (
@@ -655,7 +673,7 @@ def recon(state: ExploitationState) -> dict[str, Any]:
     observations["force_browse_endpoints_visible"] = force_browse_endpoints_visible
 
     # Brute force observations
-    observations["no_rate_limit"] = "brute" in module_names
+    observations.update(rate_probe_observations)
     observations["low_priv_session_available"] = low_priv_session_available
     observations["authenticated_crawl"] = login_success
 
@@ -666,6 +684,7 @@ def recon(state: ExploitationState) -> dict[str, Any]:
         "next_agent": "orchestrator",
         "observations": observations,
         "containment_events": containment_events,
+        "telemetry_events": rate_probe_events,
     }
 
 

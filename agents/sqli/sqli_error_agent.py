@@ -34,21 +34,19 @@ _ERROR_SIGNALS = [
 # Signals indicating successful data extraction via error-based methods.
 # The response should show the DVWA/XPath error envelope together with
 # extracted credential-like content, not generic page content.
-_EXPLOIT_SIGNALS = [
-    "~dvwa",
-    "~",
-    "xpath",
-    "xpath error:",
-    "admin:",
-    "gordonb:",
-    "pablo:",
-    "smithy:",
+_EXPLOIT_PATTERNS = [
+    r"^\s*<pre>\s*duplicate entry ['\"]dvwa[01]['\"] for key ['\"]group_key['\"]\s*</pre>\s*$",
+    r"xpath\s+(?:syntax\s+)?error\s*:\s*['\"]?~[a-z0-9_]+",
+    r"~dvwa\b",
+    r"surname\s*:\s*(?:admin|gordonb|pablo|smithy|1337):[a-f0-9]{32}\b",
 ]
 
 
 def _request_high_via_session(session: DVWASession, payload: str):
     """Store a high-level payload, then reload the page that renders results."""
-    session.post(SESSION_INPUT_PATH, data={"id": payload})
+    submitted = session.post(SESSION_INPUT_PATH, data={"id": payload})
+    if submitted.status_code != 200:
+        return submitted
     return session.get(HIGH_RESULT_PATH)
 
 
@@ -122,9 +120,8 @@ def _attempt_exploit(
             resp = _request(session, security_level, payload)
             events.append(exploit_event(AGENT_ID, payload, resp.status_code, True))
             if resp.status_code == 200:
-                # Medium DVWA can truncate the XPath envelope to ``~admin``;
-                # a tilde is sufficient evidence after the required probe.
-                result = verifier.contains_any(resp.text.lower(), _EXPLOIT_SIGNALS)
+                # Keep truncated XPath data, but reject bare tildes and prose.
+                result = verifier.regex_match(resp.text, _EXPLOIT_PATTERNS)
                 if result.ok:
                     score = max(score, 3)
                     confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])

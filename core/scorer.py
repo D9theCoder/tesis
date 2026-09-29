@@ -206,7 +206,10 @@ def scorer(state: dict) -> dict:
         "incomplete_reasons": state.get("incomplete_reason"),
     }
 
-    selected_method = state.get("selected_method")
+    decision = state.get("verifier_decision")
+    last_executed_method = decision.get("agent_id") if isinstance(decision, dict) else None
+    selected_method = state.get("selected_method") or last_executed_method
+    summary["selected_method"] = selected_method
     output_scores = dict(state.get("output_scores", {}))
     composite_scores = dict(state.get("composite_scores", {}))
     if selected_method:
@@ -262,6 +265,7 @@ def scorer(state: dict) -> dict:
         task_result = "INCOMPLETE"
 
     return {
+        "selected_method": selected_method,
         "scores": normalized_scores,
         "next_agent": END,
         "task_result": task_result,

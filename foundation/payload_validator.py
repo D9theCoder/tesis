@@ -65,8 +65,8 @@ def _is_out_of_scope(payload: str) -> bool:
     return bool(parsed.scheme and parsed.netloc)
 
 
-def _unsafe_resource_reason(payload: str) -> str | None:
-    """Reject delay mutations that can consume unbounded target resources.
+def bounded_sleep_delays(payload: str) -> list[float]:
+    """Parse bounded delay calls, raising ValueError for unsafe resource cost.
 
     Model mutations can insert SQL block comments or percent-encode function
     names.  Normalize those representations before inspecting delay calls so
@@ -81,18 +81,28 @@ def _unsafe_resource_reason(payload: str) -> str | None:
         if decoded == normalized:
             break
         normalized = decoded
-    normalized = _SQL_BLOCK_COMMENT.sub("", normalized)
+    normalized = _SQL_BLOCK_COMMENT.sub(" ", normalized)
 
     if _BENCHMARK_CALL.search(normalized):
-        return "unsafe_resource_cost"
+        raise ValueError("unsafe_resource_cost")
 
+    delays: list[float] = []
     for match in _SLEEP_CALL.finditer(normalized):
         try:
             seconds = float(match.group(1).strip())
-        except (TypeError, ValueError):
-            return "unsafe_resource_cost"
+        except (TypeError, ValueError) as exc:
+            raise ValueError("unsafe_resource_cost") from exc
         if not math.isfinite(seconds) or not 0 <= seconds <= _MAX_SAFE_DELAY_SECONDS:
-            return "unsafe_resource_cost"
+            raise ValueError("unsafe_resource_cost")
+        delays.append(seconds)
+    return delays
+
+
+def _unsafe_resource_reason(payload: str) -> str | None:
+    try:
+        bounded_sleep_delays(payload)
+    except ValueError:
+        return "unsafe_resource_cost"
     return None
 
 
@@ -295,6 +305,9 @@ def validate_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
 
     max_total = int(profile.get("max_total_candidates", state.get("candidate_budget", 5)) or 5)
     ranked = rank_candidates(valid, max_total)
+    ranked_ids = {c["candidate_id"] for c in ranked}
+    rejected.extend({"candidate_id": c["candidate_id"], "valid": False, "reason": "candidate_budget_exceeded"}
+                    for c in valid if c["candidate_id"] not in ranked_ids)
     update = {
         "payload_candidates": {method: ranked},
         "payload_validation_results": {method: [*rejected, *[c["validation"] for c in ranked]]},
@@ -350,4 +363,11 @@ def payload_validator_node(state: dict[str, Any]) -> dict[str, Any]:
 
     Returns:
         Partial state update with validation results."""
-    return validate_payload_candidates(state)
+    update = validate_payload_candidates(state)
+    update["telemetry_events"] = [{
+        "node": "payload_validator",
+        "event": "payload.validation.completed",
+        "status": "ok",
+        "payload": {"method": state.get("selected_method")},
+    }]
+    return update
