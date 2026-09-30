@@ -78,6 +78,8 @@ def _common_kwargs(config: EngagementConfig, *, output_dir: Path) -> dict[str, A
         "cancellation_token": CancellationToken(),
         "experiment_condition": config.experiment_condition,
         "target_method": config.target_method,
+        "scoring_mode": config.scoring_mode,
+        "scoring_evaluator": config.scoring_evaluator,
     }
     kwargs.update(_runtime_kwargs(config))
     return kwargs

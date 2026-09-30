@@ -422,6 +422,8 @@ def run_single_engagement(
     resume: bool = False,
     checkpoint_dir: str | None = None,
     experiment_id: str | None = None,
+    scoring_mode: str = "human",
+    scoring_evaluator: dict[str, Any] | None = None,
 ) -> dict:
     """Run one configured DVWA framework engagement and write evaluation artifacts.
 
@@ -456,6 +458,8 @@ def run_single_engagement(
         failure details when execution fails.
     """
     run_id = f"{llm_provider}-{surface}-{security_level}-{payload_mode}-{repeat_index}"
+    from evaluation.thesis_scoring import validate_scoring_config
+    validate_scoring_config(scoring_mode, scoring_evaluator or {})
     execution_id = execution_id or new_execution_id()
     cancellation_token = cancellation_token or CancellationToken()
     runtime_events: list[dict[str, Any]] = []
@@ -465,6 +469,8 @@ def run_single_engagement(
     # resume/checkpoint flags the run uses a random execution_id thread on the
     # process-local MemorySaver and never touches SQLite.
     coordinate = {
+        "scoring_mode": scoring_mode,
+        "scoring_evaluator": redact_secrets(scoring_evaluator or {}),
         "target_url": target_url,
         "provider": llm_provider,
         "surface": surface,
@@ -1434,6 +1440,11 @@ def run_single_engagement(
         "error": error,
     }
     artifact["state_schema_version"] = STATE_SCHEMA_VERSION
+    artifact["config"]["scoring_mode"] = scoring_mode
+    artifact["config"]["scoring_evaluator"] = redact_secrets(scoring_evaluator or {})
+    artifact["scoring_mode"] = scoring_mode
+    artifact["thesis_scoring_status"] = "pending_review"
+    artifact["composite_score_status"] = "historical_provisional_scoring.v2"
     artifact["checkpoint_schema_version"] = CHECKPOINT_SCHEMA_VERSION
     artifact["graph_build_version"] = GRAPH_BUILD_VERSION
     artifact["config_fingerprint"] = config_fingerprint(artifact["config"])

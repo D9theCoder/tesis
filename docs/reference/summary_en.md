@@ -899,6 +899,40 @@ Srun = 0.20 Smethod + 0.20 Spayload + 0.30 Sexploit + 0.10 Schain + 0.20 Soutput
 | `Schain`   |   0.10 | Chain outcome                             |
 | `Soutput`  |   0.20 | LLM output quality and guardrail handling |
 
+Current thesis grading uses [scoring.v3](thesis_scoring.md), with an
+experiment-wide `human|ai|both` selection. Both graders use one immutable
+execution and the same signal/proof gate, producing separate receipts.
+`Spayload_final` is the arithmetic mean over distinct executed validated
+exploit/bypass candidates in the final selected/last executed method. Rejected,
+probe and unexecuted candidates are excluded; empty denominators, missing proof
+and incomplete reviews leave the thesis composite null. Full precision is kept
+in the stored vector and final scores are rounded to four decimals.
+
+Method selection reaches 0/1/3; optimality grades 2/4 are reserved. A definite
+absent payload signal is 0; weak positive 1; partial 2; independently confirmed
+3; independently proved usable downstream material 4. Current exports do not
+establish payload tier 4; Access Control visibility and Brute Force login markers
+cap at 2 without their independent oracles. A verified one-hop chain is 3 and
+two connected verified hops are 4. Output is unusable 0, static fallback 1,
+repaired output 2 or clean usable output 3; stability grade 4 is reserved.
+Static controls have `Soutput=not_applicable` and no thesis composite.
+
+The evaluator is the configured `openai_compatible/deepseek-v4.1-flash` model in
+a fresh, separate judging role, with two attempts, 1,024 output tokens and a
+60-second timeout. This is not an independent-model comparison. Failed judge
+responses stay pending; a human result cannot fill an AI receipt. Corrections
+are append-only and receipts retain the source hash, candidate citations,
+reviewer identity, versions, denominator, component vector and formula.
+CLI and TUI use one validated source-local review ledger. Repeated evaluation
+links predecessor decisions, and telemetry is saved per execution with archived
+prior versions. Repeat comparisons separate reviewer identities and review
+versions as well as the grading workflow and frozen configuration.
+Opening an older receipt from Results can restore its source-validated history
+without a ledger, including custom output directories; further derived writes
+stay in that receipt's directory.
+
+The automatic runtime scores below are **historical/provisional scoring.v2**;
+they remain in execution artifacts and do not replace thesis `Srun_final`.
 Rubric `scoring.v2` records each selection before execution with a visit ID.
 `Smethod` is 3 for contemporaneous viability and 1 for an in-scope choice whose
 prerequisites are not proved. Forced, model/orchestrator, deterministic fallback
@@ -953,6 +987,17 @@ the recorded routing/stop decision. A stop before any execution has no selected
 method to score.
 
 ### 7.2 Metric List
+
+For `scoring.v3`, payload execution success uses valid exploit/bypass candidates
+as denominator; missing executed evidence leaves the rate unavailable.
+Optimal first-choice accuracy, separate method alignment, edge-by-edge AKG path
+validity and token cost remain null with explicit reasons when their required
+ranking/verdict/trace/price schedule is absent. Do not equate optimal selection
+with eventual first-method success. Compare completed receipts within the same
+rubric and grading workflow; retain all pending/unassessable counts and separate
+environment, model, evidence and provider integration inconsistency. The
+historical one-model matrix does not satisfy the commercial-plus-open model
+comparison requirement.
 
 | Metric                           | Function                                                 |
 | -------------------------------- | -------------------------------------------------------- |

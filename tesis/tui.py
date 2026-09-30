@@ -29,6 +29,7 @@ from tesis.tui_drawers import (
     HelpDrawer,
     PlanDrawer,
     ResultsDrawer,
+    ReviewDrawer,
     TraceDrawer,
 )
 from tesis.tui_forms import LaunchDrawer, SettingsDrawer

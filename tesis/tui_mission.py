@@ -704,6 +704,8 @@ class MissionControlScreen(Screen):
                 payload_modes = list(getattr(config, "payload_modes", []) or ["hybrid"])
                 _invoke_runner(run_provider_matrix, {
                     "target_url": config.target_url,
+                    "scoring_mode": getattr(config, "scoring_mode", "human"),
+                    "scoring_evaluator": getattr(config, "scoring_evaluator", {}),
                     "providers": providers,
                     "security_levels": levels,
                     "surfaces": surfaces,
@@ -722,6 +724,8 @@ class MissionControlScreen(Screen):
                     model_config = asdict(model_config)
                 _invoke_runner(run_single_engagement, {
                     "target_url": config.target_url,
+                    "scoring_mode": getattr(config, "scoring_mode", "human"),
+                    "scoring_evaluator": getattr(config, "scoring_evaluator", {}),
                     "security_level": str(getattr(config, "level", "low")),
                     "llm_provider": provider,
                     "surface": str(getattr(config, "surface", "sqli")),

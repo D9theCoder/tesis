@@ -148,6 +148,7 @@ def _headless_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--condition", "--experiment-condition", dest="experiment_condition")
     parser.add_argument("--target-method")
+    parser.add_argument("--scoring-mode", choices=("human", "ai", "both"))
     parser.add_argument("--model")
     parser.add_argument("--reasoning-effort", choices=("low", "medium", "high", "xhigh", "max"),
                         help="Override reasoning effort for both LLM roles.")
@@ -206,7 +207,7 @@ def _headless_overrides(namespace: argparse.Namespace) -> dict[str, object]:
     for key in (
         "target", "provider", "level", "surface", "payload_mode", "model_profile", "reasoning_effort",
         "experiment_condition",
-        "target_method", "repeats", "candidate_budget", "iterations", "stop_policy",
+        "target_method", "scoring_mode", "repeats", "candidate_budget", "iterations", "stop_policy",
         "coverage_target", "output_dir", "format", "log_verbosity", "providers", "levels",
         "surfaces", "payload_modes", "enriched_reporting", "diagnose",
         "guardrail_retry_enabled", "guardrail_handling", "llm_max_concurrency", "llm_cache",
@@ -283,6 +284,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     explicit coordinate flags for automation or LLM-driven terminal execution.
     """
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "review":
+        from evaluation.thesis_scoring import main as review_main
+        return review_main(arguments[1:])
     if arguments and arguments[0] == "doctor":
         from tesis.doctor import main as doctor_main
 

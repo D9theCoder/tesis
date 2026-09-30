@@ -430,6 +430,8 @@ def run_provider_matrix(
     resume: bool = False,
     checkpoint_dir: str | None = None,
     experiment_id: str | None = None,
+    scoring_mode: str = "human",
+    scoring_evaluator: dict[str, Any] | None = None,
 ) -> list[dict] | tuple[list[dict], dict[str, Any]]:
     """Run a deterministic matrix over all requested DVWA experiment axes.
 
@@ -539,6 +541,8 @@ def run_provider_matrix(
 
     serialized_role_configs = _serialize_role_configs(llm_role_configs)
     matrix_config = {
+        "scoring_mode": scoring_mode,
+        "scoring_evaluator": redact_secrets(scoring_evaluator or {}),
         "target_url": target_url,
         "providers": chosen_providers,
         "security_levels": chosen_levels,
@@ -623,6 +627,8 @@ def run_provider_matrix(
             else None
         )
         artifact_config = {
+            "scoring_mode": scoring_mode,
+            "scoring_evaluator": redact_secrets(scoring_evaluator or {}),
             "target_url": target_url,
             **coordinate,
             "provider": provider,
@@ -781,6 +787,8 @@ def run_provider_matrix(
     ) -> dict[str, Any]:
         provider = str(coordinate["provider"])
         run_kwargs = {
+            "scoring_mode": scoring_mode,
+            "scoring_evaluator": scoring_evaluator or {},
             "target_url": target_url,
             "security_level": coordinate["security_level"],
             "llm_provider": provider,

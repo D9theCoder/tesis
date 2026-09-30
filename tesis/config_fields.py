@@ -450,6 +450,12 @@ PAYLOAD_MODE = _field(
     forms=_SINGLE_FORMS,
     normalize="lower",
 )
+SCORING_MODE = _field(
+    "scoring_mode", label="Payload review: human / AI / both",
+    category=FieldCategory.RUN.value, value_type=str, kind="select",
+    choices=("human", "ai", "both"), default="human", forms=_COMMON_FORMS,
+    normalize="lower",
+)
 EXPERIMENT_CONDITION = _field(
     "experiment_condition",
     label="Experiment condition",
@@ -928,6 +934,7 @@ SINGLE_RUN_FIELDS: tuple[FieldSpec, ...] = (
     SECURITY_LEVEL,
     SURFACE,
     PAYLOAD_MODE,
+    SCORING_MODE,
     EXPERIMENT_CONDITION,
     TARGET_METHOD,
     CANDIDATE_BUDGET,
@@ -947,6 +954,7 @@ SINGLE_RUN_FIELDS: tuple[FieldSpec, ...] = (
 )
 MATRIX_FIELDS: tuple[FieldSpec, ...] = (
     TARGET_URL,
+    SCORING_MODE,
     MATRIX,
     MODEL_PROFILE,
     PROVIDERS,

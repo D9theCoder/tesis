@@ -37,7 +37,7 @@ import tesis.tui_security as tui_security
 import tesis.tui_state as tui_state
 
 
-_LAUNCH_SCOPE_FIELDS: tuple[str, ...] = ("target_url", "experiment_condition", "target_method")
+_LAUNCH_SCOPE_FIELDS: tuple[str, ...] = ("target_url", "experiment_condition", "target_method", "scoring_mode")
 _LAUNCH_COORDINATE_FIELDS: tuple[str, ...] = (
     "provider", "model_profile", "level", "surface", "payload_mode",
 )
@@ -85,6 +85,7 @@ _LAUNCH_CLI_KEYS: dict[str, str] = {
     "level": "level",
     "surface": "surface",
     "payload_mode": "payload_mode",
+    "scoring_mode": "scoring_mode",
     "model_profile": "model_profile",
     "experiment_condition": "experiment_condition",
     "target_method": "target_method",
@@ -435,6 +436,7 @@ class LaunchDrawer(BaseDrawer):
                 f"condition={cfg.experiment_condition} target_method={cfg.target_method or '—'}\n"
                 f"provider={cfg.provider} model_profile={getattr(cfg, 'model_profile', None) or '—'} "
                 f"level={cfg.level} surface={cfg.surface} payload_mode={cfg.payload_mode}\n"
+                f"scoring={cfg.scoring_mode} evaluator={cfg.scoring_evaluator.get('model', 'not configured')}\n"
                 f"candidate_budget={cfg.candidate_budget} iterations={cfg.iterations} "
                 f"stop_policy={cfg.stop_policy} coverage_target={cfg.coverage_target}\n"
                 f"output_dir={cfg.output_dir} format={cfg.report_format}\n"

@@ -366,6 +366,21 @@ BaseDrawer.drawer-full .drawer {
     background: $boost;
 }
 
+#results-actions {
+    height: 3;
+}
+
+#results-actions Button {
+    width: 1fr;
+    min-width: 0;
+}
+
+#results-filter-scroll {
+    height: auto;
+    max-height: 6;
+    scrollbar-size: 1 1;
+}
+
 /* ---- forms: dense grid, grouping by spacing not boxes ---- */
 
 .screen-title {

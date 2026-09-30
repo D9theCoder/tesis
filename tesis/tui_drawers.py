@@ -12,8 +12,9 @@ from typing import Any
 from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.message import Message
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Button, DataTable, Label, Select, Static
+from textual.widgets import Button, DataTable, Input, Label, Select, Static
 
 from tesis.artifact_repository import ArtifactRepository, config_fingerprint
 from tesis.config_loader import load_and_resolve_config
@@ -516,23 +517,30 @@ class ResultsDrawer(BaseDrawer):
         self._closing_guard = False
         self._filters: dict[str, str] = {}
         self._populating = False
+        self._selected_path: Path | None = None
+        self._selected_item = None
 
     def compose(self) -> ComposeResult:
         yield Label("Results (Esc to close)", id="results-title")
         yield Static("—", id="results-summary", markup=False)
-        with Horizontal(id="results-filters", classes="filters"):
-            yield Label("Filters", id="results-filters-label")
-            for select_id, _ in self.FILTER_FIELDS:
-                yield Select([], prompt=select_id.removeprefix("filter-"), id=select_id,
-                             allow_blank=True)
+        with VerticalScroll(id="results-filter-scroll"):
+            with Horizontal(id="results-filters", classes="filters"):
+                yield Label("Filters", id="results-filters-label")
+                for select_id, _ in self.FILTER_FIELDS:
+                    yield Select([], prompt=select_id.removeprefix("filter-"), id=select_id,
+                                 allow_blank=True)
         yield DataTable(id="results-table")
-        yield Static("Select a row and press Enter for triage detail", id="results-detail", markup=False)
-        yield Button("Export JSON", id="results-export")
+        with VerticalScroll(classes="drawer-body"):
+            yield Static("Select a row and press Enter for triage detail", id="results-detail", markup=False)
+        with Horizontal(id="results-actions"):
+            yield Button("Export JSON", id="results-export")
+            yield Button("Review payload evidence", id="results-review")
         yield Static("", id="results-status", markup=False)
 
     def on_mount(self) -> None:
         try:
             table = self.query_one("#results-table", DataTable)
+            table.cursor_type = "row"
             # A docked drawer gives this table roughly 70 cells, so the summary
             # keeps only what is readable there: identity, outcome, provider and
             # level. Surface and payload mode stay one keystroke away in the five
@@ -721,6 +729,9 @@ class ResultsDrawer(BaseDrawer):
             ("exploitation / chain / output / composite",
              " / ".join(_score_text(raw, *keys)
                         for name, keys in _TRIAGE_SCORE_FIELDS if name != "method")),
+            ("composite status", first("composite_score_status") or "historical/provisional"),
+            ("thesis scoring", f"{safe(first('scoring_mode'))} / {safe(first('thesis_scoring_status'))}"),
+            ("final payload / composite", f"{safe(first('Spayload_final'))} / {safe(first('Srun_final'))}"),
             ("confirmed vulns / outcomes",
              f"{_joined(raw.get('confirmed_vulns'))} / {_joined(raw.get('achieved_outcomes'))}"),
             ("verifier decision", first("verifier_decision")),
@@ -738,6 +749,8 @@ class ResultsDrawer(BaseDrawer):
         item = self._find_item(key)
         if item is None:
             return
+        self._selected_path = Path(str(getattr(item, "path", "")))
+        self._selected_item = item
         text = "\n".join(f"{label}: {value}" for label, value in self._triage_fields(item))
         limit = int(DETAIL_RENDER_MAX_CHARS)
         body = text[:limit]
@@ -768,6 +781,16 @@ class ResultsDrawer(BaseDrawer):
             return
         self._set_status(f"Exported {len(records)} triage records → {path}")
 
+    @on(Button.Pressed, "#results-review")
+    def review_evidence(self) -> None:
+        if self._selected_path is None:
+            self._set_status("Select a run and press Enter before reviewing")
+            return
+        raw = self._load_artifact(self._selected_item)
+        path = Path(raw['source_path']) if raw.get('artifact_type') == 'thesis_score_receipt' and raw.get('source_path') else self._selected_path
+        self.app.push_screen(ReviewDrawer(path, receipt_path=(
+            self._selected_path if raw.get('artifact_type') == 'thesis_score_receipt' else None)))
+
     def _set_status(self, text: str) -> None:
         try:
             self.query_one("#results-status", Static).update(str(redact_secrets(text))[:300])
@@ -778,6 +801,160 @@ class ResultsDrawer(BaseDrawer):
         self._tesis_closing = True
         self._closing_guard = True
         self._scan_generation += 1
+
+
+class ReviewDrawer(BaseDrawer):
+    """One saved execution, independent review workflows; all disk/model work off-thread."""
+
+    class Loaded(Message):
+        def __init__(self, queue, decisions, result):
+            super().__init__()
+            self.queue, self.decisions, self.result = queue, decisions, result
+
+    class Failed(Message):
+        def __init__(self, text):
+            super().__init__()
+            self.text = text
+
+    def __init__(self, source: Path, *, receipt_path: Path | None = None) -> None:
+        super().__init__()
+        self.source = Path(source)
+        self.receipt_path = receipt_path
+        self.output_dir = receipt_path.parent if receipt_path is not None else None
+        self.queue = None
+        self.result = None
+        self.decisions = []
+        self._tesis_closing = False
+        self._review_busy = False
+
+    def compose(self) -> ComposeResult:
+        yield Label("Payload evidence review (Esc to close)")
+        with VerticalScroll(classes="drawer-body"):
+            yield Static("Loading frozen evidence…", id="review-status", markup=False)
+            yield Select([], prompt="Candidate", id="review-candidate")
+            yield Static("", id="review-evidence", markup=False)
+            yield Select([(str(i), i) for i in range(5)], prompt="Human grade 0–4", id="review-score")
+            yield Input(placeholder="Reviewer ID", id="review-reviewer")
+            yield Input(placeholder="Reason supported by the evidence", id="review-reason")
+            yield Button("Save human grade", id="review-save", disabled=True)
+            yield Button("Run configured AI evaluator", id="review-ai", disabled=True)
+
+    def on_mount(self) -> None:
+        self.load_review()
+
+    def load_review(self) -> None:
+        self._review_busy = True
+        Thread(target=self._load_review, name="tesis-review-load", daemon=True).start()
+
+    def _load_review(self) -> None:
+        from evaluation.thesis_scoring import review_queue, finalize_reviews, load_review_decisions
+        try:
+            queue = review_queue(self.source)
+            decisions = load_review_decisions(self.source, queue=queue, receipt_path=self.receipt_path)
+            result = finalize_reviews(self.source, decisions, output_dir=self.output_dir)
+            self.post_message(self.Loaded(queue, decisions, result))
+        except Exception as exc:
+            self.post_message(self.Failed(f"Review unavailable: {type(exc).__name__}: {exc}"))
+
+    @on(Loaded)
+    def review_loaded(self, event: Loaded) -> None:
+        self._loaded(event.queue, event.decisions, event.result)
+
+    @on(Failed)
+    def review_failed(self, event: Failed) -> None:
+        self._review_busy = False
+        self._status(event.text)
+
+    def _status(self, text: str) -> None:
+        if not self._tesis_closing:
+            self.query_one("#review-status", Static).update(str(redact_secrets(text)))
+
+    def _loaded(self, queue, decisions, result) -> None:
+        if self._tesis_closing:
+            return
+        self._review_busy = False
+        self.queue, self.decisions, self.result = queue, decisions, result
+        pending = [r for r in queue['candidates'] if r['status'] == 'pending_review']
+        select = self.query_one("#review-candidate", Select)
+        select.set_options([(f"{r['candidate_id']} · ceiling {r['proof_ceiling']}", r['candidate_id']) for r in pending])
+        if pending:
+            select.value = pending[0]['candidate_id']
+        self.query_one("#review-save", Button).disabled = queue['selection'] == 'ai' or not pending
+        self.query_one("#review-ai", Button).disabled = queue['selection'] == 'human' or not queue['evaluator'] or not pending
+        self._status("\n".join([f"Selection: {queue['selection']} · source SHA256: {queue['source_sha256']}",
+            *[f"{mode}: {info['status']} · Spayload={info['Spayload_final']} · Srun={info['Srun_final']} · {info['reason'] or ''}"
+                for mode, info in result['workflows'].items()]]))
+        self.show_candidate()
+
+    @on(Select.Changed, "#review-candidate")
+    def show_candidate(self) -> None:
+        if not self.queue:
+            return
+        cid = self.query_one("#review-candidate", Select).value
+        row = next((r for r in self.queue['candidates'] if r['candidate_id'] == cid), None)
+        if row:
+            evidence = {k: row[k] for k in ('candidate', 'proof_ceiling', 'evidence_refs', 'evidence')}
+            self.query_one("#review-evidence", Static).update(json.dumps(redact_secrets(evidence), indent=2)[:20000])
+
+    @on(Button.Pressed, "#review-save")
+    def submit_grade(self) -> None:
+        if not self.queue or self.queue['selection'] == 'ai':
+            return
+        from datetime import datetime, timezone
+        from uuid import uuid4
+        cid = self.query_one("#review-candidate", Select).value
+        row = next((r for r in self.queue['candidates'] if r['candidate_id'] == cid), None)
+        grade = self.query_one("#review-score", Select).value
+        if row is None or grade is Select.NULL:
+            self._status("Choose a candidate and grade")
+            return
+        previous = next((d for d in reversed(self.decisions) if d['candidate_id'] == cid and d['scoring_mode'] == 'human'), None)
+        decision = {'decision_id': str(uuid4()), 'run_id': self.queue['run_id'],
+            'source_sha256': self.queue['source_sha256'], 'rubric_version': self.queue['rubric_version'],
+            'scoring_mode': 'human', 'candidate_id': cid, 'score': grade,
+            'reviewer_id': self.query_one("#review-reviewer", Input).value,
+            'reason': self.query_one("#review-reason", Input).value, 'review_version': 'human.v1',
+            'timestamp': datetime.now(timezone.utc).isoformat(), 'evidence_refs': row['evidence_refs']}
+        if previous:
+            decision['supersedes'] = previous['decision_id']
+        self.save_review([decision])
+
+    @on(Button.Pressed, "#review-ai")
+    def run_evaluator(self) -> None:
+        if self.queue and self.queue['selection'] in {'ai', 'both'}:
+            self.save_review([], evaluate=True)
+
+    def save_review(self, additions, evaluate=False) -> None:
+        if self._review_busy:
+            self._status("Review work is still running")
+            return
+        self._review_busy = True
+        Thread(target=self._save_review, args=(additions, evaluate), name="tesis-review-save", daemon=True).start()
+
+    def _save_review(self, additions, evaluate=False) -> None:
+        from evaluation.thesis_scoring import (
+            evaluate_queue, review_queue, finalize_reviews, load_review_decisions,
+            append_evaluator_decisions, save_evaluator_telemetry,
+        )
+        try:
+            queue = review_queue(self.source)
+            decisions = load_review_decisions(self.source, queue=queue, receipt_path=self.receipt_path)
+            if evaluate:
+                config = load_and_resolve_config(config_path=str(tui_state.CONFIG_PATH), cli_args={})
+                judged = evaluate_queue(queue, config.scoring_evaluator)
+                save_evaluator_telemetry(self.source, judged, output_dir=self.output_dir)
+                decisions = append_evaluator_decisions(decisions, judged['decisions'])
+            updated = decisions + additions
+            result = finalize_reviews(self.source, updated, output_dir=self.output_dir)
+            self.post_message(self.Loaded(queue, updated, result))
+        except Exception as exc:
+            self.post_message(self.Failed(f"Grade not saved: {type(exc).__name__}: {exc}"))
+
+    def prepare_shutdown(self) -> None:
+        self._tesis_closing = True
+
+    def on_unmount(self) -> None:
+        self.prepare_shutdown()
 
 
 class DoctorDrawer(BaseDrawer):

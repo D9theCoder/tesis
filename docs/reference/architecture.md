@@ -39,6 +39,26 @@ the complete execution log remains in the artifact.
 
 ## Separation of concerns
 
+Thesis grading is a post-execution artifact consumer in
+`evaluation/thesis_scoring.py`; see the [scorebook](thesis_scoring.md). The launch
+drawer and headless config freeze `scoring_mode` and `scoring_evaluator` before
+execution and include them in the experiment fingerprint. Results → Enter →
+Review payload evidence opens `ReviewDrawer`, exported through `tesis.tui`.
+It reads `tesis.tui_state.CONFIG_PATH`, performs disk/evaluator work in workers,
+and shows independent human/AI pending or final states. A human grade or fresh
+evaluator call cannot change the source artifact, payload validation, method
+execution, verifier or graph. Human and AI receipts are separate derived files;
+the original runtime composite is labeled historical/provisional. The local
+`python -m tesis review` command uses the same grading path. No DVWA request is
+part of review; optional evaluator calls use only the matching frozen profile.
+CLI and TUI share a validated source-local decisions ledger, so reopening a
+CLI-finalized review preserves its final state. Execution-specific evaluator
+telemetry and previous receipt/ledger/status versions are retained; discovery
+excludes these sidecars and archives. Results triage scrolls beneath a row-selectable
+table, while Export/Review actions remain visible at 80×24 and 60×24.
+Selecting an older custom-directory receipt carries its path into review for
+source-validated history recovery and preserves its receipt/telemetry directory.
+
 The Textual layer does not execute graph nodes directly. It starts the existing
 single or matrix runner in a daemon thread and receives immutable `RunEvent`
 objects through a `RuntimeEventSink` callback. Runtime and evaluation modules

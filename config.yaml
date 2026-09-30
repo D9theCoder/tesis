@@ -213,3 +213,11 @@ models:
     timeout: 60
     # Keep each model-backed experiment call within its configured timeout.
     max_retries: 0
+scoring_mode: human
+scoring_evaluator:
+  provider: openai_compatible
+  model: deepseek-v4.1-flash
+  model_profile: openai_compatible
+  max_attempts: 2
+  max_tokens: 1024
+  timeout: 60

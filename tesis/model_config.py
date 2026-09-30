@@ -124,6 +124,8 @@ class EngagementConfig:
     # fields so positional construction by older callers remains stable.
     dvwa_username: str = "admin"
     dvwa_password: str = field(default="password", repr=False)
+    scoring_mode: str = "human"
+    scoring_evaluator: dict[str, Any] = field(default_factory=dict)
 
     @property
     def llm_max_concurrency(self) -> int:

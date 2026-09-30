@@ -316,6 +316,7 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         "level": "level",
         "surface": "surface",
         "payload_mode": "payload_mode",
+        "scoring_mode": "scoring_mode",
         "model_profile": "model_profile",
         "experiment_condition": "experiment_condition",
         "target_method": "target_method",
@@ -822,6 +823,8 @@ def _validate_llm_runtime_config(config: LLMRuntimeConfig) -> None:
 def _validate_engagement_config(config: EngagementConfig) -> None:
     """Supports validate engagement config behavior for this module."""
     validate_target_url(config.target_url)
+    from evaluation.thesis_scoring import validate_scoring_config
+    validate_scoring_config(config.scoring_mode, config.scoring_evaluator)
     if config.iterations <= 0:
         raise ConfigError("iterations must be > 0")
     if config.repeats <= 0:
@@ -1013,6 +1016,8 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         level=level,
         surface=surface,
         payload_mode=payload_mode,
+        scoring_mode=str(merged.get("scoring_mode", "human")).strip().lower(),
+        scoring_evaluator=dict(merged.get("scoring_evaluator") or {}),
         experiment_condition=str(merged.get("experiment_condition") or "linear_hybrid").strip().lower(),
         target_method=(str(merged.get("target_method")).strip() if merged.get("target_method") else None),
         log_verbosity=str(merged.get("log_verbosity") or "info").strip().lower(),
@@ -1051,6 +1056,13 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         ),
     )
 
+    evaluator = config.scoring_evaluator
+    profile_name = evaluator.get("model_profile")
+    if profile_name:
+        profile = config.models.get(profile_name)
+        if profile is None or evaluator.get("provider") != profile.provider or evaluator.get("model") != profile.model_name:
+            raise ConfigError("Scoring evaluator must match its frozen model profile")
+        evaluator.update(api_key=profile.api_key, base_url=profile.base_url)
     _validate_engagement_config(config)
     form_name = FORM_MATRIX if config.matrix else FORM_SINGLE
     field_errors = validate_field_schema(asdict(config), form=form_name)
