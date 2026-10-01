@@ -881,7 +881,8 @@ class ReviewDrawer(BaseDrawer):
             select.value = pending[0]['candidate_id']
         self.query_one("#review-save", Button).disabled = queue['selection'] == 'ai' or not pending
         self.query_one("#review-ai", Button).disabled = queue['selection'] == 'human' or not queue['evaluator'] or not pending
-        self._status("\n".join([f"Selection: {queue['selection']} · source SHA256: {queue['source_sha256']}",
+        self._status("\n".join([f"Selection: {queue['selection']} · {queue['rubric_version']} · source SHA256: {queue['source_sha256']}",
+            f"Evidence pending: {queue['component_pending_reasons']}",
             *[f"{mode}: {info['status']} · Spayload={info['Spayload_final']} · Srun={info['Srun_final']} · {info['reason'] or ''}"
                 for mode, info in result['workflows'].items()]]))
         self.show_candidate()

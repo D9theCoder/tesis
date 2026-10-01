@@ -270,14 +270,19 @@ def test_scoring_provider_failure_is_distinct_from_returned_invalid_json(monkeyp
 
 def test_scoring_saved_data_repair_uses_no_transport_or_provider(monkeypatch):
     from evaluation.scoring_repair import rescore_saved_artifact
+    # Failure control: a missing terminal chain log must stay missing after
+    # hash-pinned rescoring; setup cannot depend on a local historical archive.
+    artifact, _, _ = control(monkeypatch, 'saved_data')
+    artifact['validation_scope'] = 'offline_synthetic_fixture'
+    artifact['final_state'].pop('chain_history')
+    source = ROOT / 'controls' / 'saved-data' / 'source.json'
+    write_json_report(source, artifact)
+    before = source.read_bytes()
     def forbidden(*args, **kwargs):
         pytest.fail('Pure rescoring attempted external I/O')
     monkeypatch.setattr(httpx.Client, 'request', forbidden)
     monkeypatch.setattr('llm.runtime.LLMRuntime.invoke', forbidden)
-    sources = json.loads(Path('results/validation/scoring-handoff-2026-09-29/source-manifest.json').read_text())
-    source = Path(sources[0]['path'])
-    before = source.read_bytes()
-    repaired = rescore_saved_artifact(source, expected_sha256=sources[0]['sha256'])
+    repaired = rescore_saved_artifact(source, expected_sha256=sha256(before).hexdigest())
     write_json_report(ROOT / 'controls' / 'saved-data' / 'rescored.json', repaired)
     assert source.read_bytes() == before
     assert repaired['source_sha256'] == sha256(before).hexdigest()

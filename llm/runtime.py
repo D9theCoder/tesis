@@ -823,7 +823,13 @@ class LLMRuntime:
         schema_version: str,
         validator: Callable[[dict[str, Any]], dict[str, Any]],
         max_tokens: int,
+        evidence_context: dict[str, Any] | None = None,
     ) -> LLMCallResult:
+        from datetime import datetime, timezone
+        from evaluation.scoring_evidence import evidence_hash
+        from tesis.runtime_events import redact_secrets
+        evidence_context = dict(evidence_context or {})
+        safe_input = redact_secrets(evidence_context.get('input', {}))
         provider, config, settings = context.role_config(role, max_tokens=max_tokens)
         pool, fingerprint = self._pool(role, provider, config)
         model = str(config.get("model_name") or config.get("model") or "unknown")
@@ -850,6 +856,10 @@ class LLMRuntime:
             "reasoning_effort": reasoning_effort,
         }).encode("utf-8")).hexdigest()
         base_record = {
+            'method': evidence_context.get('method'), 'visit_id': evidence_context.get('visit_id'),
+            'schema_version': schema_version, 'started_at': datetime.now(timezone.utc).isoformat(),
+            'input': safe_input, 'input_sha256': evidence_hash(safe_input),
+            'validation_status': 'pending', 'attempt': evidence_context.get('attempt', 1),
             "prompt_hash": prompt_hash,
             "role": role,
             "provider": provider,
@@ -882,7 +892,13 @@ class LLMRuntime:
         }
         if context.cache_enabled and cache_key in context.cache:
             text, parsed = context.cache[cache_key]
-            record = {**base_record, "cache_hit": True, "parse_status": "ok"}
+            safe_output = redact_secrets(parsed)
+            record = {**base_record, "cache_hit": True, "parse_status": "ok", 'validation_status': 'valid',
+                'output': safe_output, 'output_sha256': evidence_hash(safe_output)}
+            if role == 'orchestrator':
+                record['method'] = parsed.get('next_agent') if parsed.get('next_agent') != 'scorer' else evidence_context.get('method')
+                if evidence_context.get('visit_ordinal') and parsed.get('next_agent') != 'scorer':
+                    record['visit_id'] = f"{record['method']}:visit:{evidence_context['visit_ordinal']}"
             context.emit_activity("llm.started", call_id=call_id, record=record)
             context.append_record(record)
             context.emit_activity("llm.completed", call_id=call_id, record=record)
@@ -1080,6 +1096,8 @@ class LLMRuntime:
                 )
             record = {
                 **base_record,
+                'validation_status': 'invalid',
+                'output_sha256': evidence_hash(redact_secrets(text)),
                 "queue_wait_ms": int((acquired_at - queued_at) * 1000),
                 "call_duration_ms": elapsed_ms,
                 "elapsed_ms": elapsed_ms,
@@ -1157,6 +1175,8 @@ class LLMRuntime:
         provider_usage = self._usage(usage_source)
         record = {
             **base_record,
+            'validation_status': 'valid', 'output': redact_secrets(parsed),
+            'output_sha256': evidence_hash(redact_secrets(parsed)),
             "queue_wait_ms": int((acquired_at - queued_at) * 1000),
             "call_duration_ms": duration_ms,
             "elapsed_ms": duration_ms,
@@ -1165,6 +1185,10 @@ class LLMRuntime:
             "provider_usage": provider_usage,
             "reasoning_token_evidence": _reasoning_token_evidence(provider_usage),
         }
+        if role == 'orchestrator':
+            record['method'] = parsed.get('next_agent') if parsed.get('next_agent') != 'scorer' else evidence_context.get('method')
+            if evidence_context.get('visit_ordinal') and parsed.get('next_agent') != 'scorer':
+                record['visit_id'] = f"{record['method']}:visit:{evidence_context['visit_ordinal']}"
         if structured_output_fallback is not None:
             record["structured_output_fallback"] = structured_output_fallback
         context.append_record(record)

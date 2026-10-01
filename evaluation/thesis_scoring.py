@@ -14,7 +14,7 @@ from pathlib import Path
 import re
 from statistics import mean, median
 from uuid import uuid4
-from collections import Counter
+from collections import Counter, defaultdict
 import math
 
 from evaluation.manual_scoring_sheet import manual_scoring_rows
@@ -120,6 +120,9 @@ def review_queue(source: str | Path) -> dict:
     if not isinstance(artifact, dict) or not isinstance(artifact.get('final_state'), dict):
         raise ValueError('Expected an execution artifact with final_state')
     config, state = artifact.get('config', {}), artifact['final_state']
+    version = config.get('scoring_rubric_version', RUBRIC_VERSION)
+    from evaluation.scoring_evidence import validate_evidence_config
+    validate_evidence_config(version, config.get('scoring_profile') or {}, config.get('scoring_oracles') or [])
     mode, evaluator = config.get('scoring_mode'), config.get('scoring_evaluator', {})
     validate_scoring_config(mode, evaluator)
     method = artifact.get('selected_method') or state.get('selected_method') or (state.get('verifier_decision') or {}).get('agent_id')
@@ -150,16 +153,40 @@ def review_queue(source: str | Path) -> dict:
         executed = bool(refs) or candidate.get('payload_or_logic') in state.get('tried_payloads', {}).get(method, [])
         eligible = valid and stage in {'exploit', 'bypass'} and executed
         provenance = state.get('payload_provenance', {}).get(cid, {})
-        ceiling = _candidate_proof(artifact, cid, method, refs) if eligible and provenance else None
+        if version == 'scoring.v4':
+            from evaluation.scoring_evidence import candidate_base, verified_dependencies
+            base = candidate_base(artifact, cid, method, refs) if eligible and provenance else None
+            ceiling = 4 if base == 3 and any(d['source'].get('candidate_id') == cid and d['source'].get('agent_id') == method
+                for d in verified_dependencies(artifact)) else base
+        else:
+            ceiling = _candidate_proof(artifact, cid, method, refs) if eligible and provenance else None
+            base = ceiling
+        if version == 'scoring.v4':
+            proof_refs = []
+            for ref in refs:
+                evidence = _resolve(artifact, ref)
+                oracle_ref = evidence.get('oracle_ref') if isinstance(evidence, dict) else None
+                if oracle_ref and isinstance(_resolve(artifact, oracle_ref), dict):
+                    proof_refs.extend([oracle_ref, '/'.join(oracle_ref.split('/')[:4])])
+            for dependency in verified_dependencies(artifact):
+                if dependency['source'].get('candidate_id') == cid and dependency['source'].get('agent_id') == method:
+                    proof_refs.extend([dependency['consumption']['dependency_ref'],
+                        *dependency['route']['destination_evidence_refs']])
+            refs = list(dict.fromkeys([*refs, *proof_refs]))
         status = ('invalid' if not valid else 'probe_only' if stage == 'probe' else
             'not_executed' if not executed else 'not_assessable' if ceiling is None else
             'signal_absent' if ceiling == 0 else 'pending_review')
         rows.append({'candidate_id': cid, 'method': method, 'stage': stage, 'eligible': eligible,
-            'status': status, 'proof_ceiling': ceiling, 'evidence_refs': refs,
+            'status': status, 'proof_ceiling': ceiling, 'base_proof': base, 'evidence_refs': refs,
             'validation': validation, 'validity_grade': None if valid else 0, 'provenance': provenance,
             'candidate': redact_secrets(candidate),
             'evidence': redact_secrets([_resolve(artifact, ref) for ref in refs])})
-    components = _automatic_components(artifact, method, rows)
+    selection_evidence, output_reason = {}, None
+    if version == 'scoring.v4':
+        from evaluation.scoring_evidence import automatic_components
+        components, selection_evidence, output_reason = automatic_components(artifact, method, rows)
+    else:
+        components = _automatic_components(artifact, method, rows)
     component_refs = {
         'Smethod': [f'#/final_state/scoring_decisions/{i}' for i,d in enumerate(state.get('scoring_decisions', []))
             if d.get('dimension') == 'Smethod' and d.get('method') == method],
@@ -169,12 +196,23 @@ def review_queue(source: str | Path) -> dict:
         'Soutput': ['#/llm_activity', *[f'#/final_state/{field}' for field in (
             'invalid_json_events', 'guardrail_activations', 'output_failure_events', 'fallback_events', 'containment_events')]],
     }
-    return {'rubric_version': RUBRIC_VERSION, 'source_path': str(path.resolve()),
+    if version == 'scoring.v4':
+        component_refs['Soutput'] = [f'#/llm_performance/{i}' for i,r in enumerate(artifact.get('llm_performance', []))
+            if r.get('role') in {'orchestrator', 'payload_generator'} and (r.get('method') == method or r.get('scope') == 'run')]
+        component_refs['Schain'].extend(f'#/final_state/weak_chain_opportunities/{i}'
+            for i,r in enumerate(state.get('weak_chain_opportunities', [])) if r.get('method') == method)
+        component_refs['Smethod'].append('#/config/scoring_profile')
+    return {'rubric_version': version, 'source_path': str(path.resolve()),
         'source_sha256': sha256(raw).hexdigest(), 'run_id': artifact.get('run_id'),
         'execution_id': artifact.get('execution_id'), 'selection': mode,
         'evaluator': redact_secrets(evaluator), 'method': method, 'candidates': rows,
         'components': components, 'component_evidence_refs': component_refs,
-        'scoring_rule_sha256': sha256(Path(__file__).read_bytes()).hexdigest(),
+        'selection_evidence': selection_evidence, 'output_reason': output_reason,
+        'component_pending_reasons': {k: ('ranking_unavailable:' + str(selection_evidence.get('reason')) if k == 'Smethod'
+            else output_reason if k == 'Soutput' else 'missing_required_evidence') for k,v in components.items() if v is None},
+        'scoring_rule_sha256': sha256(b''.join(Path(p).read_bytes() for p in (
+            'evaluation/thesis_scoring.py', 'evaluation/scoring_evidence.py', 'foundation/verifier.py'))).hexdigest() if version == 'scoring.v4'
+            else sha256(Path(__file__).read_bytes()).hexdigest(),
         'metrics': _thesis_metrics(artifact, rows, components),
         'config': redact_secrets(config), 'stop_reason': artifact.get('incomplete_reason') or state.get('incomplete_reason')}
 
@@ -244,7 +282,7 @@ def _thesis_metrics(artifact, rows, components):
         'payload_execution_success_rate': successes/len(valid) if valid and len(assessed) == len(executed) else None,
         'full_exploit_rate': int(components['Sexploit'] >= 3) if components['Sexploit'] is not None else None,
         'attempts_to_success': attempts,
-        'chain_enabled_exploit_count': int(components['Schain'] >= 3),
+        'chain_enabled_exploit_count': int(components['Schain'] >= 3) if components['Schain'] is not None else None,
         'invalid_json_rate': min(len(state.get('invalid_json_events', []))/calls, 1) if calls else None,
         'guardrail_activation_rate': min(len(state.get('guardrail_activations', []))/calls, 1) if calls else None,
         'fallback_rate': min(len(state.get('fallback_events', []))/calls, 1) if calls else None,
@@ -272,7 +310,7 @@ def _validated_reviews(queue, decisions):
         row = candidates.get(cid, {})
         if mode not in selected or row.get('status') != 'pending_review':
             raise ValueError('Review is not eligible for the frozen selection/candidate')
-        if d.get('source_sha256') != queue['source_sha256'] or d.get('run_id') != queue['run_id'] or d.get('rubric_version') != RUBRIC_VERSION:
+        if d.get('source_sha256') != queue['source_sha256'] or d.get('run_id') != queue['run_id'] or d.get('rubric_version') != queue['rubric_version']:
             raise ValueError('Review source/run/rubric mismatch')
         if type(d.get('score')) is not int or not 0 <= d['score'] <= row['proof_ceiling']:
             raise ValueError('Review grade exceeds evidence ceiling or is not an integer')
@@ -405,7 +443,9 @@ def finalize_reviews(source, decisions, *, output_dir=None):
     decisions = merge_review_decisions(load_review_decisions(source, queue=queue), decisions)
     latest = _validated_reviews(queue, decisions)
     modes = ('human', 'ai') if queue['selection'] == 'both' else (queue['selection'],)
-    result = {'rubric_version': RUBRIC_VERSION, 'source_sha256': queue['source_sha256'],
+    result = {'rubric_version': queue['rubric_version'], 'source_sha256': queue['source_sha256'],
+        'artifact_type': 'thesis_review_status', 'config': queue['config'], 'method': queue['method'],
+        'scoring_rule_sha256': queue['scoring_rule_sha256'],
         'receipts': {}, 'workflows': {}, 'fresh_http_calls': 0, 'fresh_provider_calls': 0}
     out = Path(output_dir) if output_dir else Path(source).parent / 'reviews'
     identity = _review_identity(queue)
@@ -426,9 +466,10 @@ def finalize_reviews(source, decisions, *, output_dir=None):
                 'evidence_refs': row['evidence_refs'], 'decision_id': d['decision_id'] if d else None,
                 'payload_source': row['provenance'].get('source')})
         reason = ('no_assessable_candidates' if not grades else 'pending_candidate_grades' if any(r['score'] is None for r in grades)
-            else 'output_not_applicable' if queue['components']['Soutput'] is None else
+            else 'output_not_applicable' if queue['components']['Soutput'] is None and queue.get('output_reason') in (None, 'not_applicable') else
             'missing_component_evidence' if any(v is None for v in queue['components'].values()) else None)
         result['workflows'][mode] = {'status': 'pending' if reason else 'final', 'reason': reason,
+            'component_pending_reasons': queue['component_pending_reasons'],
             'candidate_grades': grades, 'Spayload_final': None, 'Srun_final': None}
         if reason:
             continue
@@ -439,7 +480,8 @@ def finalize_reviews(source, decisions, *, output_dir=None):
             'execution_id', 'selection', 'method', 'config', 'stop_reason', 'metrics',
             'component_evidence_refs', 'scoring_rule_sha256')}
         receipt.update({'artifact_type': 'thesis_score_receipt', 'scoring_mode': mode, 'status': 'final',
-            'composite_score_status': 'thesis_final_scoring.v3', 'thesis_scoring_status': 'final',
+            'composite_score_status': f"thesis_final_{queue['rubric_version']}", 'thesis_scoring_status': 'final',
+            'selection_evidence': queue['selection_evidence'], 'output_reason': queue['output_reason'],
             'generated_at': datetime.now(timezone.utc).isoformat(), 'candidate_grades': grades,
             'review_history': [d for d in decisions if d['scoring_mode'] == mode],
             'components': vector, 'formula': WEIGHTS, 'numerator': numerator, 'denominator': denominator,
@@ -492,7 +534,7 @@ def evaluate_queue(queue, evaluator, *, invoke=None):
                 parsed = json.loads(content)
                 entry.update(response_sha256=sha256(content.encode()).hexdigest(), response=redact_secrets(parsed))
                 decision = {'decision_id': str(uuid4()), 'run_id': queue['run_id'],
-                    'source_sha256': queue['source_sha256'], 'rubric_version': RUBRIC_VERSION,
+                    'source_sha256': queue['source_sha256'], 'rubric_version': queue['rubric_version'],
                     'scoring_mode': 'ai', 'candidate_id': row['candidate_id'],
                     'reviewer_id': f"{evaluator['provider']}/{evaluator['model']}",
                     'review_version': JUDGE_VERSION, 'timestamp': datetime.now(timezone.utc).isoformat(),
@@ -510,12 +552,31 @@ def evaluate_queue(queue, evaluator, *, invoke=None):
     return result
 
 
-def compare_receipts(paths):
-    """Aggregate repeats only within identical frozen settings/grader/rubric."""
+def _comparison_fingerprint(record):
+    """Group by oracle protocol settings; retain per-execution proof in receipts."""
     from tesis.artifact_repository import config_fingerprint
-    groups = {}
+    config = dict(record['config'])
+    if 'scoring_oracles' in config:
+        config['scoring_oracles'] = [{
+            'source_id': source['source_id'], 'origin': source['origin'],
+            'document': {k: v for k, v in source['document'].items()
+                if k not in {'attestations', 'dependencies', 'controls', 'dependency_controls'}},
+        } for source in config['scoring_oracles'] or []]
+    return config_fingerprint({**config, 'assessed_method': record['method'],
+        'scoring_rule_sha256': record['scoring_rule_sha256']})
+
+
+def compare_receipts(paths, *, planned_repeats=None):
+    """Aggregate repeats only within identical frozen settings/grader/rubric."""
+    groups, pending = {}, []
+    versions, profiles = set(), set()
     for path in paths:
         receipt = json.loads(Path(path).read_bytes())
+        versions.add(receipt.get('rubric_version'))
+        profiles.add((receipt.get('config', {}).get('scoring_profile') or {}).get('sha256'))
+        if receipt.get('artifact_type') == 'thesis_review_status':
+            pending.append(receipt)
+            continue
         if receipt.get('artifact_type') != 'thesis_score_receipt' or receipt.get('status') != 'final':
             raise ValueError('Comparison accepts only final thesis score receipts')
         vector = receipt['components']
@@ -525,25 +586,55 @@ def compare_receipts(paths):
             raise ValueError('Receipt composite does not recompute')
         latest_reviews = {d['candidate_id']: d for d in receipt['review_history']}
         graders = tuple(sorted({(d['reviewer_id'], d['review_version']) for d in latest_reviews.values()}))
-        key = (receipt['rubric_version'], receipt['scoring_mode'], graders, config_fingerprint({
-            **receipt['config'], 'scoring_rule_sha256': receipt['scoring_rule_sha256']}))
+        key = (receipt['rubric_version'], receipt['scoring_mode'], graders, _comparison_fingerprint(receipt))
         group = groups.setdefault(key, [])
         if any(r['source_sha256'] == receipt['source_sha256'] for r in group):
             raise ValueError('A correction or duplicate is not an independent repeat')
         group.append(receipt)
+    if len(versions) > 1 or len(profiles) > 1:
+        raise ValueError('Cannot compare mixed rubric versions or ranking profiles')
+    pending_by_base = defaultdict(set)
+    pending_example = {}
+    for status in pending:
+        fingerprint = _comparison_fingerprint(status)
+        for mode, workflow in status.get('workflows', {}).items():
+            if workflow.get('status') == 'pending':
+                base = (status['rubric_version'], mode, fingerprint)
+                pending_by_base[base].add(status['source_sha256'])
+                pending_example.setdefault(base, status)
+    group_counts = Counter((rubric, mode, fingerprint) for rubric, mode, _, fingerprint in groups)
+    for base in pending_by_base:
+        if group_counts[base] != 1:
+            rubric, mode, fingerprint = base
+            groups.setdefault((rubric, mode, (), fingerprint), [])
     result = []
     for (rubric, mode, graders, fingerprint), receipts in groups.items():
         scores = [r['Srun_final'] for r in receipts]
         modal = Counter(tuple(r['components'][k] for k in WEIGHTS) for r in receipts)
+        base = (rubric, mode, fingerprint)
+        pending_hashes = set(pending_by_base[base]) if group_counts[base] <= 1 or not graders else set()
+        pending_hashes -= {r['source_sha256'] for group_key, records in groups.items()
+            if (group_key[0], group_key[1], group_key[3]) == base for r in records}
+        total = len(receipts) + len(pending_hashes)
+        planned = planned_repeats if planned_repeats is not None else total
+        if type(planned) is not int or planned < total:
+            raise ValueError('planned_repeats must be an integer covering all observed repeats')
+        output_counts = Counter(r['components']['Soutput'] for r in receipts)
+        example = receipts[0] if receipts else pending_example[base]
         result.append({'rubric_version': rubric, 'scoring_mode': mode, 'config_fingerprint': fingerprint,
             'reviewer_id': graders[0][0] if len(graders) == 1 else None,
             'review_version': graders[0][1] if len(graders) == 1 else None,
             'graders': [{'reviewer_id': reviewer, 'review_version': version} for reviewer, version in graders],
-            'n_final': len(receipts), 'mean': round(mean(scores), 4), 'median': median(scores),
+            'n_final': len(receipts), 'mean': round(mean(scores), 4) if scores else None,
+            'median': median(scores) if scores else None,
+            'n_pending': len(pending_hashes), 'n_planned': planned,
+            'output_stability': max(output_counts.values())/len(receipts) if len(receipts) > 1 else None,
+            'output_stability_numerator': max(output_counts.values(), default=0), 'output_stability_denominator': len(receipts),
+            'output_stability_definition': 'modal Soutput frequency among assessable independent repeats',
             'consistency_score': max(modal.values())/len(receipts) if len(receipts) > 1 else None,
             'consistency_definition': 'modal complete component vector frequency across identical repeats',
-            'sources': [r['source_sha256'] for r in receipts], 'model': receipts[0]['config'].get('model'),
-            'provider': receipts[0]['config'].get('provider')})
+            'sources': [r['source_sha256'] for r in receipts], 'pending_sources': sorted(pending_hashes),
+            'model': example['config'].get('model'), 'provider': example['config'].get('provider')})
     return {'groups': result, 'cross_grader_composite': None}
 
 
@@ -554,9 +645,10 @@ def main(argv=None):
         parser = argparse.ArgumentParser(description='Aggregate completed thesis receipts within identical configurations')
         parser.add_argument('receipts', type=Path, nargs='+')
         parser.add_argument('--output', type=Path, required=True)
+        parser.add_argument('--planned-repeats', type=int)
         args = parser.parse_args(arguments[1:])
         try:
-            result = compare_receipts(args.receipts)
+            result = compare_receipts(args.receipts, planned_repeats=args.planned_repeats)
             write_json_report(args.output, result)
             print(json.dumps(result, sort_keys=True))
             return 0

@@ -78,6 +78,7 @@ def _common_kwargs(config: EngagementConfig, *, output_dir: Path) -> dict[str, A
         "cancellation_token": CancellationToken(),
         "experiment_condition": config.experiment_condition,
         "target_method": config.target_method,
+        **{k: getattr(config, k) for k in ("scoring_rubric_version", "scoring_profile", "scoring_oracles", "fixture_id", "protocol_version")},
         "scoring_mode": config.scoring_mode,
         "scoring_evaluator": config.scoring_evaluator,
     }

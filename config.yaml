@@ -107,7 +107,6 @@ matrix: false
 # Providers and levels to use in matrix mode.
 # If empty, loader falls back to llm_providers/security_levels or single provider/level.
 providers:
-  - openai
   - openai_compatible
 
 levels:
@@ -213,7 +212,10 @@ models:
     timeout: 60
     # Keep each model-backed experiment call within its configured timeout.
     max_retries: 0
-scoring_mode: human
+scoring_mode: ai
+scoring_rubric_version: scoring.v4
+scoring_profile: {}
+scoring_oracles: []
 scoring_evaluator:
   provider: openai_compatible
   model: deepseek-v4.1-flash

@@ -1,4 +1,4 @@
-"""Verification engine — response parser + Playwright XSS verifier."""
+"""Evidence verification for contained DVWA experiments."""
 
 from dataclasses import dataclass, field
 import logging
@@ -9,6 +9,62 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
+
+
+def fixture_attestation_valid(attestation, row, document, artifact):
+    """Check operator evidence offline; response text cannot create an oracle."""
+    from evaluation.scoring_evidence import timestamp
+    config = artifact.get('config', {})
+    for key in ('run_id', 'execution_id'):
+        if not artifact.get(key) or attestation.get(key) != artifact[key]:
+            return False
+    for key in ('fixture_id', 'protocol_version'):
+        if not config.get(key) or document.get(key) != config[key] or attestation.get(key) != config[key]:
+            return False
+    for key, row_key in (('method', 'agent_id'), ('visit_id', 'visit_id'), ('candidate_id', 'candidate_id'),
+                         ('evidence_id', 'evidence_id'), ('response_sha256', 'response_sha256')):
+        if not row.get(row_key) or attestation.get(key) != row[row_key]:
+            return False
+    try:
+        when = timestamp(attestation['timestamp'])
+        if row.get('timestamp') and when < timestamp(row['timestamp']):
+            return False
+    except (ValueError, KeyError, TypeError):
+        return False
+    kind = 'permission' if row['agent_id'].startswith('ac_') else 'session' if row['agent_id'].startswith('bf_') else None
+    if attestation.get('kind') != kind or kind is None:
+        return False
+    for key in ('principal_id', 'session_fingerprint', 'initial_session_fingerprint'):
+        if not row.get(key) or row[key] != attestation.get(key):
+            return False
+    if kind == 'permission' and any(not row.get(k) or row[k] != attestation.get(k) for k in ('object_id', 'action')):
+        return False
+
+    def confirmed(record):
+        if not record.get('principal_id') or not record.get('session_fingerprint'):
+            return False
+        if record.get('principal_id') != record.get('expected_principal_id'):
+            return False
+        if kind == 'permission':
+            return bool(record.get('object_id') and record.get('action')) and record.get('expected_allowed') is False and record.get('observed_allowed') is True
+        return (record.get('session_fingerprint') != record.get('initial_session_fingerprint')
+            and record.get('credentials_valid') is True and record.get('new_session') is True
+            and record.get('initial_authenticated') is False)
+
+    controls = document.get('controls')
+    if not isinstance(controls, list) or not controls or any(not isinstance(c, dict)
+        or c.get('fixture_id') != config['fixture_id'] or c.get('protocol_version') != config['protocol_version']
+        or type(c.get('expected_confirmed')) is not bool or confirmed(c) != c['expected_confirmed'] for c in controls):
+        return False
+    if kind == 'permission':
+        covered = all(any(c.get('expected_allowed') is allowed and c.get('observed_allowed') is allowed
+            and c.get('principal_id') and c.get('object_id') and c.get('action') for c in controls) for allowed in (True, False))
+    else:
+        covered = (any(c.get('new_session') is False for c in controls)
+            and any(c.get('credentials_valid') is False for c in controls)
+            and any(c.get('session_fingerprint') == c.get('initial_session_fingerprint') for c in controls)
+            and any(c.get('principal_id') != c.get('expected_principal_id') for c in controls))
+    return covered and confirmed(attestation)
 
 
 def usable_blind_response(response, *, allow_missing: bool = False) -> bool:

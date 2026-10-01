@@ -254,6 +254,8 @@ def generate_llm_variants(
                     value, seeds=seeds, profile=profile
                 ),
                 max_tokens=max_tokens,
+                evidence_context={'method': method, 'visit_id': state.get('selected_visit_id'),
+                    'input': {'observations': dict(state.get('observations', {})), 'seeds': seeds, 'profile': profile}},
             )
             text = result.text
             parsed_payload = result.parsed

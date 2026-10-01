@@ -432,6 +432,11 @@ def run_provider_matrix(
     experiment_id: str | None = None,
     scoring_mode: str = "human",
     scoring_evaluator: dict[str, Any] | None = None,
+    scoring_rubric_version: str = "scoring.v3",
+    scoring_profile: dict[str, Any] | None = None,
+    scoring_oracles: list[dict[str, Any]] | None = None,
+    fixture_id: str | None = None,
+    protocol_version: str | None = None,
 ) -> list[dict] | tuple[list[dict], dict[str, Any]]:
     """Run a deterministic matrix over all requested DVWA experiment axes.
 
@@ -541,6 +546,9 @@ def run_provider_matrix(
 
     serialized_role_configs = _serialize_role_configs(llm_role_configs)
     matrix_config = {
+        "scoring_rubric_version": scoring_rubric_version,
+        "scoring_profile": scoring_profile or {}, "scoring_oracles": scoring_oracles or [],
+        "fixture_id": fixture_id, "protocol_version": protocol_version,
         "scoring_mode": scoring_mode,
         "scoring_evaluator": redact_secrets(scoring_evaluator or {}),
         "target_url": target_url,
@@ -627,7 +635,10 @@ def run_provider_matrix(
             else None
         )
         artifact_config = {
-            "scoring_mode": scoring_mode,
+            "scoring_rubric_version": scoring_rubric_version,
+        "scoring_profile": scoring_profile or {}, "scoring_oracles": scoring_oracles or [],
+        "fixture_id": fixture_id, "protocol_version": protocol_version,
+        "scoring_mode": scoring_mode,
             "scoring_evaluator": redact_secrets(scoring_evaluator or {}),
             "target_url": target_url,
             **coordinate,
@@ -787,7 +798,10 @@ def run_provider_matrix(
     ) -> dict[str, Any]:
         provider = str(coordinate["provider"])
         run_kwargs = {
-            "scoring_mode": scoring_mode,
+            "scoring_rubric_version": scoring_rubric_version,
+        "scoring_profile": scoring_profile or {}, "scoring_oracles": scoring_oracles or [],
+        "fixture_id": fixture_id, "protocol_version": protocol_version,
+        "scoring_mode": scoring_mode,
             "scoring_evaluator": scoring_evaluator or {},
             "target_url": target_url,
             "security_level": coordinate["security_level"],

@@ -41,7 +41,9 @@ the complete execution log remains in the artifact.
 
 Thesis grading is a post-execution artifact consumer in
 `evaluation/thesis_scoring.py`; see the [scorebook](thesis_scoring.md). The launch
-drawer and headless config freeze `scoring_mode` and `scoring_evaluator` before
+drawer and headless config freeze `scoring_mode`, `scoring_evaluator`,
+`scoring_rubric_version`, evaluator-only ranking profile, fixture/protocol identity
+and operator oracle sources before
 execution and include them in the experiment fingerprint. Results → Enter →
 Review payload evidence opens `ReviewDrawer`, exported through `tesis.tui`.
 It reads `tesis.tui_state.CONFIG_PATH`, performs disk/evaluator work in workers,
@@ -51,6 +53,18 @@ execution, verifier or graph. Human and AI receipts are separate derived files;
 the original runtime composite is labeled historical/provisional. The local
 `python -m tesis review` command uses the same grading path. No DVWA request is
 part of review; optional evaluator calls use only the matching frozen profile.
+`evaluation/scoring_evidence.py` validates v4 ranking snapshots, independent
+oracle contracts, causal use and call-level output references. The method-agent
+verifier checks fixture attestations from saved sources; it adds no verifier node
+or target requests. Shared selection/evidence helpers export snapshots, source
+hashes and call context. Passive weak-chain receipts never unlock AKG nodes or
+change routing. Missing ranking/oracle proof remains pending or partial. V2
+provisional routing scores and historical v3 review rules remain distinct.
+The orchestrator validates optional reason references and plan fields before
+accepting output; native chain plans require source, target and target-agent
+bindings. Output fallback credit is scoped to its role/visit. Repeat comparison
+fingerprints oracle protocol metadata and retains execution-specific oracle
+proof in receipts, using the same grouping for pending review sidecars.
 CLI and TUI share a validated source-local decisions ledger, so reopening a
 CLI-finalized review preserves its final state. Execution-specific evaluator
 telemetry and previous receipt/ledger/status versions are retained; discovery

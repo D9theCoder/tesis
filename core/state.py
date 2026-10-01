@@ -111,6 +111,13 @@ class ExploitationState(TypedDict):
     payload_mode: str  # "static_only" | "hybrid" | "llm_mutation_only"
     experiment_condition: str  # "linear_hybrid" | "akg_guided_hybrid"
     target_method: str | None
+    run_id: str
+    execution_id: str
+    fixture_id: str | None
+    protocol_version: str | None
+    scoring_rubric_version: str
+    scoring_profile: dict
+    scoring_oracles: list[dict]
 
     # Discovered attack surface
     endpoints: list[dict]
@@ -151,6 +158,7 @@ class ExploitationState(TypedDict):
     chain_history: Annotated[list[dict], add]
     active_chain_route: dict | None
     chain_consumption: Annotated[list[dict], add]
+    weak_chain_opportunities: Annotated[list[dict], add]
 
     # LLM reasoning trace
     messages: Annotated[list[AnyMessage], add_messages]
@@ -211,6 +219,13 @@ def _default_state_template() -> dict[str, Any]:
         "payload_mode": "static_only",
         "experiment_condition": "linear_hybrid",
         "target_method": None,
+        "run_id": "",
+        "execution_id": "",
+        "fixture_id": None,
+        "protocol_version": None,
+        "scoring_rubric_version": "scoring.v3",
+        "scoring_profile": {},
+        "scoring_oracles": [],
         "endpoints": [],
         "input_vectors": [],
         "observations": {},
@@ -239,6 +254,7 @@ def _default_state_template() -> dict[str, Any]:
         "chain_history": [],
         "active_chain_route": None,
         "chain_consumption": [],
+        "weak_chain_opportunities": [],
         "messages": [],
         "guardrail_activations": [],
         "invalid_json_events": [],
@@ -308,6 +324,8 @@ ARTIFACT_ONLY_STATE_FIELDS = frozenset({
 })
 
 PERSISTENT_STATE_FIELDS = frozenset({
+    "run_id", "execution_id", "fixture_id", "protocol_version", "scoring_rubric_version",
+    "scoring_profile", "scoring_oracles", "weak_chain_opportunities",
     "target_url",
     "security_level",
     "llm_provider",

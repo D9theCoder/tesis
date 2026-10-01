@@ -825,6 +825,8 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
     validate_target_url(config.target_url)
     from evaluation.thesis_scoring import validate_scoring_config
     validate_scoring_config(config.scoring_mode, config.scoring_evaluator)
+    from evaluation.scoring_evidence import validate_evidence_config
+    validate_evidence_config(config.scoring_rubric_version, config.scoring_profile, config.scoring_oracles)
     if config.iterations <= 0:
         raise ConfigError("iterations must be > 0")
     if config.repeats <= 0:
@@ -1010,6 +1012,17 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
     )
     evasion_cooldown_threshold = int(cooldown_value)
 
+    import json
+    evidence_config = {}
+    for key, default in (("scoring_profile", {}), ("scoring_oracles", [])):
+        value = merged.get(key, default)
+        if isinstance(value, str):
+            path = Path(value)
+            if not path.is_absolute():
+                path = Path(config_path).resolve().parent / path
+            value = json.loads(path.read_bytes())
+        evidence_config[key] = value
+
     config = EngagementConfig(
         target_url=str(merged.get("target_url", "")).strip(),
         provider=provider,
@@ -1018,6 +1031,11 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         payload_mode=payload_mode,
         scoring_mode=str(merged.get("scoring_mode", "human")).strip().lower(),
         scoring_evaluator=dict(merged.get("scoring_evaluator") or {}),
+        scoring_rubric_version=str(merged.get("scoring_rubric_version", "scoring.v4")),
+        scoring_profile=evidence_config["scoring_profile"],
+        scoring_oracles=evidence_config["scoring_oracles"],
+        fixture_id=merged.get("fixture_id"),
+        protocol_version=merged.get("protocol_version"),
         experiment_condition=str(merged.get("experiment_condition") or "linear_hybrid").strip().lower(),
         target_method=(str(merged.get("target_method")).strip() if merged.get("target_method") else None),
         log_verbosity=str(merged.get("log_verbosity") or "info").strip().lower(),

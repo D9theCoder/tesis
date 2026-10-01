@@ -36,6 +36,25 @@ _ORCHESTRATOR_SCHEMA = {
     "properties": {
         "next_agent": {"type": "string"},
         "reason_code": {"type": "string"},
+        "reason_refs": {"type": "array", "items": {"type": "string"}},
+        "plan": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": [
+                    "stop_after_target", "stop_at_budget", "continue_same_surface", "chain"]},
+                "source": {"type": "string", "minLength": 1},
+                "target": {"type": "string", "minLength": 1},
+                "target_agent": {"type": "string", "minLength": 1},
+            },
+            "required": ["kind"],
+            "additionalProperties": False,
+            "anyOf": [
+                {"properties": {"kind": {"enum": [
+                    "stop_after_target", "stop_at_budget", "continue_same_surface"]}}},
+                {"properties": {"kind": {"enum": ["chain"]}},
+                    "required": ["source", "target", "target_agent"]},
+            ],
+        },
     },
     "required": ["next_agent", "reason_code"],
     "additionalProperties": False,
@@ -93,7 +112,22 @@ def _validate_decision_payload(
         raise ValueError("next_agent is not an allowed viable method")
     if not isinstance(reason_code, str) or not reason_code.strip():
         raise ValueError("reason_code must be a non-empty string")
-    return {"next_agent": next_agent, "reason_code": reason_code}
+    if 'reason_refs' in payload and (not isinstance(payload['reason_refs'], list)
+        or any(not isinstance(ref, str) for ref in payload['reason_refs'])):
+        raise ValueError("reason_refs must be a list of strings")
+    if 'plan' in payload:
+        plan = payload['plan']
+        schema = _ORCHESTRATOR_SCHEMA['properties']['plan']
+        if not isinstance(plan, dict) or set(plan) - set(schema['properties']):
+            raise ValueError("plan must contain only supported plan fields")
+        if not isinstance(plan.get('kind'), str) or plan['kind'] not in schema['properties']['kind']['enum']:
+            raise ValueError("plan.kind must be a supported continuation or stop plan")
+        for field in ('source', 'target', 'target_agent'):
+            if field in plan or plan['kind'] == 'chain':
+                if not isinstance(plan.get(field), str) or not plan[field].strip():
+                    raise ValueError(f"plan.{field} must be a non-empty string")
+    return {"next_agent": next_agent, "reason_code": reason_code,
+        **{k: payload[k] for k in ('reason_refs', 'plan') if k in payload}}
 
 
 def _coerce_bool(value: Any) -> bool:
@@ -431,6 +465,10 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                             value, allowed_agents=set(selection_methods) | {"scorer"}
                         ),
                         max_tokens=96,
+                        evidence_context={'method': state.get('selected_method'), 'visit_id': state.get('selected_visit_id'),
+                            'visit_ordinal': 1 + sum(d.get('dimension') == 'Smethod' for d in state.get('scoring_decisions', [])),
+                            'input': {'observations': dict(state.get('observations', {})),
+                                'viable_methods': list(selection_methods)}},
                     )
                     return result.text, result.parsed, result.performance
                 except LLMOutputError as exc:
@@ -638,12 +676,24 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 
 def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
     """Attach selection and role-output context at the shared selection boundary."""
+    context = current_call_context()
+    first_record = len(context.records) if context else 0
     update = _orchestrator(state)
     method = update.get("selected_method")
     if method:
         source = "forced" if state.get("target_method") else (
             "deterministic_fallback" if update.get("fallback_events") or update.get("guardrail_activations") else "model_orchestrator")
-        update.update(method_selection_update(state, method, source, viable_methods=update.get("viable_methods", [])))
+        record = next((r for r in reversed(context.records) if r.get('role') == 'orchestrator' and r.get('method') == method), {}) if context else {}
+        output = record.get('output') or {}
+        update.update(method_selection_update(state, method, source, viable_methods=update.get("viable_methods", []),
+            reason_refs=output.get('reason_refs'), plan=output.get('plan')))
+    if context:
+        for record in context.records[first_record:]:
+            if record.get('role') == 'orchestrator' and not record.get('method'):
+                record['method'] = method or (state.get('verifier_decision') or {}).get('agent_id')
+                record['visit_id'] = update.get('selected_visit_id') or state.get('selected_visit_id')
+                if not record['method']:
+                    record['scope'] = 'run'
     context_method = method or (state.get("verifier_decision") or {}).get("agent_id")
     for field in ("invalid_json_events", "output_failure_events", "guardrail_activations", "fallback_events"):
         update[field] = [{**event, "method": context_method,

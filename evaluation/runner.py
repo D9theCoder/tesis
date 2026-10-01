@@ -424,6 +424,11 @@ def run_single_engagement(
     experiment_id: str | None = None,
     scoring_mode: str = "human",
     scoring_evaluator: dict[str, Any] | None = None,
+    scoring_rubric_version: str = "scoring.v3",
+    scoring_profile: dict[str, Any] | None = None,
+    scoring_oracles: list[dict[str, Any]] | None = None,
+    fixture_id: str | None = None,
+    protocol_version: str | None = None,
 ) -> dict:
     """Run one configured DVWA framework engagement and write evaluation artifacts.
 
@@ -460,6 +465,10 @@ def run_single_engagement(
     run_id = f"{llm_provider}-{surface}-{security_level}-{payload_mode}-{repeat_index}"
     from evaluation.thesis_scoring import validate_scoring_config
     validate_scoring_config(scoring_mode, scoring_evaluator or {})
+    from copy import deepcopy
+    from evaluation.scoring_evidence import validate_evidence_config
+    scoring_profile, scoring_oracles = deepcopy(scoring_profile or {}), deepcopy(scoring_oracles or [])
+    validate_evidence_config(scoring_rubric_version, scoring_profile, scoring_oracles)
     execution_id = execution_id or new_execution_id()
     cancellation_token = cancellation_token or CancellationToken()
     runtime_events: list[dict[str, Any]] = []
@@ -469,6 +478,9 @@ def run_single_engagement(
     # resume/checkpoint flags the run uses a random execution_id thread on the
     # process-local MemorySaver and never touches SQLite.
     coordinate = {
+        "scoring_rubric_version": scoring_rubric_version,
+        "scoring_profile": scoring_profile, "scoring_oracles": scoring_oracles,
+        "fixture_id": fixture_id, "protocol_version": protocol_version,
         "scoring_mode": scoring_mode,
         "scoring_evaluator": redact_secrets(scoring_evaluator or {}),
         "target_url": target_url,
@@ -760,6 +772,9 @@ def run_single_engagement(
             app = build_framework(llm_provider=llm_provider, surface=surface)
         init_state = {
             **new_default_state(),
+            "scoring_rubric_version": scoring_rubric_version, "scoring_profile": scoring_profile,
+            "scoring_oracles": scoring_oracles, "fixture_id": fixture_id, "protocol_version": protocol_version,
+            "run_id": run_id, "execution_id": execution_id,
             "target_url": target_url,
             "security_level": security_level,
             "llm_provider": llm_provider,
@@ -1400,6 +1415,7 @@ def run_single_engagement(
             "current_chain": list(final_state.get("current_chain", [])),
             "active_chain_route": final_state.get("active_chain_route"),
             "chain_consumption": list(final_state.get("chain_consumption", [])),
+            "weak_chain_opportunities": list(final_state.get("weak_chain_opportunities", [])),
             "found_credentials": redact_secrets(final_state.get("found_credentials", [])),
             "attempted_agents": list(final_state.get("attempted_agents", [])),
             "tried_payloads": dict(final_state.get("tried_payloads", {})),
@@ -1440,6 +1456,12 @@ def run_single_engagement(
         "error": error,
     }
     artifact["state_schema_version"] = STATE_SCHEMA_VERSION
+    artifact["config"].update(scoring_rubric_version=scoring_rubric_version, scoring_profile=scoring_profile,
+        scoring_oracles=scoring_oracles, fixture_id=fixture_id, protocol_version=protocol_version)
+    if scoring_rubric_version == 'scoring.v4' and scoring_oracles:
+        from evaluation.scoring_evidence import attach_oracle_evidence
+        attach_oracle_evidence(artifact)
+        artifact['response_evidence'] = artifact['final_state']['response_evidence']
     artifact["config"]["scoring_mode"] = scoring_mode
     artifact["config"]["scoring_evaluator"] = redact_secrets(scoring_evaluator or {})
     artifact["scoring_mode"] = scoring_mode

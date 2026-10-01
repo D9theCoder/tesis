@@ -278,11 +278,13 @@ NEGATIVES += [('sqli_error', 'failed_submit')]
 NEGATIVES += [(m, c) for m in ['bf_dictionary', 'bf_spray'] for c in ['token_error', 'http_error', 'failed_probe', 'rejected_probe', 'error_probe', 'throttle', 'captcha']]
 
 
-@pytest.mark.parametrize('method,control', NEGATIVES)
-@pytest.mark.parametrize('level', ['medium', 'high'])
+@pytest.mark.parametrize('level,method,control', [
+    (level, method, control)
+    for level in ['medium', 'high']
+    for method, control in NEGATIVES
+    if control != 'failed_submit' or level == 'high'
+])
 def test_failure_controls(monkeypatch, method, control, level):
-    if control == 'failed_submit' and level != 'high':
-        pytest.skip('POST/result-GET transaction is high only')
     artifact, _ = run_control(monkeypatch, method, level, control)
     assert f'{method}_confirmed' not in artifact['confirmed_vulns']
     assert not artifact.get('found_credentials')

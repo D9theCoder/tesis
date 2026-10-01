@@ -285,6 +285,9 @@ def chaining_router_node(state: dict) -> dict:
         Partial state update merged into the LangGraph state."""
     next_agent, event = evaluate_chain_route(state)
     updates: dict = {**_complete_routed_visit(state), "next_agent": next_agent}
+    if state.get('scoring_rubric_version') == 'scoring.v4':
+        from evaluation.scoring_evidence import weak_opportunity_update
+        updates.update(weak_opportunity_update(state))
     decision = state.get("verifier_decision") or {}
     if decision.get("visit_id") and decision.get("visit_id") == state.get("selected_visit_id"):
         from core.scorer import output_decision_update
@@ -322,6 +325,11 @@ def chaining_router_node(state: dict) -> dict:
             "source_verifier_ids": [d["verifier_id"] for d in source_decisions],
             "source_evidence_refs": source_refs,
             "source_evidence_ids": [r["evidence_id"] for r in source_rows],
+            "prerequisite_evidence_refs": {p: [f'#/final_state/verifier_history/{i}'
+                for i,d in enumerate(state.get('verifier_history', [])) if p in
+                set(d.get('achieved_outcomes', [])) | set(d.get('confirmed_vulns', [])) |
+                _derive_surface_confirmed(set(d.get('confirmed_vulns', [])))]
+                for p in event.get('preconditions', [])},
         }
         updates["active_chain_route"] = route
         updates["chain_history"] = [*updates.get("chain_history", []),

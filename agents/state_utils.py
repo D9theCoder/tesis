@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Any
+from copy import deepcopy
+from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
 from foundation.http_client import RequestTimeoutError, TransportError
@@ -12,7 +14,7 @@ from tesis.runtime_events import redact_secrets
 
 
 def method_selection_update(state: dict, method: str, source: str, *, preconditions: list[str] | None = None,
-                            viable_methods: list[str] | None = None) -> dict:
+                            viable_methods: list[str] | None = None, reason_refs=None, plan=None) -> dict:
     """Grade every selection at its boundary, before execution changes viability."""
     from core.knowledge_graph import AttackKnowledgeGraph
     kg = AttackKnowledgeGraph()
@@ -34,7 +36,11 @@ def method_selection_update(state: dict, method: str, source: str, *, preconditi
         "scoring_decisions": [score_decision(state, "Smethod", method, grade,
             "viable_at_selection" if is_viable else "prerequisites_not_proved_at_selection",
             visit_id=visit_id, selection_source=source, surface=surface, viable=is_viable,
-            preconditions=requirements, observations=dict(state.get("observations", {})),
+            preconditions=requirements, observations=deepcopy(state.get("observations", {})),
+            selected_at=datetime.now(timezone.utc).isoformat(),
+            profile_sha256=(state.get('scoring_profile') or {}).get('sha256'),
+            comparison_methods=list(METHODS_BY_SURFACE[surface]),
+            reason_refs=list(reason_refs or []), plan=deepcopy(plan or {}),
             known_nodes=sorted(known))]}
 
 # Single source of truth: agent_id → DVWA endpoint path fragment.
@@ -372,9 +378,13 @@ def _materialize_request_evidence(
             "status_code": payload_copy.get("status_code"),
             "visit_id": visit_id,
             "evidence_id": f"response:{len(state.get('response_evidence', [])) + len(response_evidence)}",
+            "run_id": state.get('run_id'), "execution_id": state.get('execution_id'),
+            "fixture_id": state.get('fixture_id'), "protocol_version": state.get('protocol_version'),
+            "timestamp": datetime.now(timezone.utc).isoformat(), "origin": "method_agent_evidence",
         }
         for key in ("verified_grade", "verification_reason", "control_payload", "credentials", "consumed_source_evidence_id",
-                    "response_sha256", "response_excerpt", "response_truncated"):
+                    "response_sha256", "response_excerpt", "response_truncated", "oracle_ref",
+                    "principal_id", "object_id", "action", "session_fingerprint", "initial_session_fingerprint"):
             if key in payload_copy:
                 evidence[key] = payload_copy[key]
         if payload_copy.get("candidate_id"):
