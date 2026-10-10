@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 from collections import deque
-from dataclasses import asdict, is_dataclass
+from dataclasses import replace
 from pathlib import Path
 from threading import Lock, Thread
 from typing import Any
@@ -21,7 +21,6 @@ from textual.widgets import DataTable, Label, Static
 
 from evaluation.multi_llm_runner import run_provider_matrix
 from evaluation.runner import run_single_engagement
-from tesis.artifact_repository import new_execution_id
 from tesis.config_loader import load_and_resolve_config
 from tesis.runtime_events import CancellationToken, RunEvent
 import tesis.tui_commands as tui_commands
@@ -194,7 +193,8 @@ class MissionControlScreen(Screen):
         self._pending_dropped = 0
         self._tesis_closing = False
         self._journal_path: Path | None = None
-        self._descriptor_active = False
+        self._run_result: dict[str, Any] | None = None
+        self._artifact_root: Path | None = None
         self._drawer_observers: list = []
         # Notice auto-follow: following the bottom, else paused with a count of
         # events the operator has not scrolled to yet.
@@ -640,9 +640,11 @@ class MissionControlScreen(Screen):
         self._run_active = True
         self._tesis_closing = False
         self.state.run_mode = "matrix" if mode == "matrix" else "single"
-        self._render_regions(tui_state.apply_run_event(self.state, RunEvent("run.started", message="run started")))
-        self._journal_path = self._open_journal(config)
-        self._open_descriptor(config)
+        prefix = "matrix" if self.state.run_mode == "matrix" else "run"
+        self._render_regions(tui_state.apply_run_event(self.state, RunEvent(f"{prefix}.started", message="run started")))
+        self._journal_path = None
+        self._run_result = None
+        self._artifact_root = None
         worker = Thread(target=self._run_blocking, args=(config, self.state.run_mode),
                         name="tesis-runtime", daemon=True)
         self._runtime_thread = worker
@@ -650,123 +652,33 @@ class MissionControlScreen(Screen):
 
     _start_run = start_run
 
-    def _open_journal(self, config: Any) -> Path | None:
-        try:
-            output_dir = Path(str(getattr(config, "output_dir", "results")))
-            output_dir.mkdir(parents=True, exist_ok=True)
-            path = output_dir / "run-events.jsonl"
-            path.touch(exist_ok=True)
-            return path
-        except Exception:
-            return None
-
-    def _open_descriptor(self, config: Any) -> None:
-        try:
-            from tesis.live_runtime import build_runtime_descriptor, write_descriptor
-            descriptor = build_runtime_descriptor(config)
-            write_descriptor(descriptor)
-            self._descriptor_active = True
-        except Exception:
-            self._descriptor_active = False
-
-    def _close_descriptor(self, status: str) -> None:
-        if not self._descriptor_active:
-            return
-        try:
-            from tesis.live_runtime import write_terminal_descriptor
-            write_terminal_descriptor(status)
-        except Exception:
-            pass
-        finally:
-            self._descriptor_active = False
-
     def _run_blocking(self, config: Any, mode: str) -> None:
-        token = self.cancel_token
-        terminal_seen = False
+        from tesis.headless import run_resolved
+
+        screen = self
 
         def forward(event: RunEvent) -> None:
-            nonlocal terminal_seen
-            if str(event.event_type or "") in _TERMINAL_EVENT_TYPES:
-                terminal_seen = True
+            artifact_root = event.data.get("artifact_root")
+            if artifact_root:
+                self._journal_path = Path(artifact_root) / "runtime.events.jsonl"
             self._post_event(event)
 
         class _Sink:
             def emit(self, event: RunEvent) -> None:
                 forward(event)
 
-        sink = _Sink()
-        result_status = "cancelled" if token.is_cancelled else "succeeded"
         try:
-            if mode == "matrix":
-                providers = list(getattr(config, "providers", []) or [getattr(config, "provider", "gemini")])
-                levels = list(getattr(config, "levels", []) or [getattr(config, "level", "low")])
-                surfaces = list(getattr(config, "surfaces", []) or ["sqli"])
-                payload_modes = list(getattr(config, "payload_modes", []) or ["hybrid"])
-                _invoke_runner(run_provider_matrix, {
-                    "target_url": config.target_url,
-                    **{k: getattr(config, k, default) for k, default in (("scoring_rubric_version", "scoring.v4"),
-                        ("scoring_profile", {}), ("scoring_oracles", []), ("fixture_id", None), ("protocol_version", None))},
-                    "scoring_mode": getattr(config, "scoring_mode", "human"),
-                    "scoring_evaluator": getattr(config, "scoring_evaluator", {}),
-                    "providers": providers,
-                    "security_levels": levels,
-                    "surfaces": surfaces,
-                    "payload_modes": payload_modes,
-                    "repeats": int(getattr(config, "repeats", 1) or 1),
-                    "output_dir": str(getattr(config, "output_dir", "results")),
-                    "event_sink": sink,
-                    "cancellation_token": token,
-                    "execution_id": new_execution_id(),
-                })
-            else:
-                models = getattr(config, "models", {}) or {}
-                provider = str(getattr(config, "provider", "gemini"))
-                model_config = models.get(provider) if isinstance(models, dict) else None
-                if is_dataclass(model_config):
-                    model_config = asdict(model_config)
-                _invoke_runner(run_single_engagement, {
-                    "target_url": config.target_url,
-                    **{k: getattr(config, k, default) for k, default in (("scoring_rubric_version", "scoring.v4"),
-                        ("scoring_profile", {}), ("scoring_oracles", []), ("fixture_id", None), ("protocol_version", None))},
-                    "scoring_mode": getattr(config, "scoring_mode", "human"),
-                    "scoring_evaluator": getattr(config, "scoring_evaluator", {}),
-                    "security_level": str(getattr(config, "level", "low")),
-                    "llm_provider": provider,
-                    "surface": str(getattr(config, "surface", "sqli")),
-                    "payload_mode": str(getattr(config, "payload_mode", "hybrid")),
-                    "output_dir": str(getattr(config, "output_dir", "results")),
-                    "model_config": model_config,
-                    "event_sink": sink,
-                    "cancellation_token": token,
-                    "execution_id": new_execution_id(),
-                })
-            result_status = "cancelled" if token.is_cancelled else "succeeded"
+            _, self._run_result, self._artifact_root = run_resolved(
+                replace(config, matrix=mode == "matrix"),
+                event_sink=_Sink(), cancellation_token=self.cancel_token,
+                single_runner=run_single_engagement, matrix_runner=run_provider_matrix,
+            )
         except Exception as exc:
-            terminal_seen = True
-            result_status = "failed"
-            self._post_event(RunEvent("run.failed", message=f"{type(exc).__name__}: {exc}"))
+            prefix = "matrix" if mode == "matrix" else "run"
+            self._post_event(RunEvent(f"{prefix}.failed", execution_id=self.state.execution_id,
+                                     message=f"{type(exc).__name__}: {exc}"))
         finally:
-            if not terminal_seen:
-                # Runners normally emit their own terminal event; one that
-                # returns without it must still settle the operator state.
-                prefix = "matrix" if mode == "matrix" else "run"
-                if token.is_cancelled:
-                    self._post_event(RunEvent(f"{prefix}.cancelled", message="Cancellation requested"))
-                else:
-                    self._post_event(RunEvent(f"{prefix}.finished", message=f"Experiment {result_status}"))
             self._run_active = False
-            self._close_descriptor(result_status)
-            self._append_journal_terminal(result_status)
-
-
-    def _append_journal_terminal(self, status: str) -> None:
-        if self._journal_path is None:
-            return
-        try:
-            with open(self._journal_path, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps({"event_type": f"run.{status}", "status": status}) + "\n")
-        except Exception:
-            pass
 
     def _post_event(self, event: RunEvent) -> None:
         should_drain = False
@@ -840,7 +752,6 @@ class MissionControlScreen(Screen):
             self.cancel_token.cancel("TUI closed")
         except Exception:
             pass
-        self._close_descriptor("cancelled")
 
     def on_unmount(self) -> None:
         self.prepare_shutdown()

@@ -314,13 +314,14 @@ class RuntimeDescriptorHeartbeatSink:
             self._descriptor = current
             self._last_write = now
 
-    def terminate(self, status: str) -> RuntimeDescriptor:
+    def terminate(self, status: str, *, run_id: str | None = None) -> RuntimeDescriptor:
         """Persist a terminal descriptor and stop future heartbeat rewrites."""
 
         with self._lock:
             if self._descriptor.is_terminal:
                 return self._descriptor
-            self._descriptor = write_terminal_descriptor(self._descriptor, status)
+            source = replace(self._descriptor, run_id=run_id or self._descriptor.run_id)
+            self._descriptor = write_terminal_descriptor(source, status)
             return self._descriptor
 
 

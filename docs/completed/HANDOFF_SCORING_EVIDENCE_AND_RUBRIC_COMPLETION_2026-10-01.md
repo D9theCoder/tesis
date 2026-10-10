@@ -1,8 +1,26 @@
-# Handoff: melengkapi bukti dan rubrik penilaian eksperimen
+# Handoff: implementasi bukti dan rubrik penilaian scoring.v4
 
-Status: active. Implementasi scoring.v4 sedang dikerjakan; penerimaan offline dan bukti fixture DVWA aktual dilaporkan terpisah.
+Status: completed, 2026-10-10, untuk implementasi rubrik, kontrak bukti,
+perbaikan review, dan penerimaan offline yang tercatat. Penutupan ini mengikuti
+pemisahan cakupan yang diminta pemilik; penerimaan penelitian live dan layout
+DOCX aktual diteruskan ke handoff tersendiri dan belum dinyatakan selesai.
 
-Tanggal: 2026-10-01.
+Tanggal penyusunan: 2026-10-01. Tanggal pemisahan cakupan: 2026-10-10.
+
+## Pembagian menjadi tiga handoff
+
+| Bagian | Status dan pemilik pekerjaan |
+| --- | --- |
+| Implementasi scoring.v4, perbaikan review, rubrik dan kontrol offline | Completed dalam dokumen ini. Tujuh tabel serta 35 contoh dipertahankan sebagai sumber generator DOCX. |
+| Koneksi model dan lifecycle matriks TUI | Completed: [handoff perbaikan TUI](HANDOFF_TUI_MODEL_CONNECTION_AND_MATRIX_RUNTIME_2026-10-10.md). Kontrol offline, smoke live, dan audit runtime 108 koordinat lulus; hasil eksperimen 48 success dan 60 error belum menjadi penerimaan scoring. |
+| Profil ranking, oracle, matriks lengkap, dan DOCX aktual | Upcoming: [handoff penerimaan penelitian](../upcoming/HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md). Seluruh todo penerimaan tersisa dipindahkan ke sana. |
+
+Bagian 1 sampai 9 mempertahankan keputusan, baseline awal, spesifikasi dan
+kontrol implementasi. Pernyataan baseline adalah keadaan sebelum implementasi;
+bagian 12 mencatat hasil sesudahnya. Contoh rubrik bersifat ilustratif dan
+bukan klaim keterjangkauan skor penuh pada DVWA aktual. Kriteria selesai untuk
+cakupan yang ditutup tercantum pada bagian 10. Catatan preflight matriks lengkap
+dan audit DOCX lanjutan dipindahkan ke bagian 8 handoff penerimaan penelitian.
 
 ## 1. Tujuan dan keputusan pemilik tesis
 
@@ -43,9 +61,9 @@ Salinan rubrik sebelum rekonsiliasi tersedia di `results/validation/thesis-scori
 
 DVWA tetap menjadi satu-satunya target penelitian, dengan sembilan metode yang sudah terdaftar. Perubahan berfokus pada pencatatan dan penilaian bukti. Pemeringkatan evaluasi tidak diberikan kepada pemilih metode sebagai arahan baru. AKG, payload, containment, kondisi `linear_hybrid` dan `akg_guided_hybrid`, serta identitas eksperimen tetap mengikuti batas penelitian.
 
-## 3. Baseline yang terverifikasi dan masalah yang tersisa
+## 3. Baseline awal sebelum implementasi
 
-| Dimensi | Perilaku saat ini | Pekerjaan yang diperlukan |
+| Dimensi | Perilaku pada baseline awal | Perubahan yang direncanakan saat itu |
 | --- | --- | --- |
 | `Smethod` | `method_selection_update()` menghasilkan 1 atau 3. `_automatic_components()` menghasilkan 0, 1, 3, atau `None`; skor 2 dan 4 belum digunakan. | Bekukan profil pemeringkatan, catat alasan yang dapat diperiksa, dan implementasikan aturan 0 sampai 4. |
 | `Spayload` | `PROOF_TIERS` belum memiliki bukti tingkat 4. `verified_login` bernilai 2, dan `_candidate_proof()` membatasi seluruh metode Access Control pada 2. | Tambahkan kontrak bukti independen dan bukti penggunaan hasil kandidat. Pertahankan batas pada bukti lama yang belum memenuhi kontrak. |
@@ -238,7 +256,7 @@ Agregasi output memakai seluruh panggilan dalam konteks metode final dan kejadia
 
 Stabilitas output antar pengulangan dilaporkan sebagai frekuensi tingkat `Soutput` yang paling sering muncul dibagi jumlah pengulangan yang dapat dinilai, dengan jumlah final, pending, dan pengulangan yang direncanakan ikut dilaporkan. Gunakan konfigurasi, versi rubrik, dan metode yang sama; kelompok penilaian manusia/AI tetap terpisah. Dengan satu pengulangan nilainya `null`. Metrik ini diberi nama terpisah dari `consistency_score` yang saat ini menghitung frekuensi vektor komponen lengkap.
 
-## 7. Perubahan kode minimum dan alur implementasi
+## 7. Spesifikasi perubahan kode dan alur implementasi
 
 Gunakan usulan versi `scoring.v4` untuk perubahan semantik ini. Nomor versi ditetapkan sebelum implementasi dan dicatat dalam konfigurasi serta receipt. Artefak `scoring.v2` dan penilaian `scoring.v3` tetap dapat dibaca dengan aturan versi aslinya. Perbandingan tidak menggabungkan versi rubrik atau profil pemeringkatan yang berbeda. Versi baru tidak boleh menyamar sebagai peningkatan bukti pada file lama.
 
@@ -338,20 +356,28 @@ Ketiga konfigurasi dry run harus dibuat dengan DVWA target yang sama dan permuka
 
 Validasi DVWA aktual merupakan penerimaan terpisah dari kontrol offline. Tahap ini menggunakan kontrol yang dibekukan dan sumber oracle yang disediakan operator pada DVWA dalam ruang lingkup. Detail teknik eksploitasi baru tidak termasuk pekerjaan handoff. Jangan menjalankan matriks eksperimen utama sebelum gerbang inti lulus. Provider lain tidak ditambahkan; tahap yang memerlukan provider memakai `openai_compatible` sesuai konfigurasi yang disetujui.
 
-## 10. Kriteria selesai dan batas pelaporan
+## 10. Penerimaan cakupan implementasi yang selesai
 
-Handoff dapat dinyatakan selesai setelah seluruh kondisi berikut terpenuhi:
+Cakupan dokumen ini ditutup berdasarkan hasil implementasi pada bagian 12:
 
-1. Profil ranking lengkap untuk koordinat yang dinilai, dibekukan, dan diperiksa melalui kontrol pembanding; skor 2 serta 4 `Smethod` memiliki bukti positif dan kontrol negatif.
-2. Semua tabel rubrik memiliki lima baris kriteria dan lima contoh kondisi lengkap. Tidak ada sel contoh yang hanya berisi status implementasi, tanda kosong, atau pernyataan bahwa skor belum diberikan.
-3. Oracle Access Control/Brute Force diterima berdasarkan sumber DVWA yang nyata untuk skenario yang mengklaim skor penuh. Keterbatasan fixture atau permukaan yang tidak mendukungnya dilaporkan per skenario.
-4. Tingkat 4 payload dan exploit memiliki bukti penggunaan yang benar serta atribusi sumber yang tepat. Batas konteks metode final telah diuji dan dinyatakan dalam laporan.
-5. `Schain = 1` memiliki produsen bukti parsial yang dapat diaudit. Skor 2, 3, dan 4 tetap memerlukan prasyarat dan hubungan bukti masing-masing.
-6. `Soutput = 4` memiliki kontrol rujukan/provenance, penilaian per konteks run, dan metrik stabilitas terpisah dengan penyebut yang dapat dihitung ulang.
-7. `Srun` dapat dihitung ulang pada semua receipt final; pending dan dua workflow tetap terpisah. Sumber serta receipt historis tidak berubah.
-8. Pemeriksaan offline, dry run, audit dokumen, dan penerimaan bukti DVWA yang disyaratkan tercatat bersama perintah, konfigurasi, hasil, serta lokasi artefak. Pemeriksaan layout yang belum dilakukan dilaporkan sebagai belum diverifikasi.
+1. Kontrak scoring.v4 untuk ranking, snapshot pemilihan, oracle, bukti kandidat,
+   penggunaan hasil, chain dan output sudah diterapkan serta diuji offline.
+2. Tujuh tabel rubrik memiliki lima kriteria dan lima contoh substantif setiap
+   tabel; teks rubrik dan formula tetap tersedia sebagai sumber laporan.
+3. Kontrol offline memeriksa kelas skor, pending/null, atribusi metode/kandidat,
+   presisi komposit, kompatibilitas versi, serta workflow manusia/AI terpisah.
+4. Perbaikan review diterapkan dan kontrol artefak tersimpan mempertahankan hash
+   sumber serta receipt historis. Suite, dry run dan audit yang telah dilakukan
+   tercatat dengan perintah dan lokasi bukti.
 
-Kode yang menerima kontrak oracle melalui mock belum membuktikan bahwa fixture DVWA aktual menyediakan oracle tersebut. Jika sumber independen atau contoh tingkat tinggi belum dapat diwujudkan pada ruang lingkup sekarang, handoff tetap berada di `docs/active/` dengan matriks batasan yang jelas. Kriteria laporan yang bersifat ilustratif tetap dapat dicantumkan, disertai penjelasan keterjangkauan pada eksperimen aktual. Status completed lama tetap merujuk pada cakupan `scoring.v3` yang dahulu disetujui.
+Kriteria penerimaan awal yang bergantung pada profil penelitian frozen,
+oracle DVWA aktual, penggunaan hasil live, matriks lengkap, dan verifikasi
+DOCX final sekarang dimiliki
+[handoff penerimaan penelitian](../upcoming/HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md).
+Bug koneksi/pelaporan matriks TUI yang ditemukan kemudian dimiliki
+[handoff perbaikan TUI](HANDOFF_TUI_MODEL_CONNECTION_AND_MATRIX_RUNTIME_2026-10-10.md).
+Tidak ada syarat live yang dinyatakan lulus hanya karena dokumen ini dipindahkan
+ke completed. Handoff v3 yang sudah selesai tetap mempunyai cakupan aslinya.
 
 ## 11. Paket keluaran implementasi
 
@@ -362,7 +388,7 @@ Kode yang menerima kontrak oracle melalui mock belum membuktikan bahwa fixture D
 
 Validasi pada saat penyusunan handoff awal terbatas pada inspeksi kode, DOCX, kelengkapan tabel usulan, formula ilustratif, dan tautan sumber. Hasil implementasi sesudahnya dicatat pada bagian 12.
 
-Audit dokumen dapat diulang dengan `.venv/bin/python results/validation/scoring-handoff-2026-10-01/audit.py`. Pemeriksaan mengharapkan tujuh tabel rubrik, lima contoh lengkap per tabel, tautan sumber lokal yang valid, serta tiga perhitungan komposit yang tepat. Hasil penyusunan: 7 tabel, 35 contoh, dan seluruh pemeriksaan tersebut lulus. [Script audit](../../results/validation/scoring-handoff-2026-10-01/audit.py) dan [hasil audit](../../results/validation/scoring-handoff-2026-10-01/audit.json) disimpan pada direktori bukti lokal yang gitignored. Tidak ada panggilan HTTP atau provider pada audit dokumen ini.
+Audit dokumen pada saat penyusunan memeriksa tujuh tabel rubrik, lima contoh lengkap per tabel, tautan sumber lokal yang valid, serta tiga perhitungan komposit yang tepat. Hasil penyusunan: 7 tabel, 35 contoh, dan seluruh pemeriksaan tersebut lulus. Script audit awal masih memakai path/status baseline DOCX lama, sehingga tidak menjadi perintah penerimaan dokumen aktual. Kontrol generator yang dapat diulang setelah pemindahan adalah `.venv/bin/python -m pytest -q tests/test_scoring_evidence_v4_e2e.py::test_report_tables_examples_and_package_preservation`. [Script audit](../../results/validation/scoring-handoff-2026-10-01/audit.py) dan [hasil audit](../../results/validation/scoring-handoff-2026-10-01/audit.json) disimpan pada direktori bukti lokal yang gitignored. Tidak ada panggilan HTTP atau provider pada audit dokumen ini.
 
 ## 12. Hasil implementasi dan batas penerimaan (2026-10-02)
 
@@ -377,7 +403,7 @@ Rubrik `scoring.v4`, kontrak profil dan oracle, bukti pemilihan/output/chain, re
 | Dry run | Graph, AKG, dan seed valid pada tiga permukaan: 12 koordinat SQL Injection, 9 Access Control, 6 Brute Force. Konfigurasi memakai sumber profil/oracle kosong secara eksplisit; gerbang profil penelitian belum lulus. | [Config SQL](../../results/validation/scoring-evidence-v4/config-sqli.yaml), [Access Control](../../results/validation/scoring-evidence-v4/config-access_control.yaml), [Brute Force](../../results/validation/scoring-evidence-v4/config-brute_force.yaml) |
 | Dokumen Word | Microsoft Word merender 17 halaman. Ketujuh tabel memiliki empat kolom dan lima contoh; baris tidak terbelah, caption tetap bersama tabel, formula/objek tertanam serta bagian paket selain dokumen tetap utuh. LibreOffice tidak tersedia. | [Audit layout](../../results/validation/scoring-evidence-v4/layout-review.json), [PDF tinjauan](../../results/validation/scoring-evidence-v4/layout/metrik_penilaian_tesis-final.pdf) |
 
-Pemeriksaan hash sumber dapat diulang dengan `.venv/bin/python results/validation/scoring-evidence-v4/audit_live_sources.py`; dry run dengan `.venv/bin/python -m tesis run --dry-run --config results/validation/scoring-evidence-v4/config-<surface>.yaml`. Seluruh pemeriksaan pada tabel ini tidak mengirim permintaan HTTP DVWA atau panggilan provider. Pemeriksaan live baru dapat dinilai setelah profil referensi disetujui sebelum eksekusi dan sumber oracle operator mengikat fixture, sesi, kandidat, kontrol pembanding, serta bukti tujuan yang benar. Sampai itu tersedia, handoff tetap `active`.
+Pemeriksaan hash sumber dapat diulang dengan `.venv/bin/python results/validation/scoring-evidence-v4/audit_live_sources.py`; dry run dengan `.venv/bin/python -m tesis run --dry-run --config results/validation/scoring-evidence-v4/config-<surface>.yaml`. Seluruh pemeriksaan pada tabel ini tidak mengirim permintaan HTTP DVWA atau panggilan provider. Pemeriksaan live baru dapat dinilai setelah profil referensi disetujui sebelum eksekusi dan sumber oracle operator mengikat fixture, sesi, kandidat, kontrol pembanding, serta bukti tujuan yang benar. Penerimaan tersebut dilanjutkan pada handoff ranking dan oracle; status completed dokumen ini hanya mencakup implementasi dan kontrol offline.
 
 ### Perbaikan review dan validasi offline (2026-10-02)
 
@@ -403,5 +429,56 @@ assertion hash sumber, enam dimensi skor, dan gap chain tetap diperiksa.
 memuat detail pengulangan. Suite penuh dimulai sebelum perbaikan fixture
 rescoring lama; fixture terbaru lulus pemeriksaan tersendiri serta suite terfokus
 lengkap dalam snapshot tracked. Tidak ada validasi DVWA/provider live atau
-validasi layout visual DOCX baru pada perbaikan review ini. Handoff tetap active
-karena syarat penerimaan live sebelumnya belum dipenuhi.
+validasi layout visual DOCX baru pada perbaikan review ini. Syarat penerimaan live sebelumnya belum dipenuhi dan telah dipindahkan
+ke handoff ranking dan oracle.
+
+### Pemeriksaan revisi DOCX setelah perbaikan review (2026-10-02)
+
+Pemeriksaan warna menemukan 63 sel yang berubah tetapi belum berwarna merah;
+sel tersebut sudah diperbaiki. Audit berikutnya menemukan nol paragraf berubah
+yang belum berwarna merah, dan seluruh 35 contoh kondisi berwarna merah.
+
+Revisi bahasa memeriksa 126 paragraf merah, memperbaiki bahasa pada 83 paragraf,
+dan memberi italic pada 225 kemunculan istilah asing. Pemeriksaan memastikan
+warna merah tetap, teks di luar revisi tetap, tidak ada em-dash/en-dash pada
+teks merah, serta formula, contoh numerik, objek tertanam, geometri tabel,
+properti halaman, dan bagian paket dokumen lainnya tetap dipertahankan.
+
+Bukti: [audit warna](../../results/validation/docx-red-audit-2026-10-02/color-validation.json)
+dan [validasi revisi bahasa](../../results/validation/docx-natural-language-2026-10-02/validation.json).
+Hash DOCX setelah revisi bahasa adalah
+`2512e7be0e78b8a35c5cc56f6c0859f6b85fa115358e3a108dedf0c8c3fddf65`.
+
+Versi dengan hash tersebut sudah diperiksa dari sisi isi, format teks, dan integritas
+struktur. Ekspor ulang PDF melalui Microsoft Word gagal karena interop WSL
+(`UtilBindVsockAnyPort: socket failed 1`), sehingga belum ada penerimaan visual
+layout untuk versi terbaru. [Catatan render](../../results/validation/docx-natural-language-2026-10-02/word-render.json)
+memuat kegagalan tersebut; hasil render 17 halaman pada tabel sebelumnya
+berlaku untuk versi sebelum revisi bahasa terakhir.
+
+Pada pemeriksaan status berikutnya, file tracked saat ini memiliki hash
+`478ce522ac8e28085000fc419020c40969f1d785f2f65cb8939b073f0ea3474e`.
+Hash tersebut berbeda dari versi pada audit revisi bahasa. Hasil audit di atas
+tetap berlaku untuk versi yang tercatat; kesesuaian isi dan format file saat ini
+perlu diperiksa kembali sebelum dinyatakan terverifikasi oleh audit tersebut.
+
+## 13. Validasi pemisahan handoff (2026-10-10)
+
+Pemilik meminta penutupan cakupan implementasi dan dua handoff tindak lanjut.
+Dokumen ini dipindahkan ke `docs/completed/`; pekerjaan koneksi/lifecycle TUI
+serta ranking/oracle/penerimaan penelitian berada di `docs/upcoming/` sampai
+implementasinya dimulai. Catatan preflight dan audit DOCX terbaru dipindahkan
+ke handoff penerimaan tanpa menyatakan pekerjaan tersebut selesai.
+
+Referensi scorebook, generator DOCX, dan kontrol E2E mengikuti path baru.
+Kontrol `test_report_tables_examples_and_package_preservation` lulus satu tes;
+generator juga dijalankan melalui CLI dan menghasilkan salinan turunan dengan
+tujuh tabel, 35 contoh, formula/objek serta bagian paket lain dipertahankan.
+Audit memeriksa tautan lokal/anchor dan kesamaan rubrik dengan handoff sebelum
+pemisahan. DOCX sumber tidak berubah.
+
+[Manifest perintah dan hasil](../../results/validation/handoff-split-2026-10-10/manifest.json)
+dan [audit pemisahan](../../results/validation/handoff-split-2026-10-10/audit.json)
+menyimpan bukti repeatable. Pemeriksaan ini tidak mengirim permintaan HTTP atau
+provider, tidak menerapkan perbaikan runtime, dan tidak memverifikasi layout
+visual maupun matriks lengkap.

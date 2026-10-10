@@ -24,7 +24,7 @@ from tesis.live_runtime import (
     write_terminal_descriptor,
 )
 from tesis.model_config import EngagementConfig, ModelConfig
-from tesis.runtime_events import CancellationToken
+from tesis.runtime_events import CancellationToken, RunEvent
 from tesis.runtime_journal import JSONLJournalSink, MultiplexingRuntimeEventSink
 from llm.runtime import LLMRuntime
 
@@ -252,11 +252,33 @@ def run_headless(
         else:
             existing.model_name = model_name
 
+    return run_resolved(config, cli_args=cli_args)
+
+
+def run_resolved(
+    config: EngagementConfig,
+    *,
+    cli_args: dict[str, Any] | None = None,
+    event_sink: Any = None,
+    cancellation_token: CancellationToken | None = None,
+    single_runner: Any = None,
+    matrix_runner: Any = None,
+) -> tuple[int, dict[str, Any], Path]:
+    """Execute resolved settings with the same artifacts and observers for both UIs."""
+    cli_args = cli_args or {}
+    if config.matrix:
+        config = dataclasses.replace(
+            config,
+            providers=config.providers or [config.provider],
+            levels=config.levels or [config.level],
+            surfaces=config.surfaces or [config.surface],
+            payload_modes=config.payload_modes or [config.payload_mode],
+        )
     layout = allocate_artifact_layout(
         config.output_dir,
         "matrix" if config.matrix else "single-run",
     )
-    cancellation_token = CancellationToken()
+    cancellation_token = cancellation_token or CancellationToken()
     execution_id = new_execution_id()
     common = _common_kwargs(config, output_dir=layout.root)
     for _key in ("resume", "checkpoint_dir", "experiment_id"):
@@ -276,6 +298,7 @@ def run_headless(
     descriptor: RuntimeDescriptor | None = None
     heartbeat_sink: RuntimeDescriptorHeartbeatSink | None = None
     journal_sink: JSONLJournalSink | None = None
+    sink = event_sink
     try:
         # Live observation: wire a redacted journal into the runner event sink
         # and publish an atomic "active" descriptor before invoking a runner.
@@ -293,12 +316,22 @@ def run_headless(
         )
         write_descriptor(descriptor)
         heartbeat_sink = RuntimeDescriptorHeartbeatSink(descriptor)
-        common["event_sink"] = MultiplexingRuntimeEventSink(journal_sink, heartbeat_sink)
+        sinks = [journal_sink, heartbeat_sink]
+        if event_sink is not None:
+            sinks.append(event_sink)
+        sink = MultiplexingRuntimeEventSink(*sinks)
+        common["event_sink"] = sink
         # The same physical execution ID is passed to the runner so the
         # descriptor, journal events, and primary artifact are discoverable
         # under one identity.
         common["execution_id"] = descriptor.execution_id
         _export_akg_snapshot(layout.root)
+        sink.emit(RunEvent(
+            "matrix.started" if config.matrix else "run.started",
+            execution_id=execution_id,
+            message="Experiment started",
+            data={"artifact_root": str(layout.root)},
+        ))
 
         if config.matrix:
             matrix_kwargs = {
@@ -315,7 +348,7 @@ def run_headless(
                     for name, value in config.models.items()
                 },
             }
-            artifacts, result = _call_runner(run_provider_matrix, matrix_kwargs)
+            artifacts, result = _call_runner(matrix_runner or run_provider_matrix, matrix_kwargs)
         else:
             single_kwargs = {
                 **common,
@@ -325,7 +358,7 @@ def run_headless(
                 "payload_mode": config.payload_mode,
                 "model_config": _model_dict(config, config.provider),
             }
-            result = _call_runner(run_single_engagement, single_kwargs)
+            result = _call_runner(single_runner or run_single_engagement, single_kwargs)
     except KeyboardInterrupt:
         cancellation_token.cancel("keyboard interrupt")
         result = _cancelled_result(
@@ -336,6 +369,7 @@ def run_headless(
         artifacts = []
     except Exception as exc:
         result = {
+            "execution_id": execution_id,
             "status": "error",
             "error": f"{type(exc).__name__}: {exc}",
         }
@@ -357,17 +391,15 @@ def run_headless(
                         else descriptor_source.run_id
                     ) or descriptor_source.run_id,
                 )
-                write_terminal_descriptor(
-                    terminal_descriptor,
-                    _terminal_status_for_result(result),
-                )
+                if heartbeat_sink is not None:
+                    heartbeat_sink.terminate(
+                        _terminal_status_for_result(result),
+                        run_id=terminal_descriptor.run_id,
+                    )
+                else:
+                    write_terminal_descriptor(terminal_descriptor, _terminal_status_for_result(result))
             except Exception as exc:
                 result.setdefault("runtime_descriptor_error", f"{type(exc).__name__}: {exc}")
-        if journal_sink is not None:
-            try:
-                journal_sink.close()
-            except Exception as exc:
-                result.setdefault("runtime_journal_error", f"{type(exc).__name__}: {exc}")
         if isinstance(result, dict) and str(result.get("status", "")).lower() == "cancelled":
             execution_id = result.get("execution_id")
             if execution_id:
@@ -387,9 +419,32 @@ def run_headless(
             )
         except Exception as exc:
             result.setdefault("artifact_manifest_error", f"{type(exc).__name__}: {exc}")
+        if sink is not None:
+            terminal = _terminal_status_for_result(result)
+            sink.emit(RunEvent(
+                f"{'matrix' if config.matrix else 'run'}.{terminal}",
+                execution_id=execution_id,
+                run_id=result.get("run_id"),
+                message=f"Experiment {terminal}",
+                data={
+                    "status": result.get("status", "error"),
+                    "artifact_root": str(layout.root),
+                    "totals": result.get("totals", {}),
+                    "cancellation": result.get("cancellation", {}),
+                    "message": result.get("error"),
+                    **{key: result[key] for key in (
+                        "runtime_descriptor_error", "runtime_journal_error", "artifact_manifest_error"
+                    ) if key in result},
+                },
+            ))
+        if journal_sink is not None:
+            try:
+                journal_sink.close()
+            except Exception as exc:
+                result.setdefault("runtime_journal_error", f"{type(exc).__name__}: {exc}")
 
     exit_code = 0 if str(result.get("status", "error")).lower() in {"success", "cancelled"} else 1
     return exit_code, result, layout.root
 
 
-__all__ = ["run_headless"]
+__all__ = ["run_headless", "run_resolved"]

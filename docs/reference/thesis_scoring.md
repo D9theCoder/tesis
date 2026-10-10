@@ -273,11 +273,24 @@ Implementation checks and repeatable evidence are recorded in the
 
 ## Acceptance and current limits
 
-The [active v4 handoff](../active/HANDOFF_SCORING_EVIDENCE_AND_RUBRIC_COMPLETION_2026-10-01.md)
-tracks offline contracts and remaining live acceptance. No researcher-approved
-request-count profiles or independent live DVWA permission/session/dependency
-oracles were supplied. Synthetic profiles must not be used as thesis ground
-truth. Microsoft Word layout was visually checked across 17 rendered pages;
-LibreOffice was unavailable. Actual full-credit reachability remains
-unverified. Full live acceptance is required before moving this handoff to
-completed. The older completed v3 handoff retains its original acceptance scope.
+The [completed v4 implementation handoff](../completed/HANDOFF_SCORING_EVIDENCE_AND_RUBRIC_COMPLETION_2026-10-01.md)
+records the implemented evidence contracts, review fixes and offline validation.
+The owner split the remaining work on 2026-10-10 into the
+[TUI model connection and matrix runtime handoff](../completed/HANDOFF_TUI_MODEL_CONNECTION_AND_MATRIX_RUNTIME_2026-10-10.md)
+and the [ranking, oracle and live acceptance handoff](../upcoming/HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md).
+The TUI runtime follow-up passed its required acceptance on 2026-10-11, including
+the 108-coordinate runtime audit. Its experiment outcomes were 48 successes and
+60 incomplete errors. Ranking, oracle and final scoring acceptance remain
+upcoming. Runtime completion does not declare full live thesis acceptance.
+
+No researcher-approved request-count profiles or independent live DVWA
+permission/session/dependency oracles were supplied. Synthetic profiles must not
+be used as thesis ground truth. A direct live AI review succeeded, but its final
+score remained pending because the ranking was unavailable. The model connection
+failure was reproduced in the current TUI matrix launcher; current headless
+smokes connected successfully. Missing scoring evidence is a separate limitation.
+
+Microsoft Word layout was visually checked across 17 pages of an earlier DOCX;
+that render does not verify the current revision. Actual full-credit reachability,
+the full 108-coordinate matrix and current DOCX visual acceptance remain with the
+second follow-up. The older completed v3 handoff retains its original scope.

@@ -58,6 +58,16 @@ complete execution log. Cancellation is cooperative at safe graph/matrix
 boundaries and persists the latest state with status `cancelled`; a second
 cancel request closes the TUI without waiting for a blocked operation.
 
+Both launchers execute resolved settings through `tesis.headless.run_resolved`.
+This shared boundary forwards model profiles, runtime roles/cache/concurrency,
+experiment condition, target method, payload mode, repeats, execution limits,
+guardrail settings, and scoring configuration. It creates the artifact layout,
+redacted event journal, and active runtime descriptor. In matrix mode, child
+`run.*` lifecycle events cannot reset the parent identity, timer, or rows;
+`matrix.run.*` events update the coordinates. The returned aggregate determines
+the terminal UI, journal, and descriptor status. Terminalizing the descriptor
+also stops its heartbeat, including on failure or cancellation.
+
 Each physical execution receives a unique `execution_id`; the logical
 experiment coordinate remains `run_id`. A secret-free `config_fingerprint`
 identifies equivalent effective experiment setups while excluding execution
@@ -1113,6 +1123,15 @@ Allowed fallback:
 | Execution  | No success signal, unstable evidence                           | Record partial or failure based on verifier                       |
 
 ## 11. Artifact Schema
+
+A matrix also writes a parent `<execution_id>.matrix.json` artifact. Its
+`status`, `totals`, and `cancellation` fields are authoritative for the matrix
+outcome and completed/not-started counts. The `runs` array embeds the child
+artifacts. Each child's `execution_id` joins it to the standalone coordinate
+JSON; reconciliation preserves its `status`, experiment `config`, selected
+method, `final_state`, and fallback events. Parent and child execution IDs stay
+separate in the runtime descriptor and event journal. Runtime completion does
+not imply final scoring acceptance.
 
 Each run produces a JSON artifact with at least the following fields:
 

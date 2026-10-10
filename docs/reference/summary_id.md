@@ -60,6 +60,18 @@ Cancellation bekerja secara kooperatif pada batas graph/matrix yang aman dan
 menyimpan state terbaru dengan status `cancelled`; permintaan cancellation
 kedua menutup TUI tanpa menunggu operasi yang tersendat.
 
+Kedua peluncur menjalankan konfigurasi yang sudah di-resolved melalui
+`tesis.headless.run_resolved`. Fungsi bersama ini meneruskan profil model,
+role/cache/concurrency runtime, kondisi eksperimen, target metode, payload mode,
+repeat, batas eksekusi, pengaturan guardrail, dan konfigurasi scoring. Fungsi
+ini juga menyiapkan lokasi artifact, jurnal event yang telah direduksi dari
+secret, dan descriptor runtime aktif. Pada mode matrix, event lifecycle
+`run.*` milik child tidak mereset identitas, jam, atau baris parent;
+`matrix.run.*` memperbarui koordinat. Agregat yang dikembalikan runner menentukan
+status terminal UI, jurnal, dan descriptor. Perubahan descriptor ke status
+terminal sekaligus menghentikan heartbeat, termasuk pada kegagalan atau
+cancellation.
+
 Setiap eksekusi fisik memperoleh `execution_id` unik, sedangkan koordinat
 eksperimen logis tetap memakai `run_id`. `config_fingerprint` bebas secret
 menandai setup eksperimen efektif yang sama dengan mengecualikan identity
@@ -1122,6 +1134,15 @@ Fallback yang diperbolehkan:
 | Execution | No success signal, unstable evidence | Catat partial atau failure berdasarkan verifier |
 
 ## 11. Artifact Schema
+
+Matrix juga menghasilkan artifact parent `<execution_id>.matrix.json`.
+Field `status`, `totals`, dan `cancellation` menjadi sumber status akhir matrix
+serta jumlah koordinat selesai dan belum dimulai. Array `runs` memuat artifact
+child. `execution_id` setiap child menghubungkannya dengan JSON koordinat yang
+disimpan terpisah; rekonsiliasi mempertahankan `status`, `config` eksperimen,
+metode terpilih, `final_state`, dan fallback events. Identitas eksekusi parent
+dan child tetap terpisah pada descriptor runtime dan jurnal event. Selesainya
+runtime belum berarti scoring final diterima.
 
 Setiap run menghasilkan JSON artifact dengan field minimal:
 

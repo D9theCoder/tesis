@@ -132,7 +132,8 @@ def update_document(source, handoff, output):
             'Receipt human-verified dan ai-verified tetap terpisah dari satu sumber berhash.',
             'Batas penerimaan scoring.v4: profil penelitian dan oracle DVWA aktual belum tersedia. Bukti tingkat tinggi pada '
             'fixture aktual belum diverifikasi. Contoh kondisi pada tabel bersifat ilustratif. '
-            'Handoff berada di docs/active/HANDOFF_SCORING_EVIDENCE_AND_RUBRIC_COMPLETION_2026-10-01.md; '
+            'Implementasi dan kontrol offline tercatat pada docs/completed/HANDOFF_SCORING_EVIDENCE_AND_RUBRIC_COMPLETION_2026-10-01.md. '
+            'Profil, oracle dan penerimaan aktual dilanjutkan pada docs/upcoming/HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md; '
             'hasil offline tidak dinyatakan sebagai penerimaan eksperimen live.'
         ]
         template = next(p for p in reversed(paragraphs) if p.getElementsByTagName('w:t') and not p.getElementsByTagName('m:oMath'))

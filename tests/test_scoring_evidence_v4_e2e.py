@@ -504,7 +504,7 @@ def test_all_pending_repeats_remain_visible(monkeypatch):
 def test_report_tables_examples_and_package_preservation(tmp_path):
     from evaluation.rubric_document import update_document
     source = Path('metrik_penilaian_tesis.docx')
-    handoff = Path('docs/active/HANDOFF_SCORING_EVIDENCE_AND_RUBRIC_COMPLETION_2026-10-01.md')
+    handoff = Path('docs/completed/HANDOFF_SCORING_EVIDENCE_AND_RUBRIC_COMPLETION_2026-10-01.md')
     result = update_document(source, handoff, tmp_path / 'rubric.docx')
     assert result['tables'] == 7 and result['examples'] == 35
     assert result['math_preserved'] is True and result['other_package_parts_preserved'] is True

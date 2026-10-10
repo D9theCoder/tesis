@@ -965,7 +965,12 @@ def run_provider_matrix(
 
     if include_aggregate:
         artifacts, aggregate = finalize_aggregate("cancelled" if cancellation_token.is_cancelled else "success")
-        emit("matrix.finished", message="Experiment matrix finished", data=aggregate.get("totals", {}))
+        emit("matrix.finished", message="Experiment matrix finished", data={
+            **aggregate.get("totals", {}),
+            "status": aggregate["status"],
+            "completed": len(artifacts), "total": total_runs,
+            "cancellation": aggregate["cancellation"],
+        })
         if owns_runtime:
             runtime_service.close()
         return artifacts, aggregate

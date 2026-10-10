@@ -73,10 +73,19 @@ table, while Export/Review actions remain visible at 80×24 and 60×24.
 Selecting an older custom-directory receipt carries its path into review for
 source-validated history recovery and preserves its receipt/telemetry directory.
 
-The Textual layer does not execute graph nodes directly. It starts the existing
-single or matrix runner in a daemon thread and receives immutable `RunEvent`
-objects through a `RuntimeEventSink` callback. Runtime and evaluation modules
-do not import Textual.
+The Textual layer does not execute graph nodes directly. Its daemon worker
+calls `tesis.headless.run_resolved` with the resolved configuration, selected
+mode, cancellation token, and UI event sink. Headless execution uses the same
+function. It forwards model profiles, runtime roles, experiment identity, and
+execution limits to the existing single or matrix runner, and owns the artifact
+layout, redacted journal, descriptor heartbeat, and terminal result. Runtime
+and evaluation modules do not import Textual.
+
+For matrices, `matrix.run.*` events update coordinate rows; child `run.*`
+lifecycle events cannot reset or finish the parent. The returned aggregate
+determines the final UI, journal, and descriptor status, including errors and
+cancellation. Descriptor terminalization also stops its heartbeat sink so a
+later event cannot rewrite the descriptor as active.
 
 ```text
 LangGraph / provider callbacks / evaluation telemetry

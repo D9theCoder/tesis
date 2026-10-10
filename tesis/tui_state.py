@@ -275,11 +275,19 @@ def _apply_event(state: TuiRunState, event: RunEvent) -> frozenset[str]:
     message = str(event.message or "")
     safe_message = tui_security._redact_text(message)[:500]
 
+    if event_type == "matrix.started":
+        state.run_mode = "matrix"
+    if state.run_mode == "matrix" and event_type in {
+        "run.started", "run.finished", "run.failed", "run.error", "run.cancelled", "run.cancellation",
+    }:
+        # Child lifecycle is summarized by matrix.run.*; it never owns the parent.
+        return frozenset()
     if event_type in ("run.started", "matrix.started"):
         state.status = "running"
         state.execution_id = event.execution_id
         state.coordinates = {}
         state.exec_index = {}
+        state.selected_coordinate = None
         state.stages = _fresh_stages()
         state.selected_method = None
         state.confirmed_vulns = []
@@ -415,13 +423,25 @@ def _apply_event(state: TuiRunState, event: RunEvent) -> frozenset[str]:
         return frozenset(dirty)
 
     if event_type in ("run.finished", "matrix.finished"):
+        raw_status = str(data.get("status", "")).lower()
+        if raw_status == "cancelled":
+            state.status = "cancelled"
+        elif raw_status in {"error", "failed"}:
+            state.status = "failed"
+        elif raw_status in {"success", "complete", "completed", "finished"}:
+            state.status = "succeeded"
+        else:
+            failed = any(_row_failed(row) for row in state.coordinates.values())
+            state.status = "cancelled" if state.status == "cancelled" else "failed" if failed else "succeeded"
+        cancellation = data.get("cancellation", {})
+        if isinstance(cancellation, dict):
+            state.completed = int(cancellation.get("completed_runs", state.completed) or 0)
+            state.total = int(cancellation.get("total_runs", state.total) or 0)
         if state.status == "cancelled":
             if safe_message:
                 _push_notice(state, safe_message)
             dirty.update({"header", "evidence", "notices"})
             return frozenset(dirty)
-        failed = any(_row_failed(row) for row in state.coordinates.values())
-        state.status = "failed" if failed else "succeeded"
         if safe_message:
             _push_notice(state, safe_message)
         dirty.update({"header", "evidence", "notices"})
