@@ -22,4 +22,20 @@ binds the owner waiver to its hash and preserves the scoring and replay limits.
 Do not infer missing scores or attribute the 46 incomplete retries to the model
 without additional evidence.
 
-Earlier implementation and runtime handoffs: [scoring.v4 implementation](HANDOFF_SCORING_EVIDENCE_AND_RUBRIC_COMPLETION_2026-10-01.md) · [TUI and matrix runtime](HANDOFF_TUI_MODEL_CONNECTION_AND_MATRIX_RUNTIME_2026-10-10.md). The [remaining v4 evidence](../upcoming/HANDOFF_SCORING_V4_REMAINING_EVIDENCE_2026-10-11.md) and [older v2 incomplete runs](../upcoming/HANDOFF_MATRIX_60_INCOMPLETE_ERRORS_V2_2026-10-11.md) have separate upcoming handoffs.
+The [remaining v4 evidence handoff](HANDOFF_SCORING_V4_REMAINING_EVIDENCE_2026-10-11.md)
+completed its evidence-accounting acceptance on 2026-10-11. Its separate
+[audit](../../results/validation/scoring-v4-remaining-evidence-2026-10-11/audit-epoch2/summary.json)
+covers all 46 incomplete retries and 108 scoring joins, preserving 18 nulls and
+three deferred AI decisions. Four retries link to the prior probe-gate repair;
+42 retain `insufficient_evidence` for causal attribution. Original prompt seed
+definitions are recoverable and match reconstructed probe values/provenance,
+but validated probe snapshots and complete request/session shapes are absent,
+so exact historical replay remains irrecoverable. A new complete-input epoch
+validates future capture/replay for all nine methods using explicitly offline
+fixtures and zero provider calls. The `/security.php` version and declared-policy
+limitation remains; no role restriction is inferred. All 629 audited input
+hashes are unchanged, and the final regression suite passes 1,940 tests. The
+primary matrix, diagnostic retry, original completion status and owner waiver
+remain separate immutable evidence.
+
+Earlier implementation and runtime handoffs: [scoring.v4 implementation](HANDOFF_SCORING_EVIDENCE_AND_RUBRIC_COMPLETION_2026-10-01.md) · [TUI and matrix runtime](HANDOFF_TUI_MODEL_CONNECTION_AND_MATRIX_RUNTIME_2026-10-10.md). The [older v2 incomplete runs](../upcoming/HANDOFF_MATRIX_60_INCOMPLETE_ERRORS_V2_2026-10-11.md) retain their separate upcoming handoff.

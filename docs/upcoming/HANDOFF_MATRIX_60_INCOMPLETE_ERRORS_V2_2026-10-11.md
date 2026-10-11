@@ -4,7 +4,7 @@ Status: upcoming, 2026-10-11. Analisis awal artifact sudah tersedia; penyebab
 setiap hasil, perbaikan yang diperlukan, dan validasi pembanding belum selesai.
 
 Empat puluh enam retry incomplete dari matriks pengganti scoring.v4 adalah
-cohort terpisah pada [handoff bukti v4](HANDOFF_SCORING_V4_REMAINING_EVIDENCE_2026-10-11.md).
+cohort terpisah pada [handoff bukti v4](../completed/HANDOFF_SCORING_V4_REMAINING_EVIDENCE_2026-10-11.md).
 
 **Catatan metrik: hasil run ini memakai metrik runtime provisional
 `scoring.v2`, bukan skor final `scoring.v4`.** Konfigurasi evaluasi menyebut v4,
