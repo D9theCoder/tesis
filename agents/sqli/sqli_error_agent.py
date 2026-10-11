@@ -65,16 +65,20 @@ def _probe_preconditions(
     payloads: list[str],
     already_tried: set[str],
     security_level: str = "low",
-) -> tuple[bool, list[str], dict[str, bool], list[dict]]:
+) -> tuple[bool, list[str], dict[str, bool], list[dict], bool]:
     """Send syntax-breaking probes to detect error message output.
 
-    Returns (precondition_met, tried_payloads, observations, telemetry_events).
+    Returns (precondition_met, tried_payloads, observations, telemetry_events,
+    all_responses_ok). A clean HTTP 200 without a recognized SQL error signal
+    permits trying validated exploit candidates, but does not satisfy the
+    error-disclosure precondition or contribute a score.
     """
     observations: dict[str, bool] = {}
     tried: list[str] = []
     events: list[dict] = []
     verifier = Verifier()
     sent_any = False
+    all_responses_ok = True
 
     for payload in payloads:
         if payload in already_tried:
@@ -84,20 +88,23 @@ def _probe_preconditions(
         try:
             resp = _request(session, security_level, payload)
             events.append(probe_event(AGENT_ID, payload, resp.status_code, False, response=resp))
+            if resp.status_code != 200:
+                all_responses_ok = False
             result = verifier.contains_any(resp.text, _ERROR_SIGNALS)
             if resp.status_code == 200 and result.ok:
                 events[-1]["payload"].update(signal_detected=True, verified_grade=1, verification_reason="probe_signal")
                 observations[_PROBE_OBSERVATION_KEY] = True
-                return True, tried, observations, events
+                return True, tried, observations, events, all_responses_ok
         except Exception as exc:
             logger.warning("[%s] PROBE request failed: %s", AGENT_ID, exc)
             events.append(probe_event(AGENT_ID, payload, None, False))
+            all_responses_ok = False
 
     if not sent_any:
         # Don't overwrite prior observation if we didn't send any requests
-        return False, tried, {}, events
+        return False, tried, {}, events, False
     observations[_PROBE_OBSERVATION_KEY] = False
-    return False, tried, observations, events
+    return False, tried, observations, events, all_responses_ok
 
 
 def _attempt_exploit(
@@ -175,14 +182,14 @@ def sqli_error_agent(state: ExploitationState) -> dict[str, Any]:
 
         # Stage 1: PROBE
         probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe")
-        probe_ok, tried, probe_obs, probe_events = _probe_preconditions(
+        probe_ok, tried, probe_obs, probe_events, probe_responses_ok = _probe_preconditions(
             session, probe_payloads, already_tried, security_level
         )
         all_tried.extend(tried)
         telemetry_events.extend(probe_events)
         observations.update(probe_obs)
 
-        if not probe_ok:
+        if not probe_ok and not probe_responses_ok:
             update = make_update(
                 state=state, module_name=AGENT_ID, score=0,
                 tried_payloads=all_tried, telemetry_events=telemetry_events,
@@ -190,7 +197,8 @@ def sqli_error_agent(state: ExploitationState) -> dict[str, Any]:
             update["observations"] = observations
             return update
 
-        score = max(score, 1)
+        if probe_ok:
+            score = max(score, 1)
 
         # Stage 2: EXPLOIT
         all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit")

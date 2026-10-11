@@ -320,6 +320,14 @@ class AttackKnowledgeGraph:
                 "priority": 10,
             },
             {
+                "source": "authenticated_session",
+                "target": "ac_force_browse",
+                "is_chain": True,
+                "preconditions": ["authenticated_session"],
+                "target_agent": "ac_force_browse",
+                "priority": 9,
+            },
+            {
                 "source": "credentials_extracted",
                 "target": "bf_dictionary",
                 "is_chain": True,

@@ -14,7 +14,7 @@ from core.scorer import scorer
 from core.state import ExploitationState, new_default_state
 from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.reporter import write_json_report
-from foundation.payload_validator import validate_payload_candidates
+from foundation.payload_validator import validate_payload_candidates, validate_probe_controls
 from llm.runtime import LLMRuntime
 from core.graph_builder import _serialized_http_handler
 from tesis.runtime_events import redact_secrets
@@ -44,8 +44,9 @@ def replay_method_inputs(
 
     The source pins the target. Validation must preserve every input ID/value;
     a changed/rejected/budgeted queue stops before HTTP, without seed fallback.
-    Optional selection uses only saved IDs; include saved probes and exploits
-    so a missing stage cannot trigger the methods' legacy static fallback.
+    Optional selection uses only saved exploit IDs and retains saved detection
+    controls. Legacy inputs must include saved probes in the candidate queue.
+    A missing stage cannot trigger the methods' legacy static fallback.
     Caller supplies a diagnostic output path and retains the source artifact.
     Manual rows cover fresh response-backed candidates; final state retains history.
     """
@@ -85,6 +86,12 @@ def replay_method_inputs(
     if not queue or signature(queue) != signature(executable):
         rejections.append({'reason': 'frozen_queue_changed_or_empty', 'valid': False})
     stages = {c.get('stage') for c in queue}
+    controls = state.get('probe_controls', {}).get(method)
+    if controls is not None and ('probe' not in stages or not isinstance(controls, dict) or controls.get('candidates')):
+        control_results = validate_probe_controls(state, controls)
+        rejections.extend(r for r in control_results if r.get('valid') is not True)
+        if control_results and all(r.get('valid') is True for r in control_results):
+            stages.add('probe')
     if 'probe' not in stages or not stages & {'exploit', 'bypass'}:
         rejections.append({'reason': 'missing_saved_execution_stage', 'valid': False})
     updates = {}
@@ -118,6 +125,7 @@ def replay_method_inputs(
         'source_sha256': sha256(raw).hexdigest(), 'input_index': input_index,
         'fresh_provider_calls': 0, 'config': original['config'],
         'selected_candidate_ids': candidate_ids,
+        'probe_controls': deepcopy(state.get('probe_controls', {})),
         'manual_scoring_scope': 'fresh_replay_execution',
         'code_sha256': {
             str(path): sha256(path.read_bytes()).hexdigest()

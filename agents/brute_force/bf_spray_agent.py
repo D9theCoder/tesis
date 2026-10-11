@@ -12,7 +12,7 @@ from typing import Any
 from agents.agent_telemetry import exploit_event, probe_event, score_event
 from agents.state_utils import already_tried_payloads, candidate_payloads_for_stage, chain_check as _chain_check, make_update, normalize_security_level
 from core.state import ExploitationState, MODULE_TO_KG_NODE
-from foundation.session_manager import DVWASession
+from foundation.session_manager import DVWASession, session_fingerprint
 from foundation.verifier import Verifier, has_captcha_challenge
 
 logger = logging.getLogger(__name__)
@@ -282,6 +282,7 @@ def _attempt_exploit(
             continue
 
         try:
+            initial_fingerprint = session_fingerprint(session)
             responses = _credential_requests(
                 session,
                 username,
@@ -304,6 +305,12 @@ def _attempt_exploit(
                  response=resp))
                 events[-1]["payload"].update(verified_grade=3 if semantic_success else 0,
                     verification_reason="verified_login" if semantic_success else "login_not_confirmed")
+                events[-1]["payload"].update(principal_id=username,
+                    session_fingerprint=session_fingerprint(session),
+                    initial_session_fingerprint=initial_fingerprint)
+                if semantic_success:
+                    events[-1]["payload"]["credentials"] = [{"username": username,
+                        "password": password, "representation": "plaintext"}]
             resp = responses[-1]
 
             if has_captcha_challenge(resp.text):

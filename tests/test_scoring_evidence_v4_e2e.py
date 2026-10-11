@@ -120,6 +120,52 @@ def test_bad_profile_never_finalizes(monkeypatch, case):
     with pytest.raises(ValueError): review_queue(export(artifact, case))
 
 
+@pytest.mark.parametrize('case,expected', [('strength', 2), ('tie', 4), ('pending', None),
+    ('ineligible_pending', 4), ('unknown_pending', None)])
+def test_calibrated_ranking_export_review(monkeypatch, case, expected):
+    """Pilot evidence must survive export without inventing a pending rank.
+
+    Failures: cost defeats stronger evidence; ties disappear; unresolved or
+    unknown competitors vanish; proved-ineligible competitors block assessment.
+    """
+    from evaluation.thesis_scoring import review_queue
+    a = artifact_v4(monkeypatch)
+    p = a['config']['scoring_profile']
+    entries = p['scenarios']['sqli:low']
+    for name, entry in entries.items():
+        entry.update(reference_status='confirmed', reference_fit=1, reference_reason='pilot control')
+    entries['sqli_union']['reference_fit'] = 3
+    entries['sqli_error'].update(reference_fit=3, planned_request_count=20)
+    selection = next(d for d in a['final_state']['scoring_decisions'] if d['dimension'] == 'Smethod')
+    if case == 'strength': entries['sqli_union'].update(reference_fit=1, planned_request_count=1)
+    if case == 'tie': entries['sqli_error']['planned_request_count'] = 10
+    if 'pending' in case:
+        entries['sqli_error'].update(reference_status='pending', reference_fit=None)
+        if case == 'ineligible_pending': selection['observations']['error_messages_enabled'] = False
+        if case == 'unknown_pending': selection['observations'].pop('error_messages_enabled')
+    rehash(p)
+    selection['profile_sha256'] = p['sha256']
+    q = review_queue(export(a, f'calibrated-{case}'))
+    assert q['components']['Smethod'] == expected
+    if case == 'tie': assert set(q['selection_evidence']['top_methods']) == {'sqli_union', 'sqli_error'}
+    if case == 'pending': assert q['selection_evidence']['reason'] == 'ranking_reference_pending'
+    write_json_report(ROOT / f'calibrated-ranking-{case}.json', q)
+
+
+@pytest.mark.parametrize('change', [{'reference_fit': True}, {'reference_fit': 4},
+    {'reference_status': 'invented'}, {'reference_reason': ''}, {'reference_status': 'pending'},
+    {'reference_fit': None}])
+def test_invalid_calibration_never_finalizes(monkeypatch, change):
+    from evaluation.thesis_scoring import review_queue
+    a = artifact_v4(monkeypatch)
+    p = a['config']['scoring_profile']
+    entry = p['scenarios']['sqli:low']['sqli_union']
+    entry.update(reference_status='confirmed', reference_fit=3, reference_reason='pilot control')
+    entry.update(change)
+    rehash(p)
+    with pytest.raises(ValueError): review_queue(export(a, 'invalid-calibration'))
+
+
 @pytest.mark.parametrize('case,expected', [('complete', 4), ('unreferenced', 3), ('fake_ref', 3),
     ('retry', 2), ('unrecovered', 0), ('fallback', 1), ('containment', 0), ('other_method', 4),
     ('evaluator', 4), ('no_calls', None), ('missing_calls', None)])
@@ -234,6 +280,110 @@ def oracle_artifact(monkeypatch, method):
     row.update({k: att[k] for k in ('principal_id', 'expected_principal_id', 'object_id', 'action',
         'session_fingerprint', 'initial_session_fingerprint')})
     return a, row, att
+
+
+@pytest.mark.parametrize('change,ceiling', [('object', 2), ('action', 2),
+    ('denied_identity', 2), ('allowed_identity', 2), ('independent_principals', 3)])
+def test_permission_control_bindings_match_candidate_resource(monkeypatch, change, ceiling):
+    """Failure: unrelated authorization controls satisfy live permission coverage.
+
+    Export and review must reject controls from another object/action, a denial
+    with an unproved identity, or an allowed control whose identity was not proved.
+    """
+    from evaluation.thesis_scoring import review_queue
+    a, row, _ = oracle_artifact(monkeypatch, 'ac_idor')
+    bundle = a['config']['scoring_oracles'][0]
+    controls = bundle['document']['controls']
+    if change == 'object':
+        for c in controls: c['object_id'] = 'other-object'
+    if change == 'action':
+        for c in controls: c['action'] = 'other-action'
+    if change == 'denied_identity': controls[0]['principal_id'] = 'unproved-principal'
+    if change == 'allowed_identity': controls[1]['principal_id'] = 'unproved-principal'
+    if change == 'independent_principals':
+        controls[0]['principal_id'] = controls[0]['expected_principal_id'] = 'anonymous'
+        controls[1]['principal_id'] = controls[1]['expected_principal_id'] = 'authorized-admin'
+    bundle['sha256'] = digest(bundle['document'])
+    q = review_queue(export(a, f'permission-control-{change}'))
+    candidate = next(c for c in q['candidates'] if c['candidate_id'] == row['candidate_id'])
+    assert candidate['proof_ceiling'] == ceiling
+    write_json_report(Path('results/validation/scoring-v4-probe-replay-2026-10-11') /
+        f'permission-control-{change}.json', q)
+
+
+@pytest.mark.parametrize('case,ceiling', [('complete', 3), ('rejected', 2),
+    ('wrong_identity', 2), ('same_session', 2), ('disabled', 2), ('transport', 2),
+    ('wrong_candidate_binding', 2), ('wrong_response_hash', 2), ('unvalidated', 2)])
+def test_live_session_collector_transport_to_review(monkeypatch, case, ceiling):
+    """Offline HTTP controls of the live collector, through saved v4 review.
+
+    Failures: markers forge identity; rejected credentials or old sessions get
+    attested; opt-out still sends HTTP; transport failures invent proof; secrets
+    reach sources; collector mutates graph state or duplicates prior sources.
+    """
+    import httpx
+    from evaluation.session_oracle import collect_session_oracles
+    from evaluation.scoring_evidence import attach_oracle_evidence
+    from evaluation.thesis_scoring import review_queue
+    from foundation.session_manager import DVWASession
+    original_request = httpx.Client.request
+    a, row, _ = oracle_artifact(monkeypatch, 'bf_dictionary')
+    monkeypatch.setattr(httpx.Client, 'request', original_request)
+    row.pop('oracle_ref')
+    row['principal_id'] = 'admin'
+    row['initial_session_fingerprint'] = sha256(b'old-session').hexdigest()
+    protocol = {'fixture_id': a['config']['fixture_id'], 'protocol_version': a['config']['protocol_version'],
+        'oracle_protocol': {'kind': 'dvwa_candidate_session.v1', 'enabled': case != 'disabled'}}
+    a['config']['scoring_oracles'] = [{'source_id': 'session-protocol', 'origin': 'offline_control',
+        'document': protocol, 'sha256': digest(protocol)}]
+    raw = deepcopy(a['final_state'])
+    original = next(r for r in raw['response_evidence'] if r['evidence_id'] == row['evidence_id'])
+    if case == 'wrong_candidate_binding': original['candidate_id'] = 'different-candidate'
+    if case == 'wrong_response_hash': original['response_sha256'] = '0'*64
+    if case == 'unvalidated':
+        for validation in raw['payload_validation_results']['bf_dictionary']:
+            if validation['candidate_id'] == row['candidate_id']: validation['valid'] = False
+    candidate = next(c for c in raw['payload_candidates']['bf_dictionary'] if c['candidate_id'] == row['candidate_id'])
+    candidate['payload_or_logic'] = 'admin:fixture-secret'
+    calls = []
+    def factory(target):
+        identity = [None]
+        number = len(calls)
+        cookie = 'old-session' if case == 'same_session' else f'fresh-session-{number}'
+        def handle(request):
+            calls.append({'method': request.method, 'path': request.url.path})
+            if case == 'transport': raise httpx.ConnectError('offline transport control')
+            if request.url.path.endswith('/login.php'):
+                if request.method == 'POST':
+                    from urllib.parse import parse_qs
+                    submitted = parse_qs(request.content.decode())
+                    good = submitted.get('password') in (['fixture-secret'], ['other-secret']) and case != 'rejected'
+                    identity[0] = ('wronguser' if case == 'wrong_identity' else submitted['username'][0]) if good else None
+                    body = 'logout' if good else 'Username and/or password incorrect'
+                else: body = '<form><input name="user_token" value="fixture-token"></form>'
+            elif request.url.path.endswith('/authbypass/'):
+                body = 'This page should only be accessible by the admin user; for example otheruser / other-secret'
+            else: body = f'Username: {identity[0]}' if identity[0] else 'Login'
+            from datetime import timedelta
+            response = httpx.Response(200, text=body, headers={'set-cookie': f'PHPSESSID={cookie}; Path=/'})
+            response.elapsed = timedelta(milliseconds=1)
+            return response
+        session = DVWASession(target)
+        session.http._client.close()
+        session.http._client = httpx.Client(transport=httpx.MockTransport(handle))
+        return session
+    monkeypatch.setattr('evaluation.session_oracle.DVWASession', factory)
+    before = deepcopy(raw)
+    collected = collect_session_oracles(a, raw)
+    assert raw == before
+    attach_oracle_evidence(collected)
+    q = review_queue(export(collected, f'session-collector-{case}'))
+    assert next(c for c in q['candidates'] if c['candidate_id'] == row['candidate_id'])['proof_ceiling'] == ceiling
+    serialized = json.dumps(collected['config']['scoring_oracles'])
+    assert 'fixture-secret' not in serialized and 'fixture-token' not in serialized and 'fresh-session-' not in serialized
+    if case == 'disabled': assert calls == []
+    if case == 'complete': assert any(s['document'].get('attestations') for s in collected['config']['scoring_oracles'])
+    write_json_report(ROOT / f'session-collector-{case}.json', {'scope': 'offline_mock_http', 'requests': calls, 'review': q})
 
 
 @pytest.mark.parametrize('method', ['ac_idor', 'bf_dictionary'])

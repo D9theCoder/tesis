@@ -136,6 +136,8 @@ class ExploitationState(TypedDict):
     payload_candidates: Annotated[dict[str, list[dict]], _merge_payload_maps]
     generated_payloads: Annotated[dict[str, list[dict]], _merge_payload_maps]
     payload_validation_results: Annotated[dict[str, list[dict]], _merge_payload_maps]
+    # Current visit's detection controls, separate from scored exploit candidates.
+    probe_controls: NotRequired[Annotated[dict[str, dict], _replace_score_entries]]
     payload_scores: Annotated[dict[str, int], _merge_scores]
     payload_provenance: Annotated[dict[str, dict], _merge_nested_dicts]
     generation_prompts: Annotated[list[dict], add]
@@ -236,6 +238,7 @@ def _default_state_template() -> dict[str, Any]:
         "payload_candidates": {},
         "generated_payloads": {},
         "payload_validation_results": {},
+        "probe_controls": {},
         "payload_scores": {},
         "payload_provenance": {},
         "generation_prompts": [],
@@ -343,6 +346,7 @@ PERSISTENT_STATE_FIELDS = frozenset({
     "payload_candidates",
     "generated_payloads",
     "payload_validation_results",
+    "probe_controls",
     "payload_scores",
     "payload_provenance",
     "payload_guardrail_activations",

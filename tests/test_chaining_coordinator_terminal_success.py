@@ -15,7 +15,7 @@ def _brute_force_chain_state(**overrides):
         "experiment_condition": "akg_guided_hybrid",
         "confirmed_vulns": ["bf_spray_confirmed"],
         "achieved_outcomes": ["authenticated_session"],
-        "attempted_agents": ["bf_dictionary", "bf_spray", "ac_idor"],
+        "attempted_agents": ["bf_dictionary", "bf_spray", "ac_force_browse", "ac_idor"],
         "blocked_agents": [],
         "failure_agents": [],
         "observations": {"no_rate_limit": True},
@@ -75,5 +75,5 @@ def test_confirmed_success_does_not_prevent_an_unattempted_chain():
 
     next_agent, event = evaluate_chain_route(state)
 
-    assert next_agent == "ac_idor"
+    assert next_agent == "ac_force_browse"
     assert event["reason"] == "chain_ready"

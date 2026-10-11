@@ -56,7 +56,7 @@ def test_proved_enabling_outcome_triggers_akg_chain():
     assert event["reason"] == "chain_ready"
 
 def test_authenticated_outcome_triggers_access_control_chain():
-    """An authenticated-session outcome enables the linked IDOR workflow."""
+    """An authenticated-session outcome selects the first registered AC route."""
     state = {
         "confirmed_vulns": [],
         "achieved_outcomes": ["authenticated_session"],
@@ -70,7 +70,7 @@ def test_authenticated_outcome_triggers_access_control_chain():
         "experiment_condition": "akg_guided_hybrid",
     }
     next_agent, event = evaluate_chain_route(state)
-    assert next_agent == "ac_idor"
+    assert next_agent == "ac_force_browse"
     assert event["reason"] == "chain_ready"
 
 def test_linear_condition_does_not_take_cross_surface_chain():

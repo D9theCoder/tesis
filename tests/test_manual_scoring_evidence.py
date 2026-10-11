@@ -11,6 +11,7 @@ from copy import deepcopy
 import importlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -46,6 +47,8 @@ def test_brute_force_literal_credentials_keep_their_own_retry_evidence(monkeypat
     requests = []
 
     class Session:
+        http = SimpleNamespace(cookies={"PHPSESSID": "fixture-nonadmin"})
+
         def login(self):
             return True
 
@@ -149,10 +152,15 @@ def test_access_control_agent_exports_only_actual_candidate_attempts(monkeypatch
     ]
     state["payload_candidates"] = {method: candidates}
     state["payload_provenance"] = {c["candidate_id"]: c for c in candidates}
-    state["payload_validation_results"] = {method: [{"candidate_id": c["candidate_id"], "valid": True} for c in candidates]}
+    state["payload_validation_results"] = {method: [
+        {"candidate_id": c["candidate_id"], "valid": c["candidate_id"] != "unused",
+         "reason": "duplicate_normalized_candidate" if c["candidate_id"] == "unused" else "ok"}
+        for c in candidates]}
     original = deepcopy(state)
 
     class Session:
+        http = SimpleNamespace(cookies={"PHPSESSID": "fixture-nonadmin"})
+
         def login(self):
             return True
 
@@ -164,13 +172,19 @@ def test_access_control_agent_exports_only_actual_candidate_attempts(monkeypatch
 
         def get(self, path, params=None):
             uid = (params or {}).get("userId", "1")
-            text = "View Source" if method == "ac_force_browse" else (
-                "First name: admin" if uid.strip() == "1" or method == "ac_vertical_escalation"
-                else f"First name: Gordon; surname: Brown; user id: {uid}"
-            )
+            if method == "ac_force_browse":
+                text = "View Source" if "view_source" in path else "Database Setup and DVWA Security Level"
+            elif method == "ac_vertical_escalation" and uid.strip() == "1":
+                text = json.dumps({"user_id": "1", "first_name": "admin"})
+            elif method == "ac_idor":
+                text = f"First name: Gordon; surname: Brown; user id: {uid}"
+            else:
+                text = "No structured record"
             return type("Response", (), {"status_code": 200, "text": text})()
 
-    monkeypatch.setattr(module, "DVWASession", lambda _target: Session())
+    session = Session()
+    monkeypatch.setattr(module, "open_access_control_session",
+        lambda *args: (session, "gordonb", "initial-session-fingerprint", None))
     update = getattr(module, f"{method}_agent")(state)
     artifact = {
         "config": {"provider": "openai_compatible", "surface": "access_control", "payload_mode": "hybrid"},
@@ -185,12 +199,13 @@ def test_access_control_agent_exports_only_actual_candidate_attempts(monkeypatch
     evidence_dir.mkdir(parents=True, exist_ok=True)
     (evidence_dir / f"{method}-{'spaces' if first != first.strip() else 'plain'}-{probe.strip()}.json").write_text(json.dumps(artifact, indent=2) + "\n")
     rows = {row["candidate_id"]: row for row in artifact["manual_scoring_evidence"]}
-    assert update["scores"][method] == 2
+    assert update["scores"][method] == 1
     for candidate_id in ["probe", "attempted"]:
         row = rows[candidate_id]
         assert row["response_evidence_ref"] and row["execution_log_ref"]
-        assert row["verifier_decision"]["decision"] == "unverified"
-        assert row["score_0_4"] == (1 if candidate_id == "probe" else 2)
+        assert row["verifier_decision"]["decision"] == "not_confirmed"
+        if candidate_id == "probe":
+            assert row["score_0_4"] == 1
         for field in ["response_evidence", "execution_log"]:
             for pointer in row[f"{field}_ref"]:
                 record = artifact[field][int(pointer.rsplit("/", 1)[1])]
@@ -370,6 +385,10 @@ def test_manual_scoring_recovers_earlier_method_verifier_from_graph_history():
 ])
 def test_manual_scoring_links_the_force_browse_agent_normalized_path(payload):
     class Session:
+        http = SimpleNamespace(cookies={"PHPSESSID": "fixture-nonadmin"})
+        _principal_id = "gordonb"
+        _initial_session_fingerprint = "initial-session-fingerprint"
+
         def get(self, path):
             assert path == "vulnerabilities/view_source.php"
             return type("Response", (), {"status_code": 200, "text": "View Source"})()
@@ -386,7 +405,7 @@ def test_manual_scoring_links_the_force_browse_agent_normalized_path(payload):
         "execution_log": [{"event_type": events[0]["event"], "data": recorded}],
         "response_evidence": [recorded],
         "timing_evidence": [{**recorded, "elapsed_ms": 10}],
-        "verifier_decision": {"agent_id": "ac_force_browse", "decision": "confirmed"},
+        "verifier_decision": {"agent_id": "ac_force_browse", "decision": "unverified"},
     }
     original = deepcopy(artifact)
     row = manual_scoring_rows(artifact)[0]

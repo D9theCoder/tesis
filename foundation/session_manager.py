@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+from hashlib import sha256
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -20,6 +21,86 @@ logger = logging.getLogger(__name__)
 
 # Valid DVWA security levels (canonical contract from core/state.py)
 VALID_LEVELS = ("low", "medium", "high")
+
+
+def session_fingerprint(session) -> str | None:
+    """Identify a DVWA session without exporting its authentication cookie."""
+    cookies = getattr(getattr(session, 'http', None), 'cookies', {})
+    cookie = cookies.get('PHPSESSID')
+    return sha256(cookie.encode()).hexdigest() if isinstance(cookie, str) and cookie else None
+
+
+def _dvwa_identity(html: str) -> str | None:
+    """Read the authenticated identity from DVWA navigation without retaining HTML."""
+    text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+    match = re.search(r"Username:\s*([A-Za-z0-9_.-]+)\b", text)
+    return match.group(1) if match else None
+
+
+def open_verified_principal_session(
+    base_url: str,
+    username: str,
+    password: str,
+    security_level: str | None = None,
+) -> tuple[DVWASession, str, str]:
+    """Open a fresh DVWA session and verify its identity against the request."""
+    if not username or not password:
+        raise ValueError("A fixture principal and credential are required")
+    session = DVWASession(base_url)
+    try:
+        session.http.get("login.php")
+        initial_fingerprint = session_fingerprint(session)
+        if not initial_fingerprint or not session.login(username, password):
+            raise ValueError("Fixture principal authentication failed")
+        observed = _dvwa_identity(session.http.get("index.php").text)
+        if observed != username:
+            raise ValueError("Fixture principal identity did not match")
+        if security_level:
+            session.set_security_level(security_level)
+        session._initial_session_fingerprint = initial_fingerprint
+        session._principal_id = observed
+        return session, observed, initial_fingerprint
+    except Exception:
+        session.close()
+        raise
+
+
+def open_documented_nonadmin_session(
+    base_url: str,
+    security_level: str | None = None,
+) -> tuple[DVWASession, str, str]:
+    """Open a fresh session for the existing non-admin account documented by DVWA.
+
+    The account is read from the fixture's admin-only policy page in memory.
+    Missing policy text, missing example credentials, failed authentication, or
+    an identity mismatch fail closed. The returned tuple is the live session,
+    verified principal ID, and pre-login session fingerprint; credentials are
+    never returned or logged.
+    """
+    administrator = DVWASession(base_url)
+    username: str | None = None
+    password: str | None = None
+    try:
+        if not administrator.login():
+            raise ValueError("Unable to read the documented non-admin fixture account")
+        policy_response = administrator.http.get("/vulnerabilities/authbypass/")
+        policy_text = BeautifulSoup(policy_response.text, "html.parser").get_text(" ", strip=True)
+        if "This page should only be accessible by the admin user" not in policy_text:
+            raise ValueError("Unable to read the documented non-admin fixture account")
+        example = re.search(r"for example\s+([A-Za-z0-9_.-]+)\s*/\s*([^\s<]+)", policy_text, re.I)
+        if not example:
+            raise ValueError("Unable to read the documented non-admin fixture account")
+        username, password = example.groups()
+        if not username or username.lower() == "admin" or not password:
+            raise ValueError("Unable to read the documented non-admin fixture account")
+    finally:
+        administrator.close()
+
+    try:
+        return open_verified_principal_session(base_url, username, password, security_level)
+    finally:
+        # Do not keep credentials reachable through a longer-lived frame.
+        password = None
 
 
 class DVWASession:

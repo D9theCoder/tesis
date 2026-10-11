@@ -10,6 +10,7 @@ from urllib.parse import unquote, urlparse
 from core.knowledge_graph import AttackKnowledgeGraph
 from foundation.payload_library import PayloadLibrary
 from foundation.payload_ranker import rank_candidates
+from evaluation.scoring_evidence import evidence_hash
 
 
 _REQUIRED_FIELDS = {
@@ -351,6 +352,26 @@ def validate_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
     return update
 
 
+def validate_probe_controls(state: dict[str, Any], controls: dict) -> list[dict]:
+    """Validate saved detection controls without restoring missing local seeds.
+
+    Controls must be the complete ordered canonical probe set for this visit.
+    They do not consume the exploit candidate budget or enter its denominator.
+    """
+    method = state.get("selected_method")
+    if not isinstance(controls, dict) or controls.get("visit_id") != state.get("selected_visit_id"):
+        return [{"valid": False, "reason": "probe_control_visit_mismatch"}]
+    rows = controls.get("candidates")
+    if not isinstance(rows, list) or controls.get("sha256") != evidence_hash(rows):
+        return [{"valid": False, "reason": "probe_control_hash_mismatch"}]
+    canonical = [c for c in PayloadLibrary().load_seed_candidates(method, state.get("security_level", "low"))
+                 if c.get("stage") == "probe"]
+    if rows != canonical:
+        return [{"valid": False, "reason": "probe_control_catalog_mismatch"}]
+    profile = AttackKnowledgeGraph().get_payload_profile(method)
+    return [validate_candidate(c, method, profile) for c in rows]
+
+
 def payload_validator_node(state: dict[str, Any]) -> dict[str, Any]:
     """Executes payload validation in the LangGraph workflow.
 
@@ -372,6 +393,17 @@ def payload_validator_node(state: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Partial state update with validation results."""
     update = validate_payload_candidates(state)
+    method = state.get("selected_method")
+    queue = update.get("payload_candidates", {}).get(method, [])
+    # Freeze the probes that older agents loaded implicitly after validation.
+    # A graph visit with no executable candidate never receives probe controls.
+    controls = {"visit_id": state.get("selected_visit_id"), "candidates": []}
+    if queue and not any(c.get("stage") == "probe" for c in queue):
+        controls["candidates"] = [c for c in PayloadLibrary().load_seed_candidates(
+            method, state.get("security_level", "low")) if c.get("stage") == "probe"]
+    controls["sha256"] = evidence_hash(controls["candidates"])
+    controls["validation_results"] = validate_probe_controls(state, controls) if controls["candidates"] else []
+    update["probe_controls"] = {method: controls}
     route = state.get("active_chain_route") or {}
     if route.get("target_agent") == state.get("selected_method") == "bf_dictionary" and route.get("source") == "credentials_extracted":
         bindings = []

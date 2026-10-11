@@ -80,6 +80,12 @@ def validate_profile(profile):
             if not isinstance(plans, list) or not plans or not set(plans) <= {
                 'stop_after_target', 'stop_at_budget', 'continue_same_surface', 'chain'}:
                 raise ValueError('Ranking requires explicit valid stop/continuation plans')
+            if any(k in entry for k in ('reference_status', 'reference_fit', 'reference_reason')):
+                status, fit = entry.get('reference_status'), entry.get('reference_fit')
+                if status not in {'confirmed', 'pending'} or not isinstance(entry.get('reference_reason'), str) or not entry['reference_reason'].strip():
+                    raise ValueError('Calibration requires a status and evidence reason')
+                if status == 'confirmed' and (type(fit) is not int or not 1 <= fit <= 3) or status == 'pending' and fit is not None:
+                    raise ValueError('Confirmed reference fit must be 1..3; pending fit must be null')
 
 
 def validate_evidence_config(version, profile, oracles):
@@ -104,17 +110,17 @@ def selection_grade(artifact, method):
     surface = selection.get('surface')
     if method not in METHODS_BY_SURFACE.get(surface, []):
         return 0, {**result, 'status': 'assessed', 'reason': 'outside_selected_surface'}
+    profile = config.get('scoring_profile') or {}
+    if not profile:
+        return None, {**result, 'reason': 'ranking_unavailable'}
+    validate_profile(profile)
+    result.update(profile_sha256=profile.get('sha256'), profile_id=profile.get('profile_id'))
     observations = selection.get('observations')
     if not isinstance(observations, dict):
         return None, result
     if any(observations.get(p) is not True for p in AttackKnowledgeGraph.METHOD_PRECONDITIONS[method]) or any(
         p not in selection.get('known_nodes', []) for p in selection.get('preconditions', [])):
         return 1, {**result, 'status': 'assessed', 'reason': 'prerequisites_not_proved_at_selection'}
-    profile = config.get('scoring_profile') or {}
-    validate_profile(profile)
-    result.update(profile_sha256=profile.get('sha256'), profile_id=profile.get('profile_id'))
-    if not profile:
-        return None, {**result, 'reason': 'ranking_unavailable'}
     if artifact.get('validation_scope') != 'offline_synthetic_fixture' and any(
         source['origin'] != 'operator_fixture' for source in profile['sources']):
         return None, {**result, 'reason': 'ranking_source_is_offline_control'}
@@ -137,7 +143,10 @@ def selection_grade(artifact, method):
         if any(type(observations.get(k)) is not bool for k in keys):
             return None, {**result, 'reason': 'ranking_observation_unknown'}
         eligible = all(observations[k] is True for k in entry['preconditions'])
-        fit = 2 if all(observations[p['key']] == p['equals'] for p in entry['fit_predicates']) else 1
+        if eligible and entry.get('reference_status') == 'pending':
+            return None, {**result, 'reason': 'ranking_reference_pending', 'pending_method': name,
+                'reference_reason': entry['reference_reason']}
+        fit = entry.get('reference_fit', 2) if all(observations[p['key']] == p['equals'] for p in entry['fit_predicates']) else 1
         ranking[name] = {'eligible': eligible, 'fit_level': fit,
             'planned_request_count': entry['planned_request_count']}
     pairs = {name: (-r['fit_level'], r['planned_request_count']) for name,r in ranking.items() if r['eligible']}
@@ -220,8 +229,8 @@ def candidate_base(artifact, cid, method, refs):
             oracle = oracle_confirmed(artifact, row)
             if oracle:
                 tier = 3
-            elif tier is None and row.get('signal_detected') is True:
-                tier = 2  # A renamed oracle label cannot establish independent proof.
+            elif tier is not None or row.get('signal_detected') is True:
+                tier = min(tier or 2, 2)  # Session/permission labels cannot replace an independent oracle.
         if tier is not None:
             if verifier.get('decision') == 'not_confirmed' and tier >= 3 or verifier.get('decision') == 'unverified' and tier >= 3 and not oracle:
                 tier = 2

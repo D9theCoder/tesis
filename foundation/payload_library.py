@@ -101,8 +101,8 @@ class PayloadLibrary:
             probe_by_level={"medium": ["1 AND SLEEP(3)"]},
         ),
         "ac_idor": PayloadSet(
-            probe=["1", "2", "3"],
-            exploit=["4", "5", "6"],
+            probe=["2", "3"],
+            exploit=["1", "4", "5", "6"],
             bypass={
                 "medium": ["7", "8"],
                 "high": ["100", "200"],
@@ -118,7 +118,7 @@ class PayloadLibrary:
         ),
         "ac_force_browse": PayloadSet(
             probe=["setup.php", "phpinfo.php"],
-            exploit=["vulnerabilities/view_source.php", "security.php"],
+            exploit=["vulnerabilities/authbypass/", "vulnerabilities/view_source.php", "security.php"],
             bypass={
                 "medium": ["setup.php"],
                 "high": ["setup.php"],
