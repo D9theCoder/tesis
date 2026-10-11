@@ -113,8 +113,7 @@ source .venv/bin/activate
 ```
 
 The framework entry point is `tesis run` (`uv run tesis run` without an
-activated shell; `python -m tesis run` also works). `main.py` is a separate
-sample LLM-query runner and does not load `config.yaml`.
+activated shell; `python -m tesis run` also works).
 
 ## 1. How this app works
 

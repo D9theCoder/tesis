@@ -17,7 +17,7 @@ uv sync
 `run` opens the TUI and reads repository-root `config.yaml`; it does not accept
 `--config`. Automation uses `run --headless --mode single|matrix --config PATH`.
 The dry run checks local configuration, graph compilation, and static payloads
-without HTTP or provider calls. `main.py` is a separate sample LLM-query runner.
+without HTTP or provider calls.
 If a moved checkout leaves a stale environment, deactivate it, rename `.venv`
 to a backup, and recreate it with `uv sync`.
 
@@ -100,27 +100,33 @@ changes, preserve `tesis.tui` as the public facade and use
 
 ## Testing and validation
 
-- Never write unit tests after you write code.
-- Highly prefer E2E tests as the sole testing mechanism. Use them to verify
-  complex features work. At the end of E2E tests, produce a verifiable and
-  repeatable artifact.
-- If you must test a system in isolation, first write down all the ways it
-  could fail, then write the code.
-- Keep an isolated test only when it catches a concrete failure the broader
-  tests do not assert. Before deleting a redundant test, identify the surviving
-  assertion that catches the same bug; merely executing the same code is not
-  enough. Avoid constructor, constant, and implementation-mirroring checks.
-- Run checks appropriate to the change. Record the command, relevant config,
-  expected and observed result, and artifact paths for repeatable E2E evidence.
-  Distinguish offline/mocked validation from live DVWA/provider E2E; report
-  skipped or blocked checks as incomplete.
+- Follow the user's requested verification scope; do not add or run tests
+  automatically. When verification is requested, choose the smallest relevant
+  existing check. Add a test only for a concrete behavior that current checks
+  do not cover; assert behavior rather than constructors, constants, or
+  implementation details.
+- E2E tests are opt-in. Run one only when the user explicitly asks. For a major
+  code change, ask whether the user wants E2E coverage and wait for their answer.
+  A handoff or this file alone does not authorize an E2E run. This applies to
+  offline/mocked E2E as well as live DVWA/provider E2E; live runs also require
+  explicit target and provider scope.
+- When an E2E run is requested, keep it focused on the affected flow. Use the
+  existing artifact writer and report the command, relevant config, result,
+  and artifact path. Distinguish offline/mocked validation from live
+  DVWA/provider execution; report skipped or blocked requested checks as
+  incomplete. Do not expand a requested E2E into a full suite or experiment
+  matrix without authorization.
+- Reuse valid validation evidence while the relevant code and configuration
+  are unchanged. Before a main experiment, ensure the required core gates have
+  evidence for the current code/config epoch: AKG structure and preconditions,
+  prompt schemas/JSON parsing, payload validation, chain routing, containment,
+  artifact completeness, and at least one dry run per surface. After a change,
+  rerun only the affected non-E2E gates; ask before any E2E validation.
 - For an offline suite report, use
   `.venv/bin/python -m pytest -q --junitxml=results/validation/junit.xml`.
-  Generated evidence belongs under `results/` (gitignored).
-- Before main experiments, validate AKG structure/preconditions/profiles,
-  prompt schemas/JSON parsing, payload validation, chain routing, containment,
-  and artifact completeness; run at least one dry run per surface. Do not start
-  main experiments while core validation fails.
+  Generated evidence belongs under `results/` (gitignored). Keep routine
+  summaries concise and point to artifacts instead of copying full logs into
+  the conversation.
 
 ## Documentation
 
