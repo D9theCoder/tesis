@@ -13,7 +13,7 @@ Tanggal penyusunan: 2026-10-01. Tanggal pemisahan cakupan: 2026-10-10.
 | --- | --- |
 | Implementasi scoring.v4, perbaikan review, rubrik dan kontrol offline | Completed dalam dokumen ini. Tujuh tabel serta 35 contoh dipertahankan sebagai sumber generator DOCX. |
 | Koneksi model dan lifecycle matriks TUI | Completed: [handoff perbaikan TUI](HANDOFF_TUI_MODEL_CONNECTION_AND_MATRIX_RUNTIME_2026-10-10.md). Kontrol offline, smoke live, dan audit runtime 108 koordinat lulus; hasil eksperimen 48 success dan 60 error belum menjadi penerimaan scoring. |
-| Profil ranking, oracle, matriks lengkap, dan DOCX aktual | Upcoming: [handoff penerimaan penelitian](../upcoming/HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md). Seluruh todo penerimaan tersisa dipindahkan ke sana. |
+| Profil ranking, oracle, matriks lengkap, dan DOCX aktual | Closed with AI-only scope and limits: [handoff penerimaan penelitian](HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md). |
 
 Bagian 1 sampai 9 mempertahankan keputusan, baseline awal, spesifikasi dan
 kontrol implementasi. Pernyataan baseline adalah keadaan sebelum implementasi;
@@ -373,7 +373,7 @@ Cakupan dokumen ini ditutup berdasarkan hasil implementasi pada bagian 12:
 Kriteria penerimaan awal yang bergantung pada profil penelitian frozen,
 oracle DVWA aktual, penggunaan hasil live, matriks lengkap, dan verifikasi
 DOCX final sekarang dimiliki
-[handoff penerimaan penelitian](../upcoming/HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md).
+[handoff penerimaan penelitian](HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md).
 Bug koneksi/pelaporan matriks TUI yang ditemukan kemudian dimiliki
 [handoff perbaikan TUI](HANDOFF_TUI_MODEL_CONNECTION_AND_MATRIX_RUNTIME_2026-10-10.md).
 Tidak ada syarat live yang dinyatakan lulus hanya karena dokumen ini dipindahkan

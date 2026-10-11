@@ -822,7 +822,7 @@ Conceptually valid chain example:
 
 ```text
 sqli_confirmed -> credentials_extracted -> bf_dictionary or credential_validation
-authenticated_session -> ac_idor
+authenticated_session -> ac_idor or ac_force_browse
 admin_session_obtained -> sqli_union
 ```
 
@@ -926,6 +926,19 @@ never determine initial rank. Unknown predicates or absent profiles leave
 eligible selection pending. This narrows the v3 meaning of grade 3; historical
 v3 artifacts retain their own rules. Forced choices are recorded separately
 from model selection. Profiles stay outside the selector's input.
+The ranking reference combines prior research with independent DVWA controls
+for the same vulnerability-confirmation goal and candidate budget. Additional
+expert approval is optional. A method with only partial or unmatched proof
+remains pending in the research profile; no ranking is inferred from the scored
+main runs. The current calibrated proposal and remaining gaps are recorded in
+the active ranking handoff.
+
+Calibrated profile entries can carry `reference_status`, `reference_fit` and
+`reference_reason`. Confirmed fit is an integer from 1 to 3, explained by the
+frozen pilot protocol; pending fit is null. Matching predicates use that fit,
+otherwise fit is 1. Legacy entries retain 2/1. An eligible pending competitor
+leaves Smethod null (`ranking_reference_pending`); proved-ineligible competitors
+can be excluded, while unknown observations still block assessment.
 
 Candidate base proof reaches 0 absent, 1 weak, 2 partial or 3 independently
 confirmed. Full Access Control and Brute Force require operator fixture oracles,
@@ -945,15 +958,47 @@ All required experiment-model calls in the final method context and run-wide
 scope events contribute; evaluator calls are excluded. Stability is separate:
 modal Soutput frequency / assessable repeats, with final/pending/planned counts
 and null for one repeat. It does not raise a run's score. Zero-call controls
-have Soutput not_applicable and no thesis composite. No approved research ranking
-profiles or live fixture oracles were supplied; synthetic controls establish
-only the offline contract. See the active v4 handoff in the scorebook.
+have Soutput not_applicable and no thesis composite. The current frozen machine
+profile covers nine scenarios with five fully ranked and ten pending competitor
+entries across four scenarios. A live static Brute Force control has bound
+fresh-session proof; Access Control permission and causal dependency proof
+remain unavailable. The owner authorized provider egress to `tokenharbor.ai`
+for `openai_compatible/deepseek-v4.1-flash`, and the frozen 108-coordinate
+matrix completed with 49 success and 59 error artifacts. Review of all 108 saved
+sources used 74 evaluator calls and accepted 65 AI decisions, producing 74 final
+v4 receipts and 34 pending workflows. Immutable execution sources retain their
+initial `pending_review` and historical provisional v2 composites; derived
+receipts and tables carry the v4 results. Pending final scores remain null.
+All source hashes and 234 checked historical receipt hashes were preserved.
+All methods were forced, so `Smethod` measures reference fit. One repeat keeps
+stability null. Synthetic controls establish only the offline contract.
+
+Nine mutation-only saved-input replays stopped before HTTP because their saved
+probe stages were missing. Nine matched hybrid controls made 104 actual DVWA
+transactions with zero provider calls and no containment violations; five
+confirmed fresh results. The 59 incomplete outcomes have evidence-based cause
+categories, while the original `UNSPECIFIED` reasons and unresolved
+model-versus-code attribution remain recorded. Independent wire audits cover
+diagnostic controls; the matrix scope audit uses framework receipts. Permission
+and causal proof, ten pending ranking comparisons, and complete mutation-only
+replay inputs keep full live acceptance open. See the active handoff and its
+[score table](../../results/validation/scoring-v4-live-acceptance-2026-10-10/score-table.csv).
 
 Permission proof permits an existing low-privilege session; authentication proof
 requires a fresh session. Synthetic dependency evidence requires an explicit
 offline fixture label. Output fallback credit is limited to its role and visit.
 Repeat grouping uses stable oracle protocol settings while retaining execution
 attestations and control results in each receipt.
+
+An operator protocol can explicitly enable `dvwa_candidate_session.v1` collection
+before immutable export. The collector validates an executed candidate through a
+new DVWA login, independent identity, rejected-credential, inherited-session and
+different-identity controls. Agents retain the original session fingerprint;
+sources retain safe fingerprints and request/response hashes, never raw passwords,
+cookies or tokens. Missing or failed controls leave proof partial. Collection
+does not alter graph verdicts, routing or chain credit, and saved-artifact review
+does not repeat target requests. The current admin-session Access Control agents
+cannot establish an unauthorized permission decision.
 
 The evaluator is the configured `openai_compatible/deepseek-v4.1-flash` model in
 a fresh, separate judging role, with two attempts, 1,024 output tokens and a
@@ -1301,6 +1346,23 @@ include only candidates linked to fresh response evidence. Historical scores
 and evidence remain in `final_state` and the linked source artifact. A replay
 that stops before execution has an empty manual sheet.
 Older artifacts without frozen inputs cannot be replayed by inventing a state.
+
+New visits save detection seeds that were previously loaded implicitly in
+`probe_controls[method]`: the visit ID, ordered canonical probe candidates, their
+SHA-256 and validation receipts. Candidate records retain seed provenance.
+These controls persist in checkpoints, appear in each pre-execution snapshot,
+and give probe responses their candidate IDs. They remain outside the scored
+exploit queue and its budget. Replay retains these saved controls even when
+selecting generated exploit IDs, revalidates their hash, canonical contents,
+order and visit, and stops before HTTP on disagreement. Historical snapshots
+without a saved probe stage remain incomplete.
+
+Permission attestations require allowed and denied controls for the same
+object/action as the assessed request. Control identities must match their
+independently expected principals. Controls may use different principals with
+known permission decisions on that resource. Unrelated objects, actions or
+unproved control identities do not establish full
+permission proof.
 
 ## 12. Consistency Handling
 

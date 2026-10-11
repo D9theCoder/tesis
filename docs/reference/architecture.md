@@ -65,6 +65,25 @@ accepting output; native chain plans require source, target and target-agent
 bindings. Output fallback credit is scoped to its role/visit. Repeat comparison
 fingerprints oracle protocol metadata and retains execution-specific oracle
 proof in receipts, using the same grouping for pending review sidecars.
+Calibrated ranking entries retain `reference_status`, `reference_fit` (1..3 or
+null for pending), and `reference_reason`. Eligible pending competitors block
+ranking assessment; the selector receives no additional calibration guidance.
+An explicitly enabled operator `dvwa_candidate_session.v1` protocol invokes
+`evaluation/session_oracle.py` before artifact export. Brute Force request events
+capture the original session fingerprint through `foundation/session_manager.py`.
+The collector uses only the raw validated executed candidate in memory, performs
+fresh contained DVWA session controls, and adds hash-bound sources to an artifact
+copy. It never changes graph state, method verdicts, nodes or chain routing.
+Missing or failed controls retain partial proof. Export then attaches valid oracle
+references through the existing offline verifier contract. Review itself performs
+no target HTTP; historical artifacts are not enriched or rewritten.
+Access Control candidate-permission evidence binds a response to its candidate,
+principal, session, object and action, then checks it against allowed and denied
+controls on the same object. The causal-dependency oracle separately verifies
+that source material was consumed and that the downstream result changes between
+matched with-source and without-source controls. An authenticated session can
+route to either `ac_idor` or `ac_force_browse`; response visibility alone does
+not prove a permission bypass or a completed dependency.
 CLI and TUI share a validated source-local decisions ledger, so reopening a
 CLI-finalized review preserves its final state. Execution-specific evaluator
 telemetry and previous receipt/ledger/status versions are retained; discovery
@@ -234,6 +253,29 @@ Replay manual sheets contain only candidates linked to fresh response evidence,
 with `manual_scoring_scope: fresh_replay_execution`. Historical scores and
 evidence remain in the reduced final state and linked source artifact; a rejected
 replay queue produces no manual rows. The export helper is included in code hashes.
+
+The frozen scoring.v4 matrix exposed an ablation limitation: mutation-only
+agents can emit internal probe responses without candidate IDs, and nine saved
+queues lacked the probe stage required for replay. Revalidation stopped these
+queues before HTTP. Nine matched hybrid controls retained complete queues and
+ran with zero provider calls. This evidence gap remains documented in the
+[completed, scope-limited acceptance handoff](../completed/HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md);
+saved inputs must not be supplemented with fresh seeds during replay.
+
+New validator visits freeze implicit detection seeds in `probe_controls[method]`
+before execution, with the visit ID, ordered canonical candidates, SHA-256 and
+validation receipts. This field persists in checkpoints and is retained in each
+`method_execution_inputs` snapshot. Agents use these validated probes and link
+their response receipts to the control candidate IDs. Controls retain seed
+provenance within their candidate records and stay outside the scored exploit
+queue and its budget. Replay revalidates the saved controls against the canonical
+catalog and rejects changed hashes, values, order, provenance or visits before
+HTTP. Legacy snapshots with missing stages remain incomplete.
+
+Permission oracle coverage requires allowed and denied controls for the assessed
+object/action, with independently matching principal identities. Controls may
+use different principals with known permission decisions on that resource.
+Unrelated controls cannot establish permission proof.
 
 ## Scoring evidence and route completion
 

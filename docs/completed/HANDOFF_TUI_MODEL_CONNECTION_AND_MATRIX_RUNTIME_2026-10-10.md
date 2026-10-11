@@ -16,7 +16,7 @@ Pulihkan konfigurasi model eksperimen pada peluncur TUI dan pastikan progres,
 status akhir, jurnal, serta descriptor sesuai artefak eksekusi. Implementasi
 rubrik dan kontrol offline tercatat pada
 [handoff scoring.v4 yang selesai](../completed/HANDOFF_SCORING_EVIDENCE_AND_RUBRIC_COMPLETION_2026-10-01.md).
-[Handoff ranking dan oracle](../upcoming/HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md)
+[Handoff ranking dan oracle](HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md)
 menangani penerimaan bukti penelitian dan matriks lengkap setelah perbaikan ini.
 
 Bug koneksi ini berada pada peluncur model eksperimen TUI. AI reviewer memakai

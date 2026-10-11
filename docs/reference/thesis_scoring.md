@@ -17,7 +17,7 @@ It includes `profile_id`, `version`, `sha256`, `frozen_at`, `fixture_id`,
 methods with unchanged AKG `preconditions`, `fit_predicates` (`key`, `equals`),
 positive integer `planned_request_count` (booleans rejected), `protocol_refs`,
 and `allowed_plans`. Required predicates must be known in the selection snapshot.
-Eligible choices rank by descending fit (2 direct, 1 sufficient), then ascending
+Eligible choices rank by descending fit, then ascending
 reference request count; all best pairs tie. Actual execution request counts
 never change the ranking. Lower-ranked eligible choices now receive 2, replacing
 the broader v3 meaning of 3. Top-ranked choices receive 3, or 4 with verified
@@ -26,6 +26,15 @@ leaves eligible selection pending; clear scope/prerequisite failures still give
 0/1. Profile/hash changes are errors. Sources `forced`, `model_orchestrator`,
 `deterministic_fallback`, and `akg_route` remain explicit; forced choices cannot
 establish model selection ability.
+
+Calibrated entries may specify `reference_status`, `reference_fit`, and
+`reference_reason` together. `confirmed` requires an integer fit from 1 to 3;
+`pending` requires a null fit and an evidence reason. The frozen protocol explains
+the levels and pins independent pilot evidence through `protocol_refs`. Matching
+selection predicates use the reference fit; nonmatching predicates use 1.
+Legacy entries keep their existing 2/1 rule. An eligible pending competitor leaves
+`Smethod` null with `ranking_reference_pending`; a proved-ineligible competitor
+can be excluded. Unknown observations still leave the whole comparison pending.
 
 `Spayload_final` averages distinct executed validated exploit/bypass candidate
 IDs of the final method. Rejected candidates retain validity 0 and are excluded
@@ -58,6 +67,32 @@ marker-only, rejected credentials, inherited sessions and wrong identities.
 Raw passwords, cookies and tokens must not enter these sources or public reports.
 Visibility or a login marker without the contract caps at 2. The verifier checks
 these records offline; existing runtime routing remains conservative.
+
+An operator source can opt into live Brute Force session collection with
+`document.oracle_protocol: {kind: dvwa_candidate_session.v1, enabled: true}`.
+It must identify the same fixture and protocol before execution. Before immutable
+export, `evaluation/session_oracle.py` uses the raw validated, executed candidate
+in memory for a fresh DVWA login. It checks identity independently of the module's
+success marker, rejected credentials, reuse of the authenticated session, and a
+different account documented by the fixture. The agents retain the original
+session fingerprint. Candidate, visit, method and response-hash mismatches prevent
+collection. Each resulting source retains control request paths/statuses/hashes
+and a bound attestation; secrets never enter the source. Missing accounts, failed
+controls or transport errors leave proof partial. This is execution-time HTTP,
+separate from the saved-artifact reviewer, and it grants no chain/use credit.
+
+Permission controls must cover the assessed object/action and prove their
+expected principal identities. A control with an unproved identity cannot
+satisfy coverage. Controls may use different principals with known permission
+decisions on the same object/action.
+
+Detection seeds loaded outside the scored queue are frozen before execution as
+`probe_controls[method]`, with canonical candidate/provenance records, a visit
+ID, SHA-256 and validation receipts. Checkpoints and saved method inputs retain
+these controls. Probe responses link their control IDs; those IDs do not enter
+the exploit review denominator or candidate budget. Replay uses the saved
+controls and rejects canonical-content, ordering, hash or visit mismatches
+before HTTP. Historical inputs missing their probe stage remain incomplete.
 
 Payload tier 4 requires independently confirmed downstream use of that candidate.
 `Sexploit` uses base confirmation separately and checks a use whose source method
@@ -277,20 +312,47 @@ The [completed v4 implementation handoff](../completed/HANDOFF_SCORING_EVIDENCE_
 records the implemented evidence contracts, review fixes and offline validation.
 The owner split the remaining work on 2026-10-10 into the
 [TUI model connection and matrix runtime handoff](../completed/HANDOFF_TUI_MODEL_CONNECTION_AND_MATRIX_RUNTIME_2026-10-10.md)
-and the [ranking, oracle and live acceptance handoff](../upcoming/HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md).
+and the [ranking, oracle and live acceptance handoff](../completed/HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md).
 The TUI runtime follow-up passed its required acceptance on 2026-10-11, including
 the 108-coordinate runtime audit. Its experiment outcomes were 48 successes and
-60 incomplete errors. Ranking, oracle and final scoring acceptance remain
-upcoming. Runtime completion does not declare full live thesis acceptance.
+60 incomplete errors. The later ranking, oracle, and matrix handoff closed by
+owner direction using AI-only scoring; its 18 null score vectors and original
+input replay limitation remain explicit. This scope-limited closure does not
+claim complete numeric score coverage.
 
-No researcher-approved request-count profiles or independent live DVWA
-permission/session/dependency oracles were supplied. Synthetic profiles must not
-be used as thesis ground truth. A direct live AI review succeeded, but its final
-score remained pending because the ranking was unavailable. The model connection
-failure was reproduced in the current TUI matrix launcher; current headless
-smokes connected successfully. Missing scoring evidence is a separate limitation.
+The active handoff records a frozen nine-scenario machine profile derived from
+the independent pilot. Five scenarios are fully ranked; four retain pending
+competitors. The current Access Control agents authenticate as admin, so their
+responses cannot establish a forbidden permission decision. A live static Brute
+Force control now has a candidate-bound fresh-session attestation. Permission
+and causal dependency proof remain open. Synthetic profiles remain offline.
 
-Microsoft Word layout was visually checked across 17 pages of an earlier DOCX;
-that render does not verify the current revision. Actual full-credit reachability,
-the full 108-coordinate matrix and current DOCX visual acceptance remain with the
-second follow-up. The older completed v3 handoff retains its original scope.
+The current DOCX, SHA-256 `478ce522ac8e28085000fc419020c40969f1d785f2f65cb8939b073f0ea3474e`,
+was rendered with Word and inspected across all 18 pages, including the seven
+rubric tables and 35 examples. Its paragraph-82 addition and 22-twip column-width
+change are documented in the active handoff. The owner then authorized provider
+egress to `tokenharbor.ai` for `openai_compatible/deepseek-v4.1-flash`. The frozen
+108-coordinate matrix completed with 49 success and 59 error artifacts. Review
+of all 108 saved sources used 74 evaluator calls and accepted 65 AI decisions,
+producing 74 final v4 receipts and 34 pending workflows. Immutable execution
+sources retain their initial `pending_review` and historical provisional v2
+composites; derived receipts and score tables carry the v4 results. Pending
+`Srun_final` remains null. Source hashes and all 234 checked historical receipt
+hashes were preserved.
+
+The [score table](../../results/validation/scoring-v4-live-acceptance-2026-10-10/score-table.csv)
+and [acceptance summary](../../results/validation/scoring-v4-live-acceptance-2026-10-10/acceptance-summary.json)
+record every coordinate, component and pending reason. All target methods were
+forced, so these `Smethod` values measure reference fit. Nine mutation-only
+saved-input replays stopped before HTTP because saved probe stages were missing;
+nine matched hybrid controls made 104 actual DVWA transactions with zero provider
+calls and no containment violations. Five controls confirmed fresh results.
+The 59 incomplete outcomes have evidence-based categories, while their original
+`UNSPECIFIED` runtime reasons and unresolved model-versus-code attribution remain
+recorded. One repeat gives null stability.
+
+The current profile has five fully ranked scenarios and ten pending competitor
+entries in four scenarios. Access Control permission proof, causal downstream
+proof and complete mutation-only replay inputs remain open. Independent wire
+auditing covers diagnostic controls; the matrix scope audit uses framework
+receipts. Full live acceptance stays open.

@@ -831,7 +831,7 @@ Contoh chain valid secara konseptual:
 
 ```text
 sqli_confirmed -> credentials_extracted -> bf_dictionary or credential_validation
-authenticated_session -> ac_idor
+authenticated_session -> ac_idor or ac_force_browse
 admin_session_obtained -> sqli_union
 ```
 
@@ -938,6 +938,20 @@ aktual tidak mengubah ranking awal. Predikat belum diketahui atau profil hilang
 membuat pilihan layak pending. Makna 3 lebih sempit daripada v3; artefak historis
 v3 tetap memakai aturan aslinya. Pilihan forced terpisah dari kemampuan pemilih
 model; profil tidak dimasukkan ke input pemilih metode.
+Referensi ranking menggabungkan penelitian terdahulu dengan kontrol DVWA
+independen untuk tujuan pembuktian kerentanan dan budget kandidat yang sama.
+Persetujuan ahli tambahan bersifat opsional. Metode dengan bukti parsial atau
+tidak cocok tetap pending dalam profil penelitian; urutannya tidak disimpulkan
+dari run utama yang dinilai. Usulan kalibrasi dan gap yang tersisa tercatat
+pada handoff ranking aktif.
+
+Entri profil hasil kalibrasi dapat memuat `reference_status`, `reference_fit`,
+dan `reference_reason`. Nilai kesesuaian terkonfirmasi berupa integer 1 sampai 3
+yang dijelaskan protokol pilot frozen; nilai pending tetap null. Predikat yang
+cocok memakai nilai tersebut, sedangkan predikat tidak cocok memakai 1. Entri
+lama tetap memakai aturan 2/1. Kompetitor layak yang pending membuat Smethod null
+(`ranking_reference_pending`). Kompetitor yang terbukti tidak layak dapat
+dikeluarkan; observasi yang belum diketahui tetap menghalangi penilaian.
 
 Bukti dasar kandidat: 0 sinyal tidak ada, 1 lemah, 2 parsial, 3 konfirmasi
 independen. Konfirmasi Access Control dan Brute Force memerlukan oracle operator
@@ -958,14 +972,45 @@ konteks metode final dan event scope run diperiksa; panggilan evaluator dikecual
 Stabilitas terpisah: frekuensi Soutput modal / repeat yang dapat dinilai, dengan
 jumlah final/pending/planned dan null untuk satu repeat. Stabilitas tidak menaikkan
 skor run. Kontrol tanpa panggilan mempunyai Soutput not_applicable dan tidak
-menghasilkan komposit tesis. Profil penelitian serta oracle fixture live belum
-tersedia; kontrol sintetis hanya membuktikan kontrak offline. Handoff v4 tetap active.
+menghasilkan komposit tesis. Profil mesin frozen kini memuat sembilan skenario,
+dengan lima urutan lengkap dan empat skenario yang masih mempunyai pembanding
+pending. Kontrol statis Brute Force live mempunyai bukti sesi baru terikat;
+oracle izin Access Control serta ketergantungan kausal belum tersedia. Pemilik
+telah mengizinkan pengiriman bukti ke `tokenharbor.ai` memakai
+`openai_compatible/deepseek-v4.1-flash`. Matriks beku 108 koordinat selesai
+dengan 49 status success dan 59 error. Review seluruh 108 sumber tersimpan
+memakai 74 panggilan evaluator dan menerima 65 keputusan AI, menghasilkan
+74 receipt final v4 serta 34 workflow pending. Sumber eksekusi immutable
+mempertahankan status awal `pending_review` dan komposit provisional historis
+v2; receipt serta tabel turunan memuat hasil v4. Skor final pending tetap null.
+Hash semua sumber dan 234 receipt historis yang diperiksa tetap utuh. Seluruh
+metode dipaksakan, sehingga `Smethod` mengukur kecocokan referensi. Satu repeat
+membuat stabilitas tetap null. Kontrol sintetis hanya membuktikan kontrak offline.
+
+Snapshot matriks historis 2026-10-10 mencatat sembilan replay mutation-only yang
+berhenti sebelum HTTP, 59 hasil incomplete, dan sepuluh pembanding ranking
+pending. Penerimaan lanjutan kemudian memakai profil pengganti dan mengaudit
+transport 108/108 run. Handoff ditutup owner-directed dengan cakupan AI-only;
+18 sumber tetap tanpa skor final dan replay original-nine bukan replay bit-for-bit
+karena snapshot probe/request tidak tersedia. Detail penerimaan dan batasnya ada
+di [handoff selesai](../completed/HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md)
+dan [tabel skor historis](../../results/validation/scoring-v4-live-acceptance-2026-10-10/score-table.csv).
 
 Bukti izin dapat memakai sesi berhak terbatas yang sudah ada; bukti autentikasi
 memerlukan sesi baru. Bukti ketergantungan sintetis memerlukan label fixture
 offline eksplisit. Nilai fallback output terbatas pada role dan kunjungannya.
 Pengelompokan repeat memakai pengaturan protokol oracle yang stabil, sedangkan
 attestation eksekusi dan hasil kontrol tetap disimpan pada setiap receipt.
+
+Protokol operator dapat mengaktifkan koleksi `dvwa_candidate_session.v1` secara
+eksplisit sebelum ekspor immutable. Kolektor memvalidasi kandidat yang dieksekusi
+melalui login DVWA baru, identitas independen, serta kontrol kredensial salah,
+penggunaan ulang sesi dan identitas berbeda. Agent menyimpan fingerprint sesi
+awal; sumber menyimpan fingerprint aman dan hash permintaan/respons tanpa sandi,
+cookie atau token mentah. Kontrol hilang atau gagal membuat bukti tetap parsial.
+Koleksi tidak mengubah verdict graph, routing atau kredit chain; review artefak
+tersimpan tidak mengulang permintaan target. Agent Access Control saat ini memakai
+sesi admin sehingga belum membuktikan keputusan izin yang dilanggar.
 
 Evaluator memakai model `openai_compatible/deepseek-v4.1-flash` yang dikonfigurasi
 dalam role penilaian dengan konteks baru, dua percobaan, 1.024 output token dan
@@ -1317,6 +1362,23 @@ hanya memuat candidate yang terhubung ke response evidence eksekusi baru.
 Score dan evidence historis tetap tersimpan di `final_state` dan artifact sumber
 yang ditautkan. Replay yang berhenti sebelum eksekusi memiliki lembar manual kosong.
 Artifact lama tanpa frozen input tidak dapat direplay dengan state rekaan.
+
+Kunjungan baru menyimpan seed deteksi yang sebelumnya dimuat secara implisit
+pada `probe_controls[method]`: ID kunjungan, kandidat probe canonical berurutan,
+SHA-256, serta receipt validasi. Rekaman kandidat mempertahankan provenance seed.
+Kontrol ini tersimpan pada checkpoint dan snapshot sebelum eksekusi; respons
+probe mempunyai candidate ID. Kontrol berada di luar queue kandidat exploit
+yang dinilai beserta budget-nya. Replay mempertahankan kontrol tersimpan saat
+memilih ID exploit generated, memvalidasi ulang hash, isi canonical, urutan,
+dan kunjungan, lalu berhenti sebelum HTTP bila tidak cocok. Snapshot historis
+tanpa stage probe tersimpan tetap incomplete.
+
+Attestation izin mensyaratkan kontrol akses diizinkan dan ditolak untuk objek
+serta aksi yang sama dengan request yang dinilai. Identitas kontrol harus
+cocok dengan principal yang diharapkan secara independen. Kontrol boleh memakai
+principal berbeda dengan keputusan izin yang diketahui untuk resource tersebut.
+Objek, aksi, atau identitas kontrol yang tidak sesuai
+tidak menghasilkan bukti izin penuh.
 
 ## 12. Consistency Handling
 
