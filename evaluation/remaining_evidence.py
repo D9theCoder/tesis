@@ -89,6 +89,105 @@ def _check_grades(queue, document, grades):
     return eligible
 
 
+def _review_rounds(reader, sources, rounds):
+    """Resolve the last recorded status path for each execution in round order."""
+    by_id = {row['execution_id']: row for row in sources}
+    latest, history = {}, {}
+    for round_index, (progress_path, receipt_dir) in enumerate(rounds):
+        progress_binding = reader.binding(progress_path)
+        for record_index, record in enumerate(reader.lines(progress_path)):
+            require(isinstance(record, dict), 'Review progress row must be an object')
+            eid = record.get('execution_id')
+            require(eid in by_id and record.get('source_sha256') == by_id[eid]['sha256'],
+                    'Review round joins a different execution/source')
+            source = Path(by_id[eid]['path'])
+            recorded_source = record.get('source_path')
+            if recorded_source is not None:
+                require(Path(recorded_source).resolve() == source.resolve(),
+                        'Review progress source path does not match the manifest')
+            status_path = record.get('status_path') or (
+                (Path(receipt_dir) if receipt_dir else source.parent / 'reviews') /
+                f'{eid}.review-status.json')
+            require(isinstance(status_path, (str, Path)) and str(status_path).strip(),
+                    'Review progress is missing its status path')
+            entry = {'round_index': round_index, 'record_index': record_index,
+                'progress': progress_binding, 'status_path': str(status_path),
+                'source_sha256': record['source_sha256']}
+            latest[eid] = entry
+            history.setdefault(eid, []).append(entry)
+    require(set(latest) == set(by_id), 'Review coverage is incomplete')
+    return latest, history
+
+
+def _audit_workflow_receipt(reader, *, mode, queue, artifact, workflow,
+                            receipts, eligible, ledger_reviews):
+    """Validate one role's latest grades and receipt against its source and ledger."""
+    grades = workflow['candidate_grades']
+    require(isinstance(grades, list), f'{mode} candidate grades must be a list')
+    _check_grades(queue, artifact, grades)
+    for grade in grades:
+        decision = ledger_reviews.get((mode, grade['candidate_id']))
+        if grade['grade_origin'] == 'signal_gate':
+            require(eligible[grade['candidate_id']]['status'] == 'signal_absent'
+                    and grade['score'] == 0 and decision is None,
+                    f'Invalid {mode} automatic negative gate')
+        elif grade['score'] is None:
+            require(decision is None,
+                    f'{mode} status omits a newer decision from the source ledger')
+        else:
+            require(decision and decision['score'] == grade['score']
+                    and decision['decision_id'] == grade['decision_id'],
+                    f'{mode} grade is not bound to the latest source decision')
+
+    receipt_path = receipts.get(mode)
+    if not receipt_path:
+        require(workflow['status'] == 'pending' and workflow['Spayload_final'] is None
+                and workflow['Srun_final'] is None,
+                f'Missing {mode} receipt was treated as final')
+        return None, None
+
+    receipt = reader.read(receipt_path)
+    require(receipt['source_sha256'] == queue['source_sha256']
+            and receipt['execution_id'] == queue['execution_id']
+            and receipt['run_id'] == queue['run_id']
+            and receipt['method'] == queue['method']
+            and receipt['selection'] == queue['selection']
+            and receipt['rubric_version'] == queue['rubric_version']
+            and receipt['scoring_rule_sha256'] == queue['scoring_rule_sha256']
+            and receipt['scoring_mode'] == mode
+            and receipt['artifact_type'] == 'thesis_score_receipt'
+            and receipt['status'] == workflow['status'] == 'final',
+            f'{mode} receipt joins a different source/execution/workflow')
+    _check_grades(queue, artifact, receipt['candidate_grades'])
+    require(receipt['candidate_grades'] == grades,
+            f'{mode} receipt/status candidate mismatch')
+    require(grades and all(grade['score'] is not None for grade in grades),
+            f'Incomplete numeric {mode} receipt')
+    receipt_reviews = _validated_reviews(queue, receipt['review_history'])
+    for grade in grades:
+        if grade['grade_origin'] == 'signal_gate':
+            continue
+        decision = receipt_reviews.get((mode, grade['candidate_id']))
+        latest = ledger_reviews.get((mode, grade['candidate_id']))
+        require(decision and latest
+                and decision['score'] == grade['score']
+                and decision['decision_id'] == grade['decision_id']
+                and latest['decision_id'] == decision['decision_id'],
+                f'{mode} receipt is not bound to the latest ledger decision')
+
+    numerator, denominator = sum(grade['score'] for grade in grades), len(grades)
+    require(receipt['denominator'] == denominator and receipt['numerator'] == numerator,
+            f'{mode} receipt numerator/denominator mismatch')
+    vector = {**queue['components'], 'Spayload': numerator / denominator}
+    require(receipt['components'] == vector and receipt['formula'] == WEIGHTS,
+            f'{mode} receipt vector/formula mismatch')
+    score = round(sum(vector[key] * weight for key, weight in WEIGHTS.items()), 4)
+    require(receipt['Srun_final'] == workflow['Srun_final'] == score
+            and receipt['Spayload_final'] == workflow['Spayload_final'] == round(numerator / denominator, 4),
+            f'{mode} receipt arithmetic mismatch')
+    return reader.binding(receipt_path), vector
+
+
 def audit_score_coverage(reader, manifest_path, rounds):
     """Join the latest recorded review round to each immutable execution source."""
     manifest = reader.read(manifest_path)
@@ -96,20 +195,7 @@ def audit_score_coverage(reader, manifest_path, rounds):
     by_id = {r['execution_id']: r for r in sources}
     require(len(by_id) == len(sources), 'Duplicate source execution')
     require(len({r['sha256'] for r in sources}) == len(sources), 'Duplicate source hash')
-    latest, history = {}, {}
-    for progress_path, receipt_dir in rounds:
-        for record in reader.lines(progress_path):
-            eid = record['execution_id']
-            require(eid in by_id and record['source_sha256'] == by_id[eid]['sha256'],
-                    'Review round joins a different execution/source')
-            source = Path(by_id[eid]['path'])
-            status_path = Path(record.get('status_path') or (
-                (Path(receipt_dir) if receipt_dir else source.parent / 'reviews') /
-                f'{eid}.review-status.json'))
-            latest[eid] = status_path
-            history.setdefault(eid, []).append({'progress': reader.binding(progress_path),
-                'status_path': str(status_path)})
-    require(set(latest) == set(by_id), 'Review coverage is incomplete')
+    latest, history = _review_rounds(reader, sources, rounds)
     rows = []
     for item in sources:
         path = Path(item['path'])
@@ -119,75 +205,67 @@ def audit_score_coverage(reader, manifest_path, rounds):
         queue = review_queue(path)
         require(queue['source_sha256'] == item['sha256'] and queue['execution_id'] == item['execution_id'],
                 'Queue execution/source mismatch')
-        require(queue['selection'] == 'ai', 'Source is not from the AI-only cohort')
-        status_path = latest[item['execution_id']]
+        require(queue['selection'] in {'ai', 'both'}, 'Source has no selected AI review workflow')
+        selected_round = latest[item['execution_id']]
+        status_path = Path(selected_round['status_path'])
         status = reader.read(status_path)
         require(status['source_sha256'] == item['sha256'] and status['method'] == queue['method']
                 and status['rubric_version'] == queue['rubric_version']
                 and status['scoring_rule_sha256'] == queue['scoring_rule_sha256'],
                 'Review status source/method/rubric/rules mismatch')
-        workflow = status['workflows']['ai']
-        grades = workflow['candidate_grades']
-        eligible = _check_grades(queue, artifact, grades)
-        receipt_path = status['receipts'].get('ai')
-        receipt_binding, vector = None, None
-        if receipt_path:
-            receipt = reader.read(receipt_path)
-            require(receipt['source_sha256'] == item['sha256']
-                    and receipt['execution_id'] == queue['execution_id']
-                    and receipt['run_id'] == queue['run_id']
-                    and receipt['method'] == queue['method']
-                    and receipt['rubric_version'] == queue['rubric_version']
-                    and receipt['scoring_rule_sha256'] == queue['scoring_rule_sha256']
-                    and receipt['scoring_mode'] == 'ai'
-                    and receipt['artifact_type'] == 'thesis_score_receipt'
-                    and receipt['status'] == workflow['status'] == 'final',
-                    'Receipt joins a different source/execution/workflow')
-            _check_grades(queue, artifact, receipt['candidate_grades'])
-            require(receipt['candidate_grades'] == grades, 'Receipt/status candidate mismatch')
-            require(grades and all(g['score'] is not None for g in grades), 'Incomplete numeric receipt')
-            decisions = _validated_reviews(queue, receipt['review_history'])
-            for grade in grades:
-                decision = decisions.get(('ai', grade['candidate_id']))
-                if grade['grade_origin'] == 'signal_gate':
-                    require(eligible[grade['candidate_id']]['status'] == 'signal_absent'
-                            and grade['score'] == 0, 'Invalid automatic negative gate')
-                else:
-                    require(decision and decision['score'] == grade['score']
-                            and decision['decision_id'] == grade['decision_id'], 'Grade has no bound AI decision')
-            numerator, denominator = sum(g['score'] for g in grades), len(grades)
-            require(receipt['denominator'] == denominator and receipt['numerator'] == numerator,
-                    'Receipt numerator/denominator mismatch')
-            vector = {**queue['components'], 'Spayload': numerator / denominator}
-            require(receipt['components'] == vector and receipt['formula'] == WEIGHTS,
-                    'Receipt vector/formula mismatch')
-            score = round(sum(vector[k] * w for k, w in WEIGHTS.items()), 4)
-            require(receipt['Srun_final'] == workflow['Srun_final'] == score
-                    and receipt['Spayload_final'] == workflow['Spayload_final'] == round(numerator / denominator, 4),
-                    'Receipt arithmetic mismatch')
-            classification = 'numeric_ai_receipt'
-            receipt_binding = reader.binding(receipt_path)
+        require(status.get('execution_id', queue['execution_id']) == queue['execution_id']
+                and status.get('run_id', queue['run_id']) == queue['run_id'],
+                'Review status joins a different execution/run')
+        selected_modes = ('human', 'ai') if queue['selection'] == 'both' else ('ai',)
+        workflows = status.get('workflows')
+        receipts = status.get('receipts')
+        require(isinstance(workflows, dict) and set(workflows) == set(selected_modes)
+                and isinstance(receipts, dict) and set(receipts) <= set(selected_modes),
+                'Review status roles do not match the frozen selection')
+        recorded_ledger = status.get('decision_ledger_path')
+        if 'decision_ledger_path' in status:
+            require(isinstance(recorded_ledger, str) and bool(recorded_ledger.strip()),
+                    'Review status has an invalid decision ledger path')
+            ledger_path = Path(recorded_ledger)
+            if not ledger_path.is_absolute():
+                ledger_path = status_path.parent / ledger_path
         else:
-            require(workflow['status'] == 'pending' and workflow['Srun_final'] is None
-                    and workflow['Spayload_final'] is None, 'Missing receipt was treated as final')
-            classification = ('no_eligible_candidate' if not eligible else 'not_assessable'
-                if any(r['status'] == 'not_assessable' for r in eligible.values())
-                else 'pending_candidate_review')
-        ledger_path = review_ledger_path(path)
+            # Historical statuses predate the recorded ledger location.
+            ledger_path = review_ledger_path(path)
         ledger = reader.read(ledger_path)
-        _validated_reviews(queue, ledger)
+        ledger_reviews = _validated_reviews(queue, ledger)
+        eligible = {}
+        bindings, vectors = {}, {}
+        for mode in selected_modes:
+            eligible[mode] = _check_grades(queue, artifact, workflows[mode]['candidate_grades'])
+            bindings[mode], vectors[mode] = _audit_workflow_receipt(
+                reader, mode=mode, queue=queue, artifact=artifact,
+                workflow=workflows[mode], receipts=receipts, eligible=eligible[mode],
+                ledger_reviews=ledger_reviews)
+        workflow = workflows['ai']
+        grades = workflow['candidate_grades']
+        ai_eligible = eligible['ai']
+        classification = ('numeric_ai_receipt' if bindings['ai'] else
+            'no_eligible_candidate' if not ai_eligible else 'not_assessable'
+            if any(row['status'] == 'not_assessable' for row in ai_eligible.values())
+            else 'pending_candidate_review')
+        round_binding = reader.binding(status_path)
+        selected_round['status'] = round_binding
+        selected_round['selected'] = True
         rows.append({'execution_id': item['execution_id'], 'source': reader.binding(path),
             'coordinate': item['coordinate'], 'original_status': artifact['status'],
             'classification': classification, 'workflow_reason': workflow['reason'],
             'component_pending_reasons': workflow['component_pending_reasons'],
-            'eligible_candidate_ids': list(eligible), 'denominator': len(eligible),
+            'eligible_candidate_ids': list(ai_eligible), 'denominator': len(ai_eligible),
             'assessed_denominator': sum(g['score'] is not None for g in grades),
             'assessed_numerator': sum(g['score'] for g in grades if g['score'] is not None),
             'candidate_grades': grades, 'Spayload_final': workflow['Spayload_final'],
-            'candidates_missing_execution_evidence': [r['candidate_id'] for r in eligible.values() if not r['evidence_refs']],
-            'Srun_final': workflow['Srun_final'], 'components': vector,
-            'ai_receipt': receipt_binding, 'human_receipt': status['receipts'].get('human'),
-            'review_status': reader.binding(status_path), 'decision_ledger': reader.binding(ledger_path),
+            'candidates_missing_execution_evidence': [r['candidate_id'] for r in ai_eligible.values() if not r['evidence_refs']],
+            'Srun_final': workflow['Srun_final'], 'components': vectors['ai'],
+            'ai_receipt': bindings['ai'], 'human_receipt': bindings.get('human'),
+            'human_Spayload_final': workflows['human']['Spayload_final'] if 'human' in workflows else None,
+            'human_Srun_final': workflows['human']['Srun_final'] if 'human' in workflows else None,
+            'review_status': round_binding, 'decision_ledger': reader.binding(ledger_path),
             'review_rounds': history[item['execution_id']]})
     return rows
 

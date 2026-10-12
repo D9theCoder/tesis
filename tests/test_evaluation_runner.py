@@ -6,8 +6,67 @@ code."""
 import json
 
 from evaluation.runner import _llm_activity, run_single_engagement
+from evaluation.reporter import build_candidate_dispositions
 from llm.runtime import current_call_context
 from tesis.runtime_events import CancellationToken, CollectingEventSink
+
+
+def test_candidate_dispositions_bind_validation_selection_execution_and_terminal_stop():
+    method = "sqli_union"
+    visit_id = "sqli_union:visit:7"
+    candidates = [
+        {"candidate_id": "rejected", "method": method, "stage": "exploit", "source": "llm_generated"},
+        {"candidate_id": "budgeted", "method": method, "stage": "exploit", "source": "llm_generated"},
+        {"candidate_id": "executed", "method": method, "stage": "exploit", "source": "static_seed"},
+        {"candidate_id": "stopped", "method": method, "stage": "exploit", "source": "static_seed"},
+    ]
+    validations = [
+        {"candidate_id": "rejected", "valid": False, "reason": "out_of_scope_target"},
+        {"candidate_id": "budgeted", "valid": False, "reason": "candidate_budget_exceeded"},
+        {"candidate_id": "executed", "valid": True, "reason": "ok"},
+        {"candidate_id": "stopped", "valid": True, "reason": "ok"},
+    ]
+    artifact = {
+        "status": "success",
+        "task_result": "SUCCESS",
+        "candidate_disposition_inputs": [{
+            "method": method,
+            "visit_id": visit_id,
+            "candidate_catalog": candidates,
+            "validated_queue": [candidates[2], candidates[3]],
+            "validation_results": validations,
+            "payload_provenance": {"executed": {"source": "static_seed"}},
+        }],
+        "response_evidence": [{
+            "method": method,
+            "visit_id": visit_id,
+            "candidate_id": "executed",
+            "identity_kind": "candidate",
+            "request_ref": "#/execution_log/3/data/request_structure",
+        }],
+    }
+
+    build_candidate_dispositions(artifact)
+
+    rows = {row["candidate_id"]: row for row in artifact["candidate_dispositions"]}
+    assert {candidate_id: row["disposition"] for candidate_id, row in rows.items()} == {
+        "rejected": "rejected",
+        "budgeted": "budgeted_out",
+        "executed": "selected_executed",
+        "stopped": "terminal_stop",
+    }
+    assert rows["rejected"]["stop_reason"] == "out_of_scope_target"
+    assert rows["budgeted"]["stop_reason"] == "candidate_budget_exceeded"
+    assert rows["executed"]["execution_status"] == "executed"
+    assert rows["executed"]["request_refs"] == ["#/execution_log/3/data/request_structure"]
+    assert rows["stopped"]["selected_queue_index"] == 1
+    assert rows["stopped"]["stop_reason"] == "task_result:SUCCESS"
+    for row in rows.values():
+        assert row["method"] == method
+        assert row["visit_id"] == visit_id
+        assert row["candidate_id"]
+        assert row["validation"]["candidate_id"] == row["candidate_id"]
+        assert row["validation_ref"].startswith("#/candidate_disposition_inputs/0/validation_results/")
 
 
 def test_runtime_activity_does_not_look_like_a_retry():

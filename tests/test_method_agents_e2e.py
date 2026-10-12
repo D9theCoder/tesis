@@ -7,6 +7,7 @@ from copy import deepcopy
 from datetime import timedelta
 import importlib
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,8 +20,12 @@ from agents.state_utils import make_update
 from core.state import METHODS_BY_SURFACE, new_default_state
 from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.runner import run_single_engagement
+from tesis.runtime_events import redact_secrets
 
-EVIDENCE = Path('results/validation/method-agents-2026-09-29/offline')
+EVIDENCE = Path(os.environ.get(
+    'TESIS_METHOD_AGENTS_EVIDENCE_DIR',
+    'results/validation/method-agents-2026-09-29/offline',
+))
 CASES = [(surface, method) for surface, methods in METHODS_BY_SURFACE.items() for method in methods]
 HASH = '5f4dcc3b5aa765d61d8327deb882cf99'
 REVIEW_EVIDENCE = Path('results/validation/review-fixes-2026-09-29')
@@ -61,7 +66,9 @@ class Fixture:
         if path.endswith("login.php") and verb == "GET":
             client.cookies.set("PHPSESSID", f"fixture-{id(client)}", path="/")
         headers = {"set-cookie": f"PHPSESSID=fixture-{id(client)}; Path=/"} if path.endswith("login.php") and verb == "GET" else {}
-        result = httpx.Response(status, text=body, request=httpx.Request(verb, url), headers=headers)
+        request_options = {key: kwargs[key] for key in ("params", "data", "json", "content", "files") if key in kwargs}
+        result = httpx.Response(status, text=body,
+            request=httpx.Request(verb, url, **request_options), headers=headers)
         result.elapsed = timedelta(seconds=delay)
         return result
 
@@ -265,7 +272,10 @@ def run_control(monkeypatch, method, level, control, condition='linear_hybrid', 
         max_iterations=10, output_dir=str(EVIDENCE / name), execution_id=name,
         llm_role_configs={r: {'structured_output': 'off'} for r in ('orchestrator', 'payload_generator')})
     path = EVIDENCE / name / 'fixture.json'
-    path.write_text(json.dumps({'kind': 'offline_control', 'oracle': control, 'requests': fixture.requests, 'fake_provider_calls': fixture.provider_calls}, indent=2) + '\n')
+    path.write_text(json.dumps(redact_secrets({
+        'kind': 'offline_control', 'oracle': control, 'requests': fixture.requests,
+        'fake_provider_calls': fixture.provider_calls,
+    }), indent=2) + '\n')
     assert artifact.get('report'), artifact.get('error')
     assert not str(artifact.get('error', '')).startswith(('AttributeError', 'TypeError', 'GraphRecursionError'))
     assert artifact['target_method'] == (None if automatic else method)

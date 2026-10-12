@@ -13,7 +13,7 @@ from core.graph_builder import RUNTIME_AGENT_HANDLERS
 from core.scorer import scorer
 from core.state import ExploitationState, new_default_state
 from evaluation.manual_scoring_sheet import manual_scoring_rows
-from evaluation.reporter import write_json_report
+from evaluation.reporter import link_exported_request_evidence, write_json_report
 from foundation.payload_validator import validate_payload_candidates, validate_probe_controls
 from llm.runtime import LLMRuntime
 from core.graph_builder import _serialized_http_handler
@@ -134,10 +134,20 @@ def replay_method_inputs(
                 Path('agents/state_utils.py'), Path('foundation/verifier.py'),
                 Path('foundation/payload_validator.py'), Path('core/scorer.py'),
                 Path(inspect.getfile(manual_scoring_rows)),
+                Path(inspect.getfile(link_exported_request_evidence)),
                 Path('core/state.py'), Path(__file__),
             }
         },
         'validation_rejections': rejections, 'final_state': redact_secrets(final),
+        'execution_log': [
+            {
+                'event_type': str(event.get('event') or event.get('event_type') or 'runtime.event'),
+                'method': method,
+                'data': redact_secrets(event.get('payload') or {}),
+            }
+            for event in updates.get('telemetry_events', [])
+            if isinstance(event, dict)
+        ],
         'scoring_decisions': updates.get('scoring_decisions', []),
         'response_evidence': redact_secrets(updates.get('response_evidence', [])),
         'timing_evidence': updates.get('timing_evidence', []),
@@ -145,6 +155,7 @@ def replay_method_inputs(
         'confirmed_vulns': final.get('confirmed_vulns', []),
         'achieved_outcomes': final.get('achieved_outcomes', []),
     }
+    link_exported_request_evidence(artifact)
     artifact['manual_scoring_evidence'] = manual_scoring_rows(artifact)
     write_json_report(output, artifact)
     return artifact

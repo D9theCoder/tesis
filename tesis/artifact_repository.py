@@ -158,6 +158,7 @@ _OUTPUT_OBJECT_KEYS: Final[frozenset[str]] = frozenset(
 )
 
 _TIMESTAMP_KEYS: Final[tuple[str, ...]] = (
+    "generated_at",
     "updated_at",
     "ended_at",
     "finished_at",
@@ -685,6 +686,10 @@ class ArtifactMetadata:
     modified_at: float = 0.0
     config: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
+    artifact_type: str | None = None
+    scoring_mode: str | None = None
+    source_path: str | None = None
+    source_sha256: str | None = None
 
     @property
     def is_matrix(self) -> bool:
@@ -760,6 +765,10 @@ def _metadata_from_record(
         modified_at=modified_at,
         config=MappingProxyType(dict(config)),
         raw=MappingProxyType(dict(record)) if retain_raw else MappingProxyType({}),
+        artifact_type=_string_value(_metadata_value(record, parent, ("artifact_type",))),
+        scoring_mode=_string_value(_metadata_value(record, parent, ("scoring_mode",))),
+        source_path=_string_value(_metadata_value(record, parent, ("source_path",))),
+        source_sha256=_string_value(_metadata_value(record, parent, ("source_sha256",))),
     )
 
 
@@ -913,6 +922,52 @@ class ArtifactRepository:
         except OSError:
             return 0.0
 
+    @staticmethod
+    def _latest_bound_receipts(items: list[ArtifactMetadata]) -> list[ArtifactMetadata]:
+        """Keep only current, source-bound receipts per execution and role."""
+        retained: list[ArtifactMetadata] = []
+        latest: dict[tuple[str, str, str], ArtifactMetadata] = {}
+        source_bindings: dict[Path, tuple[str | None, frozenset[str]]] = {}
+        for item in items:
+            if item.artifact_type != "thesis_score_receipt":
+                retained.append(item)
+                continue
+            if (not item.execution_id or not item.source_path or not item.source_sha256
+                    or item.scoring_mode not in {"human", "ai"}
+                    or item.status.casefold() != "final"):
+                continue
+            source = Path(item.source_path)
+            try:
+                source = source.resolve()
+                if source not in source_bindings:
+                    source_bytes = source.read_bytes()
+                    source_hash = sha256(source_bytes).hexdigest()
+                    source_records = _flatten_records(
+                        source,
+                        json.loads(source_bytes.decode("utf-8")),
+                        parent=None,
+                        artifact_kind="single",
+                        item_index=None,
+                        modified_at=ArtifactRepository._mtime(source),
+                        retain_raw=False,
+                    )
+                    execution_ids = frozenset(
+                        record.execution_id for record in source_records if record.execution_id
+                    )
+                    source_bindings[source] = (source_hash, execution_ids)
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                source_bindings[source] = (None, frozenset())
+            source_hash, execution_ids = source_bindings[source]
+            if source_hash != item.source_sha256 or item.execution_id not in execution_ids:
+                continue
+            key = (item.execution_id, item.source_sha256, item.scoring_mode)
+            current = latest.get(key)
+            order = (item.sort_timestamp, item.modified_at, str(item.path))
+            if current is None or order > (current.sort_timestamp, current.modified_at, str(current.path)):
+                latest[key] = item
+        retained.extend(latest.values())
+        return retained
+
     def scan(
         self,
         filters: Mapping[str, object] | None = None,
@@ -969,6 +1024,9 @@ class ArtifactRepository:
                     retain_raw=retain_raw,
                 )
             )
+
+        if not self.include_sidecars:
+            items = self._latest_bound_receipts(items)
 
         items.sort(key=lambda item: (-item.sort_timestamp, str(item.path), item.item_index or -1))
         self._cache = tuple(items)

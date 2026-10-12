@@ -218,6 +218,56 @@ def test_access_control_agent_exports_only_actual_candidate_attempts(monkeypatch
     assert state == original
 
 
+def test_manual_scoring_uses_response_visit_verifier_without_candidate_score():
+    method = "sqli_union"
+    candidate = {
+        "candidate_id": "probe-candidate",
+        "method": method,
+        "stage": "probe",
+        "payload_or_logic": "1' ORDER BY 1-- -",
+        "source": "static_seed",
+    }
+    first_visit = {
+        "agent_id": method,
+        "decision": "not_confirmed",
+        "visit_id": "sqli_union:visit:1",
+        "verifier_id": "verifier:sqli_union:visit:1:0",
+    }
+    later_visit = {
+        "agent_id": method,
+        "decision": "confirmed",
+        "visit_id": "sqli_union:visit:2",
+        "verifier_id": "verifier:sqli_union:visit:2:1",
+    }
+    artifact = {
+        "config": {"provider": "openai_compatible", "surface": "sqli", "payload_mode": "hybrid"},
+        "verifier_decision": later_visit,
+        "response_evidence": [{
+            "agent_id": method,
+            "method": method,
+            "stage": "probe",
+            "payload": candidate["payload_or_logic"],
+            "candidate_id": candidate["candidate_id"],
+            "visit_id": first_visit["visit_id"],
+        }],
+        "final_state": {
+            "payload_provenance": {candidate["candidate_id"]: candidate},
+            "payload_candidates": {method: [candidate]},
+            "payload_validation_results": {method: [{"candidate_id": candidate["candidate_id"], "valid": True}]},
+            "payload_scores": {},
+            "scoring_decisions": [{"method": method, "dimension": "Sexploit", "score": 0}],
+            "verifier_history": [first_visit, later_visit],
+        },
+    }
+
+    row = manual_scoring_rows(artifact)[0]
+
+    assert row["candidate_id"] == candidate["candidate_id"]
+    assert row["response_evidence_ref"] == ["#/response_evidence/0"]
+    assert row["score_0_4"] is None
+    assert row["verifier_decision"] == first_visit
+
+
 @pytest.mark.parametrize("score", [3, None])
 def test_legacy_normalized_aliases_use_recorded_candidate_score_or_remain_unlinked(score):
     artifact = {

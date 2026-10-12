@@ -13,6 +13,19 @@ from core.state import METHODS_BY_SURFACE, score_decision
 from tesis.runtime_events import redact_secrets
 
 
+class CandidatePayload(str):
+    """String payload that retains its validated candidate identity in flight."""
+
+    def __new__(cls, value: str, candidate_id: str):
+        instance = super().__new__(cls, value)
+        instance.candidate_id = candidate_id
+        return instance
+
+    def __getnewargs__(self) -> tuple[str, str]:
+        """Keep identity when runtime state copies or pickles payload values."""
+        return str(self), self.candidate_id
+
+
 def method_selection_update(state: dict, method: str, source: str, *, preconditions: list[str] | None = None,
                             viable_methods: list[str] | None = None, reason_refs=None, plan=None) -> dict:
     """Grade every selection at its boundary, before execution changes viability."""
@@ -267,13 +280,18 @@ def candidate_payloads_for_stage(
     allowed_stages = {stage}
     if stage == "exploit":
         allowed_stages.add("bypass")
-    selected = [
-        str(candidate.get("payload_or_logic", ""))
-        for candidate in candidates
-        if isinstance(candidate, dict)
-        and str(candidate.get("stage", stage)) in allowed_stages
-        and candidate.get("payload_or_logic")
-    ]
+    selected = []
+    for candidate in candidates:
+        if (not isinstance(candidate, dict)
+                or str(candidate.get("stage", stage)) not in allowed_stages
+                or not candidate.get("payload_or_logic")):
+            continue
+        payload = str(candidate.get("payload_or_logic", ""))
+        candidate_id = candidate.get("candidate_id")
+        selected.append(
+            CandidatePayload(payload, str(candidate_id))
+            if candidate_id is not None else payload
+        )
     if selected:
         return selected
 
@@ -334,17 +352,57 @@ def _materialize_request_evidence(
     response_evidence: list[dict] = []
     timing_evidence: list[dict] = []
     normalized_events: list[dict] = []
-    candidates = validated_payload_candidates(state, module_name)
+    validation_rows = state.get("payload_validation_results", {}).get(module_name, [])
+    validation_by_id = {
+        str(row.get("candidate_id")): (index, row)
+        for index, row in enumerate(validation_rows)
+        if isinstance(row, dict) and row.get("candidate_id") is not None
+    }
+    candidates = []
+    for candidate in validated_payload_candidates(state, module_name):
+        candidate_id = candidate.get("candidate_id")
+        indexed = validation_by_id.get(str(candidate_id)) if candidate_id is not None else None
+        if indexed is None or indexed[1].get("valid") is not True:
+            continue
+        index, result = indexed
+        candidates.append({
+            "candidate": candidate,
+            "candidate_id": str(candidate_id),
+            "identity_kind": "candidate",
+            "validation": result,
+            "validation_ref": f"#/final_state/payload_validation_results/{module_name}/{index}",
+        })
     controls = state.get("probe_controls", {}).get(module_name)
-    if isinstance(controls, dict) and controls.get("candidates"):
+    if (isinstance(controls, dict) and controls.get("candidates")
+            and controls.get("visit_id") == (state.get("selected_visit_id") or
+                                               f"{module_name}:legacy:{state.get('iteration_count', 0)}")):
         from foundation.payload_validator import validate_probe_controls
         results = validate_probe_controls(state, controls)
-        if results and all(r.get("valid") is True for r in results):
-            candidates = [*candidates, *controls["candidates"]]
+        stored_results = controls.get("validation_results", [])
+        if not isinstance(stored_results, list):
+            stored_results = []
+        if results and len(results) == len(controls["candidates"]):
+            for index, (candidate, result) in enumerate(zip(controls["candidates"], results)):
+                stored = stored_results[index] if index < len(stored_results) else None
+                if (not isinstance(candidate, dict) or result.get("valid") is not True
+                        or not isinstance(stored, dict) or stored.get("valid") is not True
+                        or stored.get("candidate_id") != candidate.get("candidate_id")
+                        or stored.get("reason") != result.get("reason")):
+                    continue
+                candidates.append({
+                    "candidate": candidate,
+                    "candidate_id": str(candidate.get("candidate_id")),
+                    "identity_kind": "independent_control",
+                    "validation": stored,
+                    "validation_ref": f"#/final_state/probe_controls/{module_name}/validation_results/{index}",
+                })
     attempted = set(tried_payloads)
-    assigned: set[tuple[str, str]] = set()
     visit_id = state.get("selected_visit_id") or f"{module_name}:legacy:{state.get('iteration_count', 0)}"
-    for event in telemetry_events:
+    complementary_controls: dict[str, dict[str, Any]] = {}
+    last_exploit_record: dict[str, Any] | None = None
+    last_exploit_event_index: int | None = None
+    evidence_offset = len(state.get("response_evidence", []))
+    for event_index, event in enumerate(telemetry_events):
         if not isinstance(event, dict):
             normalized_events.append(event)
             continue
@@ -363,20 +421,102 @@ def _materialize_request_evidence(
                 [c.get("password") for c in payload_copy["credentials"]])
         payload_copy["visit_id"] = visit_id
         stage = "probe" if event_copy["event"] == "agent.probe.sent" else "exploit"
+        payload_value = payload_copy.get("payload")
+        allowed_stages = {"exploit", "bypass"} if stage == "exploit" else {"probe"}
         matches = [
-            candidate for candidate in candidates
-            if (
-                candidate.get("candidate_id") and candidate.get("payload_or_logic") in attempted
-                and candidate.get("stage", stage) in ({"exploit", "bypass"} if stage == "exploit" else {stage})
-                and payload_copy.get("payload") in candidate_evidence_payloads(module_name, candidate.get("payload_or_logic"))
+            record for record in candidates
+            if record["candidate_id"]
+            and record["candidate"].get("stage", stage) in allowed_stages
+            and (record["candidate"].get("payload_or_logic") in attempted or
+                 record["identity_kind"] == "independent_control")
+            and payload_value in candidate_evidence_payloads(
+                module_name, record["candidate"].get("payload_or_logic"),
             )
         ]
-        available = [candidate for candidate in matches if (stage, candidate["candidate_id"]) not in assigned]
-        # Multiple events can describe a bounded token retry of one candidate.
-        selected = available[0] if available else (matches[0] if len(matches) == 1 else None)
-        if selected:
+        explicit_id = payload_copy.get("candidate_id")
+        if explicit_id is not None:
+            matches = [record for record in matches if record["candidate_id"] == str(explicit_id)]
+        selected = matches[0] if len(matches) == 1 else None
+        # Boolean-blind verification sends a derived complementary request. It
+        # is linked to its source candidate as a control, never as a candidate
+        # response or denominator entry.
+        derived_control = complementary_controls.get(str(payload_value)) if stage == "probe" and not selected else None
+        if (derived_control is None and stage == "probe" and module_name == "sqli_boolean_blind"
+                and last_exploit_record is not None and last_exploit_event_index == event_index - 1):
+            # The agent records a control response even when the complementary
+            # predicate is negative, before it annotates the source event.
+            derived_control = last_exploit_record
+        if derived_control is not None:
+            selected = derived_control
+            payload_copy.pop("candidate_id", None)
+            payload_copy["source_candidate_id"] = selected["candidate_id"]
+            payload_copy["control_id"] = f"control:{selected['candidate_id']}:complementary_boolean"
+            payload_copy["identity_kind"] = "derived_control"
+            payload_copy["validation_relation"] = "derived_from_candidate"
+        elif selected is not None:
             payload_copy["candidate_id"] = selected["candidate_id"]
-            assigned.add((stage, selected["candidate_id"]))
+            if selected["identity_kind"] == "independent_control":
+                payload_copy["control_id"] = selected["candidate_id"]
+                payload_copy["identity_kind"] = "independent_control"
+            else:
+                payload_copy["identity_kind"] = "probe_candidate" if stage == "probe" else "candidate"
+            if stage == "exploit" and payload_copy.get("control_payload") is not None:
+                complementary_controls[str(payload_copy["control_payload"])] = selected
+        else:
+            payload_copy["identity_kind"] = "unresolved"
+        payload_copy["candidate_link_status"] = (
+            "linked" if selected is not None else "ambiguous" if len(matches) > 1 else "unmatched"
+        )
+        if selected is not None:
+            payload_copy["validation_ref"] = selected["validation_ref"]
+            payload_copy["validation"] = {
+                "method": module_name,
+                "candidate_id": selected["candidate_id"],
+                "visit_id": visit_id,
+                "result": deepcopy(selected["validation"]),
+            }
+        else:
+            payload_copy["validation_ref"] = None
+            payload_copy["validation"] = None
+        if selected is not None:
+            provenance = deepcopy(state.get("payload_provenance", {}).get(selected["candidate_id"], {}))
+            for key in ("method", "source", "source_seed_id", "mutation_type", "target_param", "expected_signal", "stage"):
+                if key in selected["candidate"]:
+                    provenance.setdefault(key, selected["candidate"][key])
+            payload_copy["candidate_provenance"] = provenance
+        payload_copy["method"] = module_name
+        evidence_index = evidence_offset + len(response_evidence)
+        request_id = f"request:{state.get('execution_id') or state.get('run_id') or 'unknown'}:{visit_id}:{evidence_index}"
+        # The final JSON pointer is assigned by the artifact exporter after it
+        # knows the stable execution-log position for this request.
+        request_ref = None
+        payload_copy.setdefault("request_structure", {
+            "available": False,
+            "reason": "prepared_request_unavailable",
+            "redaction_applied": True,
+            "raw_values_included": False,
+        })
+        payload_copy["request_id"] = request_id
+        payload_copy["request_ref"] = request_ref
+        payload_copy["request_link_status"] = "pending_export"
+        session_fields = {
+            "principal_id": payload_copy.get("principal_id"),
+            "session_fingerprint": payload_copy.get("session_fingerprint"),
+            "initial_session_fingerprint": payload_copy.get("initial_session_fingerprint"),
+            "consumed_source_evidence_id": payload_copy.get("consumed_source_evidence_id"),
+        }
+        payload_copy["session_descriptor"] = {
+            "available": any(value not in (None, "") for value in session_fields.values()),
+            **{key: value for key, value in session_fields.items() if value not in (None, "")},
+            "redaction_applied": True,
+            "raw_values_included": False,
+        }
+        payload_copy["eligible_for_exploit_denominator"] = bool(
+            selected is not None
+            and selected["identity_kind"] == "candidate"
+            and stage == "exploit"
+            and selected["candidate"].get("stage", stage) in {"exploit", "bypass"}
+        )
         event_endpoint = str(payload_copy.get("endpoint") or endpoint or "")
         if event_endpoint and not urlparse(event_endpoint).scheme and target_url:
             event_endpoint = urljoin(f"{target_url}/", event_endpoint.lstrip("/"))
@@ -386,12 +526,23 @@ def _materialize_request_evidence(
 
         evidence = {
             "agent_id": str(payload_copy.get("agent_id") or module_name),
+            "method": module_name,
             "stage": stage,
             "endpoint": payload_copy["endpoint"],
             "payload": payload_copy.get("payload"),
             "status_code": payload_copy.get("status_code"),
             "visit_id": visit_id,
-            "evidence_id": f"response:{len(state.get('response_evidence', [])) + len(response_evidence)}",
+            "evidence_id": f"response:{evidence_index}",
+            "request_id": request_id,
+            "request_ref": request_ref,
+            "request_link_status": "pending_export",
+            "request_structure": deepcopy(payload_copy["request_structure"]),
+            "session_descriptor": deepcopy(payload_copy["session_descriptor"]),
+            "identity_kind": payload_copy["identity_kind"],
+            "candidate_link_status": payload_copy["candidate_link_status"],
+            "eligible_for_exploit_denominator": payload_copy["eligible_for_exploit_denominator"],
+            "validation_ref": payload_copy["validation_ref"],
+            "validation": deepcopy(payload_copy["validation"]),
             "run_id": state.get('run_id'), "execution_id": state.get('execution_id'),
             "fixture_id": state.get('fixture_id'), "protocol_version": state.get('protocol_version'),
             "timestamp": datetime.now(timezone.utc).isoformat(), "origin": "method_agent_evidence",
@@ -403,11 +554,25 @@ def _materialize_request_evidence(
                 evidence[key] = payload_copy[key]
         if payload_copy.get("candidate_id"):
             evidence["candidate_id"] = payload_copy["candidate_id"]
+        if payload_copy.get("control_id"):
+            evidence["control_id"] = payload_copy["control_id"]
+        if payload_copy.get("source_candidate_id"):
+            evidence["source_candidate_id"] = payload_copy["source_candidate_id"]
+        if payload_copy.get("candidate_provenance") is not None:
+            evidence["candidate_provenance"] = payload_copy["candidate_provenance"]
+        if payload_copy.get("validation_relation"):
+            evidence["validation_relation"] = payload_copy["validation_relation"]
         if "signal_detected" in payload_copy:
             evidence["signal_detected"] = payload_copy["signal_detected"]
         if "success" in payload_copy:
             evidence["success"] = payload_copy["success"]
         response_evidence.append(evidence)
+
+        if stage == "exploit" and selected is not None and payload_copy.get("control_payload") is not None:
+            complementary_controls[str(payload_copy["control_payload"])] = selected
+        if stage == "exploit":
+            last_exploit_record = selected
+            last_exploit_event_index = event_index
 
         if "elapsed_ms" in payload_copy:
             timing_evidence.append({
@@ -569,6 +734,9 @@ def make_update(
     update["verifier_history"] = [decision]
     payload_decisions = []
     evidence = update.get("response_evidence", [])
+    # Score validated queue candidates only. Independent controls are stored in
+    # probe_controls and deliberately never enter this candidate denominator;
+    # queue probe candidates may still retain their measured payload grade.
     for candidate in validated_payload_candidates(state, module_name):
         candidate_id = candidate.get("candidate_id")
         linked = [(i, row) for i, row in enumerate(evidence) if row.get("candidate_id") == candidate_id]

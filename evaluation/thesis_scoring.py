@@ -15,6 +15,7 @@ import re
 from statistics import mean, median
 from uuid import uuid4
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 import math
 
 from evaluation.manual_scoring_sheet import manual_scoring_rows
@@ -55,6 +56,185 @@ def validate_scoring_config(mode, evaluator):
             value = evaluator[key]
             if type(value) is not int or not 1 <= value <= ceiling:
                 raise ValueError(f'scoring_evaluator.{key} must be an integer in 1..{ceiling}')
+
+
+def _json_safe(value, *, depth=0):
+    """Convert provider metadata to bounded, JSON-compatible values."""
+    if depth > 12:
+        return '[DEPTH_LIMIT]'
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item, depth=depth + 1) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_json_safe(item, depth=depth + 1) for item in value]
+    return str(value)
+
+
+def _field(value, name):
+    if isinstance(value, Mapping):
+        return value.get(name)
+    try:
+        return getattr(value, name, None)
+    except Exception:
+        return None
+
+
+def _content_text(content):
+    """Adapt LangChain text blocks and native text fields without parsing JSON."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, bytes):
+        return content.decode('utf-8', errors='replace')
+    if isinstance(content, list):
+        blocks = []
+        for item in content:
+            if isinstance(item, str):
+                blocks.append(item)
+            elif isinstance(item, Mapping):
+                text = item.get('text')
+                if isinstance(text, str):
+                    blocks.append(text)
+                elif isinstance(text, Mapping) and isinstance(text.get('value'), str):
+                    blocks.append(text['value'])
+                elif isinstance(item.get('refusal'), str):
+                    blocks.append(item['refusal'])
+        return '\n'.join(blocks)
+    if isinstance(content, Mapping):
+        text = content.get('text')
+        if isinstance(text, str):
+            return text
+        if isinstance(text, Mapping) and isinstance(text.get('value'), str):
+            return text['value']
+        return json.dumps(_json_safe(content), ensure_ascii=False, sort_keys=True)
+    return '' if content is None else str(content)
+
+
+def _evaluator_response_text(response):
+    """Capture response text from strings, LangChain messages, or native envelopes."""
+    if isinstance(response, str):
+        return response
+    if isinstance(response, bytes):
+        return response.decode('utf-8', errors='replace')
+    if isinstance(response, Mapping):
+        raw = response.get('raw')
+        if raw is not None:
+            raw_text = _evaluator_response_text(raw)
+            if raw_text:
+                return raw_text
+        for key in ('content', 'output_text', 'text'):
+            if response.get(key) is not None:
+                return _content_text(response[key])
+        choices = response.get('choices')
+        if isinstance(choices, list) and choices:
+            choice = choices[0]
+            message = choice.get('message') if isinstance(choice, Mapping) else None
+            if isinstance(message, Mapping) and message.get('content') is not None:
+                text = _content_text(message['content'])
+                if text:
+                    return text
+            if isinstance(choice, Mapping) and choice.get('text') is not None:
+                return _content_text(choice['text'])
+            if isinstance(message, Mapping):
+                return json.dumps(_json_safe(message), ensure_ascii=False, sort_keys=True)
+        output = response.get('output')
+        if isinstance(output, list):
+            blocks = []
+            for item in output:
+                if isinstance(item, Mapping):
+                    blocks.extend(_content_text(item.get('content')).split('\n'))
+            return '\n'.join(blocks).strip('\n')
+        # A mapping returned directly by a test adapter or native SDK is itself
+        # the only available raw representation.
+        return json.dumps(_json_safe(response), ensure_ascii=False, sort_keys=True)
+    content = _field(response, 'content')
+    if content is not None:
+        text = _content_text(content)
+        if text:
+            return text
+    for key in ('output_text', 'text'):
+        text = _field(response, key)
+        if text is not None:
+            return _content_text(text)
+    additional = _field(response, 'additional_kwargs')
+    if isinstance(additional, Mapping) and additional.get('refusal') is not None:
+        return _content_text(additional['refusal'])
+    for key in ('tool_calls', 'invalid_tool_calls'):
+        calls = _field(response, key)
+        if calls:
+            return json.dumps({key: _json_safe(calls)}, ensure_ascii=False, sort_keys=True)
+    return ''
+
+
+def _evaluator_native_metadata(response):
+    """Keep provider-native completion, usage, and response identifiers."""
+    raw = response.get('raw') if isinstance(response, Mapping) else _field(response, 'raw')
+    sources = [source for source in (response, raw) if source is not None]
+    metadata = {}
+    fields = ('response_metadata', 'usage_metadata', 'additional_kwargs', 'id', 'name',
+        'response_id', 'status', 'incomplete_details', 'finish_reason', 'model',
+        'created', 'request_id')
+    for source in sources:
+        for key in fields:
+            value = _field(source, key)
+            if value is not None:
+                metadata[key] = _json_safe(value)
+        if isinstance(source, Mapping):
+            usage = source.get('usage')
+            if usage is not None and 'usage_metadata' not in metadata:
+                metadata['usage_metadata'] = _json_safe(usage)
+            choices = source.get('choices')
+            if isinstance(choices, list) and choices and isinstance(choices[0], Mapping):
+                finish = choices[0].get('finish_reason')
+                if finish is not None and 'finish_reason' not in metadata:
+                    metadata['finish_reason'] = _json_safe(finish)
+    return metadata
+
+
+def _incomplete_response_reason(metadata):
+    response_metadata = metadata.get('response_metadata', {})
+    details = metadata.get('incomplete_details')
+    if not isinstance(details, Mapping) and isinstance(response_metadata, Mapping):
+        details = response_metadata.get('incomplete_details')
+    finish = metadata.get('finish_reason')
+    if finish is None and isinstance(response_metadata, Mapping):
+        finish = response_metadata.get('finish_reason')
+    finish = str(finish or '').strip().lower()
+    if finish in {'length', 'max_tokens', 'max_output_tokens', 'content_filter'}:
+        return finish
+    status = metadata.get('status')
+    if status is None and isinstance(response_metadata, Mapping):
+        status = response_metadata.get('status')
+    if str(status or '').strip().lower() == 'incomplete':
+        reason = details.get('reason') if isinstance(details, Mapping) else None
+        return str(reason or 'provider_reported_incomplete').strip().lower()
+    return None
+
+
+_JSON_FENCE = re.compile(r'\A\s*```(?:json)?[ \t]*\r?\n(.*?)\r?\n```\s*\Z', re.IGNORECASE | re.DOTALL)
+
+
+def _parse_evaluator_json(raw_response):
+    """Normalize only lossless wrappers, then require a JSON object."""
+    content = raw_response
+    normalization = 'none'
+    if content.startswith('\ufeff'):
+        content = content[1:]
+        normalization = 'utf8_bom'
+    fenced = _JSON_FENCE.fullmatch(content)
+    if fenced:
+        content = fenced.group(1)
+        normalization = 'markdown_json_fence'
+    parsed = json.loads(content)
+    if not isinstance(parsed, dict):
+        raise ValueError('AI review response must be a JSON object')
+    return parsed, normalization
+
+
+class _IncompleteEvaluatorResponse(ValueError):
+    pass
 
 
 def _resolve(artifact, ref):
@@ -344,9 +524,12 @@ def _review_identity(queue):
     return re.sub(r'[^a-zA-Z0-9_.-]', '_', str(queue['execution_id'] or queue['run_id']))
 
 
-def review_ledger_path(source):
+def review_ledger_path(source, *, output_dir=None, queue=None):
     source = Path(source)
-    return source.parent / 'reviews' / f'{source.stem}.decisions.json'
+    if output_dir is None:
+        return source.parent / 'reviews' / f'{source.stem}.decisions.json'
+    queue = queue or review_queue(source)
+    return Path(output_dir) / f'{_review_identity(queue)}.decisions.json'
 
 
 def _protect_source(path, source):
@@ -389,7 +572,7 @@ def merge_review_decisions(history, additions):
     return merged
 
 
-def load_review_decisions(source, *, queue=None, receipt_path=None):
+def load_review_decisions(source, *, queue=None, receipt_path=None, output_dir=None):
     queue = queue or review_queue(source)
     ledger = review_ledger_path(source)
     receipts = []
@@ -402,6 +585,18 @@ def load_review_decisions(source, *, queue=None, receipt_path=None):
         decisions = []
         out = Path(source).parent / 'reviews'
         receipts = [out / f'{_review_identity(queue)}.{mode}-verified.json' for mode in ('human', 'ai')]
+    if output_dir is not None:
+        output_ledger = review_ledger_path(source, output_dir=output_dir, queue=queue)
+        if output_ledger.resolve() != ledger.resolve():
+            if output_ledger.exists():
+                output_decisions = json.loads(output_ledger.read_bytes())
+                if not isinstance(output_decisions, list):
+                    raise ValueError('Saved output review ledger must be a JSON list')
+                decisions = merge_review_decisions(decisions, output_decisions)
+            else:
+                out = Path(output_dir)
+                receipts.extend(out / f'{_review_identity(queue)}.{mode}-verified.json'
+                    for mode in ('human', 'ai'))
     if receipt_path is not None:
         receipt_path = Path(receipt_path)
         receipts.extend(receipt_path.parent / f'{_review_identity(queue)}.{mode}-verified.json'
@@ -438,18 +633,32 @@ def save_evaluator_telemetry(source, evaluated, *, output_dir=None):
     return path
 
 
-def finalize_reviews(source, decisions, *, output_dir=None):
+def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=False,
+                     review_runtime=None):
     queue = review_queue(source)
-    decisions = merge_review_decisions(load_review_decisions(source, queue=queue), decisions)
+    if isolated_output and output_dir is None:
+        raise ValueError('isolated review output requires a separate output_dir')
+    out = Path(output_dir) if output_dir else Path(source).parent / 'reviews'
+    if isolated_output:
+        source_reviews = (Path(source).parent / 'reviews').resolve()
+        resolved_out = out.resolve()
+        if (resolved_out == source_reviews or resolved_out in source_reviews.parents
+                or source_reviews in resolved_out.parents):
+            raise ValueError('isolated review output must be separate from the source-side reviews tree')
+    decisions = merge_review_decisions(load_review_decisions(source, queue=queue,
+        output_dir=out if isolated_output else None), decisions)
     latest = _validated_reviews(queue, decisions)
     modes = ('human', 'ai') if queue['selection'] == 'both' else (queue['selection'],)
     result = {'rubric_version': queue['rubric_version'], 'source_sha256': queue['source_sha256'],
         'artifact_type': 'thesis_review_status', 'config': queue['config'], 'method': queue['method'],
         'scoring_rule_sha256': queue['scoring_rule_sha256'],
+        'decision_ledger_path': str(review_ledger_path(source,
+            output_dir=out if isolated_output else None, queue=queue).resolve()),
         'receipts': {}, 'workflows': {}, 'fresh_http_calls': 0, 'fresh_provider_calls': 0}
-    out = Path(output_dir) if output_dir else Path(source).parent / 'reviews'
+    if review_runtime is not None:
+        result['review_runtime'] = review_runtime
     identity = _review_identity(queue)
-    ledger = review_ledger_path(source)
+    ledger = review_ledger_path(source, output_dir=out if isolated_output else None, queue=queue)
     for path in [ledger, out / f'{identity}.review-status.json',
                  *[out / f'{identity}.{mode}-verified.json' for mode in modes]]:
         _protect_source(path, source)
@@ -490,6 +699,8 @@ def finalize_reviews(source, decisions, *, output_dir=None):
             'rounding': 'full precision components; final scores rounded to 4 decimals',
             'invalid_candidates': sum(r['status'] == 'invalid' for r in queue['candidates']),
             'excluded_candidates': [r['candidate_id'] for r in queue['candidates'] if not r['eligible']]})
+        if review_runtime is not None:
+            receipt['review_runtime'] = review_runtime
         path = out / f'{identity}.{mode}-verified.json'
         _write_review_file(path, receipt, source)
         result['receipts'][mode] = str(path)
@@ -499,23 +710,70 @@ def finalize_reviews(source, decisions, *, output_dir=None):
     return result
 
 
-def evaluate_queue(queue, evaluator, *, invoke=None):
+def evaluate_queue(queue, evaluator, *, invoke=None, candidate_ids=None, expected_source_sha256=None,
+                   max_tokens_override=None):
     """Bounded independent evaluator; refusal/malformed/missing citations abstain."""
     validate_scoring_config(queue['selection'], evaluator)
-    result = {'decisions': [], 'telemetry': [], 'status': 'pending', 'judge_version': JUDGE_VERSION}
+    source_sha256 = queue.get('source_sha256')
+    if expected_source_sha256 is not None and expected_source_sha256 != source_sha256:
+        raise ValueError('Expected source SHA256 does not match the frozen review queue')
+    if candidate_ids is not None:
+        if expected_source_sha256 is None:
+            raise ValueError('Candidate-scoped evaluator retries require expected_source_sha256')
+        source_path = queue.get('source_path')
+        if not isinstance(source_path, str) or not source_path:
+            raise ValueError('Candidate-scoped evaluator retries require a source artifact path')
+        try:
+            current_source_sha256 = sha256(Path(source_path).read_bytes()).hexdigest()
+        except OSError as exc:
+            raise ValueError('Cannot verify the candidate retry source artifact') from exc
+        if current_source_sha256 != source_sha256:
+            raise ValueError('Source artifact changed since the frozen review queue was created')
+        if isinstance(candidate_ids, (str, bytes)) or not isinstance(candidate_ids, (list, tuple, set, frozenset)):
+            raise ValueError('candidate_ids must be a collection of candidate IDs')
+        requested_ids = list(candidate_ids)
+        if not requested_ids or any(not isinstance(cid, str) or not cid for cid in requested_ids):
+            raise ValueError('candidate_ids must contain nonempty candidate IDs')
+        if len(set(requested_ids)) != len(requested_ids):
+            raise ValueError('candidate_ids must not contain duplicates')
+        available_ids = {row['candidate_id'] for row in queue['candidates']
+            if row['status'] == 'pending_review'}
+        if not set(requested_ids) <= available_ids:
+            raise ValueError('Candidate retry is not pending in the frozen source')
+        selected_ids = set(requested_ids)
+    else:
+        selected_ids = None
+    result = {'decisions': [], 'telemetry': [], 'status': 'pending', 'judge_version': JUDGE_VERSION,
+        'source_sha256': source_sha256, 'run_id': queue.get('run_id'),
+        'execution_id': queue.get('execution_id')}
     if queue['selection'] == 'human' or not evaluator:
         result['reason'] = 'evaluator_not_selected_or_configured'
         return result
     if redact_secrets(evaluator) != queue['evaluator']:
         raise ValueError('Evaluator differs from frozen experiment configuration')
+    runtime_evaluator = dict(evaluator)
+    if max_tokens_override is not None:
+        if selected_ids is None:
+            raise ValueError('Token budget override requires a source-bound candidate retry')
+        if (type(max_tokens_override) is not int or
+                not evaluator['max_tokens'] < max_tokens_override <= 8192):
+            raise ValueError('Token budget override must exceed the frozen budget and be at most 8192')
+        runtime_evaluator['max_tokens'] = max_tokens_override
+    result['evaluator_runtime'] = {
+        'source_max_tokens': evaluator['max_tokens'],
+        'requested_max_tokens': runtime_evaluator['max_tokens'],
+        'max_attempts': runtime_evaluator['max_attempts'],
+        'override_reason': 'prior_length_truncation' if max_tokens_override is not None else None,
+    }
     if invoke is None:
         from llm.provider import get_llm
-        options = {k: v for k, v in evaluator.items() if k in {'api_key', 'base_url', 'timeout', 'max_tokens'}}
+        options = {k: v for k, v in runtime_evaluator.items()
+            if k in {'api_key', 'base_url', 'timeout', 'max_tokens'}}
         model = get_llm(evaluator['provider'], model_name=evaluator['model'], temperature=0, max_retries=0, **options)
         invoke = model.invoke
     from langchain_core.messages import SystemMessage, HumanMessage
     for row in queue['candidates']:
-        if row['status'] != 'pending_review':
+        if row['status'] != 'pending_review' or (selected_ids is not None and row['candidate_id'] not in selected_ids):
             continue
         evidence = {k: row[k] for k in ('candidate_id', 'method', 'stage', 'proof_ceiling', 'evidence_refs', 'candidate', 'evidence')}
         messages = [SystemMessage(content=(
@@ -525,14 +783,30 @@ def evaluate_queue(queue, evaluator, *, invoke=None):
             'The supplied proof ceiling is binding. Return only JSON with integer score, nonempty reason, '
             'and evidence_refs citing supplied candidate references; or {"abstain":true}.')),
             HumanMessage(content=json.dumps(redact_secrets(evidence), sort_keys=True))]
-        for attempt in range(evaluator['max_attempts']):
+        for attempt in range(runtime_evaluator['max_attempts']):
             entry = {'candidate_id': row['candidate_id'], 'attempt': attempt + 1,
-                'prompt_sha256': sha256(messages[-1].content.encode()).hexdigest()}
+                'source_sha256': source_sha256, 'run_id': queue.get('run_id'),
+                'execution_id': queue.get('execution_id'),
+                'prompt_sha256': sha256(messages[-1].content.encode()).hexdigest(),
+                'requested_max_tokens': runtime_evaluator['max_tokens']}
             try:
                 response = invoke(messages)
-                content = response if isinstance(response, str) else response.content
-                parsed = json.loads(content)
-                entry.update(response_sha256=sha256(content.encode()).hexdigest(), response=redact_secrets(parsed))
+                raw_content = _evaluator_response_text(response)
+                native_metadata = _evaluator_native_metadata(response)
+                sanitized_content = redact_secrets(raw_content, known_secrets=evaluator.get('api_key'))
+                native_metadata = redact_secrets(native_metadata, known_secrets=evaluator.get('api_key'))
+                entry.update(raw_response=sanitized_content,
+                    response_sha256=sha256(raw_content.encode('utf-8')).hexdigest(),
+                    sanitized_response_sha256=sha256(sanitized_content.encode('utf-8')).hexdigest(),
+                    native_metadata=native_metadata, usage=native_metadata.get('usage_metadata', {}),
+                    response_capture_status='captured' if raw_content else 'empty')
+                incomplete_reason = _incomplete_response_reason(native_metadata)
+                if incomplete_reason:
+                    entry['incomplete_reason'] = incomplete_reason
+                    raise _IncompleteEvaluatorResponse(incomplete_reason)
+                parsed, normalization = _parse_evaluator_json(sanitized_content)
+                entry['normalization'] = normalization
+                entry['response'] = redact_secrets(parsed, known_secrets=evaluator.get('api_key'))
                 decision = {'decision_id': str(uuid4()), 'run_id': queue['run_id'],
                     'source_sha256': queue['source_sha256'], 'rubric_version': queue['rubric_version'],
                     'scoring_mode': 'ai', 'candidate_id': row['candidate_id'],
@@ -541,13 +815,15 @@ def evaluate_queue(queue, evaluator, *, invoke=None):
                     'score': parsed.get('score'), 'reason': parsed.get('reason'), 'evidence_refs': parsed.get('evidence_refs')}
                 _validated_reviews(queue, [decision])
                 result['decisions'].append(decision)
-                entry.update(status='accepted', usage=redact_secrets(getattr(response, 'usage_metadata', {})))
+                entry['status'] = 'accepted'
             except Exception as exc:
                 entry.update(status='abstained', error_type=type(exc).__name__)
             result['telemetry'].append(entry)
             if entry['status'] == 'accepted':
                 break
-    required = sum(r['status'] == 'pending_review' for r in queue['candidates'])
+    required = sum(r['status'] == 'pending_review' and
+        (selected_ids is None or r['candidate_id'] in selected_ids)
+        for r in queue['candidates'])
     result['status'] = 'complete' if len(result['decisions']) == required else 'pending'
     return result
 
@@ -660,16 +936,40 @@ def main(argv=None):
     parser.add_argument('--output-dir', type=Path)
     parser.add_argument('--template', type=Path, help='Export evidence and pending review template')
     parser.add_argument('--evaluate', action='store_true', help='Call only the frozen independent evaluator')
+    parser.add_argument('--candidate-id', action='append', dest='candidate_ids',
+        help='Evaluate only this pending candidate; repeat only within one source artifact')
+    parser.add_argument('--expected-source-sha256', help='Require the frozen source hash before evaluator calls')
+    parser.add_argument('--max-tokens-override', type=int,
+        help='Bounded larger evaluator budget for a source-bound candidate retry')
     parser.add_argument('--config', default='config.yaml', help='Resolve evaluator credentials; must match frozen profile')
     args = parser.parse_args(arguments)
     try:
         queue = review_queue(args.source)
+        if args.candidate_ids and not args.evaluate:
+            parser.error('--candidate-id requires --evaluate')
+        if args.candidate_ids and not args.expected_source_sha256:
+            parser.error('--candidate-id requires --expected-source-sha256')
+        if args.candidate_ids and not args.output_dir:
+            parser.error('--candidate-id requires a separate --output-dir')
+        if args.max_tokens_override is not None and not args.candidate_ids:
+            parser.error('--max-tokens-override requires --candidate-id')
+        if args.candidate_ids and args.template:
+            parser.error('--template cannot be combined with candidate-scoped retries')
+        if args.candidate_ids:
+            source_reviews = (args.source.parent / 'reviews').resolve()
+            output_dir = args.output_dir.resolve()
+            if (output_dir == source_reviews or output_dir in source_reviews.parents
+                    or source_reviews in output_dir.parents):
+                raise ValueError('Candidate retries must write outside the source-side reviews tree')
+        if args.expected_source_sha256 and args.expected_source_sha256 != queue['source_sha256']:
+            raise ValueError('Expected source SHA256 does not match the frozen review queue')
         if args.template:
             for protected in (args.source, args.decisions, review_ledger_path(args.source)):
                 if protected is not None:
                     _protect_source(args.template, protected)
             write_json_report(args.template, queue)
-        decisions = load_review_decisions(args.source, queue=queue)
+        decisions = load_review_decisions(args.source, queue=queue,
+            output_dir=args.output_dir if args.candidate_ids else None)
         if args.decisions:
             decisions = merge_review_decisions(decisions, json.loads(args.decisions.read_bytes()))
         _validated_reviews(queue, decisions)
@@ -677,10 +977,15 @@ def main(argv=None):
         if args.evaluate:
             from tesis.config_loader import load_and_resolve_config
             config = load_and_resolve_config(config_path=args.config, cli_args={})
-            evaluated = evaluate_queue(queue, config.scoring_evaluator)
+            evaluated = evaluate_queue(queue, config.scoring_evaluator,
+                candidate_ids=args.candidate_ids,
+                expected_source_sha256=args.expected_source_sha256,
+                max_tokens_override=args.max_tokens_override)
             decisions = append_evaluator_decisions(decisions, evaluated['decisions'])
             save_evaluator_telemetry(args.source, evaluated, output_dir=args.output_dir)
-        result = finalize_reviews(args.source, decisions, output_dir=args.output_dir)
+        result = finalize_reviews(args.source, decisions, output_dir=args.output_dir,
+            isolated_output=bool(args.candidate_ids),
+            review_runtime=evaluated.get('evaluator_runtime') if evaluated else None)
         result['evaluator_provider_calls'] = len(evaluated['telemetry']) if evaluated else 0
         result['evaluator_status'] = evaluated['status'] if evaluated else 'not_invoked'
         print(json.dumps(result, sort_keys=True))

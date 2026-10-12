@@ -16,14 +16,25 @@ def manual_scoring_rows(artifact: dict[str, Any]) -> list[dict[str, Any]]:
         return []
 
     verifiers: dict[str, dict[str, Any]] = {}
+    verifiers_by_visit: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def remember_verifier(decision: Any) -> None:
+        if not isinstance(decision, dict) or not decision.get("agent_id"):
+            return
+        method = str(decision["agent_id"])
+        verifiers[method] = decision
+        visit_id = decision.get("visit_id")
+        if visit_id:
+            verifiers_by_visit[(method, str(visit_id))] = decision
+
     for event in artifact.get("execution_log", []):
         if event.get("event_type") == "graph.state":
             decision = event.get("data", {}).get("latest_verifier")
-            if isinstance(decision, dict) and decision.get("agent_id"):
-                verifiers[decision["agent_id"]] = decision
+            remember_verifier(decision)
+    for decision in final_state.get("verifier_history", []):
+        remember_verifier(decision)
     latest = artifact.get("verifier_decision")
-    if isinstance(latest, dict) and latest.get("agent_id"):
-        verifiers[latest["agent_id"]] = latest
+    remember_verifier(latest)
 
     validated: dict[str, list[dict]] = {}
     for method, candidates in final_state.get("payload_candidates", {}).items():
@@ -87,8 +98,25 @@ def manual_scoring_rows(artifact: dict[str, Any]) -> list[dict[str, Any]]:
                 if ref.startswith("source:#/execution_log/") and ref.endswith("/data/latest_verifier")), None)
             if legacy_ref:
                 verifier = artifact.get("execution_log", [])[int(legacy_ref.split('/')[2])].get("data", {}).get("latest_verifier")
-        if not decisions and links["response_evidence_ref"]:
-            verifier = verifiers.get(method)
+        if not verifier and links["response_evidence_ref"]:
+            linked_verifiers = []
+            for ref in links["response_evidence_ref"]:
+                try:
+                    evidence_index = int(ref.rsplit("/", 1)[1])
+                    evidence = artifact.get("response_evidence", [])[evidence_index]
+                except (IndexError, TypeError, ValueError):
+                    continue
+                evidence_method = evidence.get("method") or evidence.get("agent_id") or method
+                visit_id = evidence.get("visit_id")
+                if visit_id:
+                    decision = verifiers_by_visit.get((str(evidence_method), str(visit_id)))
+                    if decision and all(item.get("verifier_id") != decision.get("verifier_id")
+                                        for item in linked_verifiers):
+                        linked_verifiers.append(decision)
+            if linked_verifiers:
+                verifier = linked_verifiers[-1]
+            elif not decisions:
+                verifier = verifiers.get(method)
         later = [d for d in history if earning and d.get("agent_id") == method
                  and d.get("visit_id") != earning.get("visit_id")
                  and history.index(d) > next((i for i, v in enumerate(history) if v is verifier), len(history))]

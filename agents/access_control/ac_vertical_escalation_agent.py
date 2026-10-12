@@ -56,13 +56,14 @@ def _probe_preconditions(
     for payload in payloads:
         if payload in already_tried:
             continue
+        candidate_id = getattr(payload, "candidate_id", None)
         sent_any = True
         tried.append(payload)
         try:
             test_id = payload.strip()
             resp = session.get(MODULE_PATH, params={"userId": test_id})
             events.append(probe_event(AGENT_ID, f"userId={test_id}", resp.status_code, False,
-                endpoint=MODULE_PATH, response=resp))
+                endpoint=MODULE_PATH, response=resp, candidate_id=candidate_id))
             events[-1]["payload"].update(permission_evidence_fields(session, session._principal_id,
                 session._initial_session_fingerprint, object_id=user_object_id(test_id)))
             if resp.status_code == 200:
@@ -77,7 +78,8 @@ def _probe_preconditions(
                     return True, tried, observations, events
         except Exception as exc:
             logger.warning("[%s] PROBE request failed: %s", AGENT_ID, exc)
-            events.append(probe_event(AGENT_ID, f"userId={test_id}", None, False))
+            events.append(probe_event(AGENT_ID, f"userId={test_id}", None, False,
+                candidate_id=candidate_id))
 
     if not sent_any:
         return False, tried, {}, events
@@ -98,6 +100,7 @@ def _attempt_exploit(
     for payload in payloads:
         if payload in already_tried:
             continue
+        candidate_id = getattr(payload, "candidate_id", None)
         tried.append(payload)
         try:
             # Attempt to access admin user data
@@ -113,7 +116,7 @@ def _attempt_exploit(
                 and (test_id != "1" or "admin" in " ".join(str(v) for v in record.values()).lower())
                 for record in records)
             events.append(exploit_event(AGENT_ID, f"userId={test_id}", resp.status_code, visible,
-                endpoint=MODULE_PATH, response=resp))
+                endpoint=MODULE_PATH, response=resp, candidate_id=candidate_id))
             events[-1]["payload"].update(permission_evidence_fields(session, session._principal_id,
                 session._initial_session_fingerprint, object_id=user_object_id(test_id),
                 consumed_source_evidence_id=getattr(session, "_consumed_source_evidence_id", None)))
@@ -125,7 +128,8 @@ def _attempt_exploit(
                 break
         except Exception as exc:
             logger.warning("[%s] EXPLOIT request failed: %s", AGENT_ID, exc)
-            events.append(exploit_event(AGENT_ID, f"userId={payload}", None, False))
+            events.append(exploit_event(AGENT_ID, f"userId={payload}", None, False,
+                candidate_id=candidate_id))
 
     return score, tried, confirmed, events
 

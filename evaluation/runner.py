@@ -38,7 +38,12 @@ from core.state import (
 from evaluation.diagnostics import diagnose_quality
 from evaluation.failure_logger import write_failure_artifact
 from evaluation.manual_scoring_sheet import manual_scoring_rows
-from evaluation.reporter import write_events_jsonl, write_json_report
+from evaluation.reporter import (
+    build_candidate_dispositions,
+    link_exported_request_evidence,
+    write_events_jsonl,
+    write_json_report,
+)
 from evaluation.telemetry import RunTelemetry, stable_sha256
 from llm.diagnostics import format_failure_line
 from llm.runtime import (
@@ -473,7 +478,9 @@ def run_single_engagement(
     cancellation_token = cancellation_token or CancellationToken()
     runtime_events: list[dict[str, Any]] = []
     method_execution_inputs: list[dict[str, Any]] = []
-    captured_inputs: set[tuple[str, int]] = set()
+    candidate_disposition_inputs: list[dict[str, Any]] = []
+    captured_inputs: set[tuple[str, str]] = set()
+    captured_disposition_inputs: set[tuple[str, str]] = set()
     # Opt-in durable resume (handoff slice 2). Defaults are unchanged: without
     # resume/checkpoint flags the run uses a random execution_id thread on the
     # process-local MemorySaver and never touches SQLite.
@@ -847,7 +854,60 @@ def run_single_engagement(
                 seen_events = len(events)
                 method = final_state.get("selected_method")
                 queue = validated_payload_candidates(final_state, str(method))
-                identity = (str(method), int(final_state.get("iteration_count", 0)))
+                visit_id = str(final_state.get("selected_visit_id") or "")
+                identity = (str(method), visit_id or str(final_state.get("iteration_count", 0)))
+                for event in new_events:
+                    event_name = str(event.get("event") or event.get("event_type") or "")
+                    if event_name != "payload.validation.completed":
+                        continue
+                    event_payload = event.get("payload")
+                    if not isinstance(event_payload, dict):
+                        event_payload = {}
+                    event_method = str(event_payload.get("method") or method or "")
+                    if not event_method:
+                        continue
+                    event_visit = str(
+                        final_state.get("selected_visit_id")
+                        or event_payload.get("visit_id")
+                        or f"{event_method}:legacy:{final_state.get('iteration_count', 0)}"
+                    )
+                    disposition_identity = (event_method, event_visit)
+                    if disposition_identity in captured_disposition_inputs:
+                        continue
+                    catalog = final_state.get("payload_candidates", {}).get(event_method, [])
+                    validations = final_state.get("payload_validation_results", {}).get(event_method, [])
+                    candidate_ids = {
+                        str(candidate.get("candidate_id"))
+                        for candidate in catalog
+                        if isinstance(candidate, dict) and candidate.get("candidate_id") is not None
+                    } if isinstance(catalog, list) else set()
+                    previously_tried = {
+                        str(value)
+                        for value in final_state.get("tried_payloads", {}).get(event_method, [])
+                    }
+                    provenance = final_state.get("payload_provenance", {})
+                    frozen_disposition = {
+                        "method": event_method,
+                        "visit_id": event_visit,
+                        "iteration_count": final_state.get("iteration_count", 0),
+                        "candidate_catalog": deepcopy(catalog) if isinstance(catalog, list) else [],
+                        "validated_queue": deepcopy(validated_payload_candidates(final_state, event_method)),
+                        "validation_results": deepcopy(validations) if isinstance(validations, list) else [],
+                        "previously_tried_candidate_ids": [
+                            str(candidate.get("candidate_id"))
+                            for candidate in catalog
+                            if isinstance(candidate, dict)
+                            and candidate.get("candidate_id") is not None
+                            and str(candidate.get("payload_or_logic")) in previously_tried
+                        ] if isinstance(catalog, list) else [],
+                        "payload_provenance": {
+                            candidate_id: deepcopy(provenance[candidate_id])
+                            for candidate_id in candidate_ids
+                            if isinstance(provenance, dict) and candidate_id in provenance
+                        },
+                    }
+                    candidate_disposition_inputs.append(redact_secrets(frozen_disposition, known_secrets))
+                    captured_disposition_inputs.add(disposition_identity)
                 if (queue and identity not in captured_inputs
                         and any(event.get("event") == "payload.validation.completed"
                                 and event.get("payload", {}).get("method") == method
@@ -1453,6 +1513,7 @@ def run_single_engagement(
         "verifier_decision": final_state.get("verifier_decision"),
         "scoring_decisions": list(final_state.get("scoring_decisions", [])),
         "method_execution_inputs": method_execution_inputs,
+        "candidate_disposition_inputs": candidate_disposition_inputs,
         "output_score": dict(final_state.get("output_scores", {})).get(selected_method, 0),
         "composite_score": dict(final_state.get("composite_scores", {})).get(selected_method, 0),
         "error": error,
@@ -1471,6 +1532,8 @@ def run_single_engagement(
         artifact = collect_dependency_oracles(artifact, final_state)
         attach_oracle_evidence(artifact)
         artifact['response_evidence'] = artifact['final_state']['response_evidence']
+    link_exported_request_evidence(artifact)
+    build_candidate_dispositions(artifact)
     artifact["config"]["scoring_mode"] = scoring_mode
     artifact["config"]["scoring_evaluator"] = redact_secrets(scoring_evaluator or {})
     artifact["scoring_mode"] = scoring_mode

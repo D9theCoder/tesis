@@ -65,6 +65,7 @@ def _probe_preconditions(
 
     already_tried = {_normalize_probe_path(value) for value in already_tried}
     for payload in payloads:
+        candidate_id = getattr(payload, "candidate_id", None)
         path = _normalize_probe_path(payload)
         if path in already_tried:
             continue
@@ -72,7 +73,8 @@ def _probe_preconditions(
         tried.append(payload)
         try:
             resp = session.get(path)
-            events.append(probe_event(AGENT_ID, path, resp.status_code, False, endpoint=path, response=resp))
+            events.append(probe_event(AGENT_ID, path, resp.status_code, False,
+                endpoint=path, response=resp, candidate_id=candidate_id))
             events[-1]["payload"].update(permission_evidence_fields(session, session._principal_id,
                 session._initial_session_fingerprint, object_id=f"dvwa-path:/{path.lstrip('/')}"))
             if resp.status_code == 200:
@@ -83,7 +85,8 @@ def _probe_preconditions(
                     return True, tried, observations, events
         except Exception as exc:
             logger.warning("[%s] PROBE request failed for %s: %s", AGENT_ID, path, exc)
-            events.append(probe_event(AGENT_ID, path, None, False, endpoint=path))
+            events.append(probe_event(AGENT_ID, path, None, False,
+                endpoint=path, candidate_id=candidate_id))
 
     if not sent_any:
         return False, tried, {}, events
@@ -109,6 +112,7 @@ def _attempt_exploit(
 
     already_tried = {_normalize_probe_path(value) for value in already_tried}
     for payload in payloads:
+        candidate_id = getattr(payload, "candidate_id", None)
         path = _normalize_probe_path(payload)
         if path in already_tried:
             continue
@@ -117,7 +121,8 @@ def _attempt_exploit(
             resp = session.get(path)
             result = verifier.contains_any(resp.text, _signals_for_path(path)) if resp.status_code == 200 else None
             visible = bool(result and result.ok)
-            events.append(exploit_event(AGENT_ID, path, resp.status_code, visible, endpoint=path, response=resp))
+            events.append(exploit_event(AGENT_ID, path, resp.status_code, visible,
+                endpoint=path, response=resp, candidate_id=candidate_id))
             events[-1]["payload"].update(permission_evidence_fields(session, session._principal_id,
                 session._initial_session_fingerprint, object_id=f"dvwa-path:/{path.lstrip('/')}",
                 consumed_source_evidence_id=getattr(session, "_consumed_source_evidence_id", None)))
@@ -133,7 +138,8 @@ def _attempt_exploit(
                     break
         except Exception as exc:
             logger.warning("[%s] EXPLOIT request failed for %s: %s", AGENT_ID, path, exc)
-            events.append(exploit_event(AGENT_ID, path, None, False, endpoint=path))
+            events.append(exploit_event(AGENT_ID, path, None, False,
+                endpoint=path, candidate_id=candidate_id))
 
     return score, tried, confirmed, events
 

@@ -9,6 +9,7 @@ External HTTP and model responses are offline fixtures, never live acceptance.
 from copy import deepcopy
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -21,14 +22,44 @@ from evaluation.thesis_scoring import review_queue
 from tests.test_method_agents_e2e import run_control
 
 
-ROOT = Path('results/validation/scoring-v4-probe-replay-2026-10-11/offline')
+ROOT = Path(os.environ.get(
+    'TESIS_SCORING_V4_PROBE_REPLAY_EVIDENCE',
+    'results/validation/scoring-v4-probe-replay-2026-10-11/offline',
+))
 METHODS = [m for methods in METHODS_BY_SURFACE.values() for m in methods]
+
+
+def resolve_pointer(document, pointer):
+    value = document
+    for part in pointer.removeprefix('#/').split('/'):
+        part = part.replace('~1', '/').replace('~0', '~')
+        value = value[int(part)] if isinstance(value, list) else value[part]
+    return value
 
 
 def save(artifact, label):
     path = ROOT / f'{label}-{uuid4().hex}' / 'execution.json'
     write_json_report(path, artifact)
     return path
+
+
+def test_replay_execution_log_redacts_confirmed_credentials(monkeypatch, tmp_path):
+    artifact, _ = run_control(monkeypatch, 'bf_dictionary', 'low', 'positive')
+    source = tmp_path / 'execution.json'
+    write_json_report(source, artifact)
+    before = source.read_bytes()
+    output = tmp_path / 'replay.json'
+
+    replay = replay_method_inputs(source, output_path=output)
+
+    assert replay['validation_rejections'] == []
+    credentials = [event['data']['credentials'] for event in replay['execution_log']
+        if 'credentials' in event['data']]
+    assert credentials
+    assert all(credential == '[REDACTED]' for credential in credentials)
+    assert json.loads(output.read_text())['execution_log'] == replay['execution_log']
+    assert source.read_bytes() == before
+    assert replay['fresh_provider_calls'] == 0
 
 
 @pytest.mark.parametrize('condition', ['linear_hybrid', 'akg_guided_hybrid'])
@@ -50,6 +81,28 @@ def test_mutation_only_graph_export_saved_probe_replay(monkeypatch, condition, l
     assert not probe_ids & exploit_ids
     probes = [r for r in artifact['response_evidence'] if r['stage'] == 'probe']
     assert probes and all(r.get('candidate_id') in probe_ids for r in probes)
+    assert all(r.get('method') == method and r.get('visit_id') == frozen['selected_visit_id']
+        and r.get('validation_ref') and r.get('request_id') and r.get('request_ref')
+        and r.get('request_structure', {}).get('available') is True
+        and r.get('request_structure', {}).get('redaction_applied') is True
+        and r.get('request_structure', {}).get('raw_values_included') is False
+        for r in artifact['response_evidence'])
+    for row in artifact['response_evidence']:
+        assert resolve_pointer(artifact, row['request_ref']) == row['request_structure']
+        validation = resolve_pointer(artifact, row['validation_ref'])
+        assert validation.get('candidate_id') == row.get('candidate_id', row.get('source_candidate_id'))
+        assert validation.get('valid') is True
+    if method.startswith('ac_'):
+        assert all(r.get('session_descriptor', {}).get('available') is True
+            and r.get('session_descriptor', {}).get('redaction_applied') is True
+            for r in artifact['response_evidence'])
+    if method in {'ac_idor', 'ac_vertical_escalation'}:
+        assert any(any(field.get('name') == 'userId'
+            for field in r['request_structure'].get('query_fields', []))
+            for r in artifact['response_evidence'])
+    assert all(r.get('eligible_for_exploit_denominator') is False for r in probes)
+    assert not any(d.get('dimension') == 'Spayload' and d.get('candidate_id') in probe_ids
+        for d in artifact['final_state']['scoring_decisions'])
     artifact['config']['scoring_rubric_version'] = 'scoring.v4'
     artifact['validation_scope'] = 'offline_synthetic_fixture'
     source = save(artifact, f'{condition}-{method}-{level}')
@@ -62,6 +115,16 @@ def test_mutation_only_graph_export_saved_probe_replay(monkeypatch, condition, l
     assert replay['fresh_provider_calls'] == 0 and fixture.provider_calls == providers
     assert source.read_bytes() == before
     assert all(r.get('candidate_id') in probe_ids | exploit_ids for r in replay['response_evidence'])
+    assert all(r.get('method') == method and r.get('validation_ref') and r.get('request_id')
+        and r.get('request_ref') and r.get('request_structure', {}).get('available') is True
+        and r.get('request_structure', {}).get('redaction_applied') is True
+        and r.get('request_structure', {}).get('raw_values_included') is False
+        for r in replay['response_evidence'])
+    for row in replay['response_evidence']:
+        assert resolve_pointer(replay, row['request_ref']) == row['request_structure']
+        validation = resolve_pointer(replay, row['validation_ref'])
+        assert validation.get('candidate_id') == row.get('candidate_id', row.get('source_candidate_id'))
+        assert validation.get('valid') is True
     assert [r['payload'] for r in replay['response_evidence']] == [r['payload'] for r in artifact['response_evidence']]
     queue_review = review_queue(source)
     assert queue_review['rubric_version'] == 'scoring.v4'
@@ -72,6 +135,201 @@ def test_mutation_only_graph_export_saved_probe_replay(monkeypatch, condition, l
         'probe_ids': sorted(probe_ids), 'exploit_ids': sorted(exploit_ids),
         'fresh_provider_calls': 0, 'mock_http_transactions': len(fixture.requests) - requests,
         'replay_path': str(replay_path), 'queue_review': queue_review,
+    })
+
+
+def test_revisited_visits_keep_distinct_queues_probe_and_request_links(monkeypatch):
+    """Exercise per-visit capture/export twice with no provider or HTTP client."""
+    import httpx
+
+    from agents.agent_telemetry import exploit_event, probe_event
+    from agents.state_utils import make_update
+    from core.state import new_default_state
+    from evaluation.runner import run_single_engagement
+    from evaluation.scoring_evidence import evidence_hash
+    from foundation.payload_library import PayloadLibrary
+    from foundation.payload_validator import validate_payload_candidates, validate_probe_controls
+
+    method = 'sqli_union'
+    level = 'medium'
+    seeds = PayloadLibrary().load_seed_candidates(method, level)
+    probes = [candidate for candidate in seeds if candidate.get('stage') == 'probe']
+    visit_candidates = [
+        next(candidate for candidate in seeds if candidate.get('stage') == 'exploit'),
+        next(candidate for candidate in seeds if candidate.get('stage') == 'bypass'),
+    ]
+    execution_id = f'capture-revisit-{uuid4().hex}'
+    evidence_dir = ROOT / 'revisit-control'
+
+    class RevisitGraph:
+        def stream(self, initial_state, stream_mode=None, config=None):
+            del stream_mode, config
+            previous = None
+            for visit_number, candidate in enumerate(visit_candidates, start=1):
+                state = deepcopy(previous if previous is not None else initial_state)
+                visit_id = f'{method}:fixture-visit:{visit_number}'
+                state.update({
+                    'selected_method': method,
+                    'selected_visit_id': visit_id,
+                    'current_surface': 'sqli',
+                    'target_method': method,
+                    'security_level': level,
+                    'payload_mode': 'static_only',
+                })
+                historical = list(state.get('payload_candidates', {}).get(method, []))
+                if candidate['candidate_id'] not in {row.get('candidate_id') for row in historical}:
+                    historical.append(deepcopy(candidate))
+                state['payload_candidates'] = {method: historical}
+
+                validation = validate_payload_candidates(state)
+                state['payload_candidates'] = validation['payload_candidates']
+                validation_by_id = {
+                    str(row.get('candidate_id')): row
+                    for row in [*state.get('payload_validation_results', {}).get(method, []),
+                                *validation['payload_validation_results'][method]]
+                    if isinstance(row, dict) and row.get('candidate_id') is not None
+                }
+                state['payload_validation_results'] = {method: [
+                    validation_by_id[str(row['candidate_id'])]
+                    for row in state['payload_candidates'][method]
+                ]}
+                state['payload_provenance'] = {
+                    **state.get('payload_provenance', {}), **validation['payload_provenance'],
+                }
+                controls = {
+                    'visit_id': visit_id,
+                    'candidates': deepcopy(probes),
+                    'sha256': evidence_hash(probes),
+                }
+                controls['validation_results'] = validate_probe_controls(state, controls)
+                assert controls['validation_results'] and all(
+                    row.get('valid') is True for row in controls['validation_results'])
+                state['probe_controls'] = {method: controls}
+
+                probe = probes[visit_number - 1]
+                probe_payload = probe['payload_or_logic']
+                exploit_payload = candidate['payload_or_logic']
+                endpoint = 'http://localhost/dvwa/vulnerabilities/sqli/'
+                probe_response = httpx.Response(200, text='offline probe response', request=
+                    httpx.Request('GET', endpoint, params={'id': probe_payload}))
+                exploit_response = httpx.Response(200, text='offline exploit response', request=
+                    httpx.Request('GET', endpoint, params={'id': exploit_payload}))
+                events = [
+                    {'node': 'payload_validator', 'event': 'payload.validation.completed',
+                     'status': 'ok', 'payload': {'method': method, 'visit_id': visit_id}},
+                    probe_event(method, probe_payload, 200, False, endpoint=endpoint,
+                                response=probe_response),
+                    exploit_event(method, exploit_payload, 200, False, endpoint=endpoint,
+                                  response=exploit_response),
+                ]
+                updates = make_update(
+                    state=state, module_name=method, score=0,
+                    tried_payloads=[exploit_payload], telemetry_events=events,
+                )
+                snapshot = {**state, **updates}
+                snapshot['telemetry_events'] = [
+                    *state.get('telemetry_events', []), *updates.get('telemetry_events', []),
+                ]
+                snapshot['response_evidence'] = [
+                    *state.get('response_evidence', []), *updates.get('response_evidence', []),
+                ]
+                snapshot['iteration_count'] = state.get('iteration_count', 0) + 1
+                snapshot['task_result'] = 'SUCCESS' if visit_number == len(visit_candidates) else None
+                snapshot['next_agent'] = 'scorer'
+                previous = snapshot
+                yield snapshot
+
+    monkeypatch.setattr('evaluation.runner.build_framework', lambda **_kwargs: RevisitGraph())
+    artifact = run_single_engagement(
+        target_url='http://localhost/dvwa', security_level=level,
+        llm_provider='openai_compatible', surface='sqli', payload_mode='static_only',
+        target_method=method, max_iterations=10, output_dir=str(evidence_dir),
+        execution_id=execution_id,
+    )
+
+    inputs = artifact['method_execution_inputs']
+    assert len(inputs) == 2
+    assert [row['state']['selected_visit_id'] for row in inputs] == [
+        f'{method}:fixture-visit:1', f'{method}:fixture-visit:2',
+    ]
+    first_queue = inputs[0]['state']['payload_candidates'][method]
+    second_queue = inputs[1]['state']['payload_candidates'][method]
+    assert {row['candidate_id'] for row in first_queue} == {visit_candidates[0]['candidate_id']}
+    assert {row['candidate_id'] for row in second_queue} == {
+        candidate['candidate_id'] for candidate in visit_candidates
+    }
+    assert all(row['valid'] for visit in inputs for row in
+        visit['state']['payload_validation_results'][method])
+    assert all(visit['state']['probe_controls'][method]['visit_id'] ==
+        visit['state']['selected_visit_id'] for visit in inputs)
+    assert artifact['llm_activity'] == {'started': 0, 'completed': 0, 'failed': 0, 'tokens': 0}
+    assert artifact['llm_performance'] == []
+
+    response_rows = artifact['response_evidence']
+    assert len(response_rows) == 4
+    assert len({row['request_id'] for row in response_rows}) == len(response_rows)
+    dispositions = artifact['candidate_dispositions']
+    disposition_by_visit_candidate = {
+        (row['method'], row['visit_id'], row['candidate_id']): row
+        for row in dispositions
+    }
+    first_visit_id, second_visit_id = [row['state']['selected_visit_id'] for row in inputs]
+    first_candidate_id, second_candidate_id = [candidate['candidate_id'] for candidate in visit_candidates]
+    assert disposition_by_visit_candidate[(method, first_visit_id, first_candidate_id)]['disposition'] == 'selected_executed'
+    revisited_unexecuted = disposition_by_visit_candidate[(method, second_visit_id, first_candidate_id)]
+    assert revisited_unexecuted['disposition'] == 'already_tried'
+    assert revisited_unexecuted['selection_status'] == 'selected'
+    assert revisited_unexecuted['stop_reason'] == 'already_tried_before_visit'
+    assert disposition_by_visit_candidate[(method, second_visit_id, second_candidate_id)]['disposition'] == 'selected_executed'
+    for disposition in dispositions:
+        assert disposition['method'] == method
+        assert disposition['validation']['candidate_id'] == disposition['candidate_id']
+        validation = resolve_pointer(artifact, disposition['validation_ref'])
+        assert validation['candidate_id'] == disposition['candidate_id']
+        for evidence_ref in disposition['response_refs']:
+            evidence = resolve_pointer(artifact, evidence_ref)
+            assert evidence['candidate_id'] == disposition['candidate_id']
+        for request_ref in disposition['request_refs']:
+            assert resolve_pointer(artifact, request_ref)
+    for input_index, visit in enumerate(inputs):
+        visit_id = visit['state']['selected_visit_id']
+        rows = [row for row in response_rows if row['visit_id'] == visit_id]
+        assert len(rows) == 2
+        assert {row['stage'] for row in rows} == {'probe', 'exploit'}
+        for row in rows:
+            assert row['method'] == method
+            assert row['validation']['visit_id'] == visit_id
+            assert row['validation']['method'] == method
+            assert row['validation_link_status'] == 'linked'
+            if row['identity_kind'] == 'independent_control':
+                expected_prefix = (
+                    f"#/method_execution_inputs/{input_index}/state/probe_controls/{method}/validation_results/"
+                )
+            else:
+                expected_prefix = (
+                    f"#/method_execution_inputs/{input_index}/state/payload_validation_results/{method}/"
+                )
+            assert row['validation_ref'].startswith(expected_prefix)
+            assert resolve_pointer(artifact, row['request_ref']) == row['request_structure']
+            validation = resolve_pointer(artifact, row['validation_ref'])
+            assert validation['candidate_id'] == row.get('candidate_id', row.get('source_candidate_id'))
+            assert validation['valid'] is True
+
+    artifact_path = evidence_dir / f'{execution_id}.json'
+    assert artifact_path.exists()
+    write_json_report(evidence_dir / 'revisit-control.json', {
+        'validation_scope': 'offline_mocked_graph_no_http_or_provider',
+        'artifact_path': artifact_path.as_posix(),
+        'execution_id': execution_id,
+        'visit_ids': [row['state']['selected_visit_id'] for row in inputs],
+        'candidate_queues': [[c['candidate_id'] for c in row['state']['payload_candidates'][method]]
+                             for row in inputs],
+        'response_count': len(response_rows),
+        'unique_request_ids': len({row['request_id'] for row in response_rows}),
+        'request_links_resolved': sum(
+            resolve_pointer(artifact, row['request_ref']) == row['request_structure']
+            for row in response_rows),
+        'provider_calls': len(artifact['llm_performance']),
     })
 
 

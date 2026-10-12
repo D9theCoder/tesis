@@ -250,3 +250,64 @@ def test_artifact_repository_loads_legacy_new_matrix_and_malformed_files(tmp_pat
         {"matrix-error", "matrix-success"},
     ]
     assert repository.group_by_config_fingerprint(duplicates_only=True) == duplicate_groups
+
+
+def test_artifact_repository_selects_latest_source_bound_receipts(tmp_path: Path) -> None:
+    """Default discovery shows each role's current receipt; history remains inspectable."""
+    from hashlib import sha256
+
+    source = tmp_path / "execution.json"
+    source.write_text(json.dumps({
+        "execution_id": "exec-review",
+        "run_id": "run-review",
+        "status": "success",
+        "config": {"surface": "sqli"},
+    }), encoding="utf-8")
+    source_hash = sha256(source.read_bytes()).hexdigest()
+
+    def write_receipt(
+        name: str,
+        mode: str,
+        generated_at: str,
+        *,
+        bound_hash: str = source_hash,
+        bound_execution_id: str = "exec-review",
+    ) -> Path:
+        path = tmp_path / "reviews" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "artifact_type": "thesis_score_receipt",
+            "status": "final",
+            "scoring_mode": mode,
+            "execution_id": bound_execution_id,
+            "run_id": "run-review",
+            "source_path": str(source.resolve()),
+            "source_sha256": bound_hash,
+            "generated_at": generated_at,
+        }), encoding="utf-8")
+        return path
+
+    human_old = write_receipt("old-human.json", "human", "2026-10-11T10:00:00Z")
+    ai_old = write_receipt("old-ai.json", "ai", "2026-10-11T10:00:00Z")
+    human_latest = write_receipt("latest-human.json", "human", "2026-10-12T10:00:00Z")
+    ai_latest = write_receipt("latest-ai.json", "ai", "2026-10-12T10:00:00Z")
+    stale_hash = write_receipt("stale-hash-ai.json", "ai", "2026-10-13T10:00:00Z", bound_hash="0" * 64)
+    stale_execution = write_receipt(
+        "stale-execution-ai.json",
+        "ai",
+        "2026-10-14T10:00:00Z",
+        bound_execution_id="different-execution",
+    )
+
+    current = ArtifactRepository(tmp_path).scan()
+    current_receipts = {item.path for item in current if item.artifact_type == "thesis_score_receipt"}
+    assert current_receipts == {human_latest, ai_latest}
+    assert any(item.path == source for item in current)
+
+    history = ArtifactRepository(tmp_path, include_sidecars=True).scan()
+    history_receipts = {item.path for item in history if item.artifact_type == "thesis_score_receipt"}
+    assert history_receipts == {human_old, ai_old, human_latest, ai_latest, stale_hash, stale_execution}
+
+    source.write_text(source.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    changed_source = ArtifactRepository(tmp_path).scan()
+    assert not any(item.artifact_type == "thesis_score_receipt" for item in changed_source)

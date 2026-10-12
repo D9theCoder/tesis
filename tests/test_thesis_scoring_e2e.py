@@ -243,6 +243,118 @@ def test_frozen_ai_evaluator_does_not_rate_negatives_or_escape_ceiling(monkeypat
     write_json_report(ROOT / 'evaluator-control.json', result)
 
 
+@pytest.mark.parametrize('failure', ['malformed', 'truncated'])
+def test_evaluator_capture_precedes_parse_and_retries_source_bound_candidate(monkeypatch, tmp_path, failure):
+    from types import SimpleNamespace
+    from evaluation.thesis_scoring import (review_queue, evaluate_queue, finalize_reviews,
+        load_review_decisions, review_ledger_path, main)
+    artifact, _, _ = control(monkeypatch, f'response-capture-{failure}')
+    artifact['config']['scoring_mode'] = 'ai'
+    artifact['config']['scoring_evaluator'] = {'provider': 'offline', 'model': 'independent-judge',
+        'api_key': 'offline-test-key', 'max_attempts': 2, 'max_tokens': 512, 'timeout': 5}
+    artifact['llm_activity'] = {'started': 1, 'completed': 1}
+    artifact['execution_id'] = f'offline-response-capture-{failure}-{uuid4().hex}'
+    path = tmp_path / f'{failure}.json'
+    write_json_report(path, artifact)
+    queue = review_queue(path)
+    row = next(row for row in queue['candidates'] if row['status'] == 'pending_review')
+    assert queue['components']['Soutput'] is not None
+    evaluator = artifact['config']['scoring_evaluator']
+    prior = grades(queue, 'ai')
+    finalize_reviews(path, prior, output_dir=path.parent / 'reviews')
+    source_review_files = {item.relative_to(path.parent / 'reviews'): item.read_bytes()
+        for item in (path.parent / 'reviews').rglob('*') if item.is_file()}
+
+    with pytest.raises(ValueError, match='require expected_source_sha256'):
+        evaluate_queue(queue, evaluator, invoke=lambda _: None, candidate_ids=[row['candidate_id']])
+    calls = []
+    with pytest.raises(ValueError, match='does not match'):
+        evaluate_queue(queue, evaluator, invoke=lambda _: calls.append(True),
+            candidate_ids=[row['candidate_id']], expected_source_sha256='0' * 64)
+    assert calls == []
+    with pytest.raises(ValueError, match='source-bound candidate retry'):
+        evaluate_queue(queue, evaluator, invoke=lambda _: None,
+            max_tokens_override=2048)
+    source_bytes = path.read_bytes()
+    path.write_bytes(source_bytes + b' ')
+    with pytest.raises(ValueError, match='changed since'):
+        evaluate_queue(queue, evaluator, invoke=lambda _: calls.append(True),
+            candidate_ids=[row['candidate_id']], expected_source_sha256=queue['source_sha256'])
+    path.write_bytes(source_bytes)
+    assert calls == []
+
+    def judge(messages):
+        evidence = json.loads(messages[-1].content)
+        calls.append(evidence['candidate_id'])
+        if len(calls) == 1:
+            raw = '{' if failure == 'malformed' else '{"score":'
+            finish = 'stop' if failure == 'malformed' else 'length'
+        else:
+            payload = {'score': evidence['proof_ceiling'],
+                'reason': 'Supported by offline-test-key-bound evidence',
+                'evidence_refs': evidence['evidence_refs']}
+            raw = '```json\n' + json.dumps(payload) + '\n```'
+            finish = 'stop'
+        return SimpleNamespace(content=[{'type': 'text', 'text': raw}],
+            response_metadata={'finish_reason': finish, 'request_id': f'offline-request-{len(calls)}',
+                'authorization': 'Bearer offline-test-key'},
+            usage_metadata={'input_tokens': 10, 'output_tokens': 4})
+
+    monkeypatch.setattr('tesis.config_loader.load_and_resolve_config',
+        lambda **kwargs: SimpleNamespace(scoring_evaluator=evaluator))
+    model_options = []
+    def model_factory(*args, **kwargs):
+        model_options.append(kwargs)
+        return SimpleNamespace(invoke=judge)
+    monkeypatch.setattr('llm.provider.get_llm', model_factory)
+    output_dir = Path('results/validation/scoring-v4-remediation-2026-10-12/response-capture') / failure
+    identifier = queue['execution_id']
+    assert main([str(path), '--evaluate', '--candidate-id', row['candidate_id'],
+        '--expected-source-sha256', queue['source_sha256'], '--output-dir', str(output_dir),
+        '--max-tokens-override', '2048',
+        '--config', str(tmp_path / 'config.yaml')]) == 0
+    telemetry_path = output_dir / f'{identifier}.evaluator.json'
+    result = json.loads(telemetry_path.read_text())
+    first, second = result['telemetry']
+    assert calls == [row['candidate_id'], row['candidate_id']]
+    assert model_options[0]['max_tokens'] == 2048
+    assert result['evaluator_runtime'] == {
+        'source_max_tokens': 512, 'requested_max_tokens': 2048,
+        'max_attempts': 2, 'override_reason': 'prior_length_truncation'}
+    assert all(item['requested_max_tokens'] == 2048 for item in result['telemetry'])
+    assert first['status'] == 'abstained'
+    assert first['error_type'] == ('JSONDecodeError' if failure == 'malformed' else '_IncompleteEvaluatorResponse')
+    assert first['raw_response'] == ('{' if failure == 'malformed' else '{"score":')
+    assert first['response_sha256'] == sha256(first['raw_response'].encode()).hexdigest()
+    assert first['native_metadata']['response_metadata']['finish_reason'] == (
+        'stop' if failure == 'malformed' else 'length')
+    assert first['native_metadata']['response_metadata']['authorization'] == '[REDACTED]'
+    if failure == 'truncated':
+        assert first['incomplete_reason'] == 'length'
+    assert second['status'] == 'accepted'
+    assert second['normalization'] == 'markdown_json_fence'
+    assert 'offline-test-key' not in json.dumps(result)
+    assert len(result['decisions']) == 1
+    assert result['status'] == 'complete'
+    assert result['decisions'][0]['candidate_id'] == row['candidate_id']
+    assert result['decisions'][0]['reason'] == 'Supported by [REDACTED]-bound evidence'
+    status = json.loads((output_dir / f'{identifier}.review-status.json').read_text())
+    assert status['receipts']['ai']
+    receipt = json.loads(Path(status['receipts']['ai']).read_text())
+    assert receipt['source_sha256'] == queue['source_sha256']
+    assert receipt['source_path'] == str(path.resolve())
+    assert receipt['review_runtime'] == result['evaluator_runtime']
+    assert status['decision_ledger_path'] == str(review_ledger_path(path,
+        output_dir=output_dir).resolve())
+    assert len(load_review_decisions(path, queue=queue, output_dir=output_dir)) == len(prior) + 1
+    assert {item.relative_to(path.parent / 'reviews'): item.read_bytes()
+        for item in (path.parent / 'reviews').rglob('*') if item.is_file()} == source_review_files
+    write_json_report(output_dir / f'{failure}-control.json',
+        {'source_sha256': queue['source_sha256'], 'candidate_id': row['candidate_id'],
+            'response_capture': result['telemetry'], 'receipt': status['receipts']['ai'],
+            'historical_source_reviews_unchanged': True})
+
+
 @pytest.mark.parametrize('size', [(80, 24), (60, 24)])
 def test_tui_review_exports_same_receipt_as_headless(monkeypatch, tmp_path, size):
     import asyncio
