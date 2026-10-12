@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import stat
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from core.run_status import terminal_status
 
@@ -304,14 +307,36 @@ def build_candidate_dispositions(artifact: dict[str, Any]) -> None:
 
 
 def write_json_report(path: str | Path, payload: dict) -> Path:
-    """Handles write json report behavior for this module.
-
-    Args:
-        path: Value used by this function.
-        payload: Value used by this function."""
+    """Publish complete JSON atomically, retaining modes or honoring the umask."""
     out_path = Path(path)
+    serialized = json.dumps(payload, indent=2, sort_keys=True)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    temporary = None
+    try:
+        while True:
+            candidate = out_path.with_name(f".{out_path.name}.{uuid4().hex}.tmp")
+            try:
+                # Let file creation apply the process umask without changing
+                # that process-wide setting while other writers are active.
+                descriptor = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+            except FileExistsError:
+                continue
+            temporary = candidate
+            break
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(serialized)
+            handle.flush()
+            try:
+                destination_mode = stat.S_IMODE(out_path.stat().st_mode)
+            except FileNotFoundError:
+                pass
+            else:
+                os.chmod(temporary, destination_mode)
+            os.fsync(handle.fileno())
+        os.replace(temporary, out_path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return out_path
 
 

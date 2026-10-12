@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from core.run_status import terminal_status
-import json
+from evaluation.reporter import write_json_report
 
 
 def write_failure_artifact(
@@ -40,5 +40,4 @@ def write_failure_artifact(
     }
 
     out_path = out_dir / f"{run_id}.failure.json"
-    out_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    return out_path
+    return write_json_report(out_path, payload)

@@ -541,9 +541,7 @@ def _protect_source(path, source):
 
 def _write_review_file(path, payload, source):
     path = Path(path)
-    temporary = path.with_suffix('.tmp')
     _protect_source(path, source)
-    _protect_source(temporary, source)
     if path.exists():
         previous = path.read_bytes()
         archived = path.parent / 'history' / f'{path.stem}.{sha256(previous).hexdigest()}.review-history.json'
@@ -551,8 +549,7 @@ def _write_review_file(path, payload, source):
         if not archived.exists():
             archived.parent.mkdir(parents=True, exist_ok=True)
             archived.write_bytes(previous)
-    write_json_report(temporary, payload)
-    temporary.replace(path)
+    write_json_report(path, payload)
 
 
 def merge_review_decisions(history, additions):
