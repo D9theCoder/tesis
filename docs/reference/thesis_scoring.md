@@ -327,7 +327,7 @@ responses cannot establish a forbidden permission decision. A live static Brute
 Force control now has a candidate-bound fresh-session attestation. Permission
 and causal dependency proof remain open. Synthetic profiles remain offline.
 
-The current DOCX, SHA-256 `478ce522ac8e28085000fc419020c40969f1d785f2f65cb8939b073f0ea3474e`,
+The prior DOCX snapshot, SHA-256 `478ce522ac8e28085000fc419020c40969f1d785f2f65cb8939b073f0ea3474e`,
 was rendered with Word and inspected across all 18 pages, including the seven
 rubric tables and 35 examples. Its paragraph-82 addition and 22-twip column-width
 change are documented in the active handoff. The owner then authorized provider
@@ -356,3 +356,76 @@ entries in four scenarios. Access Control permission proof, causal downstream
 proof and complete mutation-only replay inputs remain open. Independent wire
 auditing covers diagnostic controls; the matrix scope audit uses framework
 receipts. Full live acceptance stays open.
+
+## Status eksekusi dan hasil keamanan (2026-10-12)
+
+### Status eksekusi dan hasil keamanan
+
+Artefak terminal menyimpan dua field kanonis yang dinilai secara terpisah:
+
+| `execution_status` | Definisi | Contoh |
+| --- | --- | --- |
+| `completed` | Koordinat yang direncanakan mencapai akhir eksekusi secara normal. | Metode berhenti setelah anggaran habis dengan sinyal yang belum terkonfirmasi. |
+| `failed` | Kesalahan runtime, provider, request target, resume, atau penulisan artefak utama menghalangi penyelesaian normal. | Panggilan provider wajib gagal atau request target mengalami kesalahan transport. |
+| `interrupted` | Pembatalan eksplisit menghentikan eksekusi sebelum selesai secara normal. | Operator membatalkan pengujian dan state aman terakhir disimpan. |
+
+| `security_outcome` | Bukti yang diperlukan | Contoh |
+| --- | --- | --- |
+| `confirmed` | Bukti metode memenuhi proof ceiling dan kontrol independen yang berlaku. | Ekstraksi yang terikat pada kandidat dikonfirmasi verifier metode. |
+| `no_finding` | Bukti respons yang dapat digunakan dan bukti negatif verifier menunjukkan bahwa sinyal yang dinilai tidak terjadi. | Kandidat mempunyai sinyal negatif terverifikasi; dimensi terkait dapat diberi skor 0. |
+| `unconfirmed` | Bukti tidak tersedia, parsial, atau belum dapat ditentukan. | Rujukan kandidat yang hilang atau keputusan unverified tidak membuktikan hasil negatif. |
+| `fixture_limited` | Kontrol principal, izin, sesi, atau fixture independen yang wajib belum dapat mendukung kesimpulan. | Visibilitas Access Control belum mempunyai oracle izin independen. |
+
+`execution_reason` dan `security_outcome_reason` merupakan objek terpisah dengan
+`code`, `detail`, dan `evidence_refs`. Alasan eksekusi bernilai null untuk
+`completed`, sedangkan alasan hasil keamanan bernilai null untuk `confirmed`.
+Kode hasil meliputi `NO_CANDIDATE_CONFIRMATION`, `PARTIAL_SIGNAL`,
+`PERMISSION_ORACLE_UNAVAILABLE`, `SESSION_ORACLE_UNAVAILABLE`, dan
+`VERIFIED_NEGATIVE`. Kesalahan eksekusi tetap mempunyai kode tersendiri, seperti
+`LLM_RUNTIME_FAILURE`, `TARGET_TRANSPORT_FAILURE`, `TARGET_REQUEST_FAILURE`,
+`RUNNER_EXCEPTION`, `RESUME_REFUSED`, atau `ARTIFACT_WRITE_FAILURE`.
+Pembatalan menggunakan `CANCELLED`.
+
+Pembacaan dan klasifikasi menggunakan `core/run_status.py` dengan aturan bukti
+kandidat scoring.v4 yang sudah berlaku. Protokol oracle izin dan sesi saat ini
+memberikan attestation untuk konfirmasi. Attestation yang tidak tersedia tidak
+membuktikan hasil negatif pada metode tersebut. Field `execution_status` pada
+baris candidate disposition tetap berarti `executed|not_executed`; status
+terminal di atas berlaku pada envelope run dan final state.
+
+Untuk kompatibilitas, artefak baru mempertahankan `status=success|error|cancelled`
+sebagai alias lifecycle untuk `completed|failed|interrupted`. `task_result` dan
+`incomplete_reason` mempertahankan label terminal lama bagi pembaca terdahulu;
+keduanya tidak digunakan untuk menentukan kegagalan eksekusi. Field kanonis
+juga disimpan pada laporan, failure sidecar, manifest, event anak matriks,
+journal, runtime descriptor, dan hasil penilaian tesis. Artefak historis tidak
+diubah. Error lama dengan `INCOMPLETE` hanya dipetakan menjadi completed jika
+terdapat rekaman akhir normal, aktivitas provider wajib lengkap, dan tidak ada
+bukti request gagal. Jika atribusi lifecycle belum tersedia, pembaca
+mempertahankan null/unknown dan melaporkan jumlah unknown secara terpisah.
+Koordinat skipped yang belum dijalankan mempunyai status eksekusi null dan tidak
+masuk cakupan eksekusi maupun hitungan hasil keamanan.
+
+Cakupan menghitung seluruh hasil dengan eksekusi completed. Matriks melaporkan
+`execution_status_counts` dan `security_outcome_counts` secara terpisah.
+`successful_runs` menjadi alias sementara untuk `completed_runs`, sedangkan
+`confirmed_runs` melaporkan jumlah hasil terkonfirmasi. Matriks dapat mempunyai
+temuan pada satu anak, tetapi eksekusinya tetap failed atau interrupted.
+Indikator lifecycle TUI mengikuti eksekusi; hasil keamanan dan alasannya
+ditampilkan terpisah pada baris hasil dan detail.
+
+Rubrik scoring.v4 dan rumus tetap berlaku:
+`Srun = 0.20*Smethod + 0.20*Spayload + 0.30*Sexploit + 0.10*Schain + 0.20*Soutput`.
+Bukti negatif terverifikasi dapat diberi skor 0 pada dimensi terkait. Bukti yang
+hilang tetap null/pending; komponen lain dinilai sesuai bukti yang tersedia.
+Satu komponen bernilai nol tidak membuat jumlah berbobot menjadi nol.
+`Srun_final` memerlukan seluruh komponen, penyebut yang memenuhi syarat, dan
+workflow penilaian yang dipilih telah lengkap. Eksekusi completed saja tidak
+membuat skor tesis menjadi final.
+
+The status-contract DOCX update has SHA-256 `75dd6e877c504e2d7ce37ad8f74df54d0e198463f32b08b8111b00400c50e7d1`.
+Its two added tables and dark-blue text passed XML/package and preservation
+checks. Rendered appearance has not been verified for this hash; the earlier
+Word inspection above applies to the prior snapshot. See the
+[completed status handoff](../completed/HANDOFF_EXECUTION_AND_SECURITY_OUTCOME_STATUS_2026-10-12.md)
+for commands, evidence, and validation limits.

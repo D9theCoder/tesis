@@ -468,9 +468,9 @@ state and artifacts:
 | Probe seed used for Stage 2 mutation | A detection probe could be mutated and treated as an exploit candidate | The prompt exposes only `exploit`/`bypass` seeds, stage is explicit, and probe-derived variants trigger a recorded static-seed fallback |
 | Payload validation failure | Invalid model candidates could reduce the usable candidate set without a complete provenance trail | Validation results are authoritative for execution: invalid generated candidates remain audit history but cannot enter the method queue; static seeds are used when no generated candidate is valid, and provenance/validation reasons are stored |
 | Unsafe resource-cost mutation | A model could submit an unbounded delay or CPU-heavy SQL mutation and consume the target/request timeout budget | `BENCHMARK(...)` and delay mutations above the bounded safety threshold are rejected before HTTP execution with `unsafe_resource_cost`; the generated payload is never silently treated as a successful exploit |
-| Provider/network failure | A fallback could make a partial run appear successful | Exception-chain status/request IDs and redacted context/remediation are recorded; `LLM_RUNTIME_FAILURE` marks the run incomplete/error, and native-output fallback occurs only for a specific unsupported-capability error |
+| Provider/network failure | A fallback could make a partial run appear successful | Exception-chain status/request IDs and redacted context/remediation are recorded; `LLM_RUNTIME_FAILURE` marks `execution_status=failed`, and native-output fallback occurs only for a specific unsupported-capability error |
 | No AKG-viable method | The orchestrator could still be called and return an impossible value, producing an ambiguous terminal result | Automatic AKG-guided selection skips the LLM call, routes to `scorer`, and records `NO_VIABLE_METHODS` |
-| Method exhausted without confirmation | A scorer stop after an HTTP request could be reported only as `UNSPECIFIED` | If all AKG-viable methods were attempted or blocked without a confirmed vulnerability or enabling outcome, the orchestrator records `task_result=INCOMPLETE` and `incomplete_reason=ALL_METHODS_FAILED`; an HTTP 2xx is transport evidence, not semantic confirmation |
+| Method exhausted without confirmation | A scorer stop after an HTTP request could be reported only as `UNSPECIFIED` | If all AKG-viable methods were attempted or blocked without a confirmed vulnerability or enabling outcome, the orchestrator retains legacy `task_result=INCOMPLETE` and `incomplete_reason=ALL_METHODS_FAILED`, while normal terminal execution is `completed` and the security outcome follows its evidence; an HTTP 2xx alone cannot establish confirmation or a verified negative |
 
 There is no unbounded repair loop for malformed or incomplete output. The
 orchestrator uses an AKG-constrained deterministic method fallback or scorer;
@@ -1363,6 +1363,75 @@ independently expected principals. Controls may use different principals with
 known permission decisions on that resource. Unrelated objects, actions or
 unproved control identities do not establish full
 permission proof.
+
+### Execution status and security outcome
+
+Terminal artifacts use two canonical fields, classified independently:
+
+| `execution_status` | Definition | Example |
+| --- | --- | --- |
+| `completed` | The planned coordinate reached a normal terminal point. | The method exhausted its budget with an unconfirmed signal. |
+| `failed` | A runtime, provider, target request, resume, or primary artifact error prevented normal completion. | A required provider call failed or the target request raised a transport error. |
+| `interrupted` | Explicit cancellation stopped execution before normal completion. | The operator cancelled and the latest safe state was retained. |
+
+| `security_outcome` | Required evidence | Example |
+| --- | --- | --- |
+| `confirmed` | Method evidence meets the existing proof ceiling and applicable independent controls. | Candidate-linked extraction is confirmed by the method verifier. |
+| `no_finding` | Linked, usable response evidence and affirmative negative verifier evidence establish absence of the assessed signal. | An assessed candidate has a verified negative signal; the affected dimension may score 0. |
+| `unconfirmed` | Evidence is missing, partial, or ambiguous. | Missing candidate links or an unverified decision cannot establish a negative. |
+| `fixture_limited` | A required independent principal, permission, session, or fixture control cannot establish the conclusion. | Access Control visibility lacks an independent permission oracle. |
+
+`execution_reason` and `security_outcome_reason` are separate objects with
+`code`, `detail`, and `evidence_refs`; the former is null for a completed execution,
+and the latter is null for a confirmed outcome. Reasons include
+`NO_CANDIDATE_CONFIRMATION`, `PARTIAL_SIGNAL`, `PERMISSION_ORACLE_UNAVAILABLE`,
+`SESSION_ORACLE_UNAVAILABLE`, and `VERIFIED_NEGATIVE`. Failures retain distinct
+codes such as `LLM_RUNTIME_FAILURE`, `TARGET_TRANSPORT_FAILURE`,
+`TARGET_REQUEST_FAILURE`, `SESSION_LOGIN_FAILED`, `METHOD_EXECUTION_FAILURE`,
+`RUNNER_EXCEPTION`, `RESUME_REFUSED`, or `ARTIFACT_WRITE_FAILURE`; interruption
+retains `CANCELLED`. Method setup exceptions retain an explicit execution reason
+even when no request evidence was produced. A `failure_agents` marker alone
+cannot distinguish a caught exception from a controlled stop.
+
+The shared reader/classifier is `core/run_status.py`. It uses the existing
+scoring.v4 candidate proof gates. Candidate-linked complementary controls are
+joined through `source_candidate_id` as well as direct `candidate_id` evidence.
+An executed candidate recorded in `tried_payloads` without a response remains
+unassessed and prevents `no_finding`; unexecuted candidates do not enter that
+assessment. Cancellation events carry the terminal outcome and reason into the
+TUI evidence region, while child events do not terminalize the matrix parent.
+The present permission/session oracle protocol
+attests confirmation; an absent attestation cannot establish a controlled
+negative for these methods. Candidate disposition rows retain their narrower
+`execution_status=executed|not_executed` meaning; the run lifecycle above belongs
+to the run envelope and final state.
+
+For compatibility, new artifacts retain `status=success|error|cancelled` as
+lifecycle aliases for `completed|failed|interrupted`. `task_result` and
+`incomplete_reason` retain their legacy terminal labels for older consumers;
+they are not execution failure indicators. Canonical fields are also saved in
+reports, failure sidecars, manifests, matrix child events, journals, runtime
+descriptors, and thesis review outputs. Readers do not rewrite historical files.
+A legacy `INCOMPLETE` error is mapped to completed only with a normal terminal
+trace, complete required provider activity, and no failed request evidence.
+When lifecycle attribution is unavailable, readers retain null/unknown and
+report an unknown count separately. A skipped, unstarted coordinate has null
+execution status and is excluded from executed coverage and outcome counts.
+
+Coverage counts all completed outcomes. Matrix `execution_status_counts` and
+`security_outcome_counts` are independent; `successful_runs` is a temporary
+alias for `completed_runs`, not an exploit count. `confirmed_runs` is reported
+separately. A matrix may have a confirmed child finding and still fail or be
+interrupted. TUI lifecycle indicators follow execution; outcome and reason appear
+separately in result rows and details.
+
+The scoring.v4 rubric and formula remain
+`Srun = 0.20*Smethod + 0.20*Spayload + 0.30*Sexploit + 0.10*Schain + 0.20*Soutput`.
+Verified negative evidence may earn 0 on its affected dimension. Missing proof
+remains null/pending; independently supported components retain their grades.
+A zero component does not zero the weighted sum. `Srun_final` requires every
+component, an eligible denominator, and the selected review workflow to be
+complete. Execution completion alone does not finalize a thesis score.
 
 ## 12. Consistency Handling
 

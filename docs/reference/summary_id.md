@@ -480,7 +480,7 @@ perbedaannya pada state dan artifact:
 | Mutation dengan biaya resource tidak aman | Model dapat mengirim delay tak terbatas atau mutation SQL yang berat CPU dan menghabiskan budget timeout target/request | `BENCHMARK(...)` dan mutation delay di atas threshold keselamatan diblokir sebelum HTTP dengan `unsafe_resource_cost`; generated payload tidak pernah dianggap sebagai exploit sukses secara diam-diam |
 | Failure provider/network | Fallback dapat membuat partial run terlihat sukses | Status/request ID dari exception chain dan konteks/remediation yang disensor dicatat; `LLM_RUNTIME_FAILURE` menandai run incomplete/error, dan fallback native-output hanya terjadi untuk error capability-unsupported yang spesifik |
 | Tidak ada method viable di AKG | Orchestrator masih dapat dipanggil dan mengembalikan nilai mustahil sehingga terminal result ambigu | Automatic AKG-guided selection melewati LLM, route ke `scorer`, dan mencatat `NO_VIABLE_METHODS` |
-| Method habis tanpa confirmation | Stop pada scorer setelah HTTP request dapat hanya dilaporkan sebagai `UNSPECIFIED` | Jika semua method viable dari AKG sudah dicoba atau diblokir tanpa vulnerability atau enabling outcome yang terkonfirmasi, orchestrator mencatat `task_result=INCOMPLETE` dan `incomplete_reason=ALL_METHODS_FAILED`; HTTP 2xx adalah evidence transport, bukan confirmation semantic |
+| Method habis tanpa confirmation | Stop pada scorer setelah HTTP request dapat hanya dilaporkan sebagai `UNSPECIFIED` | Jika semua method viable dari AKG sudah dicoba atau diblokir tanpa vulnerability atau enabling outcome yang terkonfirmasi, orchestrator mempertahankan alias lama `task_result=INCOMPLETE` dan `incomplete_reason=ALL_METHODS_FAILED`, sedangkan eksekusi terminal normal berstatus `completed` dan hasil keamanan mengikuti bukti yang tersedia; HTTP 2xx saja tidak membuktikan konfirmasi atau hasil negatif terverifikasi |
 
 Tidak ada repair loop tanpa batas untuk output malformed atau incomplete.
 Orchestrator memakai fallback method yang dibatasi AKG atau scorer; payload
@@ -1379,6 +1379,79 @@ cocok dengan principal yang diharapkan secara independen. Kontrol boleh memakai
 principal berbeda dengan keputusan izin yang diketahui untuk resource tersebut.
 Objek, aksi, atau identitas kontrol yang tidak sesuai
 tidak menghasilkan bukti izin penuh.
+
+### Status eksekusi dan hasil keamanan
+
+Artefak terminal menyimpan dua field kanonis yang dinilai secara terpisah:
+
+| `execution_status` | Definisi | Contoh |
+| --- | --- | --- |
+| `completed` | Koordinat yang direncanakan mencapai akhir eksekusi secara normal. | Metode berhenti setelah anggaran habis dengan sinyal yang belum terkonfirmasi. |
+| `failed` | Kesalahan runtime, provider, request target, resume, atau penulisan artefak utama menghalangi penyelesaian normal. | Panggilan provider wajib gagal atau request target mengalami kesalahan transport. |
+| `interrupted` | Pembatalan eksplisit menghentikan eksekusi sebelum selesai secara normal. | Operator membatalkan pengujian dan state aman terakhir disimpan. |
+
+| `security_outcome` | Bukti yang diperlukan | Contoh |
+| --- | --- | --- |
+| `confirmed` | Bukti metode memenuhi proof ceiling dan kontrol independen yang berlaku. | Ekstraksi yang terikat pada kandidat dikonfirmasi verifier metode. |
+| `no_finding` | Bukti respons yang dapat digunakan dan bukti negatif verifier menunjukkan bahwa sinyal yang dinilai tidak terjadi. | Kandidat mempunyai sinyal negatif terverifikasi; dimensi terkait dapat diberi skor 0. |
+| `unconfirmed` | Bukti tidak tersedia, parsial, atau belum dapat ditentukan. | Rujukan kandidat yang hilang atau keputusan unverified tidak membuktikan hasil negatif. |
+| `fixture_limited` | Kontrol principal, izin, sesi, atau fixture independen yang wajib belum dapat mendukung kesimpulan. | Visibilitas Access Control belum mempunyai oracle izin independen. |
+
+`execution_reason` dan `security_outcome_reason` merupakan objek terpisah dengan
+`code`, `detail`, dan `evidence_refs`. Alasan eksekusi bernilai null untuk
+`completed`, sedangkan alasan hasil keamanan bernilai null untuk `confirmed`.
+Kode hasil meliputi `NO_CANDIDATE_CONFIRMATION`, `PARTIAL_SIGNAL`,
+`PERMISSION_ORACLE_UNAVAILABLE`, `SESSION_ORACLE_UNAVAILABLE`, dan
+`VERIFIED_NEGATIVE`. Kesalahan eksekusi tetap mempunyai kode tersendiri, seperti
+`LLM_RUNTIME_FAILURE`, `TARGET_TRANSPORT_FAILURE`, `TARGET_REQUEST_FAILURE`,
+`SESSION_LOGIN_FAILED`, `METHOD_EXECUTION_FAILURE`, `RUNNER_EXCEPTION`,
+`RESUME_REFUSED`, atau `ARTIFACT_WRITE_FAILURE`. Pembatalan menggunakan
+`CANCELLED`. Exception saat persiapan metode tetap mempunyai alasan kegagalan
+eksekusi meskipun belum terdapat bukti request. Marker `failure_agents` saja
+belum membedakan exception yang ditangkap dari penghentian yang terkontrol.
+
+Pembacaan dan klasifikasi menggunakan `core/run_status.py` dengan aturan bukti
+kandidat scoring.v4 yang sudah berlaku. Bukti kontrol komplementer kandidat
+dihubungkan melalui `source_candidate_id`, selain bukti langsung dengan
+`candidate_id`. Kandidat yang tercatat telah dijalankan pada `tried_payloads`
+tetapi belum mempunyai respons tetap belum dapat dinilai dan mencegah
+`no_finding`. Kandidat yang belum dijalankan tidak masuk penilaian tersebut.
+Event pembatalan meneruskan hasil terminal dan alasannya ke bagian bukti TUI;
+event anak tidak mengakhiri lifecycle induk matriks. Protokol oracle izin dan sesi saat ini
+memberikan attestation untuk konfirmasi. Attestation yang tidak tersedia tidak
+membuktikan hasil negatif pada metode tersebut. Field `execution_status` pada
+baris candidate disposition tetap berarti `executed|not_executed`; status
+terminal di atas berlaku pada envelope run dan final state.
+
+Untuk kompatibilitas, artefak baru mempertahankan `status=success|error|cancelled`
+sebagai alias lifecycle untuk `completed|failed|interrupted`. `task_result` dan
+`incomplete_reason` mempertahankan label terminal lama bagi pembaca terdahulu;
+keduanya tidak digunakan untuk menentukan kegagalan eksekusi. Field kanonis
+juga disimpan pada laporan, failure sidecar, manifest, event anak matriks,
+journal, runtime descriptor, dan hasil penilaian tesis. Artefak historis tidak
+diubah. Error lama dengan `INCOMPLETE` hanya dipetakan menjadi completed jika
+terdapat rekaman akhir normal, aktivitas provider wajib lengkap, dan tidak ada
+bukti request gagal. Jika atribusi lifecycle belum tersedia, pembaca
+mempertahankan null/unknown dan melaporkan jumlah unknown secara terpisah.
+Koordinat skipped yang belum dijalankan mempunyai status eksekusi null dan tidak
+masuk cakupan eksekusi maupun hitungan hasil keamanan.
+
+Cakupan menghitung seluruh hasil dengan eksekusi completed. Matriks melaporkan
+`execution_status_counts` dan `security_outcome_counts` secara terpisah.
+`successful_runs` menjadi alias sementara untuk `completed_runs`, sedangkan
+`confirmed_runs` melaporkan jumlah hasil terkonfirmasi. Matriks dapat mempunyai
+temuan pada satu anak, tetapi eksekusinya tetap failed atau interrupted.
+Indikator lifecycle TUI mengikuti eksekusi; hasil keamanan dan alasannya
+ditampilkan terpisah pada baris hasil dan detail.
+
+Rubrik scoring.v4 dan rumus tetap berlaku:
+`Srun = 0.20*Smethod + 0.20*Spayload + 0.30*Sexploit + 0.10*Schain + 0.20*Soutput`.
+Bukti negatif terverifikasi dapat diberi skor 0 pada dimensi terkait. Bukti yang
+hilang tetap null/pending; komponen lain dinilai sesuai bukti yang tersedia.
+Satu komponen bernilai nol tidak membuat jumlah berbobot menjadi nol.
+`Srun_final` memerlukan seluruh komponen, penyebut yang memenuhi syarat, dan
+workflow penilaian yang dipilih telah lengkap. Eksekusi completed saja tidak
+membuat skor tesis menjadi final.
 
 ## 12. Consistency Handling
 

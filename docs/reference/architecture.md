@@ -340,3 +340,43 @@ Low/medium brute-force probes require both threefold relative latency and
 100 ms absolute growth for timing-based throttle inference. Explicit throttle
 responses still stop execution; high-level random delay is excluded from the
 relative heuristic.
+
+## Terminal status contract
+
+`core/run_status.py` owns canonical validation, conservative evidence
+classification, legacy reads, and matrix status mapping. Typed fields live in
+`core/state.py`; checkpoint snapshots retain them. The graph topology and
+method execution behavior are unchanged.
+
+`execution_status` is `completed`, `failed`, or `interrupted`.
+`security_outcome` is `confirmed`, `no_finding`, `unconfirmed`, or `fixture_limited`.
+Separate structured reasons carry `code`, `detail`, and `evidence_refs`.
+The runner classifies exported evidence after applicable oracle evidence is
+attached. Scorer/orchestrator/chaining updates may carry preliminary evidence
+classification; the terminal artifact is authoritative. Method error handlers
+retain typed failure metadata through `make_update` even before response
+evidence exists. Classification includes candidate-linked complementary control
+references and retains uncertainty for tried candidates missing responses.
+Cancellation reducers consume the launcher's canonical terminal fields and
+refresh the evidence region. Existing verifier
+thresholds, proof ceilings, and final scoring gates remain in effect.
+
+A normal terminal point without confirmation is a completed execution. Provider,
+target request, unexpected runtime/resume, and primary artifact failures remain
+failed; explicit cancellation remains interrupted. A later error retains earlier
+method evidence, so failure and confirmation can coexist. A skipped coordinate
+has null execution status and does not count as an executed outcome.
+
+Both fields flow through run/failure artifacts, reports, matrix child events and
+aggregates, manifests, journals, descriptors, and review receipts. TUI lifecycle
+indicators follow execution, with the security result and its reason displayed
+separately. The matrix parent keeps its identity and cannot be terminalized by
+child `run.*` events.
+
+`status=success|error|cancelled` remains a lifecycle compatibility alias.
+Legacy `task_result` and `incomplete_reason` remain available to older consumers.
+Historical artifacts are never rewritten; a legacy incomplete error needs a
+normal terminal trace, complete required provider calls, and no failed request
+evidence before it can be attributed to completed execution. Unknown attribution
+remains null/unknown. See [the artifact contract](summary_en.md#execution-status-and-security-outcome)
+and [the Indonesian contract](summary_id.md#status-eksekusi-dan-hasil-keamanan).
