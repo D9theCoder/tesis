@@ -28,6 +28,7 @@ from evaluation.metrics import (
 )
 from core.state import ALL_METHOD_AGENTS, SURFACES, METHODS_BY_SURFACE, SCORE_LABELS
 from core.state import score_decision
+from core.run_status import terminal_status
 
 
 def output_grade(state: dict, method: str) -> tuple[int, str, list[str]]:
@@ -137,6 +138,10 @@ def build_score_report(state: dict) -> ScorerReport:
     )
 
     summary = ScoreSummary(
+        execution_status=state.get("execution_status"),
+        execution_reason=state.get("execution_reason"),
+        security_outcome=state.get("security_outcome"),
+        security_outcome_reason=state.get("security_outcome_reason"),
         llm_provider=state.get("llm_provider", "gemini"),
         security_level=state.get("security_level", "low"),
         total_modules_tested=len(ALL_METHOD_AGENTS),
@@ -304,7 +309,10 @@ def scorer(state: dict) -> dict:
     else:
         task_result = "INCOMPLETE"
 
+    status_fields = terminal_status(state, execution_status=state.get("execution_status") or "completed", classify=True)
+    summary.update(status_fields)
     return {
+        **status_fields,
         "selected_method": selected_method,
         "scores": normalized_scores,
         "next_agent": END,

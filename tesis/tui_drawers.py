@@ -65,7 +65,7 @@ class CoordinateDrawer(BaseDrawer):
         try:
             table = self.query_one("#coordinates-table", DataTable)
             table.cursor_type = "row"
-            for key, label in (("index", "Index"), ("status", "Status"),
+            for key, label in (("index", "Index"), ("status", "Status"), ("outcome", "Outcome"),
                                ("provider", "Provider"), ("surface", "Surface"),
                                ("level", "Level"), ("mode", "Mode"), ("method", "Method"),
                                ("findings", "Findings"), ("elapsed", "Elapsed")):
@@ -130,7 +130,8 @@ class CoordinateDrawer(BaseDrawer):
                     continue
                 table.add_row(
                     str(index),
-                    _cell(row.status),
+                    _cell(row.execution_status or row.status),
+                    _cell(row.security_outcome),
                     _cell(row.provider),
                     _cell(row.surface),
                     _cell(row.level),
@@ -153,7 +154,8 @@ class CoordinateDrawer(BaseDrawer):
             return
         try:
             detail = (
-                f"coordinate {key} · {_cell(row.status)}\n"
+                f"coordinate {key} · {_cell(row.execution_status or row.status)}\n"
+                f"security={_cell(row.security_outcome)} reason={_cell(row.security_outcome_reason)}\n"
                 f"provider={_cell(row.provider)} surface={_cell(row.surface)} "
                 f"level={_cell(row.level)} mode={_cell(row.mode)}\n"
                 f"method={_cell(row.selected_method or row.target_method)} "
@@ -545,8 +547,9 @@ class ResultsDrawer(BaseDrawer):
             # keeps only what is readable there: identity, outcome, provider and
             # level. Surface and payload mode stay one keystroke away in the five
             # filters above, and every field remains in the Enter detail view.
-            for key, label, width in (("run", "Run", 20), ("status", "Status", 9),
-                                      ("provider", "Provider", 18), ("level", "Level", 6)):
+            for key, label, width in (("run", "Run", 16), ("status", "Execution", 11),
+                                      ("outcome", "Outcome", 15),
+                                      ("provider", "Provider", 12), ("level", "Level", 6)):
                 table.add_column(label, key=key, width=width)
         except Exception:
             pass
@@ -647,7 +650,8 @@ class ResultsDrawer(BaseDrawer):
             for item in visible[:500]:
                 table.add_row(
                     self._cell(item, "run_id", "execution_id"),
-                    self._cell(item, "status"),
+                    self._cell(item, "execution_status", "status"),
+                    self._cell(item, "security_outcome"),
                     self._cell(item, "provider"),
                     self._cell(item, "security_level"),
                     key=str(getattr(item, "path", "") or id(item)),
@@ -714,7 +718,11 @@ class ResultsDrawer(BaseDrawer):
         )
         fields: list[tuple[str, Any]] = [
             ("run", self._cell(item, "run_id", "execution_id")),
-            ("status", first("status", "task_result")),
+            ("execution status", getattr(item, "execution_status", None)),
+            ("execution reason", getattr(item, "execution_reason", None)),
+            ("security outcome", getattr(item, "security_outcome", None)),
+            ("security outcome reason", getattr(item, "security_outcome_reason", None)),
+            ("compatibility status / task result", first("status", "task_result")),
             ("provider / model", f"{safe(first('provider'))} / {safe(first('model'))}"),
             ("surface / level / mode",
              f"{safe(first('surface'))} / {safe(first('security_level', 'level'))} / "

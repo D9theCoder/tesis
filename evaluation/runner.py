@@ -37,6 +37,7 @@ from core.state import (
 )
 from evaluation.diagnostics import diagnose_quality
 from evaluation.failure_logger import write_failure_artifact
+from core.run_status import terminal_status, lifecycle_alias, reason as status_reason, FAILURE_REASONS
 from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.reporter import (
     build_candidate_dispositions,
@@ -373,13 +374,17 @@ def _payload_generation_failure(final_state: dict[str, Any]) -> dict[str, Any] |
 
 
 def _terminal_incomplete_reason(final_state: dict[str, Any]) -> str | None:
-    """Return a normalized terminal failure reason, if one is present."""
+    """Read terminal aliases; only known execution errors fail the run."""
+    if final_state.get("execution_status") == "failed":
+        return (final_state.get("execution_reason") or {}).get("code") or "RUNTIME_FAILURE"
+    if any(row.get("status_code") is None for row in final_state.get("response_evidence", [])):
+        return "TARGET_REQUEST_FAILURE"
     result = str(final_state.get("task_result") or "").strip().upper()
     reason = str(final_state.get("incomplete_reason") or "").strip()
     if result == "SUCCESS":
         return None
     if result == "INCOMPLETE":
-        return reason or "UNSPECIFIED"
+        return reason or "NO_CANDIDATE_CONFIRMATION"
     if result:
         # Unknown terminal values (FAILED, ERROR, or malformed values) must
         # never fall through to the success branch.
@@ -519,6 +524,7 @@ def run_single_engagement(
             "execution_id": execution_id,
             "run_id": run_id,
             "status": "error",
+            **terminal_status({}, execution_status="failed", execution_reason={"code": "RESUME_REFUSED", "detail": reason, "evidence_refs": []}),
             "error": reason,
             "resumed_from_checkpoint": False,
             "resumed": False,
@@ -580,6 +586,9 @@ def run_single_engagement(
             if not ok:
                 return _resume_error(reason)
             resumed = dict(stored["artifact"])
+            resumed.update(terminal_status(resumed))
+            if resumed["execution_status"]:
+                resumed["status"] = lifecycle_alias(resumed["execution_status"])
             resumed["resumed_from_checkpoint"] = True
             resumed["resumed"] = True
             resumed["resume_thread_id"] = checkpoint_thread_id
@@ -1029,16 +1038,16 @@ def run_single_engagement(
             )
         elif (
             terminal_incomplete_reason is not None
+            and (terminal_incomplete_reason in FAILURE_REASONS or terminal_incomplete_reason.startswith("INVALID_TASK_RESULT:"))
             and not llm_activity["failed"]
             and payload_generation_failure is None
         ):
-            # The graph completed normally, but its terminal state says the
-            # requested engagement did not achieve a result.  Do not turn a
-            # well-observed failed probe into a misleading successful run.
+            # Only explicit execution failures enter this branch. A missing
+            # confirmed security finding cannot make a normal completion fail.
             final_state = dict(final_state)
             final_state["task_result"] = "INCOMPLETE"
             final_state["incomplete_reason"] = terminal_incomplete_reason
-            error = f"Experiment incomplete: {terminal_incomplete_reason}"
+            error = f"Execution failed: {terminal_incomplete_reason}"
             status = "error"
             telemetry.emit(
                 iteration=int(final_state.get("iteration_count", 0) or 0),
@@ -1173,6 +1182,9 @@ def run_single_engagement(
         else:
             status = "success"
             error = None
+            if terminal_incomplete_reason:
+                final_state = {**final_state, "task_result": "INCOMPLETE",
+                    "incomplete_reason": terminal_incomplete_reason}
         report = build_score_report(final_state).to_dict()
         if reporter:
             reporter.finalize(report)
@@ -1183,14 +1195,14 @@ def run_single_engagement(
         error = None
         emit("run.cancelled", message="Cancellation requested; latest safe state retained")
     except _ResumeFailed as exc:
-        final_state = new_default_state()
+        final_state = dict(final_state or new_default_state())
         final_state.update({"task_result": "INCOMPLETE", "incomplete_reason": "RESUME_REFUSED"})
         report = build_score_report(final_state).to_dict()
         status = "error"
         error = f"{type(exc).__name__}: {exc}"
         emit("run.failed", node="runner", message=str(exc), data={"error_type": "_ResumeFailed"})
     except Exception as exc:
-        final_state = new_default_state()
+        final_state = dict(final_state or init_state or new_default_state())
         final_state.update({
             "target_url": target_url,
             "security_level": security_level,
@@ -1201,13 +1213,12 @@ def run_single_engagement(
             "max_iterations": max_iterations,
             "stop_policy": stop_policy,
             "coverage_target": coverage_target,
-            "iteration_count": 0,
             "evasion_enabled": evasion_enabled,
             "evasion_mode": evasion_mode,
             "evasion_max_retries": evasion_max_retries,
             "evasion_cooldown_threshold": evasion_cooldown_threshold,
             "task_result": "INCOMPLETE",
-            "incomplete_reason": "RUNNER_EXCEPTION",
+            "incomplete_reason": "TARGET_TRANSPORT_FAILURE" if type(exc).__name__ in {"TransportError", "RequestTimeoutError"} else "RUNNER_EXCEPTION",
         })
         report = build_score_report(final_state).to_dict()
         status = "error"
@@ -1233,19 +1244,6 @@ def run_single_engagement(
 
     ended_at = _now_iso()
     duration_ms = int((perf_counter() - started_clock) * 1000)
-    telemetry.emit(
-        iteration=int(final_state.get("iteration_count", 0) or 0),
-        node="runner",
-        event_type="run.finished",
-        status=status,
-        payload={"duration_ms": duration_ms},
-    )
-    emit(
-        "run.finished",
-        message=f"Experiment {status}",
-        data={"status": status, "duration_ms": duration_ms},
-    )
-
     if diagnose:
         summary = report.get("summary", {}) if isinstance(report, dict) else {}
         module_scores = report.get("module_scores", {}) if isinstance(report, dict) else {}
@@ -1261,76 +1259,6 @@ def run_single_engagement(
         )
         if isinstance(summary, dict):
             summary["diagnostics"] = diagnostics
-
-    base_dir = Path(output_dir) if output_dir else Path("results") / "runs"
-    # The user-facing sidecar must contain the complete runtime trace,
-    # including provider callbacks. The previous telemetry-only sidecar
-    # omitted llm.started/completed/failed and made real calls impossible
-    # to audit even though they were present in the primary artifact.
-    events = list(runtime_events)
-    if enriched_reporting:
-        rich_payload = {
-            "schema_version": "stage7.rich.v1",
-            "run_id": run_id,
-            "execution_id": execution_id,
-            "status": status,
-            "prompt_response_hashes": [
-                {
-                    "event_type": event.get("event_type"),
-                    "hash": stable_sha256(
-                        json.dumps(event.get("data", {}), sort_keys=True, separators=(",", ":"))
-                    ),
-                }
-                for event in events
-                if isinstance(event, dict)
-                and str(event.get("event_type", "")).startswith(("orchestrator", "llm."))
-            ],
-            "events_count": len(events),
-        }
-        try:
-            write_events_jsonl(base_dir / f"{execution_id}.events.jsonl", events)
-            write_json_report(base_dir / f"{execution_id}.rich.json", rich_payload)
-        except Exception as exc:
-            # Sidecar generation must never break primary artifact generation.
-            summary = report.get("summary") if isinstance(report, dict) else None
-            if isinstance(summary, dict):
-                summary["sidecar_warning"] = f"{type(exc).__name__}: {exc}"
-
-    # Failure evidence is useful even when rich reporting is disabled. Keep
-    # this sidecar independent so a TUI/default run cannot lose the exact
-    # terminal reason and provider activity that caused an error.
-    if status == "error" and (output_dir or enriched_reporting):
-        try:
-            write_failure_artifact(
-                output_dir=base_dir,
-                run_id=execution_id,
-                error=error or "unknown_error",
-                failure=provider_failure,
-                final_state={
-                    "iteration_count": final_state.get("iteration_count", 0),
-                    "task_result": final_state.get("task_result"),
-                    "incomplete_reason": final_state.get("incomplete_reason"),
-                    "provider": llm_provider,
-                    "model": (model_config or {}).get("model_name"),
-                    "payload_mode": payload_mode,
-                    "llm_required": llm_required,
-                    "llm_activity": _llm_activity(events),
-                    "confirmed_vulns": list(final_state.get("confirmed_vulns", [])),
-                    "achieved_outcomes": list(final_state.get("achieved_outcomes", [])),
-                    "fallback_events": list(final_state.get("fallback_events", [])),
-                    "invalid_json_events": list(final_state.get("invalid_json_events", [])),
-                    "containment_events": list(final_state.get("containment_events", [])),
-                    "evasion_enabled": final_state.get("evasion_enabled", False),
-                    "evasion_mode": final_state.get("evasion_mode", "reactive"),
-                    "evasion_max_retries": final_state.get("evasion_max_retries", 3),
-                    "evasion_cooldown_threshold": final_state.get("evasion_cooldown_threshold", 5),
-                },
-                recent_events=events[-20:],
-            )
-        except Exception as exc:
-            summary = report.get("summary") if isinstance(report, dict) else None
-            if isinstance(summary, dict):
-                summary["failure_sidecar_warning"] = f"{type(exc).__name__}: {exc}"
 
     summary = report.get("summary", {}) if isinstance(report, dict) else {}
     method_scores = dict(final_state.get("method_scores", {}))
@@ -1521,17 +1449,35 @@ def run_single_engagement(
     artifact["state_schema_version"] = STATE_SCHEMA_VERSION
     artifact["config"].update(scoring_rubric_version=scoring_rubric_version, scoring_profile=scoring_profile,
         scoring_oracles=scoring_oracles, fixture_id=fixture_id, protocol_version=protocol_version)
-    if scoring_rubric_version == 'scoring.v4' and scoring_oracles:
-        from evaluation.session_oracle import collect_session_oracles
-        artifact = collect_session_oracles(artifact, final_state)
-        from evaluation.permission_oracle import collect_permission_oracles
-        artifact = collect_permission_oracles(artifact, final_state)
-        from evaluation.scoring_evidence import attach_oracle_evidence
-        attach_oracle_evidence(artifact)
-        from evaluation.dependency_oracle import collect_dependency_oracles
-        artifact = collect_dependency_oracles(artifact, final_state)
-        attach_oracle_evidence(artifact)
-        artifact['response_evidence'] = artifact['final_state']['response_evidence']
+    try:
+        if scoring_rubric_version == 'scoring.v4' and scoring_oracles:
+            from evaluation.session_oracle import collect_session_oracles
+            artifact = collect_session_oracles(artifact, final_state)
+            from evaluation.permission_oracle import collect_permission_oracles
+            artifact = collect_permission_oracles(artifact, final_state)
+            from evaluation.scoring_evidence import attach_oracle_evidence
+            attach_oracle_evidence(artifact)
+            from evaluation.dependency_oracle import collect_dependency_oracles
+            artifact = collect_dependency_oracles(artifact, final_state)
+            attach_oracle_evidence(artifact)
+            artifact['response_evidence'] = artifact['final_state']['response_evidence']
+    except Exception as exc:
+        status = "error"
+        error = f"{type(exc).__name__}: {exc}"
+        final_state = {**final_state, "incomplete_reason": "ARTIFACT_PROCESSING_FAILURE"}
+        artifact.update(status=status, error=error)
+        emit("run.failed", node="runner", message=error, data={"reason": "ARTIFACT_PROCESSING_FAILURE"})
+    status_fields = terminal_status(artifact,
+        execution_status={"success": "completed", "error": "failed", "cancelled": "interrupted"}[status],
+        execution_reason=((final_state.get("execution_reason")
+            if (final_state.get("execution_reason") or {}).get("code") == final_state.get("incomplete_reason")
+            else status_reason(final_state.get("incomplete_reason") or "RUNTIME_FAILURE", error or ""))
+            if status == "error" else status_reason("CANCELLED", cancellation_token.reason or "") if status == "cancelled" else None),
+        classify=True)
+    artifact.update(status_fields)
+    artifact["final_state"].update(status_fields)
+    final_state = {**final_state, **status_fields}
+    report.setdefault("summary", {}).update(status_fields)
     link_exported_request_evidence(artifact)
     build_candidate_dispositions(artifact)
     artifact["config"]["scoring_mode"] = scoring_mode
@@ -1549,11 +1495,115 @@ def run_single_engagement(
     artifact["resumed_from_checkpoint"] = resumed_ok
     artifact["resumed"] = resumed_ok
     artifact["manual_scoring_evidence"] = manual_scoring_rows(artifact)
+    telemetry.emit(
+        iteration=int(final_state.get("iteration_count", 0) or 0),
+        node="runner",
+        event_type="run.finished",
+        status=status,
+        payload={"duration_ms": duration_ms, **status_fields},
+    )
+    emit(
+        "run.finished",
+        message=f"Experiment {status}",
+        data={"status": status, "duration_ms": duration_ms, **status_fields},
+    )
+
+    base_dir = Path(output_dir) if output_dir else Path("results") / "runs"
+    # The user-facing sidecar must contain the complete runtime trace,
+    # including provider callbacks. The previous telemetry-only sidecar
+    # omitted llm.started/completed/failed and made real calls impossible
+    # to audit even though they were present in the primary artifact.
+    events = list(runtime_events)
+    if enriched_reporting:
+        rich_payload = {
+            "schema_version": "stage7.rich.v1",
+            "run_id": run_id,
+            "execution_id": execution_id,
+            "status": status,
+            **status_fields,
+            "prompt_response_hashes": [
+                {
+                    "event_type": event.get("event_type"),
+                    "hash": stable_sha256(
+                        json.dumps(event.get("data", {}), sort_keys=True, separators=(",", ":"))
+                    ),
+                }
+                for event in events
+                if isinstance(event, dict)
+                and str(event.get("event_type", "")).startswith(("orchestrator", "llm."))
+            ],
+            "events_count": len(events),
+        }
+        try:
+            write_events_jsonl(base_dir / f"{execution_id}.events.jsonl", events)
+            write_json_report(base_dir / f"{execution_id}.rich.json", rich_payload)
+        except Exception as exc:
+            # Sidecar generation must never break primary artifact generation.
+            summary = report.get("summary") if isinstance(report, dict) else None
+            if isinstance(summary, dict):
+                summary["sidecar_warning"] = f"{type(exc).__name__}: {exc}"
+
+    # Failure evidence is useful even when rich reporting is disabled. Keep
+    # this sidecar independent so a TUI/default run cannot lose the exact
+    # terminal reason and provider activity that caused an error.
+    if status == "error" and (output_dir or enriched_reporting):
+        try:
+            write_failure_artifact(
+                output_dir=base_dir,
+                run_id=execution_id,
+                error=error or "unknown_error",
+                failure=provider_failure,
+                final_state={
+                    **status_fields,
+                    "iteration_count": final_state.get("iteration_count", 0),
+                    "task_result": final_state.get("task_result"),
+                    "incomplete_reason": final_state.get("incomplete_reason"),
+                    "provider": llm_provider,
+                    "model": (model_config or {}).get("model_name"),
+                    "payload_mode": payload_mode,
+                    "llm_required": llm_required,
+                    "llm_activity": _llm_activity(events),
+                    "confirmed_vulns": list(final_state.get("confirmed_vulns", [])),
+                    "achieved_outcomes": list(final_state.get("achieved_outcomes", [])),
+                    "fallback_events": list(final_state.get("fallback_events", [])),
+                    "invalid_json_events": list(final_state.get("invalid_json_events", [])),
+                    "containment_events": list(final_state.get("containment_events", [])),
+                    "evasion_enabled": final_state.get("evasion_enabled", False),
+                    "evasion_mode": final_state.get("evasion_mode", "reactive"),
+                    "evasion_max_retries": final_state.get("evasion_max_retries", 3),
+                    "evasion_cooldown_threshold": final_state.get("evasion_cooldown_threshold", 5),
+                },
+                recent_events=events[-20:],
+            )
+        except Exception as exc:
+            summary = report.get("summary") if isinstance(report, dict) else None
+            if isinstance(summary, dict):
+                summary["failure_sidecar_warning"] = f"{type(exc).__name__}: {exc}"
+
+    artifact["execution_log"] = list(runtime_events)
     if output_dir:
         try:
             write_json_report(Path(output_dir) / f"{execution_id}.json", artifact)
         except Exception as exc:
             artifact["artifact_write_warning"] = f"{type(exc).__name__}: {exc}"
+            status = "error"
+            artifact.update(status="error", error=artifact["artifact_write_warning"], execution_status="failed",
+                execution_reason=status_reason("ARTIFACT_WRITE_FAILURE", artifact["artifact_write_warning"]))
+            artifact["final_state"].update({k: artifact[k] for k in status_fields})
+            report["summary"].update({k: artifact[k] for k in status_fields})
+            status_fields = {k: artifact[k] for k in status_fields}
+            emit("run.failed", node="runner", message=artifact["error"], data={"status": "error", **status_fields})
+            artifact["execution_log"] = list(runtime_events)
+            try:
+                write_failure_artifact(output_dir=base_dir, run_id=execution_id,
+                    error=artifact["error"], failure=provider_failure,
+                    final_state=artifact["final_state"], recent_events=runtime_events[-20:])
+                if enriched_reporting:
+                    write_events_jsonl(base_dir / f"{execution_id}.events.jsonl", runtime_events)
+                    rich_payload.update(status="error", **status_fields)
+                    write_json_report(base_dir / f"{execution_id}.rich.json", rich_payload)
+            except Exception as sidecar_exc:
+                report["summary"]["failure_sidecar_warning"] = f"{type(sidecar_exc).__name__}: {sidecar_exc}"
     # Completed successful fast-path runs are the only safe checkpoint receipts.
     # Partial/error/cancelled runs are never stored, so resume cannot replay
     # externally acting nodes. Opt-in: only when checkpoint flags are set.

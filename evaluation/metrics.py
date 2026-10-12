@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections import Counter
+
+from core.run_status import terminal_status, lifecycle_alias, EXECUTION_STATUSES, SECURITY_OUTCOMES
 import math
 
 from core.state import ALL_METHOD_AGENTS, SURFACES, METHODS_BY_SURFACE
@@ -294,13 +296,19 @@ def aggregate_runs(run_artifacts: list[dict]) -> dict:
 
     Args:
         run_artifacts: Value used by this function."""
-    completed = [r for r in run_artifacts if r.get("status") == "success"]
+    statuses = [terminal_status(r) for r in run_artifacts]
+    completed = [r for r, fields in zip(run_artifacts, statuses) if fields["execution_status"] == "completed"]
     summaries = [artifact_summary(artifact) for artifact in run_artifacts]
     return {
         "total_runs": len(run_artifacts),
-        "successful_runs": len(completed),
-        "error_runs": sum(1 for r in run_artifacts if r.get("status") == "error"),
+        "successful_runs": len(completed),  # compatibility alias: completed executions
+        "completed_runs": len(completed),
+        "execution_status_counts": {key: sum(s["execution_status"] == key for s in statuses) for key in EXECUTION_STATUSES},
+        "execution_unknown_runs": sum(s["execution_status"] is None and r.get("status") != "skipped" for r,s in zip(run_artifacts, statuses)),
+        "security_outcome_counts": {key: sum(s["security_outcome"] == key for s in statuses if s["execution_status"] is not None) for key in SECURITY_OUTCOMES},
+        "confirmed_runs": sum(s["security_outcome"] == "confirmed" for s in statuses if s["execution_status"] is not None),
+        "error_runs": sum(s["execution_status"] == "failed" for s in statuses),
         "skipped_runs": sum(1 for r in run_artifacts if r.get("status") == "skipped"),
-        "cancelled_runs": sum(1 for r in run_artifacts if r.get("status") == "cancelled"),
+        "cancelled_runs": sum(s["execution_status"] == "interrupted" for s in statuses),
         "metrics": {name: aggregate_metric(summaries, name) for name in UNAVAILABLE_METRICS},
     }

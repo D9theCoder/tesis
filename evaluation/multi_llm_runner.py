@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.run_status import terminal_status, lifecycle_alias, EXECUTION_STATUSES, SECURITY_OUTCOMES, reason as status_reason, matrix_terminal_status
+
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
@@ -186,7 +188,8 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
         surface = str(config.get("surface", "unknown"))
         payload_mode = str(config.get("payload_mode", "static_only"))
         level = str(config.get("security_level", "unknown"))
-        status = str(artifact.get("status", "unknown"))
+        status_fields = terminal_status(artifact)
+        status = "skipped" if artifact.get("status") == "skipped" else lifecycle_alias(status_fields["execution_status"])
         final_state = artifact.get("final_state", {})
 
         provider_surface = by_provider_surface_level.setdefault(provider, {}).setdefault(
@@ -198,6 +201,8 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
             {
                 "runs": 0,
                 "statuses": {"success": 0, "error": 0, "skipped": 0, "cancelled": 0},
+                "execution_status_counts": dict.fromkeys(EXECUTION_STATUSES, 0),
+                "security_outcome_counts": dict.fromkeys(SECURITY_OUTCOMES, 0),
                 "total_score": 0,
                 "chain_exploits": 0,
                 "guardrail_activations": 0,
@@ -214,6 +219,8 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
             {
                 "runs": 0,
                 "statuses": {"success": 0, "error": 0, "skipped": 0, "cancelled": 0},
+                "execution_status_counts": dict.fromkeys(EXECUTION_STATUSES, 0),
+                "security_outcome_counts": dict.fromkeys(SECURITY_OUTCOMES, 0),
                 "total_score": 0,
                 "chain_exploits": 0,
                 "guardrail_activations": 0,
@@ -237,6 +244,8 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
             {
                 "runs": 0,
                 "statuses": {"success": 0, "error": 0, "skipped": 0, "cancelled": 0},
+                "execution_status_counts": dict.fromkeys(EXECUTION_STATUSES, 0),
+                "security_outcome_counts": dict.fromkeys(SECURITY_OUTCOMES, 0),
                 "total_score": 0,
                 "chain_exploits": 0,
                 "guardrail_activations": 0,
@@ -257,6 +266,9 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
         module_scores = artifact.get("report", {}).get("module_scores", {})
         audit_counts = _artifact_audit_counts(artifact)
         for summary in (provider_level, provider_level_agg, provider_summary):
+            if status_fields["execution_status"]:
+                summary["execution_status_counts"][status_fields["execution_status"]] += 1
+                summary["security_outcome_counts"][status_fields["security_outcome"]] += 1
             for key, count in audit_counts.items():
                 summary[key] += count
         if status == "success":
@@ -590,12 +602,16 @@ def run_provider_matrix(
         # matrix result, so derive it from the authoritative child artifacts.
         if cancellation_token.is_cancelled or status == "cancelled":
             status = "cancelled"
-        elif any(str(artifact.get("status", "")).lower() == "error" for artifact in artifacts):
+        elif any(terminal_status(artifact)["execution_status"] == "failed" for artifact in artifacts):
             status = "error"
+        matrix_fields = matrix_terminal_status(artifacts, interrupted=status == "cancelled",
+            interruption_reason=cancellation_token.reason or "")
+        status = lifecycle_alias(matrix_fields["execution_status"])
         aggregate.update({
             "execution_id": matrix_execution_id,
             "run_id": "matrix-" + config_fingerprint(matrix_config).split(":", 1)[-1][:12],
             "status": status,
+            **matrix_fields,
             "config": matrix_config,
             "config_fingerprint": config_fingerprint(matrix_config),
         })
@@ -691,8 +707,11 @@ def run_provider_matrix(
             "composite_scores": {},
         }
         incomplete_reason = "CANCELLED" if status == "cancelled" else "SKIPPED"
+        status_fields = terminal_status({}, execution_status="interrupted" if status == "cancelled" else None,
+            execution_reason=status_reason("CANCELLED", reason) if status == "cancelled" else None)
         final_state = {
             "iteration_count": 0,
+            **status_fields,
             "task_result": None,
             "incomplete_reason": incomplete_reason,
             "llm_activity": llm_activity,
@@ -725,6 +744,7 @@ def run_provider_matrix(
             "execution_id": run_execution_id,
             "run_id": run_id,
             "status": status,
+            **status_fields,
             "experiment_condition": coordinate["experiment_condition"],
             "target_method": coordinate["target_method"],
             "repeat_index": coordinate["repeat_index"],
@@ -772,6 +792,7 @@ def run_provider_matrix(
             artifact["cancellation_reason"] = reason
         artifact["config_fingerprint"] = config_fingerprint(artifact_config)
         artifact["manual_scoring_evidence"] = []
+        artifact["report"]["summary"].update(status_fields)
         return artifact
 
     def skipped_artifact(coordinate: dict[str, Any], run_execution_id: str) -> dict[str, Any]:
@@ -878,6 +899,7 @@ def run_provider_matrix(
             "confirmed_vulns": redact_secrets(list(artifact.get("confirmed_vulns") or [])),
             "achieved_outcomes": redact_secrets(list(artifact.get("achieved_outcomes") or [])),
             "task_result": artifact.get("task_result"),
+            **terminal_status(artifact),
             "status": artifact.get("status", "unknown"),
             "completed": completed,
             "total": total_runs,

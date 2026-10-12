@@ -5,6 +5,8 @@ again before delegating the fixed 108-coordinate design to multi_llm_runner.
 """
 from __future__ import annotations
 
+from core.run_status import terminal_status, STATUS_FIELDS
+
 import argparse
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -481,6 +483,8 @@ def run_plan(manifest_path: Path) -> dict:
         }, artifacts=artifacts, aggregate=aggregate, status=aggregate.get("status"))
         run_summary.update({
             "status": aggregate.get("status", "unknown"),
+            **terminal_status(aggregate),
+            "totals": aggregate.get("totals", {}),
             "matrix_execution_id": aggregate.get("execution_id"),
             "completed_artifacts": len(artifacts),
             "coordinates": [{
@@ -488,6 +492,7 @@ def run_plan(manifest_path: Path) -> dict:
                 "execution_id": artifact.get("execution_id"),
                 "run_id": artifact.get("run_id"),
                 "status": artifact.get("status", "unknown"),
+                **terminal_status(artifact),
             } for planned, artifact in zip(plan["planned_identities"], artifacts)],
         })
     except BaseException as exc:
@@ -505,6 +510,7 @@ def run_plan(manifest_path: Path) -> dict:
         "artifact_type": "scoring_v4_matrix_end", "status": run_summary["status"],
         "ended_at": datetime.now(timezone.utc).isoformat(),
         "matrix_execution_id": plan["matrix_execution_id"],
+        **{key: run_summary.get(key) for key in STATUS_FIELDS},
         "completed_artifacts": len(artifacts), "plan_sha256": plan["plan_sha256"],
     })
     return run_summary

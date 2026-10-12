@@ -111,6 +111,10 @@ class RuntimeDescriptor:
     mode: str = "single-run"
     experiment_dir: str = ""
     status: str = ACTIVE_STATUS
+    execution_status: str | None = None
+    execution_reason: dict | None = None
+    security_outcome: str | None = None
+    security_outcome_reason: dict | None = None
     started_at: str = field(default_factory=_utc_now)
     updated_at: str = field(default_factory=_utc_now)
     heartbeat_at: str | None = None
@@ -314,13 +318,13 @@ class RuntimeDescriptorHeartbeatSink:
             self._descriptor = current
             self._last_write = now
 
-    def terminate(self, status: str, *, run_id: str | None = None) -> RuntimeDescriptor:
+    def terminate(self, status: str, *, run_id: str | None = None, status_fields: dict | None = None) -> RuntimeDescriptor:
         """Persist a terminal descriptor and stop future heartbeat rewrites."""
 
         with self._lock:
             if self._descriptor.is_terminal:
                 return self._descriptor
-            source = replace(self._descriptor, run_id=run_id or self._descriptor.run_id)
+            source = replace(self._descriptor, run_id=run_id or self._descriptor.run_id, **(status_fields or {}))
             self._descriptor = write_terminal_descriptor(source, status)
             return self._descriptor
 

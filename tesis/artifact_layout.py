@@ -7,6 +7,8 @@ terminal runner so old integrations and existing artifacts remain readable.
 
 from __future__ import annotations
 
+from core.run_status import terminal_status
+
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -143,6 +145,7 @@ class ExperimentArtifactLayout:
                 "execution_id": execution_id,
                 "run_id": artifact.get("run_id"),
                 "status": artifact.get("status", "unknown"),
+                **terminal_status(artifact),
                 "provider": artifact.get("provider", artifact_config.get("provider")),
                 "surface": artifact.get("surface", artifact_config.get("surface")),
                 "security_level": artifact.get("security_level", artifact_config.get("security_level")),
@@ -165,6 +168,7 @@ class ExperimentArtifactLayout:
                 "execution_id": aggregate_execution_id,
                 "run_id": aggregate.get("run_id"),
                 "status": aggregate.get("status"),
+                **terminal_status(aggregate),
                 "totals": aggregate.get("totals", {}),
             }
 
@@ -177,6 +181,7 @@ class ExperimentArtifactLayout:
             "status": status or (aggregate or {}).get("status") or (
                 artifacts[-1].get("status") if artifacts else "unknown"
             ),
+            **terminal_status(aggregate or (artifacts[-1] if artifacts else {})),
             "config": safe_config,
             "aggregate": aggregate_info,
             "runs": runs,

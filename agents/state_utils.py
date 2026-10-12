@@ -600,6 +600,8 @@ def make_update(
     blocked_agents: list[str] | None = None,
     task_result: str | None = None,
     incomplete_reason: str | None = None,
+    execution_error: Exception | None = None,
+    execution_failure_code: str | None = None,
 ) -> dict[str, Any]:
     """Build a method-agent partial state update without mutating input state.
 
@@ -621,6 +623,8 @@ def make_update(
         blocked_agents: Method IDs to mark as blocked.
         task_result: Optional terminal task status.
         incomplete_reason: Optional reason for incomplete execution.
+        execution_error: Caught setup/execution exception retained as failure metadata.
+        execution_failure_code: Explicit setup failure without a raised exception.
 
     Returns:
         Partial `ExploitationState` update suitable for LangGraph reducers.
@@ -797,6 +801,12 @@ def make_update(
         update["task_result"] = task_result
     if incomplete_reason is not None:
         update["incomplete_reason"] = incomplete_reason
+    if execution_error is not None or execution_failure_code is not None:
+        from core.run_status import reason
+        code = execution_failure_code or ("TARGET_TRANSPORT_FAILURE"
+            if isinstance(execution_error, (TransportError, RequestTimeoutError)) else "METHOD_EXECUTION_FAILURE")
+        detail = f"{module_name}: {type(execution_error).__name__}" if execution_error is not None else f"{module_name}: session login failed"
+        update.update(execution_status="failed", execution_reason=reason(code, detail))
 
     return update
 

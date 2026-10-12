@@ -5,6 +5,8 @@ LLM adapters, agents, evaluation, or CLI integration without changing runtime
 code."""
 import json
 
+import pytest
+
 from evaluation.runner import _llm_activity, run_single_engagement
 from evaluation.reporter import build_candidate_dispositions
 from llm.runtime import current_call_context
@@ -335,156 +337,71 @@ def test_partial_llm_activity_is_not_reported_as_success(monkeypatch):
     assert artifact["llm_activity"] == {"started": 2, "completed": 1, "failed": 0, "tokens": 0}
 
 
-def test_terminal_incomplete_run_is_not_reported_as_success(monkeypatch, tmp_path):
-    """A completed graph must preserve its incomplete terminal result."""
+def test_terminal_incomplete_is_a_completed_unconfirmed_execution(monkeypatch, tmp_path):
     class FakeApp:
         def stream(self, state, stream_mode=None, config=None):
-            yield {
-                **state,
-                "iteration_count": 4,
-                "task_result": "INCOMPLETE",
-                "incomplete_reason": "ALL_METHODS_FAILED",
-            }
-
-    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
-
-    artifact = run_single_engagement(
-        target_url="http://localhost/dvwa",
-        security_level="low",
-        llm_provider="openai_compatible",
-        enriched_reporting=True,
-        output_dir=str(tmp_path),
-    )
-
-    assert artifact["status"] == "error"
-    assert artifact["task_result"] == "INCOMPLETE"
-    assert artifact["incomplete_reason"] == "ALL_METHODS_FAILED"
-    assert "ALL_METHODS_FAILED" in artifact["error"]
-    failure_path = tmp_path / f"{artifact['execution_id']}.failure.json"
-    assert failure_path.exists()
-    failure = json.loads(failure_path.read_text(encoding="utf-8"))
-    assert failure["final_state"]["task_result"] == "INCOMPLETE"
-    assert failure["final_state"]["incomplete_reason"] == "ALL_METHODS_FAILED"
-
-    event_rows = [
-        json.loads(line)
-        for line in (tmp_path / f"{artifact['execution_id']}.events.jsonl").read_text(encoding="utf-8").splitlines()
-    ]
-    failed = next(row for row in event_rows if row["event_type"] == "run.failed")
-    assert failed["data"] == {"task_result": "INCOMPLETE", "reason": "ALL_METHODS_FAILED"}
-    assert event_rows[-1]["event_type"] == "run.finished"
-    assert event_rows[-1]["data"]["status"] == "error"
+            yield {**state, "iteration_count": 4, "task_result": "INCOMPLETE", "incomplete_reason": "ALL_METHODS_FAILED"}
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **kwargs: FakeApp())
+    artifact = run_single_engagement(target_url="http://localhost/dvwa", security_level="low",
+        llm_provider="openai_compatible", target_method="sqli_union", payload_mode="static_only",
+        output_dir=str(tmp_path), enriched_reporting=True)
+    assert artifact["status"] == "success"
+    assert artifact["execution_status"] == "completed"
+    assert artifact["security_outcome"] == "unconfirmed"
+    assert artifact["incomplete_reason"] == "ALL_METHODS_FAILED"  # compatibility alias
+    assert artifact["error"] is None
+    assert not (tmp_path / f"{artifact['execution_id']}.failure.json").exists()
+    saved = json.loads((tmp_path / f"{artifact['execution_id']}.json").read_text())
+    assert saved["final_state"]["execution_status"] == "completed"
+    events = [json.loads(line) for line in (tmp_path / f"{artifact['execution_id']}.events.jsonl").read_text().splitlines()]
+    assert not any(e["event_type"] == "run.failed" for e in events)
+    assert events[-1]["data"]["execution_status"] == "completed"
 
 
-def test_iteration_limit_reason_is_preserved_in_artifact_events(monkeypatch, tmp_path):
-    """The runner persists budget exhaustion distinctly from semantic failure."""
+@pytest.mark.parametrize("legacy_reason", ["ITERATION_LIMIT", None])
+def test_normal_terminal_stops_have_an_evidence_reason(monkeypatch, legacy_reason):
     class FakeApp:
         def stream(self, state, stream_mode=None, config=None):
-            yield {
-                **state,
-                "iteration_count": 30,
-                "task_result": "INCOMPLETE",
-                "incomplete_reason": "ITERATION_LIMIT",
-                "telemetry_events": [{
-                    "node": "orchestrator",
-                    "iteration": 30,
-                    "event": "orchestrator.stop",
-                    "status": "incomplete",
-                    "payload": {"reason": "ITERATION_LIMIT"},
-                }],
-            }
-
-    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
-
-    artifact = run_single_engagement(
-        target_url="http://localhost/dvwa",
-        security_level="low",
-        llm_provider="openai_compatible",
-        enriched_reporting=True,
-        output_dir=str(tmp_path),
-    )
-
-    assert artifact["status"] == "error"
-    assert artifact["task_result"] == "INCOMPLETE"
-    assert artifact["incomplete_reason"] == "ITERATION_LIMIT"
-    event_rows = [
-        json.loads(line)
-        for line in (tmp_path / f"{artifact['execution_id']}.events.jsonl").read_text(encoding="utf-8").splitlines()
-    ]
-    failed = next(row for row in event_rows if row["event_type"] == "run.failed")
-    assert failed["data"] == {"task_result": "INCOMPLETE", "reason": "ITERATION_LIMIT"}
-
-
-def test_terminal_incomplete_without_reason_uses_a_stable_reason(monkeypatch, tmp_path):
-    """Incomplete graph output without a reason remains auditable as an error."""
-    class FakeApp:
-        def stream(self, state, stream_mode=None, config=None):
-            yield {**state, "iteration_count": 2, "task_result": "INCOMPLETE"}
-
-    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
-
-    artifact = run_single_engagement(
-        target_url="http://localhost/dvwa",
-        security_level="low",
-        llm_provider="openai_compatible",
-        enriched_reporting=True,
-        output_dir=str(tmp_path),
-    )
-
-    assert artifact["status"] == "error"
-    assert artifact["task_result"] == "INCOMPLETE"
-    assert artifact["incomplete_reason"] == "UNSPECIFIED"
-    failure = json.loads(
-        (tmp_path / f"{artifact['execution_id']}.failure.json").read_text(encoding="utf-8")
-    )
-    assert failure["final_state"]["incomplete_reason"] == "UNSPECIFIED"
+            yield {**state, "iteration_count": 3, "task_result": "INCOMPLETE", "incomplete_reason": legacy_reason}
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **kwargs: FakeApp())
+    artifact = run_single_engagement(target_url="http://localhost/dvwa", security_level="low",
+        llm_provider="openai_compatible", target_method="sqli_union")
+    assert artifact["execution_status"] == "completed"
+    assert artifact["security_outcome_reason"]["code"] == "NO_CANDIDATE_CONFIRMATION"
+    assert artifact["incomplete_reason"] == (legacy_reason or "NO_CANDIDATE_CONFIRMATION")
 
 
 def test_failure_sidecar_is_written_without_rich_reporting(monkeypatch, tmp_path):
-    """Default/error runs retain a compact failure artifact for audit."""
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("unit failure")))
+    artifact = run_single_engagement(target_url="http://localhost/dvwa", security_level="low",
+        llm_provider="gemini", output_dir=str(tmp_path), enriched_reporting=False)
+    failure = json.loads((tmp_path / f"{artifact['execution_id']}.failure.json").read_text())
+    assert artifact["execution_status"] == failure["execution_status"] == "failed"
+    assert failure["final_state"]["execution_reason"]["code"] == "RUNNER_EXCEPTION"
+
+
+def test_reason_only_terminal_state_from_invoke_is_completed(monkeypatch):
     class FakeApp:
         def stream(self, state, stream_mode=None, config=None):
-            yield {**state, "iteration_count": 1, "task_result": "INCOMPLETE", "incomplete_reason": "ALL_METHODS_FAILED"}
-
-    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
-
-    artifact = run_single_engagement(
-        target_url="http://localhost/dvwa",
-        security_level="low",
-        llm_provider="gemini",
-        output_dir=str(tmp_path),
-        enriched_reporting=False,
-    )
-
-    failure_path = tmp_path / f"{artifact['execution_id']}.failure.json"
-    assert failure_path.exists()
-    failure = json.loads(failure_path.read_text(encoding="utf-8"))
-    assert failure["final_state"]["task_result"] == "INCOMPLETE"
-    assert failure["final_state"]["incomplete_reason"] == "ALL_METHODS_FAILED"
-    assert failure["final_state"]["llm_activity"]["started"] == 0
-
-
-def test_reason_only_terminal_state_from_invoke_is_not_reported_as_success(monkeypatch):
-    """The runner recognizes scorer-compatible reason-only terminal output."""
-    class FakeApp:
-        def stream(self, state, stream_mode=None, config=None):
-            if False:
-                yield state
-
+            yield from ()
         def invoke(self, state, config=None):
             return {**state, "iteration_count": 3, "incomplete_reason": "ALL_METHODS_FAILED"}
-
-    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: FakeApp())
-
-    artifact = run_single_engagement(
-        target_url="http://localhost/dvwa",
-        security_level="low",
-        llm_provider="openai_compatible",
-    )
-
-    assert artifact["status"] == "error"
-    assert artifact["task_result"] == "INCOMPLETE"
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **kwargs: FakeApp())
+    artifact = run_single_engagement(target_url="http://localhost/dvwa", security_level="low",
+        llm_provider="openai_compatible", target_method="sqli_union")
+    assert artifact["execution_status"] == "completed"
     assert artifact["incomplete_reason"] == "ALL_METHODS_FAILED"
+
+
+@pytest.mark.parametrize("error_type", ["TransportError", "RequestTimeoutError"])
+def test_true_target_transport_failure_remains_failed(monkeypatch, error_type):
+    from foundation import http_client
+    error = getattr(http_client, error_type)("unit target unavailable")
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **kwargs: (_ for _ in ()).throw(error))
+    artifact = run_single_engagement(target_url="http://localhost/dvwa", security_level="low", llm_provider="gemini")
+    assert artifact["execution_status"] == "failed"
+    assert artifact["execution_reason"]["code"] == "TARGET_TRANSPORT_FAILURE"
+    assert artifact["security_outcome"] == "unconfirmed"
 
 
 def test_unknown_terminal_state_is_not_reported_as_success(monkeypatch):
@@ -523,6 +440,8 @@ def test_cancelled_before_execution_persists_cancelled_artifact(monkeypatch, tmp
     )
 
     assert artifact["status"] == "cancelled"
+    assert artifact["execution_status"] == "interrupted"
+    assert artifact["execution_reason"]["code"] == "CANCELLED"
     assert artifact["execution_id"]
     assert artifact["config_fingerprint"]
     assert (tmp_path / f"{artifact['execution_id']}.json").exists()
@@ -676,3 +595,19 @@ def test_runtime_calls_feed_runner_activity_and_effective_runtime_metadata(monke
     assert "do-not-store" not in json.dumps(effective)
     assert artifact["config"]["llm_cache_scope"] == "run"
     assert artifact["config"]["llm_max_concurrency"] == 1
+
+
+def test_primary_artifact_write_failure_is_a_failed_execution(monkeypatch, tmp_path):
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            yield {**state, 'iteration_count': 1}
+    monkeypatch.setattr('evaluation.runner.build_framework', lambda **kwargs: FakeApp())
+    monkeypatch.setattr('evaluation.runner.write_json_report', lambda *args: (_ for _ in ()).throw(OSError('unit write failure')))
+    sink = CollectingEventSink()
+    artifact = run_single_engagement(target_url='http://localhost/dvwa', security_level='low',
+        llm_provider='gemini', target_method='sqli_union', output_dir=str(tmp_path), event_sink=sink)
+    assert artifact['execution_status'] == 'failed'
+    assert artifact['execution_reason']['code'] == 'ARTIFACT_WRITE_FAILURE'
+    assert artifact['status'] == 'error'
+    assert artifact['final_state']['execution_status'] == artifact['report']['summary']['execution_status'] == 'failed'
+    assert sink.events[-1].event_type == 'run.failed'

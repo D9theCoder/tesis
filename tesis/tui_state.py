@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from tesis.runtime_events import RunEvent, redact_secrets
+from core.run_status import terminal_status, STATUS_FIELDS, lifecycle_alias, reason as status_reason
 
 import tesis.tui_security as tui_security
 
@@ -25,7 +26,7 @@ _DROP_COT_KEYS = frozenset({
     "prompt", "reasoning", "cot",
 })
 
-RunStatus = Literal["ready", "running", "degraded", "succeeded", "failed", "cancelled"]
+RunStatus = Literal["ready", "running", "degraded", "succeeded", "failed", "cancelled", "unknown"]
 StageStatus = Literal["queued", "running", "succeeded", "warning", "failed"]
 
 CANONICAL_STAGE_IDS = (
@@ -38,10 +39,10 @@ CANONICAL_STAGE_IDS = (
     "scorer",
 )
 
-_FINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
+_FINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled", "unknown"})
 
 # Coordinate statuses that a late or replayed matrix.run.started must not undo.
-_FINAL_COORDINATE_STATUSES = frozenset({"succeeded", "failed", "skipped", "cancelled", "error"})
+_FINAL_COORDINATE_STATUSES = frozenset({"succeeded", "failed", "skipped", "cancelled", "error", "unknown"})
 
 
 @dataclass(slots=True)
@@ -67,6 +68,10 @@ class CoordinateRow:
     selected_method: str | None = None
     run_id: str | None = None
     task_result: str | None = None
+    execution_status: str | None = None
+    execution_reason: dict | None = None
+    security_outcome: str | None = None
+    security_outcome_reason: dict | None = None
     failure_class: str | None = None
     finding_count: int = 0
     confirmed_vulns: list = field(default_factory=list)
@@ -87,6 +92,10 @@ class FailureSummary:
 @dataclass(slots=True)
 class TuiRunState:
     status: str = "ready"
+    execution_status: str | None = None
+    execution_reason: dict | None = None
+    security_outcome: str | None = None
+    security_outcome_reason: dict | None = None
     execution_id: str | None = None
     run_mode: str = "single"
     stages: list = field(default_factory=list)
@@ -290,6 +299,8 @@ def _apply_event(state: TuiRunState, event: RunEvent) -> frozenset[str]:
         state.selected_coordinate = None
         state.stages = _fresh_stages()
         state.selected_method = None
+        for key in STATUS_FIELDS:
+            setattr(state, key, None)
         state.confirmed_vulns = []
         state.achieved_outcomes = []
         state.verifier_decision = None
@@ -346,11 +357,21 @@ def _apply_event(state: TuiRunState, event: RunEvent) -> frozenset[str]:
             failure_class = failure_class or data["failure"].get("failure_class")
         if failure_class:
             row.failure_class = str(redact_secrets(failure_class))[:120]
+        fields = terminal_status(data)
+        for key, value in fields.items():
+            setattr(row, key, redact_secrets(value))
         raw_status = str(data.get("status", "") or "").lower()
+        if fields["execution_status"]:
+            raw_status = lifecycle_alias(fields["execution_status"])
+        elif raw_status == "error" and data.get("task_result") == "INCOMPLETE":
+            raw_status = "unknown"
         if raw_status in {"skipped", "cancelled"}:
             row.status = raw_status
+        elif raw_status == "unknown":
+            row.status = "unknown"
         else:
-            row.status = "failed" if (row.failure_class or raw_status in {"failed", "error"}) else "succeeded"
+            row.status = "failed" if (raw_status in {"failed", "error"}
+                or row.failure_class and fields["execution_status"] is None) else "succeeded"
         for key, attr in (("confirmed_vulns", "confirmed_vulns"), ("achieved_outcomes", "achieved_outcomes")):
             values = data.get(key)
             if isinstance(values, (list, tuple)):
@@ -423,9 +444,18 @@ def _apply_event(state: TuiRunState, event: RunEvent) -> frozenset[str]:
         return frozenset(dirty)
 
     if event_type in ("run.finished", "matrix.finished"):
+        fields = terminal_status(data)
+        for key, value in fields.items():
+            setattr(state, key, redact_secrets(value))
         raw_status = str(data.get("status", "")).lower()
+        if fields["execution_status"]:
+            raw_status = lifecycle_alias(fields["execution_status"])
+        elif raw_status == "error" and data.get("task_result") == "INCOMPLETE":
+            raw_status = "unknown"
         if raw_status == "cancelled":
             state.status = "cancelled"
+        elif raw_status == "unknown":
+            state.status = "unknown"
         elif raw_status in {"error", "failed"}:
             state.status = "failed"
         elif raw_status in {"success", "complete", "completed", "finished"}:
@@ -448,6 +478,14 @@ def _apply_event(state: TuiRunState, event: RunEvent) -> frozenset[str]:
         return frozenset(dirty)
 
     if event_type in ("run.failed", "matrix.failed", "run.error"):
+        fields = terminal_status({**data, "status": "error", "incomplete_reason": data.get("reason")})
+        if fields["execution_status"] is None and data.get("task_result") == "INCOMPLETE":
+            state.status = "unknown"
+            _push_notice(state, f"Historical lifecycle unattributed: {safe_message}"[:300])
+            return frozenset({"header", "notices"})
+        if data.get("execution_status"):
+            for key, value in fields.items():
+                setattr(state, key, redact_secrets(value))
         state.status = "failed"
         state.failure = _failure_summary_from_data({**data, "message": message or data.get("message")})
         _push_notice(state, f"failed: {safe_message or state.failure.failure_class}"[:300])
@@ -455,10 +493,17 @@ def _apply_event(state: TuiRunState, event: RunEvent) -> frozenset[str]:
         return frozenset(dirty)
 
     if event_type in ("run.cancelled", "matrix.cancelled", "run.cancellation"):
+        # Early runner notices may omit outcome metadata. Retain the current
+        # evidence until the launcher supplies the authoritative terminal fields.
+        fields = terminal_status({**{key: getattr(state, key) for key in STATUS_FIELDS}, **data},
+            execution_status="interrupted",
+            execution_reason=data.get("execution_reason") or status_reason("CANCELLED", safe_message))
+        for key, value in fields.items():
+            setattr(state, key, redact_secrets(value))
         state.status = "cancelled"
         if safe_message:
             _push_notice(state, safe_message)
-        dirty.update({"header", "notices"})
+        dirty.update({"header", "evidence", "notices"})
         return frozenset(dirty)
 
     if event_type in ("llm.failed", "llm.error", "provider.failed"):

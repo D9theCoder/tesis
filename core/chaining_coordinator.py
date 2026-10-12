@@ -7,6 +7,8 @@ stand in for confirmation of that later method's vulnerability node.
 
 from __future__ import annotations
 
+from core.run_status import terminal_status
+
 import logging
 
 from core.knowledge_graph import AttackKnowledgeGraph
@@ -345,6 +347,8 @@ def chaining_router_node(state: dict) -> dict:
         # the persisted artifact agree with the verifier-backed finding.
         updates["task_result"] = "SUCCESS"
         updates["incomplete_reason"] = None
+    if event.get("reason") in {"all_methods_exhausted", "confirmed_success"}:
+        updates.update(terminal_status({**state, **updates}, classify=True))
     event["payload"] = {k: v for k, v in event.items() if k not in {"node", "event", "iteration", "payload"}}
     updates["telemetry_events"] = [event]
     return updates

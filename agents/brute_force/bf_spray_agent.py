@@ -360,6 +360,7 @@ def bf_spray_agent(state: ExploitationState) -> dict[str, Any]:
             return make_update(
                 state=state, module_name=AGENT_ID, score=0, tried_payloads=[],
                 failure_agents=[AGENT_ID],
+                execution_failure_code="SESSION_LOGIN_FAILED",
             )
         session.set_security_level(security_level)
         user_token = None if security_level == "high" else _module_user_token(session)
@@ -457,6 +458,7 @@ def bf_spray_agent(state: ExploitationState) -> dict[str, Any]:
         return make_update(
             state=state, module_name=AGENT_ID, score=0, tried_payloads=[],
             failure_agents=[AGENT_ID],
+            execution_error=exc,
         )
     finally:
         session.close()

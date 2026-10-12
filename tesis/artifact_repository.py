@@ -27,6 +27,8 @@ from typing import Any, Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
+from core.run_status import terminal_status, lifecycle_alias
+
 LOGGER = logging.getLogger(__name__)
 
 _FINGERPRINT_PREFIX: Final[str] = "sha256:"
@@ -674,6 +676,10 @@ class ArtifactMetadata:
     execution_id: str | None = None
     run_id: str | None = None
     status: str = "unknown"
+    execution_status: str | None = None
+    security_outcome: str | None = None
+    execution_reason: dict | None = None
+    security_outcome_reason: dict | None = None
     provider: str | None = None
     surface: str | None = None
     security_level: str | None = None
@@ -727,6 +733,15 @@ def _metadata_from_record(
         else _metadata_value(record, parent, ("run_id", "legacy_run_id", "id"))
     )
     status = _string_value(_metadata_value(record, parent, ("status", "run_status", "state"))) or "unknown"
+    try:
+        fields = terminal_status(record)
+    except (TypeError, ValueError, AttributeError):
+        fields = terminal_status({})
+        status = "unknown"
+    if fields["execution_status"] and record.get("artifact_type") not in {"thesis_score_receipt", "thesis_review_status"}:
+        status = lifecycle_alias(fields["execution_status"])
+    elif status == "error" and fields["execution_status"] is None:
+        status = "unknown"
     provider = _string_value(_metadata_value(record, parent, ("provider", "llm_provider")))
     surface = _string_value(_metadata_value(record, parent, ("surface", "current_surface", "target_surface")))
     security_level = _string_value(
@@ -753,6 +768,7 @@ def _metadata_from_record(
         execution_id=execution_id,
         run_id=run_id,
         status=status,
+        **fields,
         provider=provider,
         surface=surface,
         security_level=security_level,
@@ -1119,7 +1135,7 @@ def _matches_filters(item: ArtifactMetadata, filters: Mapping[str, object]) -> b
     for key, requested in filters.items():
         normalised = _normalise_key(key)
         normalised = aliases.get(normalised, normalised)
-        if normalised not in {"status", "provider", "surface", "security_level", "payload_mode"}:
+        if normalised not in {"status", "execution_status", "security_outcome", "provider", "surface", "security_level", "payload_mode"}:
             continue
         if not _matches_filter(getattr(item, normalised), requested):
             return False

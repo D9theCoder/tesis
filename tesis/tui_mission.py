@@ -70,7 +70,7 @@ _STAGE_GLYPH = {"queued": "○", "running": "●", "succeeded": "✓", "warning"
 _STATUS_GLYPH = {"ready": "○", "running": "●", "succeeded": "✓",
                  "degraded": "!", "failed": "×", "cancelled": "!"}
 
-_RUN_STATUSES = ("ready", "running", "degraded", "succeeded", "failed", "cancelled")
+_RUN_STATUSES = ("ready", "running", "degraded", "succeeded", "failed", "cancelled", "unknown")
 
 _TOO_SMALL_FOOTER = "? help · q quit"
 
@@ -257,7 +257,7 @@ class MissionControlScreen(Screen):
         try:
             table = self.query_one("#coordinate-pane", DataTable)
             table.add_columns("#", "status", "provider", "surface", "level",
-                              "mode", "method", "findings", "elapsed")
+                              "mode", "method", "outcome", "findings", "elapsed")
             # Row cursor: Enter inspects a whole coordinate, never a single cell.
             table.cursor_type = "row"
         except Exception:
@@ -429,7 +429,8 @@ class MissionControlScreen(Screen):
             cells = {
                 "#": str(index),
                 "index": str(index),
-                "status": _cell(row.status),
+                "status": _cell(row.execution_status or row.status),
+                "outcome": _cell(row.security_outcome),
                 "provider": _cell(row.provider),
                 "surface": _cell(row.surface),
                 "level": _cell(row.level),
@@ -449,6 +450,8 @@ class MissionControlScreen(Screen):
         self._update("#evidence-badge", f"evidence · {state.unseen_evidence} new")
         lines = [
             "Evidence",
+            f"execution={state.execution_status or '—'} security={state.security_outcome or '—'} "
+            f"reason={(state.security_outcome_reason or {}).get('code', '—')}",
             f"findings={len(state.confirmed_vulns)} outcomes={len(state.achieved_outcomes)} "
             f"verifier={state.verifier_decision or '—'}",
             f"guardrails={state.guardrail_count} containment={state.containment_count} "

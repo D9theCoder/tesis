@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+
+from core.run_status import terminal_status
 import json
 
 
@@ -30,6 +32,7 @@ def write_failure_artifact(
     payload = {
         "schema_version": "stage6.failure.v1",
         "run_id": run_id,
+        **terminal_status(final_state),
         "error": error,
         "failure": failure,
         "final_state": final_state,

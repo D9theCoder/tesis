@@ -52,6 +52,10 @@ class ScoreSummary:
     # value are legacy (see evaluation.metrics.metric_reading).
     metric_availability: dict[str, bool] = field(default_factory=dict)
     metric_unavailable_reason: dict[str, str] = field(default_factory=dict)
+    execution_status: str | None = None
+    execution_reason: dict | None = None
+    security_outcome: str | None = None
+    security_outcome_reason: dict | None = None
 
     def __post_init__(self):
         if self.evasion_attempts < 0 or self.successful_evasions < 0:

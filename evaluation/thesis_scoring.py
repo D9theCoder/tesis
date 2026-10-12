@@ -20,6 +20,7 @@ import math
 
 from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.reporter import write_json_report
+from core.run_status import terminal_status
 from tesis.runtime_events import redact_secrets
 
 
@@ -382,7 +383,7 @@ def review_queue(source: str | Path) -> dict:
         component_refs['Schain'].extend(f'#/final_state/weak_chain_opportunities/{i}'
             for i,r in enumerate(state.get('weak_chain_opportunities', [])) if r.get('method') == method)
         component_refs['Smethod'].append('#/config/scoring_profile')
-    return {'rubric_version': version, 'source_path': str(path.resolve()),
+    return {**terminal_status(artifact), 'rubric_version': version, 'source_path': str(path.resolve()),
         'source_sha256': sha256(raw).hexdigest(), 'run_id': artifact.get('run_id'),
         'execution_id': artifact.get('execution_id'), 'selection': mode,
         'evaluator': redact_secrets(evaluator), 'method': method, 'candidates': rows,
@@ -394,7 +395,7 @@ def review_queue(source: str | Path) -> dict:
             'evaluation/thesis_scoring.py', 'evaluation/scoring_evidence.py', 'foundation/verifier.py'))).hexdigest() if version == 'scoring.v4'
             else sha256(Path(__file__).read_bytes()).hexdigest(),
         'metrics': _thesis_metrics(artifact, rows, components),
-        'config': redact_secrets(config), 'stop_reason': artifact.get('incomplete_reason') or state.get('incomplete_reason')}
+        'config': redact_secrets(config), 'stop_reason': (terminal_status(artifact)['execution_reason'] or terminal_status(artifact)['security_outcome_reason'] or {}).get('code')}
 
 
 def _automatic_components(artifact, method, rows):
@@ -650,6 +651,7 @@ def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=Fals
     latest = _validated_reviews(queue, decisions)
     modes = ('human', 'ai') if queue['selection'] == 'both' else (queue['selection'],)
     result = {'rubric_version': queue['rubric_version'], 'source_sha256': queue['source_sha256'],
+        **{k: queue[k] for k in ('execution_status', 'execution_reason', 'security_outcome', 'security_outcome_reason')},
         'artifact_type': 'thesis_review_status', 'config': queue['config'], 'method': queue['method'],
         'scoring_rule_sha256': queue['scoring_rule_sha256'],
         'decision_ledger_path': str(review_ledger_path(source,
@@ -687,7 +689,8 @@ def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=Fals
         vector = {**queue['components'], 'Spayload': payload}
         receipt = {k: queue[k] for k in ('rubric_version', 'source_path', 'source_sha256', 'run_id',
             'execution_id', 'selection', 'method', 'config', 'stop_reason', 'metrics',
-            'component_evidence_refs', 'scoring_rule_sha256')}
+            'component_evidence_refs', 'scoring_rule_sha256',
+            'execution_status', 'execution_reason', 'security_outcome', 'security_outcome_reason')}
         receipt.update({'artifact_type': 'thesis_score_receipt', 'scoring_mode': mode, 'status': 'final',
             'composite_score_status': f"thesis_final_{queue['rubric_version']}", 'thesis_scoring_status': 'final',
             'selection_evidence': queue['selection_evidence'], 'output_reason': queue['output_reason'],

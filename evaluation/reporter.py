@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.run_status import terminal_status
+
 
 def link_exported_request_evidence(artifact: dict[str, Any]) -> None:
     """Bind response IDs and validation receipts to exported evidence records."""
@@ -141,7 +143,11 @@ def build_candidate_dispositions(artifact: dict[str, Any]) -> None:
     incomplete_reason = artifact.get("incomplete_reason")
     run_status = artifact.get("status")
     run_error = artifact.get("error")
-    if incomplete_reason:
+    canonical_reason = artifact.get("execution_reason") or artifact.get("security_outcome_reason")
+    if isinstance(canonical_reason, dict):
+        terminal_reason = canonical_reason["code"]
+        terminal_reason_source = "artifact.execution_reason" if artifact.get("execution_reason") else "artifact.security_outcome_reason"
+    elif incomplete_reason:
         terminal_reason = f"incomplete_reason:{incomplete_reason}"
         terminal_reason_source = "final_state.incomplete_reason"
     elif task_result:
@@ -351,10 +357,14 @@ def build_markdown_summary(aggregate: dict) -> str:
         "# Evaluation Summary",
         "",
         f"- Total runs: {totals.get('total_runs', 0)}",
-        f"- Successful runs: {totals.get('successful_runs', 0)}",
+        f"- Completed executions: {totals.get('completed_runs', totals.get('successful_runs', 0))}",
         f"- Error runs: {totals.get('error_runs', 0)}",
         f"- Skipped runs: {totals.get('skipped_runs', 0)}",
     ]
+    for key, count in totals.get("security_outcome_counts", {}).items():
+        lines.append(f"- Security outcome {key}: {count}")
+    if totals.get("execution_unknown_runs"):
+        lines.append(f"- Historical executions with unknown lifecycle: {totals['execution_unknown_runs']}")
     metrics_block = aggregate.get("metrics")
     if not isinstance(metrics_block, dict) or not metrics_block:
         metrics_block = totals.get("metrics", {})

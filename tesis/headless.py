@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.run_status import terminal_status, STATUS_FIELDS
+
 import dataclasses
 import inspect
 from pathlib import Path
@@ -215,6 +217,9 @@ def _descriptor_coordinates(config: EngagementConfig) -> dict[str, Any]:
 def _terminal_status_for_result(result: dict[str, Any]) -> str:
     """Map a runner result/exception into a terminal descriptor status."""
 
+    fields = terminal_status(result)
+    if fields["execution_status"]:
+        return {"completed": "finished", "failed": "failed", "interrupted": "cancelled"}[fields["execution_status"]]
     status = str(result.get("status", "unknown")).lower()
     if status in {"success", "complete", "completed", "finished"}:
         return "finished"
@@ -374,6 +379,7 @@ def run_resolved(
             "error": f"{type(exc).__name__}: {exc}",
         }
     finally:
+        result.update(terminal_status(result))
         runtime_service.close()
         # Always land in a terminal state, even when runner/provider setup fails.
         if descriptor is not None:
@@ -385,6 +391,7 @@ def run_resolved(
                     # The parent descriptor always retains the preallocated
                     # matrix execution ID.
                     execution_id=descriptor_source.execution_id or result.get("execution_id"),
+                    **{key: result.get(key) for key in STATUS_FIELDS},
                     run_id=(
                         result.get("run_id")
                         if not config.matrix
@@ -395,6 +402,7 @@ def run_resolved(
                     heartbeat_sink.terminate(
                         _terminal_status_for_result(result),
                         run_id=terminal_descriptor.run_id,
+                        status_fields={key: result.get(key) for key in STATUS_FIELDS},
                     )
                 else:
                     write_terminal_descriptor(terminal_descriptor, _terminal_status_for_result(result))
@@ -428,6 +436,7 @@ def run_resolved(
                 message=f"Experiment {terminal}",
                 data={
                     "status": result.get("status", "error"),
+                    **{key: result.get(key) for key in STATUS_FIELDS},
                     "artifact_root": str(layout.root),
                     "totals": result.get("totals", {}),
                     "cancellation": result.get("cancellation", {}),

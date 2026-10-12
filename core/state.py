@@ -1,7 +1,7 @@
 """ExploitationState — shared state schema for all agents and graph nodes."""
 
 from copy import deepcopy
-from typing import Any, TypedDict, Annotated, NotRequired
+from typing import Any, TypedDict, Annotated, NotRequired, Literal
 from operator import add
 
 from langchain_core.messages import AnyMessage
@@ -94,6 +94,25 @@ def _merge_nested_dicts(a: dict[str, dict], b: dict[str, dict]) -> dict[str, dic
         if isinstance(value, dict):
             merged[key] = {**merged.get(key, {}), **value}
     return merged
+
+
+ExecutionStatus = Literal["completed", "failed", "interrupted"]
+SecurityOutcome = Literal["confirmed", "no_finding", "unconfirmed", "fixture_limited"]
+StatusReasonCode = Literal[
+    "NO_CANDIDATE_CONFIRMATION", "PARTIAL_SIGNAL", "VERIFIED_NEGATIVE",
+    "PERMISSION_ORACLE_UNAVAILABLE", "SESSION_ORACLE_UNAVAILABLE",
+    "LLM_RUNTIME_FAILURE", "LLM_NOT_CALLED", "LLM_ACTIVITY_INCOMPLETE",
+    "TARGET_TRANSPORT_FAILURE", "TARGET_REQUEST_FAILURE", "RUNNER_EXCEPTION",
+    "RESUME_REFUSED", "ARTIFACT_WRITE_FAILURE", "ARTIFACT_PROCESSING_FAILURE",
+    "RUNTIME_FAILURE", "CANCELLED", "CHILD_EXECUTION_FAILED", "CHILD_OUTCOMES",
+    "SESSION_LOGIN_FAILED", "METHOD_EXECUTION_FAILURE",
+]
+
+
+class StatusReason(TypedDict):
+    code: StatusReasonCode
+    detail: str
+    evidence_refs: list[str]
 
 
 class ExploitationState(TypedDict):
@@ -210,6 +229,10 @@ class ExploitationState(TypedDict):
     max_iterations: int
     task_result: str | None  # None | "SUCCESS" | "INCOMPLETE"
     incomplete_reason: str | None  # "CONTENT_POLICY" | "ALL_METHODS_FAILED"
+    execution_status: NotRequired[ExecutionStatus | None]
+    execution_reason: NotRequired[StatusReason | None]
+    security_outcome: NotRequired[SecurityOutcome | None]
+    security_outcome_reason: NotRequired[StatusReason | None]
 
 
 def _default_state_template() -> dict[str, Any]:
@@ -292,6 +315,10 @@ def _default_state_template() -> dict[str, Any]:
         "max_iterations": 30,
         "task_result": None,
         "incomplete_reason": None,
+        "execution_status": None,
+        "execution_reason": None,
+        "security_outcome": None,
+        "security_outcome_reason": None,
     }
 
 
@@ -397,6 +424,10 @@ PERSISTENT_STATE_FIELDS = frozenset({
     "max_iterations",
     "task_result",
     "incomplete_reason",
+    "execution_status",
+    "execution_reason",
+    "security_outcome",
+    "security_outcome_reason",
 })
 
 

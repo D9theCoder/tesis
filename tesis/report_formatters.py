@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from core.run_status import terminal_status
+
 
 def _extract_runs(data: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Supports extract runs behavior for this module."""
@@ -53,6 +55,7 @@ def format_module_scores_table(
         return "No run artifacts found for score analysis."
 
     run = runs[0]
+    fields = terminal_status(run)
     report = run.get("report", {})
     module_scores = report.get("module_scores", {})
     if not isinstance(module_scores, Mapping) or not module_scores:
@@ -115,7 +118,8 @@ def format_module_scores_table(
 
     for _name in UNAVAILABLE_METRICS:
         tail.append(f"{_name}: {format_metric(summary_map, _name)}")
-    return _as_table(headers, rows) + "\n" + "\n".join(tail)
+    return (f"Execution: {fields['execution_status'] or 'unknown'}; security outcome: {fields['security_outcome']}\n"
+        + _as_table(headers, rows)) + "\n" + "\n".join(tail)
 
 
 def format_provider_comparison_table(matrix_data: Mapping[str, Any]) -> str:

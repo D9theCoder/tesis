@@ -164,6 +164,7 @@ def sqli_union_agent(state: ExploitationState) -> dict[str, Any]:
             return make_update(
                 state=state, module_name=AGENT_ID, score=0, tried_payloads=[],
                 failure_agents=[AGENT_ID],
+                execution_failure_code="SESSION_LOGIN_FAILED",
             )
         session.set_security_level(security_level)
 
@@ -232,6 +233,7 @@ def sqli_union_agent(state: ExploitationState) -> dict[str, Any]:
         return make_update(
             state=state, module_name=AGENT_ID, score=0, tried_payloads=[],
             failure_agents=[AGENT_ID],
+            execution_error=exc,
         )
     finally:
         session.close()

@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.state import METHODS_BY_SURFACE
+from core.run_status import terminal_status
 from agents.state_utils import method_selection_update
 from llm.guardrail_monitor import is_guardrail_refusal, make_guardrail_event
 from llm.prompts.orchestrator_prompt import build_orchestrator_prompt
@@ -294,6 +295,7 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "iteration_count": iteration_count + 1,
             "task_result": "INCOMPLETE",
             "incomplete_reason": "ITERATION_LIMIT",
+            **terminal_status({**state, "incomplete_reason": "ITERATION_LIMIT"}, classify=True),
             "telemetry_events": [{
                 **telemetry_base,
                 "event": "orchestrator.stop",
@@ -369,6 +371,7 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "iteration_count": iteration_count + 1,
             "task_result": "INCOMPLETE",
             "incomplete_reason": "NO_VIABLE_METHODS",
+            **terminal_status({**state, "incomplete_reason": "NO_VIABLE_METHODS"}, classify=True),
             "fallback_events": [{
                 "event": "orchestrator.no_viable_methods",
                 "surface": current_surface,
@@ -595,6 +598,7 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             terminal_fields = {
                 "task_result": "INCOMPLETE",
                 "incomplete_reason": terminal_reason,
+                **terminal_status({**state, "incomplete_reason": terminal_reason}, classify=True),
             }
             telemetry_events.append({
                 **telemetry_base,
@@ -663,6 +667,7 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "iteration_count": iteration_count + 1,
             "task_result": "INCOMPLETE",
             "incomplete_reason": "LLM_RUNTIME_FAILURE",
+            **terminal_status({**state, "incomplete_reason": "LLM_RUNTIME_FAILURE"}, classify=True),
             "fallback_events": [failure_event],
             "telemetry_events": [
                 *telemetry_events,
