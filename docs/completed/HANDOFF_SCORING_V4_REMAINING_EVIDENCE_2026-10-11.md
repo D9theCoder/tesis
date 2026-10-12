@@ -9,7 +9,7 @@ The [60 incomplete v2 runs](../upcoming/HANDOFF_MATRIX_60_INCOMPLETE_ERRORS_V2_2
 are an earlier cohort and have their own investigation.
 
 Actual repair and prevention work is tracked separately in the
-[defect remediation handoff](../upcoming/HANDOFF_SCORING_V4_DEFECT_REMEDIATION_2026-10-11.md).
+[completed defect remediation handoff](HANDOFF_SCORING_V4_DEFECT_REMEDIATION_2026-10-11.md).
 
 ## Remaining work
 
