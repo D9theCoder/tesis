@@ -391,7 +391,7 @@ def review_queue(source: str | Path) -> dict:
         'selection_evidence': selection_evidence, 'output_reason': output_reason,
         'component_pending_reasons': {k: ('ranking_unavailable:' + str(selection_evidence.get('reason')) if k == 'Smethod'
             else output_reason if k == 'Soutput' else 'missing_required_evidence') for k,v in components.items() if v is None},
-        'scoring_rule_sha256': sha256(b''.join(Path(p).read_bytes() for p in (
+        'scoring_rule_sha256': sha256(b''.join((Path(__file__).resolve().parents[1] / p).read_bytes() for p in (
             'evaluation/thesis_scoring.py', 'evaluation/scoring_evidence.py', 'foundation/verifier.py'))).hexdigest() if version == 'scoring.v4'
             else sha256(Path(__file__).read_bytes()).hexdigest(),
         'metrics': _thesis_metrics(artifact, rows, components),
@@ -648,6 +648,8 @@ def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=Fals
     latest = _validated_reviews(queue, decisions)
     modes = ('human', 'ai') if queue['selection'] == 'both' else (queue['selection'],)
     result = {'rubric_version': queue['rubric_version'], 'source_sha256': queue['source_sha256'],
+        **{k: queue[k] for k in ('execution_id', 'run_id', 'source_path', 'selection')},
+        'generated_at': datetime.now(timezone.utc).isoformat(),
         **{k: queue[k] for k in ('execution_status', 'execution_reason', 'security_outcome', 'security_outcome_reason')},
         'artifact_type': 'thesis_review_status', 'config': queue['config'], 'method': queue['method'],
         'scoring_rule_sha256': queue['scoring_rule_sha256'],
@@ -678,6 +680,9 @@ def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=Fals
             'missing_component_evidence' if any(v is None for v in queue['components'].values()) else None)
         result['workflows'][mode] = {'status': 'pending' if reason else 'final', 'reason': reason,
             'component_pending_reasons': queue['component_pending_reasons'],
+            'components': {**queue['components'], 'Spayload': None},
+            'numerator': sum(r['score'] for r in grades) if grades and all(r['score'] is not None for r in grades) else None,
+            'denominator': len(grades),
             'candidate_grades': grades, 'Spayload_final': None, 'Srun_final': None}
         if reason:
             continue
@@ -704,7 +709,8 @@ def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=Fals
         path = out / f'{identity}.{mode}-verified.json'
         _write_review_file(path, receipt, source)
         result['receipts'][mode] = str(path)
-        result['workflows'][mode].update(Spayload_final=receipt['Spayload_final'], Srun_final=receipt['Srun_final'])
+        result['workflows'][mode].update(Spayload_final=receipt['Spayload_final'], Srun_final=receipt['Srun_final'],
+            components=vector, numerator=numerator, denominator=denominator)
     _write_review_file(ledger, decisions, source)
     _write_review_file(out / f'{identity}.review-status.json', result, source)
     return result

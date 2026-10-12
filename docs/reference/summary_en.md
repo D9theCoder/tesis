@@ -1543,3 +1543,13 @@ dvwa-llm-pentest/
 8. Experiment repetitions must be stored completely.
 9. Models must be compared under the same configuration.
 10. AKG changes before the main experiment must be revalidated.
+
+### Offline observer artifact export
+
+The additive [`observer-projection.v1` contract](observer_projection.md) exposes source-bound metadata for current and historical artifacts. An operator invokes `python -m tesis export-observer` with explicit source roots, review roots in declared epoch order, and a new output under `results/`. The exporter reuses the canonical Python status classifier and availability-aware metric readers. It does not execute experiments, invoke an evaluator, rewrite sources, or change proof thresholds.
+
+New `thesis_review_status` files include execution/run identity, source path/hash, selection and UTC generation time. Human and AI workflows retain independent components, numerator/denominator, pending reasons and nullable finals. Final receipts require verified original source bytes, identity, method/config/rubric/selection, candidate evidence and arithmetic. A newer pending or invalid review cannot replace an eligible final. Legacy pending status joins require a unique verified source hash and a validated contained ledger in the declared review epoch. Stored rule hashes identify the review code epoch independently of the export code epoch.
+
+Manifests retain v1 and add model/profile, repeat, parent identity, stored timing and relative detail references. Manifest indexes remain one-based; projection/event coordinate indexes are zero-based. A source root can be a flat directory or one exact source file. Embedded children retain their own identity/evidence; duplicate copies and missing primary/detail files are diagnosed. Primary/manifest/matrix/review JSON is published by atomic replacement of a unique same-directory temporary file. Journals retain their existing append behavior.
+
+Projection coverage separates planned, represented, completed, failed, interrupted, unknown, skipped/unstarted and confirmed counts. Historical legacy totals and hash-bound analysis labels remain separate from canonical outcomes. Runtime scores retain their provisional origin; absent dimensions stay null. Final payload scores retain the distinct eligible-candidate mean and fractional components. Metrics require finite values with explicit availability; legacy numeric placeholders remain unavailable. Web API/UI integration has separate acceptance requirements.

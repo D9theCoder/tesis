@@ -130,6 +130,16 @@ class ExperimentArtifactLayout:
         """Write a compact index while keeping full evidence in run JSON files."""
 
         safe_config = redact_secrets(dict(config or {}))
+        parent_id = (aggregate or {}).get("execution_id")
+
+        def existing(path: Path) -> str | None:
+            return path.relative_to(self.root).as_posix() if path.is_file() else None
+
+        shared_details = {
+            "journal": existing(self.root / "runtime.events.jsonl"),
+            "snapshot": existing(self.root / "akg.snapshot.json"),
+            "runtime": existing(self.root / "runtime.json"),
+        }
         runs: list[dict[str, Any]] = []
         for index, artifact in enumerate(artifacts):
             artifact_config = artifact.get("config", {})
@@ -138,11 +148,16 @@ class ExperimentArtifactLayout:
             child = self._children[index] if index < len(self._children) else self.root
             execution_id = artifact.get("execution_id")
             primary_name = f"{execution_id}.json" if execution_id else None
+            timing = artifact.get("timing") or {}
             runs.append({
                 "index": index + 1,
+                "index_base": 1,
+                "coordinate_index": index,
+                "coordinate_index_base": 0,
                 "directory": str(child.relative_to(self.root)),
                 "artifact": str((child / primary_name).relative_to(self.root)) if primary_name else None,
                 "execution_id": execution_id,
+                "matrix_execution_id": parent_id,
                 "run_id": artifact.get("run_id"),
                 "status": artifact.get("status", "unknown"),
                 **terminal_status(artifact),
@@ -154,6 +169,20 @@ class ExperimentArtifactLayout:
                     "experiment_condition", artifact_config.get("experiment_condition")
                 ),
                 "target_method": artifact.get("target_method", artifact_config.get("target_method")),
+                **{key: artifact.get(key, artifact_config.get(key)) for key in (
+                    "model", "model_profile", "repeat_index", "selected_method",
+                )},
+                **{key: artifact.get(key) for key in (
+                    "created_at", "started_at", "finished_at", "generated_at", "duration_seconds",
+                )},
+                "timing": dict(timing),
+                "detail": {
+                    **shared_details,
+                    "trace": existing(child / f"{execution_id}.events.jsonl") if execution_id else None,
+                    "rich": existing(child / f"{execution_id}.rich.json") if execution_id else None,
+                    "failure": existing(child / f"{execution_id}.failure.json") if execution_id else None,
+                    "owner_execution_id": parent_id or execution_id,
+                },
             })
 
         aggregate_info: dict[str, Any] | None = None
@@ -170,6 +199,8 @@ class ExperimentArtifactLayout:
                 "status": aggregate.get("status"),
                 **terminal_status(aggregate),
                 "totals": aggregate.get("totals", {}),
+                "detail": shared_details,
+                **{key: aggregate.get(key) for key in ("generated_at", "started_at", "finished_at")},
             }
 
         payload = {
@@ -178,6 +209,10 @@ class ExperimentArtifactLayout:
             "mode": self.mode,
             "directory": self.root.name,
             "created_at": self.created_at,
+            "updated_at": datetime.now().astimezone().isoformat(),
+            "execution_id": parent_id or (artifacts[-1].get("execution_id") if artifacts else None),
+            "index_base": 1,
+            "detail": shared_details,
             "status": status or (aggregate or {}).get("status") or (
                 artifacts[-1].get("status") if artifacts else "unknown"
             ),

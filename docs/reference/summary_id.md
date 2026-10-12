@@ -1563,3 +1563,13 @@ dvwa-llm-pentest/
 8. Repetisi eksperimen harus disimpan lengkap.
 9. Model dibandingkan pada konfigurasi yang sama.
 10. Perubahan AKG sebelum eksperimen utama harus divalidasi ulang.
+
+### Ekspor artefak untuk observer secara offline
+
+Kontrak tambahan [`observer-projection.v1`](observer_projection.md) menyediakan metadata yang terikat ke sumber untuk artefak baru dan historis. Operator menjalankan `python -m tesis export-observer` dengan root sumber, root review sesuai urutan epoch yang dipilih, serta file keluaran baru di bawah `results/`. Exporter memakai classifier status Python dan pembaca metrik yang sudah ada. Proses ini tidak menjalankan eksperimen, memanggil evaluator, menulis ulang sumber, atau mengubah ambang pembuktian.
+
+File `thesis_review_status` baru memuat identitas eksekusi dan run, path serta hash sumber, selection, dan waktu pembuatan UTC. Workflow Human dan AI tetap terpisah, termasuk komponen, pembilang, penyebut, alasan pending, dan skor final yang dapat bernilai null. Receipt final memerlukan kecocokan byte sumber asli, identitas, metode/config/rubrik/selection, bukti kandidat, dan perhitungan skor. Review pending atau tidak valid yang lebih baru tidak menggantikan final yang memenuhi syarat. Status pending lama hanya dapat dihubungkan melalui hash sumber terverifikasi yang unik dan ledger tervalidasi di root serta epoch review yang dipilih. Hash aturan review menunjukkan epoch kode penilaian secara terpisah dari epoch kode exporter.
+
+Manifest tetap memakai v1 dengan tambahan model/profile, repeat, identitas induk, waktu eksekusi yang tersimpan, dan referensi detail relatif. Indeks manifest dimulai dari satu; indeks koordinat projection dan event dimulai dari nol. Root sumber dapat berupa direktori datar atau satu file tertentu. Anak matriks yang tertanam memakai identitas dan buktinya sendiri. Salinan ambigu serta file sumber/detail yang hilang dilaporkan sebagai diagnosis. JSON utama, manifest, matriks, dan review diterbitkan secara atomik melalui file sementara unik di direktori yang sama. Perilaku append jurnal tetap berlaku.
+
+Cakupan projection membedakan rencana, artefak yang tersedia, completed, failed, interrupted, atribusi tidak diketahui, skipped/belum dimulai, dan temuan terkonfirmasi. Total legacy dan label analisis historis yang terikat hash tetap terpisah dari hasil keamanan kanonis. Skor runtime mempertahankan asal provisional; dimensi yang tidak tersedia tetap null. Skor payload final menggunakan rata-rata kandidat berbeda yang memenuhi syarat serta mempertahankan komponen pecahan. Metrik memerlukan nilai finite dan availability eksplisit; placeholder numerik legacy tetap tidak tersedia. Integrasi API dan UI web mempunyai pemeriksaan penerimaan tersendiri.

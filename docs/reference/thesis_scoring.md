@@ -429,3 +429,11 @@ checks. Rendered appearance has not been verified for this hash; the earlier
 Word inspection above applies to the prior snapshot. See the
 [completed status handoff](../completed/HANDOFF_EXECUTION_AND_SECURITY_OUTCOME_STATUS_2026-10-12.md)
 for commands, evidence, and validation limits.
+
+## Observer review discovery
+
+The [`observer-projection.v1` contract](observer_projection.md) keeps provisional runtime scoring.v2 separate from source-bound Human and AI thesis receipts. New review-status outputs include `execution_id`, `run_id`, `source_path`, `source_sha256`, `selection`, `generated_at`, and independent workflow components/numerator/denominator. Missing finals remain null.
+
+Only an eligible final receipt can supply final scores: verify the original source-byte hash, exact execution/run identity, frozen selection/method/config/rubric, candidate evidence and decision history, eligible denominator, full weighted formula and four-decimal rounding. Keep fractional component precision. Select the latest valid receipt timestamp per execution/source hash/workflow within declared review roots; deterministic epoch/path ordering resolves ties. A newer pending or mismatched file cannot replace it. Rule hashes retain their original scoring epoch rather than being compared to the exporter's current code hash.
+
+Pending discovery uses the latest eligible declared review epoch and validates its decision ledger. Legacy files missing identity/timestamps require a unique source hash and validated ledger association; directory names alone cannot establish identity. Missing or invalid workflows expose reasons and null finals. Export performs read-only validation of stored evidence and arithmetic, with no new evaluator decision, oracle request, source rewrite or rescore.

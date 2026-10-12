@@ -380,3 +380,11 @@ normal terminal trace, complete required provider calls, and no failed request
 evidence before it can be attributed to completed execution. Unknown attribution
 remains null/unknown. See [the artifact contract](summary_en.md#execution-status-and-security-outcome)
 and [the Indonesian contract](summary_id.md#status-eksekusi-dan-hasil-keamanan).
+
+## Offline observer projection
+
+[`observer-projection.v1`](observer_projection.md) is the additive transport contract for the web observer. `ArtifactRepository.catalog()` exposes `tesis/artifact_catalog.py` without changing existing TUI discovery APIs. The catalog reads explicitly configured source/review roots, checks real-path containment, hashes original bytes, retains standalone/embedded child membership, and reports ambiguous identities and unavailable detail files. Reviews and sidecars are never coordinate records.
+
+`evaluation/observer_reviews.py` validates separate Human/AI workflows using existing evidence/decision readers, frozen config/method/rubric bindings, and receipt arithmetic. `evaluation/observer_export.py` serializes grouped metadata with the current `core/run_status.py` classifier and `evaluation/metrics.py` readers. The CLI is `python -m tesis export-observer`; it makes no HTTP/provider calls, performs no scoring finalization, and publishes only a new derived file under `results/`. Classifier/code hashes and all input byte hashes identify the export epoch. The web observer reads the projection and revalidates sources; it never launches the exporter.
+
+`write_json_report` publishes primary, manifest, matrix and review JSON with a unique same-directory temporary file, flush/fsync and atomic replacement. Failure preserves the previous complete file and propagates the exception. Existing descriptor publication and append-only runtime journals retain their contracts. Manifests now declare parent identity and available invocation-owned journal/snapshot references with one-based indexes; the DTO uses explicit zero-based coordinate indexes.

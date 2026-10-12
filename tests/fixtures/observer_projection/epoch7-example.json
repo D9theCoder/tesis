@@ -1,0 +1,1634 @@
+{
+  "artifact_type": "observer_projection",
+  "code_epoch": {
+    "core/run_status.py": "f0f1004847dcd73483f3155a44417ee72e9128ed2bf594cea6cc8ac1ffd3d4f3",
+    "evaluation/failure_logger.py": "c8f9b040c7bfd9c3efc7258b1c6040427a7aeecc0fa7e13a310f13eb6e3e961a",
+    "evaluation/metrics.py": "1d2c87d2127e738e2ce4ce3f7ecbf95ce67c2f91ef55f846273ab14035b0a985",
+    "evaluation/observer_export.py": "bde44690627d4d0980fc346d68e264a0f9115d11a1b6f16bed896a6da00a071f",
+    "evaluation/observer_reviews.py": "2b0c106279e241bbf5d30df3765a8b5debda17bea66efce28e13085959cd5861",
+    "evaluation/reporter.py": "3630ea709dd37329f2c936409dcd203684ded4d839d96c6ebf0c35e82d4cfdb2",
+    "evaluation/scoring_evidence.py": "06f2f59448d32ae4808029bdfda6da5628cb46eaafa1cb63fcf0bac3d46ca59b",
+    "evaluation/thesis_scoring.py": "67d6c4a6bec238b8f86476b85a4c7cdf5455d7ef402d926bb7aa7144c24ace91",
+    "foundation/verifier.py": "39e6a1853bc26b3822199de97128ad6ecb4bcbb7d455d7bc0e22a4700c397075",
+    "tesis/artifact_catalog.py": "d252900bb7db05a0a38b6d17a28edd7464562813db41efa9e3f638566a273a91",
+    "tesis/artifact_layout.py": "9b87058feed05d700059117dd9c1d3d4bea6e8f5e1d86c275fb6c9ae4e4d77bc",
+    "tesis/artifact_repository.py": "b3332fb5a7a653020ac75a2a7fedd0ac4616e4a2ea0fc0e8f82cdf82eca0999c",
+    "tesis/cli.py": "ec0e498e27efc8d96d238d64d50c059705da1f752cf48fe3d84ef6c4db935c7f",
+    "tesis/runtime_events.py": "bc0b76d36806e92961dc25abc3aa74b0e9c50908c287f36f7a8f16681205e664"
+  },
+  "coverage": {
+    "cancelled_runs": 0,
+    "completed_runs": 4,
+    "confirmed_runs": 1,
+    "error_runs": 0,
+    "execution_status_counts": {
+      "completed": 4,
+      "failed": 0,
+      "interrupted": 0
+    },
+    "execution_unknown_runs": 0,
+    "metrics": {
+      "consistency_score": {
+        "mean": null,
+        "n_available": 0,
+        "n_unavailable": 4,
+        "unavailable_reasons": {
+          "not_computed": 4
+        }
+      },
+      "token_cost": {
+        "mean": null,
+        "n_available": 0,
+        "n_unavailable": 4,
+        "unavailable_reasons": {
+          "not_computed": 4
+        }
+      },
+      "token_cost_per_success": {
+        "mean": null,
+        "n_available": 0,
+        "n_unavailable": 4,
+        "unavailable_reasons": {
+          "not_computed": 4
+        }
+      }
+    },
+    "security_outcome_counts": {
+      "confirmed": 1,
+      "fixture_limited": 1,
+      "no_finding": 1,
+      "unconfirmed": 1
+    },
+    "skipped_runs": 0,
+    "successful_runs": 4,
+    "total_runs": 4
+  },
+  "diagnostics": [],
+  "fixture": {
+    "canonical_cohort_counts": {
+      "confirmed": 57,
+      "fixture_limited": 32,
+      "no_finding": 10,
+      "unconfirmed": 9
+    },
+    "kind": "metadata_excerpt",
+    "original_cohort_size": 108,
+    "sample_size": 4,
+    "source_files_not_bundled": true,
+    "source_projection_sha256": "b5ebd9ef20c4f6c735e20eedea6beb40c885ce7ba4e91e1d6cf40a7c03d07d1c"
+  },
+  "generated_at": "2026-10-12T03:58:19.181654+00:00",
+  "matrices": [],
+  "metrics": {
+    "consistency_score": {
+      "mean": null,
+      "n_available": 0,
+      "n_unavailable": 4,
+      "unavailable_reasons": {
+        "not_computed": 4
+      }
+    },
+    "token_cost": {
+      "mean": null,
+      "n_available": 0,
+      "n_unavailable": 4,
+      "unavailable_reasons": {
+        "not_computed": 4
+      }
+    },
+    "token_cost_per_success": {
+      "mean": null,
+      "n_available": 0,
+      "n_unavailable": 4,
+      "unavailable_reasons": {
+        "not_computed": 4
+      }
+    }
+  },
+  "roots": [
+    {
+      "id": "epoch7",
+      "kind": "source"
+    },
+    {
+      "epoch_order": 0,
+      "id": "epoch1",
+      "kind": "review"
+    },
+    {
+      "epoch_order": 1,
+      "id": "epoch2",
+      "kind": "review"
+    },
+    {
+      "epoch_order": 2,
+      "id": "epoch3",
+      "kind": "review"
+    }
+  ],
+  "runs": [
+    {
+      "ambiguous": false,
+      "detail": {
+        "alternate_locations": [
+          {
+            "legacy_status": "success",
+            "legacy_task_result": "SUCCESS",
+            "path": "exec-20261011T210631386831Z-f2e47b7df64f4a6a8082ccb3ef02d061.matrix.json",
+            "pointer": "/runs/24",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "79bcc95b0c6e6558e6f5de2bed3dee9f541823076616e9471e0ef809bb64c145"
+          }
+        ],
+        "candidate_dispositions": {
+          "available": true,
+          "pointer": "/candidate_dispositions",
+          "source": {
+            "legacy_status": "success",
+            "legacy_task_result": "SUCCESS",
+            "path": "run-025-openai_compatible-access_control-medium-hybrid/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "3a57e9cae53a7e5dd87522357f919f2fd0c8f3bcd1ac329314a5c2cbe9eb9d4d"
+          }
+        },
+        "child_artifact": {
+          "legacy_status": "success",
+          "legacy_task_result": "SUCCESS",
+          "path": "run-025-openai_compatible-access_control-medium-hybrid/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.json",
+          "pointer": "",
+          "root_id": "epoch7",
+          "schema_version": "tui.v1",
+          "sha256": "3a57e9cae53a7e5dd87522357f919f2fd0c8f3bcd1ac329314a5c2cbe9eb9d4d"
+        },
+        "execution_log": {
+          "available": true,
+          "pointer": "/execution_log",
+          "source": {
+            "legacy_status": "success",
+            "legacy_task_result": "SUCCESS",
+            "path": "run-025-openai_compatible-access_control-medium-hybrid/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "3a57e9cae53a7e5dd87522357f919f2fd0c8f3bcd1ac329314a5c2cbe9eb9d4d"
+          }
+        },
+        "journal": null,
+        "manifest": {
+          "path": "experiment.manifest.json",
+          "root_id": "epoch7",
+          "sha256": "11afacb0c74cf11fe330f86a4f98f620e644bdc9f2db9c0f01d516bf8c6635e7"
+        },
+        "response_evidence": {
+          "available": true,
+          "pointer": "/response_evidence",
+          "source": {
+            "legacy_status": "success",
+            "legacy_task_result": "SUCCESS",
+            "path": "run-025-openai_compatible-access_control-medium-hybrid/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "3a57e9cae53a7e5dd87522357f919f2fd0c8f3bcd1ac329314a5c2cbe9eb9d4d"
+          }
+        },
+        "rich": {
+          "owner_execution_id": "exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1",
+          "path": "run-025-openai_compatible-access_control-medium-hybrid/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.rich.json",
+          "root_id": "epoch7",
+          "sha256": "df81b935583f32f57359dfbbab505448fbe56c228597ee106ba11af45e30cb98"
+        },
+        "snapshot": null,
+        "timing_evidence": {
+          "available": false,
+          "pointer": "/timing_evidence",
+          "source": {
+            "legacy_status": "success",
+            "legacy_task_result": "SUCCESS",
+            "path": "run-025-openai_compatible-access_control-medium-hybrid/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "3a57e9cae53a7e5dd87522357f919f2fd0c8f3bcd1ac329314a5c2cbe9eb9d4d"
+          }
+        },
+        "trace": {
+          "owner_execution_id": "exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1",
+          "path": "run-025-openai_compatible-access_control-medium-hybrid/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.events.jsonl",
+          "root_id": "epoch7",
+          "sha256": "dab1bdf9149b7c7d337a36b74554279ac9fb8b2ca2663c057130f0bd71fedc28"
+        },
+        "verifier_history": {
+          "available": true,
+          "pointer": "/final_state/verifier_history",
+          "source": {
+            "legacy_status": "success",
+            "legacy_task_result": "SUCCESS",
+            "path": "run-025-openai_compatible-access_control-medium-hybrid/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "3a57e9cae53a7e5dd87522357f919f2fd0c8f3bcd1ac329314a5c2cbe9eb9d4d"
+          }
+        }
+      },
+      "diagnostics": [
+        {
+          "code": "absent_journal",
+          "location": {
+            "path": "run-025-openai_compatible-access_control-medium-hybrid/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.json",
+            "root_id": "epoch7"
+          }
+        },
+        {
+          "code": "absent_snapshot",
+          "location": {
+            "path": "run-025-openai_compatible-access_control-medium-hybrid/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.json",
+            "root_id": "epoch7"
+          }
+        }
+      ],
+      "execution": {
+        "observer": null,
+        "reason": null,
+        "status": "completed"
+      },
+      "identity": {
+        "config_fingerprint": "sha256:4c040cc5690649625e5603f8c4f27e33dffdab4445269f81b9e52b5de0ec7ce9",
+        "coordinate_index": 24,
+        "coordinate_index_base": 0,
+        "created_at": null,
+        "duration_seconds": null,
+        "execution_id": "exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1",
+        "experiment_condition": "akg_guided_hybrid",
+        "finished_at": null,
+        "generated_at": null,
+        "matrix_execution_id": "exec-20261011T210631386831Z-f2e47b7df64f4a6a8082ccb3ef02d061",
+        "model": "deepseek-v4.1-flash",
+        "model_profile": "openai_compatible",
+        "payload_mode": "hybrid",
+        "provider": "openai_compatible",
+        "repeat_index": 0,
+        "run_id": "openai_compatible-access_control-medium-hybrid-0",
+        "security_level": "medium",
+        "selected_method": "ac_idor",
+        "started_at": "2026-10-11T21:11:52.401332+00:00",
+        "surface": "access_control",
+        "target_method": "ac_idor",
+        "timing": {
+          "duration_ms": 6370,
+          "ended_at": "2026-10-11T21:11:58.771992+00:00",
+          "started_at": "2026-10-11T21:11:52.401332+00:00"
+        }
+      },
+      "metrics": {
+        "consistency_score": {
+          "available": false,
+          "unavailable_reason": "not_computed",
+          "value": null
+        },
+        "token_cost": {
+          "available": false,
+          "unavailable_reason": "not_computed",
+          "value": null
+        },
+        "token_cost_per_success": {
+          "available": false,
+          "unavailable_reason": "not_computed",
+          "value": null
+        }
+      },
+      "runtime_scores": {
+        "components": {
+          "Schain": 0,
+          "Sexploit": 3,
+          "Smethod": 1,
+          "Soutput": 4,
+          "Spayload": null,
+          "Srun": 2.3
+        },
+        "method_scores": {
+          "ac_idor": 1
+        },
+        "payload_scores": {
+          "ac_idor_medium_bypass_6": 0,
+          "ac_idor_medium_bypass_7": 0,
+          "ac_idor_medium_exploit_2": 2,
+          "ac_idor_medium_probe_0": 1
+        },
+        "rubric_version": "scoring.v2",
+        "source": {
+          "legacy_status": "success",
+          "legacy_task_result": "SUCCESS",
+          "path": "run-025-openai_compatible-access_control-medium-hybrid/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.json",
+          "pointer": "",
+          "root_id": "epoch7",
+          "schema_version": "tui.v1",
+          "sha256": "3a57e9cae53a7e5dd87522357f919f2fd0c8f3bcd1ac329314a5c2cbe9eb9d4d"
+        },
+        "status": "historical_provisional_scoring.v2",
+        "stored_composite": 2.3,
+        "thesis_scoring_status": "pending_review"
+      },
+      "security": {
+        "historical_analysis": null,
+        "outcome": "confirmed",
+        "reason": null
+      },
+      "source": {
+        "legacy_status": "success",
+        "legacy_task_result": "SUCCESS",
+        "path": "run-025-openai_compatible-access_control-medium-hybrid/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.json",
+        "pointer": "",
+        "root_id": "epoch7",
+        "schema_version": "tui.v1",
+        "sha256": "3a57e9cae53a7e5dd87522357f919f2fd0c8f3bcd1ac329314a5c2cbe9eb9d4d"
+      },
+      "thesis_review": {
+        "ai": {
+          "Spayload_final": 1.3333,
+          "Srun_final": 1.7667,
+          "aggregation": "mean_of_distinct_executed_valid_exploit_bypass_candidates",
+          "candidate_grades": [
+            {
+              "candidate_id": "ac_idor_medium_exploit_2",
+              "decision_id": "0b4142c1-a95d-4144-823b-44e52bc3b6da",
+              "evidence_refs": [
+                "#/response_evidence/3",
+                "#/final_state/response_evidence/3",
+                "#/config/scoring_oracles/5/document/attestations/0",
+                "#/config/scoring_oracles/5"
+              ],
+              "grade_origin": "ai",
+              "payload_source": "static_seed",
+              "proof_ceiling": 3,
+              "score": 3
+            },
+            {
+              "candidate_id": "ac_idor_medium_bypass_6",
+              "decision_id": "ec17485e-1247-4250-b848-b36fa897ec1b",
+              "evidence_refs": [
+                "#/response_evidence/1",
+                "#/final_state/response_evidence/1"
+              ],
+              "grade_origin": "ai",
+              "payload_source": "static_seed",
+              "proof_ceiling": 2,
+              "score": 1
+            },
+            {
+              "candidate_id": "ac_idor_medium_bypass_7",
+              "decision_id": "cbc44bce-61b4-4e9f-b788-3c1238ef09de",
+              "evidence_refs": [
+                "#/response_evidence/2",
+                "#/final_state/response_evidence/2"
+              ],
+              "grade_origin": "ai",
+              "payload_source": "static_seed",
+              "proof_ceiling": 2,
+              "score": 0
+            }
+          ],
+          "component_evidence_refs": {
+            "Schain": [],
+            "Sexploit": [
+              "#/response_evidence/3",
+              "#/final_state/response_evidence/3",
+              "#/config/scoring_oracles/5/document/attestations/0",
+              "#/config/scoring_oracles/5",
+              "#/response_evidence/1",
+              "#/final_state/response_evidence/1",
+              "#/response_evidence/2",
+              "#/final_state/response_evidence/2"
+            ],
+            "Smethod": [
+              "#/final_state/scoring_decisions/0",
+              "#/config/scoring_profile"
+            ],
+            "Soutput": [
+              "#/llm_performance/0"
+            ]
+          },
+          "component_pending_reasons": {},
+          "components": {
+            "Schain": 0,
+            "Sexploit": 3,
+            "Smethod": 1,
+            "Soutput": 2,
+            "Spayload": 1.3333333333333333
+          },
+          "decision_ledger": {
+            "path": "ai-review-epoch2/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.decisions.json",
+            "root_id": "epoch7",
+            "sha256": "b08720d3cf8e681e98efcdf35ea270fe3708b4b999cde3f9abe4674f5ee6faa3"
+          },
+          "denominator": 3,
+          "generated_at": "2026-10-11T21:34:18.219170+00:00",
+          "numerator": 4,
+          "output_reason": "context_call_evidence",
+          "reason": null,
+          "receipt": {
+            "path": "ai-review-epoch2/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.ai-verified.json",
+            "root_id": "epoch7",
+            "sha256": "a0caffb23bd12fad68de9c08d171d3c3e0d648ae922c58cfdf5061b8909a3229"
+          },
+          "review_status": {
+            "path": "ai-review-epoch2/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.review-status.json",
+            "root_id": "epoch7",
+            "sha256": "52549f9a032ee1eb7a9b6fb3ec6b8a602563097a18520739cd581691dcc98eef"
+          },
+          "rounding": "full precision components; final scores rounded to 4 decimals",
+          "rubric_version": "scoring.v4",
+          "scoring_mode": "ai",
+          "scoring_rule_sha256": "04483c4970ba35c495553d61628b16b6aaa2d65b2db47f6fbd92acb5429f39e1",
+          "selection": "ai",
+          "selection_evidence": {
+            "profile_id": "dvwa-calibrated-ranking-completion-2026-10-11",
+            "profile_sha256": "150fcaa348897ab23c7da51192c0f4992cc0c00d17e6562b8296955f282471f9",
+            "reason": "prerequisites_not_proved_at_selection",
+            "selection_source": "forced",
+            "status": "assessed",
+            "top_methods": []
+          },
+          "status": "final"
+        },
+        "human": {
+          "Spayload_final": null,
+          "Srun_final": null,
+          "candidate_grades": [],
+          "component_pending_reasons": {},
+          "components": null,
+          "decision_ledger": null,
+          "denominator": null,
+          "generated_at": null,
+          "numerator": null,
+          "reason": "workflow_not_selected",
+          "receipt": null,
+          "review_status": null,
+          "rubric_version": null,
+          "scoring_rule_sha256": null,
+          "status": "not_selected"
+        }
+      }
+    },
+    {
+      "ambiguous": false,
+      "detail": {
+        "alternate_locations": [
+          {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "exec-20261011T210631386831Z-f2e47b7df64f4a6a8082ccb3ef02d061.matrix.json",
+            "pointer": "/runs/69",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "79bcc95b0c6e6558e6f5de2bed3dee9f541823076616e9471e0ef809bb64c145"
+          }
+        ],
+        "candidate_dispositions": {
+          "available": true,
+          "pointer": "/candidate_dispositions",
+          "source": {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "282da3093a100a63d4813d375b8512cab8d48053cc3030f0ad697104428eeffb"
+          }
+        },
+        "child_artifact": {
+          "legacy_status": "error",
+          "legacy_task_result": "INCOMPLETE",
+          "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.json",
+          "pointer": "",
+          "root_id": "epoch7",
+          "schema_version": "tui.v1",
+          "sha256": "282da3093a100a63d4813d375b8512cab8d48053cc3030f0ad697104428eeffb"
+        },
+        "execution_log": {
+          "available": true,
+          "pointer": "/execution_log",
+          "source": {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "282da3093a100a63d4813d375b8512cab8d48053cc3030f0ad697104428eeffb"
+          }
+        },
+        "failure": {
+          "owner_execution_id": "exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941",
+          "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.failure.json",
+          "root_id": "epoch7",
+          "sha256": "ea89074804ce72558ab7a2170dd1db6645f3f07ab783ed9a99ea175205736113"
+        },
+        "journal": null,
+        "manifest": {
+          "path": "experiment.manifest.json",
+          "root_id": "epoch7",
+          "sha256": "11afacb0c74cf11fe330f86a4f98f620e644bdc9f2db9c0f01d516bf8c6635e7"
+        },
+        "response_evidence": {
+          "available": true,
+          "pointer": "/response_evidence",
+          "source": {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "282da3093a100a63d4813d375b8512cab8d48053cc3030f0ad697104428eeffb"
+          }
+        },
+        "rich": {
+          "owner_execution_id": "exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941",
+          "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.rich.json",
+          "root_id": "epoch7",
+          "sha256": "5f323964561e49d5d23e63484cab67580283ea2d6ea4dee17d35772d3e6075fb"
+        },
+        "snapshot": null,
+        "timing_evidence": {
+          "available": false,
+          "pointer": "/timing_evidence",
+          "source": {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "282da3093a100a63d4813d375b8512cab8d48053cc3030f0ad697104428eeffb"
+          }
+        },
+        "trace": {
+          "owner_execution_id": "exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941",
+          "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.events.jsonl",
+          "root_id": "epoch7",
+          "sha256": "c2d014fddf782bf2fbe298c0d80576b938930ef7410ef962cd865497b35c1658"
+        },
+        "verifier_history": {
+          "available": true,
+          "pointer": "/final_state/verifier_history",
+          "source": {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "282da3093a100a63d4813d375b8512cab8d48053cc3030f0ad697104428eeffb"
+          }
+        }
+      },
+      "diagnostics": [
+        {
+          "code": "absent_journal",
+          "location": {
+            "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.json",
+            "root_id": "epoch7"
+          }
+        },
+        {
+          "code": "absent_snapshot",
+          "location": {
+            "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.json",
+            "root_id": "epoch7"
+          }
+        }
+      ],
+      "execution": {
+        "observer": null,
+        "reason": null,
+        "status": "completed"
+      },
+      "identity": {
+        "config_fingerprint": "sha256:7cd54cf79d3eb9be208f83f50d705190e8f5f7d94ef179499e0a42f332281a86",
+        "coordinate_index": 69,
+        "coordinate_index_base": 0,
+        "created_at": null,
+        "duration_seconds": null,
+        "execution_id": "exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941",
+        "experiment_condition": "akg_guided_hybrid",
+        "finished_at": null,
+        "generated_at": null,
+        "matrix_execution_id": "exec-20261011T210631386831Z-f2e47b7df64f4a6a8082ccb3ef02d061",
+        "model": "deepseek-v4.1-flash",
+        "model_profile": "openai_compatible",
+        "payload_mode": "llm_mutation_only",
+        "provider": "openai_compatible",
+        "repeat_index": 0,
+        "run_id": "openai_compatible-sqli-high-llm_mutation_only-0",
+        "security_level": "high",
+        "selected_method": "sqli_error",
+        "started_at": "2026-10-11T21:19:41.887010+00:00",
+        "surface": "sqli",
+        "target_method": "sqli_error",
+        "timing": {
+          "duration_ms": 5577,
+          "ended_at": "2026-10-11T21:19:47.464419+00:00",
+          "started_at": "2026-10-11T21:19:41.887010+00:00"
+        }
+      },
+      "metrics": {
+        "consistency_score": {
+          "available": false,
+          "unavailable_reason": "not_computed",
+          "value": null
+        },
+        "token_cost": {
+          "available": false,
+          "unavailable_reason": "not_computed",
+          "value": null
+        },
+        "token_cost_per_success": {
+          "available": false,
+          "unavailable_reason": "not_computed",
+          "value": null
+        }
+      },
+      "runtime_scores": {
+        "components": {
+          "Schain": 0,
+          "Sexploit": 0,
+          "Smethod": 3,
+          "Soutput": 4,
+          "Spayload": null,
+          "Srun": 1.4
+        },
+        "method_scores": {
+          "sqli_error": 3
+        },
+        "payload_scores": {
+          "sqli_error_llm_0_329700f4": 0
+        },
+        "rubric_version": "scoring.v2",
+        "source": {
+          "legacy_status": "error",
+          "legacy_task_result": "INCOMPLETE",
+          "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.json",
+          "pointer": "",
+          "root_id": "epoch7",
+          "schema_version": "tui.v1",
+          "sha256": "282da3093a100a63d4813d375b8512cab8d48053cc3030f0ad697104428eeffb"
+        },
+        "status": "historical_provisional_scoring.v2",
+        "stored_composite": 1.4,
+        "thesis_scoring_status": "pending_review"
+      },
+      "security": {
+        "historical_analysis": {
+          "artifact_type": "scoring_v4_epoch7_incomplete_outcome_audit",
+          "classification": "executed_without_candidate_confirmation",
+          "generated_at": "2026-10-11T22:07:24.893114+00:00",
+          "source": {
+            "path": "incomplete-outcome-audit-v2.json",
+            "root_id": "epoch7",
+            "sha256": "20f27dfb1adbbc5af64ea66a391f2764d9da2365d7ad847c987c85146fc746d4"
+          },
+          "source_epoch": "epoch7"
+        },
+        "outcome": "no_finding",
+        "reason": {
+          "code": "VERIFIED_NEGATIVE",
+          "detail": "Assessed candidates have linked negative verifier evidence.",
+          "evidence_refs": [
+            "#/final_state/response_evidence/3"
+          ]
+        }
+      },
+      "source": {
+        "legacy_status": "error",
+        "legacy_task_result": "INCOMPLETE",
+        "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.json",
+        "pointer": "",
+        "root_id": "epoch7",
+        "schema_version": "tui.v1",
+        "sha256": "282da3093a100a63d4813d375b8512cab8d48053cc3030f0ad697104428eeffb"
+      },
+      "thesis_review": {
+        "ai": {
+          "Spayload_final": 0.0,
+          "Srun_final": 1.2,
+          "aggregation": "mean_of_distinct_executed_valid_exploit_bypass_candidates",
+          "candidate_grades": [
+            {
+              "candidate_id": "sqli_error_llm_0_329700f4",
+              "decision_id": null,
+              "evidence_refs": [
+                "#/response_evidence/3",
+                "#/final_state/response_evidence/3"
+              ],
+              "grade_origin": "signal_gate",
+              "payload_source": "llm_generated",
+              "proof_ceiling": 0,
+              "score": 0
+            }
+          ],
+          "component_evidence_refs": {
+            "Schain": [],
+            "Sexploit": [
+              "#/response_evidence/3",
+              "#/final_state/response_evidence/3"
+            ],
+            "Smethod": [
+              "#/final_state/scoring_decisions/0",
+              "#/config/scoring_profile"
+            ],
+            "Soutput": [
+              "#/llm_performance/0"
+            ]
+          },
+          "component_pending_reasons": {},
+          "components": {
+            "Schain": 0,
+            "Sexploit": 0,
+            "Smethod": 2,
+            "Soutput": 4,
+            "Spayload": 0.0
+          },
+          "decision_ledger": {
+            "path": "ai-review-epoch2/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.decisions.json",
+            "root_id": "epoch7",
+            "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          "denominator": 1,
+          "generated_at": "2026-10-11T21:48:19.713994+00:00",
+          "numerator": 0,
+          "output_reason": "context_call_evidence",
+          "reason": null,
+          "receipt": {
+            "path": "ai-review-epoch2/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.ai-verified.json",
+            "root_id": "epoch7",
+            "sha256": "0fd5a28e792bb1d088ab35c2d4a842e30292d5287a0e6c290e4fef977642735b"
+          },
+          "review_status": {
+            "path": "ai-review-epoch2/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.review-status.json",
+            "root_id": "epoch7",
+            "sha256": "f6de84e1a210a63003f1162499b0c551b0d0cb292c0c210b73418daaa339b980"
+          },
+          "rounding": "full precision components; final scores rounded to 4 decimals",
+          "rubric_version": "scoring.v4",
+          "scoring_mode": "ai",
+          "scoring_rule_sha256": "04483c4970ba35c495553d61628b16b6aaa2d65b2db47f6fbd92acb5429f39e1",
+          "selection": "ai",
+          "selection_evidence": {
+            "comparison": {
+              "sqli_boolean_blind": {
+                "eligible": false,
+                "fit_level": 1,
+                "planned_request_count": 4
+              },
+              "sqli_error": {
+                "eligible": true,
+                "fit_level": 1,
+                "planned_request_count": 12
+              },
+              "sqli_time_blind": {
+                "eligible": false,
+                "fit_level": 1,
+                "planned_request_count": 6
+              },
+              "sqli_union": {
+                "eligible": true,
+                "fit_level": 3,
+                "planned_request_count": 8
+              }
+            },
+            "profile_id": "dvwa-calibrated-ranking-completion-2026-10-11",
+            "profile_sha256": "150fcaa348897ab23c7da51192c0f4992cc0c00d17e6562b8296955f282471f9",
+            "reason": "higher_ranked_comparison_exists",
+            "selection_source": "forced",
+            "status": "assessed",
+            "top_methods": [
+              "sqli_union"
+            ]
+          },
+          "status": "final"
+        },
+        "human": {
+          "Spayload_final": null,
+          "Srun_final": null,
+          "candidate_grades": [],
+          "component_pending_reasons": {},
+          "components": null,
+          "decision_ledger": null,
+          "denominator": null,
+          "generated_at": null,
+          "numerator": null,
+          "reason": "workflow_not_selected",
+          "receipt": null,
+          "review_status": null,
+          "rubric_version": null,
+          "scoring_rule_sha256": null,
+          "status": "not_selected"
+        }
+      }
+    },
+    {
+      "ambiguous": false,
+      "detail": {
+        "alternate_locations": [
+          {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "exec-20261011T210631386831Z-f2e47b7df64f4a6a8082ccb3ef02d061.matrix.json",
+            "pointer": "/runs/0",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "79bcc95b0c6e6558e6f5de2bed3dee9f541823076616e9471e0ef809bb64c145"
+          }
+        ],
+        "candidate_dispositions": {
+          "available": true,
+          "pointer": "/candidate_dispositions",
+          "source": {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "c85fc96cffdc2bb976cbf7b5a1731c2aec659f4bd7e38a09156ab757a9b272d8"
+          }
+        },
+        "child_artifact": {
+          "legacy_status": "error",
+          "legacy_task_result": "INCOMPLETE",
+          "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.json",
+          "pointer": "",
+          "root_id": "epoch7",
+          "schema_version": "tui.v1",
+          "sha256": "c85fc96cffdc2bb976cbf7b5a1731c2aec659f4bd7e38a09156ab757a9b272d8"
+        },
+        "execution_log": {
+          "available": true,
+          "pointer": "/execution_log",
+          "source": {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "c85fc96cffdc2bb976cbf7b5a1731c2aec659f4bd7e38a09156ab757a9b272d8"
+          }
+        },
+        "failure": {
+          "owner_execution_id": "exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb",
+          "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.failure.json",
+          "root_id": "epoch7",
+          "sha256": "0e34f1b588c6bef761f8a4412e43919af97f0081ac1cdb4e8c363611fd13add7"
+        },
+        "journal": null,
+        "manifest": {
+          "path": "experiment.manifest.json",
+          "root_id": "epoch7",
+          "sha256": "11afacb0c74cf11fe330f86a4f98f620e644bdc9f2db9c0f01d516bf8c6635e7"
+        },
+        "response_evidence": {
+          "available": true,
+          "pointer": "/response_evidence",
+          "source": {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "c85fc96cffdc2bb976cbf7b5a1731c2aec659f4bd7e38a09156ab757a9b272d8"
+          }
+        },
+        "rich": {
+          "owner_execution_id": "exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb",
+          "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.rich.json",
+          "root_id": "epoch7",
+          "sha256": "8fd89bb0f4ca84b56657c1449b694f225e404ec20048ba89f7304a7078326b3e"
+        },
+        "snapshot": null,
+        "timing_evidence": {
+          "available": false,
+          "pointer": "/timing_evidence",
+          "source": {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "c85fc96cffdc2bb976cbf7b5a1731c2aec659f4bd7e38a09156ab757a9b272d8"
+          }
+        },
+        "trace": {
+          "owner_execution_id": "exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb",
+          "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.events.jsonl",
+          "root_id": "epoch7",
+          "sha256": "6f458527c97af74a88dd497a253c1ba245fd76ccbcc29f50831d6a6ae0f008f6"
+        },
+        "verifier_history": {
+          "available": true,
+          "pointer": "/final_state/verifier_history",
+          "source": {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "c85fc96cffdc2bb976cbf7b5a1731c2aec659f4bd7e38a09156ab757a9b272d8"
+          }
+        }
+      },
+      "diagnostics": [
+        {
+          "code": "absent_journal",
+          "location": {
+            "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.json",
+            "root_id": "epoch7"
+          }
+        },
+        {
+          "code": "absent_snapshot",
+          "location": {
+            "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.json",
+            "root_id": "epoch7"
+          }
+        }
+      ],
+      "execution": {
+        "observer": null,
+        "reason": null,
+        "status": "completed"
+      },
+      "identity": {
+        "config_fingerprint": "sha256:2a3ff027719891d0d6d75c3bef46babb5de4275a90c9dc018f061f2bcc0d5ceb",
+        "coordinate_index": 0,
+        "coordinate_index_base": 0,
+        "created_at": null,
+        "duration_seconds": null,
+        "execution_id": "exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb",
+        "experiment_condition": "akg_guided_hybrid",
+        "finished_at": null,
+        "generated_at": null,
+        "matrix_execution_id": "exec-20261011T210631386831Z-f2e47b7df64f4a6a8082ccb3ef02d061",
+        "model": "deepseek-v4.1-flash",
+        "model_profile": "openai_compatible",
+        "payload_mode": "hybrid",
+        "provider": "openai_compatible",
+        "repeat_index": 0,
+        "run_id": "openai_compatible-access_control-high-hybrid-0",
+        "security_level": "high",
+        "selected_method": "ac_idor",
+        "started_at": "2026-10-11T21:09:10.263098+00:00",
+        "surface": "access_control",
+        "target_method": "ac_idor",
+        "timing": {
+          "duration_ms": 7786,
+          "ended_at": "2026-10-11T21:09:18.049304+00:00",
+          "started_at": "2026-10-11T21:09:10.263098+00:00"
+        }
+      },
+      "metrics": {
+        "consistency_score": {
+          "available": false,
+          "unavailable_reason": "not_computed",
+          "value": null
+        },
+        "token_cost": {
+          "available": false,
+          "unavailable_reason": "not_computed",
+          "value": null
+        },
+        "token_cost_per_success": {
+          "available": false,
+          "unavailable_reason": "not_computed",
+          "value": null
+        }
+      },
+      "runtime_scores": {
+        "components": {
+          "Schain": 0,
+          "Sexploit": 0,
+          "Smethod": 1,
+          "Soutput": 4,
+          "Spayload": null,
+          "Srun": 1.0
+        },
+        "method_scores": {
+          "ac_idor": 1
+        },
+        "payload_scores": {
+          "ac_idor_high_probe_0": 0,
+          "ac_idor_high_probe_1": 0
+        },
+        "rubric_version": "scoring.v2",
+        "source": {
+          "legacy_status": "error",
+          "legacy_task_result": "INCOMPLETE",
+          "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.json",
+          "pointer": "",
+          "root_id": "epoch7",
+          "schema_version": "tui.v1",
+          "sha256": "c85fc96cffdc2bb976cbf7b5a1731c2aec659f4bd7e38a09156ab757a9b272d8"
+        },
+        "status": "historical_provisional_scoring.v2",
+        "stored_composite": 1.0,
+        "thesis_scoring_status": "pending_review"
+      },
+      "security": {
+        "historical_analysis": {
+          "artifact_type": "scoring_v4_epoch7_incomplete_outcome_audit",
+          "classification": "executed_without_candidate_confirmation",
+          "generated_at": "2026-10-11T22:07:24.893114+00:00",
+          "source": {
+            "path": "incomplete-outcome-audit-v2.json",
+            "root_id": "epoch7",
+            "sha256": "20f27dfb1adbbc5af64ea66a391f2764d9da2365d7ad847c987c85146fc746d4"
+          },
+          "source_epoch": "epoch7"
+        },
+        "outcome": "unconfirmed",
+        "reason": {
+          "code": "NO_CANDIDATE_CONFIRMATION",
+          "detail": "Missing or ambiguous candidate proof cannot establish presence or absence.",
+          "evidence_refs": []
+        }
+      },
+      "source": {
+        "legacy_status": "error",
+        "legacy_task_result": "INCOMPLETE",
+        "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.json",
+        "pointer": "",
+        "root_id": "epoch7",
+        "schema_version": "tui.v1",
+        "sha256": "c85fc96cffdc2bb976cbf7b5a1731c2aec659f4bd7e38a09156ab757a9b272d8"
+      },
+      "thesis_review": {
+        "ai": {
+          "Spayload_final": null,
+          "Srun_final": null,
+          "candidate_grades": [],
+          "component_pending_reasons": {
+            "Sexploit": "missing_required_evidence"
+          },
+          "components": null,
+          "decision_ledger": {
+            "path": "ai-review-epoch2/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.decisions.json",
+            "root_id": "epoch7",
+            "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          "denominator": 0,
+          "generated_at": null,
+          "numerator": null,
+          "reason": "no_assessable_candidates",
+          "receipt": null,
+          "review_status": {
+            "path": "ai-review-epoch2/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.review-status.json",
+            "root_id": "epoch7",
+            "sha256": "0a0f1bf791ee4cb96d0cd7ffdcc6c5796cb2502e38a633213644922cbb333b02"
+          },
+          "rubric_version": "scoring.v4",
+          "scoring_rule_sha256": "04483c4970ba35c495553d61628b16b6aaa2d65b2db47f6fbd92acb5429f39e1",
+          "status": "pending"
+        },
+        "human": {
+          "Spayload_final": null,
+          "Srun_final": null,
+          "candidate_grades": [],
+          "component_pending_reasons": {},
+          "components": null,
+          "decision_ledger": null,
+          "denominator": null,
+          "generated_at": null,
+          "numerator": null,
+          "reason": "workflow_not_selected",
+          "receipt": null,
+          "review_status": null,
+          "rubric_version": null,
+          "scoring_rule_sha256": null,
+          "status": "not_selected"
+        }
+      }
+    },
+    {
+      "ambiguous": false,
+      "detail": {
+        "alternate_locations": [
+          {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "exec-20261011T210631386831Z-f2e47b7df64f4a6a8082ccb3ef02d061.matrix.json",
+            "pointer": "/runs/1",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "79bcc95b0c6e6558e6f5de2bed3dee9f541823076616e9471e0ef809bb64c145"
+          }
+        ],
+        "candidate_dispositions": {
+          "available": true,
+          "pointer": "/candidate_dispositions",
+          "source": {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "9fd9f4fdab560dcbaf06fd8e07a073c7a9b6675d79c18762b22dfce79b0548f7"
+          }
+        },
+        "child_artifact": {
+          "legacy_status": "error",
+          "legacy_task_result": "INCOMPLETE",
+          "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.json",
+          "pointer": "",
+          "root_id": "epoch7",
+          "schema_version": "tui.v1",
+          "sha256": "9fd9f4fdab560dcbaf06fd8e07a073c7a9b6675d79c18762b22dfce79b0548f7"
+        },
+        "execution_log": {
+          "available": true,
+          "pointer": "/execution_log",
+          "source": {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "9fd9f4fdab560dcbaf06fd8e07a073c7a9b6675d79c18762b22dfce79b0548f7"
+          }
+        },
+        "failure": {
+          "owner_execution_id": "exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1",
+          "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.failure.json",
+          "root_id": "epoch7",
+          "sha256": "323512ddce19770e81226e0f8565255174e7792f00fa683ef786c1f1b946766d"
+        },
+        "journal": null,
+        "manifest": {
+          "path": "experiment.manifest.json",
+          "root_id": "epoch7",
+          "sha256": "11afacb0c74cf11fe330f86a4f98f620e644bdc9f2db9c0f01d516bf8c6635e7"
+        },
+        "response_evidence": {
+          "available": true,
+          "pointer": "/response_evidence",
+          "source": {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "9fd9f4fdab560dcbaf06fd8e07a073c7a9b6675d79c18762b22dfce79b0548f7"
+          }
+        },
+        "rich": {
+          "owner_execution_id": "exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1",
+          "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.rich.json",
+          "root_id": "epoch7",
+          "sha256": "478ea7feb7a9cce6e85d5f7c01422c2c3eac2c1494f6139a72cb3ddd85f3acad"
+        },
+        "snapshot": null,
+        "timing_evidence": {
+          "available": false,
+          "pointer": "/timing_evidence",
+          "source": {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "9fd9f4fdab560dcbaf06fd8e07a073c7a9b6675d79c18762b22dfce79b0548f7"
+          }
+        },
+        "trace": {
+          "owner_execution_id": "exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1",
+          "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.events.jsonl",
+          "root_id": "epoch7",
+          "sha256": "013dc3c06c2335319e599333355d145ccde40519977a187a3ea4922c5cf4eb06"
+        },
+        "verifier_history": {
+          "available": true,
+          "pointer": "/final_state/verifier_history",
+          "source": {
+            "legacy_status": "error",
+            "legacy_task_result": "INCOMPLETE",
+            "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.json",
+            "pointer": "",
+            "root_id": "epoch7",
+            "schema_version": "tui.v1",
+            "sha256": "9fd9f4fdab560dcbaf06fd8e07a073c7a9b6675d79c18762b22dfce79b0548f7"
+          }
+        }
+      },
+      "diagnostics": [
+        {
+          "code": "absent_journal",
+          "location": {
+            "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.json",
+            "root_id": "epoch7"
+          }
+        },
+        {
+          "code": "absent_snapshot",
+          "location": {
+            "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.json",
+            "root_id": "epoch7"
+          }
+        }
+      ],
+      "execution": {
+        "observer": null,
+        "reason": null,
+        "status": "completed"
+      },
+      "identity": {
+        "config_fingerprint": "sha256:b7245e6dd82f8900b690fa91c07b719e558960d21ba89c75524e83772bfbc31f",
+        "coordinate_index": 1,
+        "coordinate_index_base": 0,
+        "created_at": null,
+        "duration_seconds": null,
+        "execution_id": "exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1",
+        "experiment_condition": "akg_guided_hybrid",
+        "finished_at": null,
+        "generated_at": null,
+        "matrix_execution_id": "exec-20261011T210631386831Z-f2e47b7df64f4a6a8082ccb3ef02d061",
+        "model": "deepseek-v4.1-flash",
+        "model_profile": "openai_compatible",
+        "payload_mode": "hybrid",
+        "provider": "openai_compatible",
+        "repeat_index": 0,
+        "run_id": "openai_compatible-access_control-high-hybrid-0",
+        "security_level": "high",
+        "selected_method": "ac_vertical_escalation",
+        "started_at": "2026-10-11T21:09:18.178239+00:00",
+        "surface": "access_control",
+        "target_method": "ac_vertical_escalation",
+        "timing": {
+          "duration_ms": 6131,
+          "ended_at": "2026-10-11T21:09:24.309459+00:00",
+          "started_at": "2026-10-11T21:09:18.178239+00:00"
+        }
+      },
+      "metrics": {
+        "consistency_score": {
+          "available": false,
+          "unavailable_reason": "not_computed",
+          "value": null
+        },
+        "token_cost": {
+          "available": false,
+          "unavailable_reason": "not_computed",
+          "value": null
+        },
+        "token_cost_per_success": {
+          "available": false,
+          "unavailable_reason": "not_computed",
+          "value": null
+        }
+      },
+      "runtime_scores": {
+        "components": {
+          "Schain": 0,
+          "Sexploit": 1,
+          "Smethod": 1,
+          "Soutput": 4,
+          "Spayload": null,
+          "Srun": 1.5
+        },
+        "method_scores": {
+          "ac_vertical_escalation": 1
+        },
+        "payload_scores": {
+          "ac_vertical_escalation_high_exploit_2": 0,
+          "ac_vertical_escalation_high_probe_0": 1,
+          "ac_vertical_escalation_llm_0_166acf97": 0
+        },
+        "rubric_version": "scoring.v2",
+        "source": {
+          "legacy_status": "error",
+          "legacy_task_result": "INCOMPLETE",
+          "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.json",
+          "pointer": "",
+          "root_id": "epoch7",
+          "schema_version": "tui.v1",
+          "sha256": "9fd9f4fdab560dcbaf06fd8e07a073c7a9b6675d79c18762b22dfce79b0548f7"
+        },
+        "status": "historical_provisional_scoring.v2",
+        "stored_composite": 1.5,
+        "thesis_scoring_status": "pending_review"
+      },
+      "security": {
+        "historical_analysis": {
+          "artifact_type": "scoring_v4_epoch7_incomplete_outcome_audit",
+          "classification": "executed_without_candidate_confirmation",
+          "generated_at": "2026-10-11T22:07:24.893114+00:00",
+          "source": {
+            "path": "incomplete-outcome-audit-v2.json",
+            "root_id": "epoch7",
+            "sha256": "20f27dfb1adbbc5af64ea66a391f2764d9da2365d7ad847c987c85146fc746d4"
+          },
+          "source_epoch": "epoch7"
+        },
+        "outcome": "fixture_limited",
+        "reason": {
+          "code": "PERMISSION_ORACLE_UNAVAILABLE",
+          "detail": "Required independent control does not establish the candidate outcome.",
+          "evidence_refs": [
+            "#/final_state/response_evidence/1",
+            "#/final_state/response_evidence/2"
+          ]
+        }
+      },
+      "source": {
+        "legacy_status": "error",
+        "legacy_task_result": "INCOMPLETE",
+        "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.json",
+        "pointer": "",
+        "root_id": "epoch7",
+        "schema_version": "tui.v1",
+        "sha256": "9fd9f4fdab560dcbaf06fd8e07a073c7a9b6675d79c18762b22dfce79b0548f7"
+      },
+      "thesis_review": {
+        "ai": {
+          "Spayload_final": 0.0,
+          "Srun_final": 1.2,
+          "aggregation": "mean_of_distinct_executed_valid_exploit_bypass_candidates",
+          "candidate_grades": [
+            {
+              "candidate_id": "ac_vertical_escalation_high_exploit_2",
+              "decision_id": "9857f092-f670-4acb-929b-63e92ee5bd75",
+              "evidence_refs": [
+                "#/response_evidence/1",
+                "#/final_state/response_evidence/1"
+              ],
+              "grade_origin": "ai",
+              "payload_source": "static_seed",
+              "proof_ceiling": 2,
+              "score": 0
+            },
+            {
+              "candidate_id": "ac_vertical_escalation_llm_0_166acf97",
+              "decision_id": "27afe971-18c7-428e-91f4-295de28a7fc5",
+              "evidence_refs": [
+                "#/response_evidence/2",
+                "#/final_state/response_evidence/2"
+              ],
+              "grade_origin": "ai",
+              "payload_source": "llm_generated",
+              "proof_ceiling": 2,
+              "score": 0
+            }
+          ],
+          "component_evidence_refs": {
+            "Schain": [],
+            "Sexploit": [
+              "#/response_evidence/1",
+              "#/final_state/response_evidence/1",
+              "#/response_evidence/2",
+              "#/final_state/response_evidence/2"
+            ],
+            "Smethod": [
+              "#/final_state/scoring_decisions/0",
+              "#/config/scoring_profile"
+            ],
+            "Soutput": [
+              "#/llm_performance/0"
+            ]
+          },
+          "component_pending_reasons": {},
+          "components": {
+            "Schain": 0,
+            "Sexploit": 2,
+            "Smethod": 1,
+            "Soutput": 2,
+            "Spayload": 0.0
+          },
+          "decision_ledger": {
+            "path": "ai-review-epoch2/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.decisions.json",
+            "root_id": "epoch7",
+            "sha256": "ddd8800ce07af5b69985b5c12cf6d3772ea1a2aae2359fafc98b8b3eb41631fc"
+          },
+          "denominator": 2,
+          "generated_at": "2026-10-11T21:29:14.530989+00:00",
+          "numerator": 0,
+          "output_reason": "context_call_evidence",
+          "reason": null,
+          "receipt": {
+            "path": "ai-review-epoch2/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.ai-verified.json",
+            "root_id": "epoch7",
+            "sha256": "83cf4f58b323c225cf313f45e13f6bfa1ac0096335743423f1c543f28de5e386"
+          },
+          "review_status": {
+            "path": "ai-review-epoch2/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.review-status.json",
+            "root_id": "epoch7",
+            "sha256": "594dfffb9163a3af5f52e6abf32173ec0571fab5eb02287efa84b0097fc64c92"
+          },
+          "rounding": "full precision components; final scores rounded to 4 decimals",
+          "rubric_version": "scoring.v4",
+          "scoring_mode": "ai",
+          "scoring_rule_sha256": "04483c4970ba35c495553d61628b16b6aaa2d65b2db47f6fbd92acb5429f39e1",
+          "selection": "ai",
+          "selection_evidence": {
+            "profile_id": "dvwa-calibrated-ranking-completion-2026-10-11",
+            "profile_sha256": "150fcaa348897ab23c7da51192c0f4992cc0c00d17e6562b8296955f282471f9",
+            "reason": "prerequisites_not_proved_at_selection",
+            "selection_source": "forced",
+            "status": "assessed",
+            "top_methods": []
+          },
+          "status": "final"
+        },
+        "human": {
+          "Spayload_final": null,
+          "Srun_final": null,
+          "candidate_grades": [],
+          "component_pending_reasons": {},
+          "components": null,
+          "decision_ledger": null,
+          "denominator": null,
+          "generated_at": null,
+          "numerator": null,
+          "reason": "workflow_not_selected",
+          "receipt": null,
+          "review_status": null,
+          "rubric_version": null,
+          "scoring_rule_sha256": null,
+          "status": "not_selected"
+        }
+      }
+    }
+  ],
+  "schema_version": "observer-projection.v1",
+  "selection": {
+    "historical_analysis": [
+      "epoch7:incomplete-outcome-audit-v2.json"
+    ],
+    "review_epoch_policy": "declared_oldest_to_newest; latest_eligible_final_timestamp",
+    "review_roots": [
+      "epoch1",
+      "epoch2",
+      "epoch3"
+    ],
+    "source_roots": [
+      "epoch7"
+    ]
+  },
+  "sources": [
+    {
+      "path": "ai-review-epoch2/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.decisions.json",
+      "root_id": "epoch7",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "path": "ai-review-epoch2/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.review-status.json",
+      "root_id": "epoch7",
+      "sha256": "0a0f1bf791ee4cb96d0cd7ffdcc6c5796cb2502e38a633213644922cbb333b02"
+    },
+    {
+      "path": "ai-review-epoch2/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.ai-verified.json",
+      "root_id": "epoch7",
+      "sha256": "83cf4f58b323c225cf313f45e13f6bfa1ac0096335743423f1c543f28de5e386"
+    },
+    {
+      "path": "ai-review-epoch2/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.decisions.json",
+      "root_id": "epoch7",
+      "sha256": "ddd8800ce07af5b69985b5c12cf6d3772ea1a2aae2359fafc98b8b3eb41631fc"
+    },
+    {
+      "path": "ai-review-epoch2/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.review-status.json",
+      "root_id": "epoch7",
+      "sha256": "594dfffb9163a3af5f52e6abf32173ec0571fab5eb02287efa84b0097fc64c92"
+    },
+    {
+      "path": "ai-review-epoch2/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.ai-verified.json",
+      "root_id": "epoch7",
+      "sha256": "a0caffb23bd12fad68de9c08d171d3c3e0d648ae922c58cfdf5061b8909a3229"
+    },
+    {
+      "path": "ai-review-epoch2/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.decisions.json",
+      "root_id": "epoch7",
+      "sha256": "b08720d3cf8e681e98efcdf35ea270fe3708b4b999cde3f9abe4674f5ee6faa3"
+    },
+    {
+      "path": "ai-review-epoch2/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.review-status.json",
+      "root_id": "epoch7",
+      "sha256": "52549f9a032ee1eb7a9b6fb3ec6b8a602563097a18520739cd581691dcc98eef"
+    },
+    {
+      "path": "ai-review-epoch2/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.ai-verified.json",
+      "root_id": "epoch7",
+      "sha256": "0fd5a28e792bb1d088ab35c2d4a842e30292d5287a0e6c290e4fef977642735b"
+    },
+    {
+      "path": "ai-review-epoch2/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.decisions.json",
+      "root_id": "epoch7",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "path": "ai-review-epoch2/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.review-status.json",
+      "root_id": "epoch7",
+      "sha256": "f6de84e1a210a63003f1162499b0c551b0d0cb292c0c210b73418daaa339b980"
+    },
+    {
+      "path": "exec-20261011T210631386831Z-f2e47b7df64f4a6a8082ccb3ef02d061.matrix.json",
+      "root_id": "epoch7",
+      "sha256": "79bcc95b0c6e6558e6f5de2bed3dee9f541823076616e9471e0ef809bb64c145"
+    },
+    {
+      "path": "experiment.manifest.json",
+      "root_id": "epoch7",
+      "sha256": "11afacb0c74cf11fe330f86a4f98f620e644bdc9f2db9c0f01d516bf8c6635e7"
+    },
+    {
+      "path": "incomplete-outcome-audit-v2.json",
+      "root_id": "epoch7",
+      "sha256": "20f27dfb1adbbc5af64ea66a391f2764d9da2365d7ad847c987c85146fc746d4"
+    },
+    {
+      "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.events.jsonl",
+      "root_id": "epoch7",
+      "sha256": "6f458527c97af74a88dd497a253c1ba245fd76ccbcc29f50831d6a6ae0f008f6"
+    },
+    {
+      "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.failure.json",
+      "root_id": "epoch7",
+      "sha256": "0e34f1b588c6bef761f8a4412e43919af97f0081ac1cdb4e8c363611fd13add7"
+    },
+    {
+      "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.json",
+      "root_id": "epoch7",
+      "sha256": "c85fc96cffdc2bb976cbf7b5a1731c2aec659f4bd7e38a09156ab757a9b272d8"
+    },
+    {
+      "path": "run-001-openai_compatible-access_control-high-hybrid/exec-20261011T210910202799Z-c71f2cdb478141cfa691747c0c4cebeb.rich.json",
+      "root_id": "epoch7",
+      "sha256": "8fd89bb0f4ca84b56657c1449b694f225e404ec20048ba89f7304a7078326b3e"
+    },
+    {
+      "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.events.jsonl",
+      "root_id": "epoch7",
+      "sha256": "013dc3c06c2335319e599333355d145ccde40519977a187a3ea4922c5cf4eb06"
+    },
+    {
+      "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.failure.json",
+      "root_id": "epoch7",
+      "sha256": "323512ddce19770e81226e0f8565255174e7792f00fa683ef786c1f1b946766d"
+    },
+    {
+      "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.json",
+      "root_id": "epoch7",
+      "sha256": "9fd9f4fdab560dcbaf06fd8e07a073c7a9b6675d79c18762b22dfce79b0548f7"
+    },
+    {
+      "path": "run-002-openai_compatible-access_control-high-hybrid/exec-20261011T210910203184Z-4fd56f2a595544369aef04683c6f0eb1.rich.json",
+      "root_id": "epoch7",
+      "sha256": "478ea7feb7a9cce6e85d5f7c01422c2c3eac2c1494f6139a72cb3ddd85f3acad"
+    },
+    {
+      "path": "run-025-openai_compatible-access_control-medium-hybrid/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.events.jsonl",
+      "root_id": "epoch7",
+      "sha256": "dab1bdf9149b7c7d337a36b74554279ac9fb8b2ca2663c057130f0bd71fedc28"
+    },
+    {
+      "path": "run-025-openai_compatible-access_control-medium-hybrid/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.json",
+      "root_id": "epoch7",
+      "sha256": "3a57e9cae53a7e5dd87522357f919f2fd0c8f3bcd1ac329314a5c2cbe9eb9d4d"
+    },
+    {
+      "path": "run-025-openai_compatible-access_control-medium-hybrid/exec-20261011T210910208123Z-75c2609cfff2419596f928d2c1e9b5b1.rich.json",
+      "root_id": "epoch7",
+      "sha256": "df81b935583f32f57359dfbbab505448fbe56c228597ee106ba11af45e30cb98"
+    },
+    {
+      "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.events.jsonl",
+      "root_id": "epoch7",
+      "sha256": "c2d014fddf782bf2fbe298c0d80576b938930ef7410ef962cd865497b35c1658"
+    },
+    {
+      "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.failure.json",
+      "root_id": "epoch7",
+      "sha256": "ea89074804ce72558ab7a2170dd1db6645f3f07ab783ed9a99ea175205736113"
+    },
+    {
+      "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.json",
+      "root_id": "epoch7",
+      "sha256": "282da3093a100a63d4813d375b8512cab8d48053cc3030f0ad697104428eeffb"
+    },
+    {
+      "path": "run-070-openai_compatible-sqli-high-llm_mutation_only/exec-20261011T210910218840Z-afaee39c8536422c9e50083efc37c941.rich.json",
+      "root_id": "epoch7",
+      "sha256": "5f323964561e49d5d23e63484cab67580283ea2d6ea4dee17d35772d3e6075fb"
+    }
+  ]
+}

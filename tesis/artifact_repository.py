@@ -1056,6 +1056,14 @@ class ArtifactRepository:
             self.scan()
         return self._cache
 
+    def catalog(self, *, source_id: str = "default", review_roots=None):
+        """Return the contained producer catalog without changing legacy scan APIs."""
+        from tesis.artifact_catalog import ArtifactCatalog
+
+        catalog = ArtifactCatalog({source_id: self.root}, review_roots or {})
+        catalog.scan()
+        return catalog
+
     def filter(self, items: Iterable[ArtifactMetadata] | None = None, **filters: object) -> list[ArtifactMetadata]:
         """Apply supported filters to an existing snapshot or fresh scan."""
 
