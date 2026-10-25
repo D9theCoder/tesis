@@ -114,15 +114,20 @@ def provider_choices() -> tuple[str, ...]:
 
 
 def configured_provider_choices(config: Mapping[str, Any] | None = None) -> tuple[str, ...]:
-    """Limit launch choices to configured adapters, retaining legacy defaults."""
-    models = config.get("models") if isinstance(config, Mapping) else None
+    """Offer distinct model profiles, retaining historical adapter selections."""
+    from tesis.provider_registry import expanded_model_sections
+    models = expanded_model_sections(config) if isinstance(config, Mapping) else None
     if not isinstance(models, Mapping) or not models:
         return provider_choices()
+    legacy = config.get("models") or {}
     configured = {
         str(profile.get("provider", name)).strip().lower()
-        for name, profile in models.items() if isinstance(profile, Mapping)
+        for name, profile in legacy.items() if isinstance(profile, Mapping)
     }
-    return tuple(provider for provider in provider_choices() if provider in configured)
+    return tuple(dict.fromkeys([
+        *(provider for provider in provider_choices() if provider in configured),
+        *(str(name) for name in models),
+    ]))
 
 
 def surface_choices() -> tuple[str, ...]:
@@ -172,7 +177,8 @@ def _model_profile_choices(config: Mapping[str, Any] | None = None) -> tuple[str
 
     if not isinstance(config, Mapping):
         return ()
-    models = config.get("models")
+    from tesis.provider_registry import expanded_model_sections
+    models = expanded_model_sections(config)
     if not isinstance(models, Mapping):
         return ()
     return tuple(str(name) for name in models if str(name).strip())

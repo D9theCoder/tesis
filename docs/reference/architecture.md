@@ -9,6 +9,17 @@ Headless execution uses the same runners and artifact schema without opening
 Textual; network-backed runs should be pointed at an authorized DVWA sandbox.
 The app and headless layer read the repository-root `config.yaml` by default.
 
+`tesis/provider_registry.py` expands the optional `api_providers` mapping into
+one stable named model profile per selected provider/model. Existing `models`
+entries retain their keys. `config_fields` offers these profiles to launch and
+matrix selectors; matrix dispatch resolves their underlying adapter while
+preserving separate coordinate identities. `tui_providers.py` owns the API-key
+provider form and sends catalog results through Textual messages from daemon
+workers. `llm/model_catalog.py` owns authenticated, paginated model discovery.
+`provider_settings.py` validates staged settings, writes keys to the colocated
+`.env`, and atomically replaces YAML containing environment references. Settings
+saves run in a daemon worker. See [API providers and models](api_providers.md).
+
 Useful automation flags include `--condition`, `--target-method`,
 `--providers`, `--levels`, `--surfaces`, `--payload-modes`, `--repeats`,
 `--candidate-budget`, `--iterations`, `--model-profile`, `--output-dir`, and

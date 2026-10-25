@@ -445,6 +445,35 @@ BaseDrawer.drawer-full .drawer {
     height: 1fr;
 }
 
+SettingsDrawer .drawer {
+    overflow-y: auto;
+}
+
+/* API provider form: one scroll area and two fixed actions at every width. */
+#provider-fields {
+    overflow-x: hidden;
+}
+
+#provider-fields Label, #provider-status, #provider-selection {
+    height: auto;
+}
+
+#provider-models {
+    height: 9;
+    min-height: 4;
+    border: none;
+}
+
+.provider-actions {
+    height: 3;
+}
+
+.provider-actions Button {
+    min-width: 12;
+    width: auto;
+    margin-right: 1;
+}
+
 /* ---- trace / results / doctor specifics ---- */
 
 #doctor-summary {

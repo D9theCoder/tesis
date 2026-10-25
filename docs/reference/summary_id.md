@@ -158,6 +158,16 @@ Verifikasi teknis dilakukan di dalam method agent dengan bantuan `verifier`, buk
 
 ### 3.5 Multi-LLM Abstraction Layer
 
+Registri opsional `api_providers` menyimpan *endpoint*, referensi API key,
+protokol, dan daftar model terpilih untuk setiap provider. Setiap pasangan
+provider/model menjadi *profile* dengan ID stabil yang dapat dipilih pada
+eksekusi tunggal atau koordinat *matrix*. Entri baru mendukung OpenAI Responses,
+OpenAI Chat Completions, dan Anthropic Messages. Settings TUI dapat mengambil
+katalog atau menerima ID manual, memilih model yang disimpan, serta menyimpan
+key ke `.env`. Pengaturan *role* tetap diresolusikan per koordinat, dengan
+orkestrasi metode dan identitas artefak yang dipertahankan.
+Lihat [konfigurasi API provider](api_providers.md).
+
 Semua model diuji dengan konfigurasi yang sama:
 
 - AKG sama

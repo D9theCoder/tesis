@@ -154,6 +154,15 @@ Technical verification is performed inside the method agent with help from `veri
 
 ### 3.5 Multi-LLM Abstraction Layer
 
+The optional `api_providers` registry stores independent endpoints, API-key
+references, protocols, and selected model lists. Each provider/model pair
+expands into a stable named profile selectable as a single run or matrix
+coordinate. New entries support OpenAI Responses, OpenAI Chat Completions, and
+Anthropic Messages. TUI Settings can discover a catalog or accept manual IDs,
+select models to retain, and save keys to `.env`. The runtime continues to
+resolve role settings per coordinate and preserves method orchestration and
+artifact identity. See [API provider configuration](api_providers.md).
+
 All models are tested with the same configuration:
 
 * same AKG

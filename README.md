@@ -13,6 +13,11 @@ uv run tesis run
 
 This opens mission control and reads the repository-root `config.yaml`. Use `uv run tesis run --dry-run` for local configuration checks. See the [usage guide](guide.md) for headless runs, Doctor, and detailed operation; see [architecture](docs/reference/architecture.md) and [methodology and artifact schema](docs/reference/summary_en.md) for research references. Scoped validation guidance is in [AGENTS.md](AGENTS.md).
 
+For multiple API providers and models, open **Settings → Model profile → Add API
+provider**. Configure Responses, Chat Completions, or Anthropic Messages, fetch
+and select models, and save API keys to `.env`. See the
+[provider setup guide](docs/reference/api_providers.md).
+
 ## Mission control quick reference
 
 Mission control requires a TTY of at least 60x18. At 120x24 or wider, pipeline, coordinates, and evidence are visible together; smaller layouts collapse panes into drawers.

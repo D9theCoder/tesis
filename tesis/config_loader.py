@@ -29,6 +29,7 @@ from tesis.model_config import (
     REASONING_EFFORTS,
 )
 from tesis.config_fields import FORM_MATRIX, FORM_SINGLE, validate_config as validate_field_schema
+from tesis.provider_registry import expanded_model_sections
 
 
 class ConfigError(ValueError):
@@ -115,19 +116,19 @@ def dump_yaml_config(payload: Mapping[str, Any]) -> str:
     return stream.getvalue()
 
 
-def _resolve_env_refs(value: Any) -> Any:
+def _resolve_env_refs(value: Any, secret_overrides: Mapping[str, str] | None = None) -> Any:
     """Supports resolve env refs behavior for this module."""
     if isinstance(value, dict):
-        return {k: _resolve_env_refs(v) for k, v in value.items()}
+        return {k: _resolve_env_refs(v, secret_overrides) for k, v in value.items()}
     if isinstance(value, list):
-        return [_resolve_env_refs(v) for v in value]
+        return [_resolve_env_refs(v, secret_overrides) for v in value]
     if not isinstance(value, str):
         return value
 
     def _replace(match: re.Match[str]) -> str:
         """Supports replace behavior for this module."""
         env_key = match.group(1)
-        env_value = os.getenv(env_key)
+        env_value = (secret_overrides or {}).get(env_key, os.getenv(env_key))
         if env_value is None:
             raise ConfigError(f"Missing environment variable for config placeholder: {env_key}")
         return env_value
@@ -135,12 +136,12 @@ def _resolve_env_refs(value: Any) -> Any:
     return _ENV_REF_PATTERN.sub(_replace, value)
 
 
-def resolve_env_references(config: dict[str, Any]) -> dict[str, Any]:
+def resolve_env_references(config: dict[str, Any], *, secret_overrides: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Handles resolve env references behavior for this module.
 
     Args:
         config: Value used by this function."""
-    return _resolve_env_refs(config)
+    return _resolve_env_refs(config, secret_overrides)
 
 
 def _parse_bool(raw: str) -> bool:
@@ -460,12 +461,13 @@ def validate_target_url(url: str) -> None:
         raise ConfigError(f"Invalid target URL: {url}")
 
 
-def validate_provider(provider: str) -> None:
+def validate_provider(provider: str, models: Mapping[str, ModelConfig] | None = None) -> None:
     """Validates provider according to current framework rules.
 
     Args:
         provider: Value used by this function."""
-    if provider not in SUPPORTED_PROVIDERS:
+    adapter = models[provider].provider if models and provider in models else provider
+    if adapter not in SUPPORTED_PROVIDERS:
         raise ConfigError(f"Unsupported provider: {provider}")
 
 
@@ -870,7 +872,7 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
         if not config.levels:
             raise ConfigError("matrix mode requires at least one security level")
         for provider in config.providers:
-            validate_provider(provider)
+            validate_provider(provider, config.models)
         for level in config.levels:
             validate_level(level)
         for surface in config.surfaces:
@@ -885,7 +887,7 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
                 f"target_method {config.target_method!r} is not available for every configured matrix surface"
             )
     else:
-        validate_provider(config.provider)
+        validate_provider(config.provider, config.models)
         validate_level(config.level)
         if config.target_method and config.target_method not in METHODS_BY_SURFACE.get(config.surface, []):
             raise ConfigError(
@@ -893,7 +895,8 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
             )
 
 
-def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) -> EngagementConfig:
+def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any],
+                            secret_overrides: Mapping[str, str] | None = None) -> EngagementConfig:
     """Loads and resolve config from configured inputs.
 
     Args:
@@ -905,7 +908,9 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
     config_file = Path(config_path)
     load_dotenv(dotenv_path=config_file.with_name(".env"), override=False)
 
-    yaml_cfg = _normalize_runtime_overrides(resolve_env_references(load_yaml_config(config_file)))
+    yaml_cfg = _normalize_runtime_overrides(resolve_env_references(
+        load_yaml_config(config_file), secret_overrides=secret_overrides,
+    ))
     env_cfg = load_env_overrides(prefix="TESIS_")
     cli_cfg = _extract_cli_overrides(cli_args)
 
@@ -1017,6 +1022,11 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
             value = json.loads(path.read_bytes())
         evidence_config[key] = value
 
+    try:
+        model_sections = expanded_model_sections(merged)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from None
+
     config = EngagementConfig(
         target_url=str(merged.get("target_url", "")).strip(),
         provider=provider,
@@ -1053,7 +1063,7 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         evasion_cooldown_threshold=evasion_cooldown_threshold,
         evasion_strategy=str(merged.get("evasion_strategy") or evasion_mode).strip().lower(),
         evasion_attempts_max=int(merged.get("evasion_attempts_max", evasion_max_retries)),
-        models=_parse_model_configs(merged.get("models", {})),
+        models=_parse_model_configs(model_sections),
         llm_runtime=llm_runtime,
         model_profile=model_profile,
         dvwa_username=(

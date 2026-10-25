@@ -12,6 +12,7 @@ wheels/
 
 # environment variables
 .env
+config.yaml.lock
 
 # results
 results/

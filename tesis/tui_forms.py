@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import re
-import tempfile
+from threading import Thread
 from typing import Any, Literal
 
 from textual import on
+from textual.message import Message
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import (
@@ -30,7 +30,6 @@ from tesis.config_loader import (
     load_and_resolve_config,
     load_yaml_config,
     parse_yaml_config,
-    save_yaml_config,
 )
 from tesis.tui_commands import BaseDrawer
 import tesis.tui_security as tui_security
@@ -185,18 +184,20 @@ class LaunchDrawer(BaseDrawer):
         choices = [str(value) for value in spec.choice_values(config)]
         value = _launch_field_value(resolved, path)
         label = _LAUNCH_GUARDRAIL_LABELS.get(path, spec.label)
+        from tesis.provider_registry import model_profile_labels
+        profile_labels = model_profile_labels(config) if path in {"provider", "providers", "model_profile"} else {}
         if spec.kind == "select" or (choices and spec.value_type is str and not spec.multiple):
             current = None if value in (None, "") else str(value)
             if current is not None and current not in choices:
                 # An off-registry value degrades to blank rather than crashing;
                 # leaving it untouched keeps the configured value on submit.
                 current = None
-            return Select([(choice, choice) for choice in choices],
+            return Select([(profile_labels.get(choice, choice), choice) for choice in choices],
                           value=current if current is not None else Select.NULL,
                           allow_blank=True, prompt=label, id=field_id)
         if spec.multiple or spec.kind == "multi_select":
             selected = {str(item) for item in (value or [])}
-            return SelectionList(*[(choice, choice, choice in selected) for choice in choices],
+            return SelectionList(*[(profile_labels.get(choice, choice), choice, choice in selected) for choice in choices],
                                  id=field_id)
         if spec.value_type is bool or spec.kind == "boolean":
             return Checkbox(label, value=bool(value), id=field_id)
@@ -235,8 +236,10 @@ class LaunchDrawer(BaseDrawer):
                     runtime = getattr(resolved, "llm_runtime", None)
                     roles = getattr(runtime, "roles", {}) or {}
                     concurrency = getattr(runtime, "max_concurrency", None)
-                    profiles = [(name, name) for name in self._profile_names(config)]
-                    profile_names = {name for name, _ in profiles}
+                    from tesis.provider_registry import model_profile_labels
+                    labels = model_profile_labels(config)
+                    profiles = [(labels.get(name, name), name) for name in self._profile_names(config)]
+                    profile_names = {name for _, name in profiles}
                     yield Input(value="" if concurrency in (None, "") else str(concurrency),
                                 placeholder="LLM max concurrency (1-4)",
                                 id="launch-llm-concurrency")
@@ -492,6 +495,12 @@ class LaunchDrawer(BaseDrawer):
         self._tesis_closing = True
 
 
+class SettingsSaved(Message):
+    def __init__(self, generation: int, payload: dict[str, Any], error: str | None):
+        super().__init__()
+        self.generation, self.payload, self.error = generation, payload, error
+
+
 class SettingsDrawer(BaseDrawer):
     def __init__(self) -> None:
         super().__init__()
@@ -499,6 +508,8 @@ class SettingsDrawer(BaseDrawer):
         self.literal_warning_acknowledged = False
         self._tesis_closing = False
         self._settings_generation = 0
+        self._pending_api_keys: dict[str, str] = {}
+        self._saving = False
 
     def compose(self) -> ComposeResult:
         yield Label("Settings — config sections (Esc to close)", id="settings-title")
@@ -506,6 +517,10 @@ class SettingsDrawer(BaseDrawer):
             yield Static("", id="settings-target-body", markup=False)
         with Collapsible(title="Model profile", collapsed=True, id="settings-section-model"):
             yield Static("", id="settings-model-body", markup=False)
+            yield Label("API providers and models")
+            yield Button("Add API provider", id="settings-api-add")
+            yield Select([], prompt="Saved API providers", id="settings-api-provider")
+            yield Button("Edit provider / models", id="settings-api-edit", disabled=True)
         with Collapsible(title="LLM runtime", collapsed=True, id="settings-section-llm"):
             yield Static("", id="settings-llm-body", markup=False)
         with Collapsible(title="Policy & output", collapsed=True, id="settings-section-policy"):
@@ -535,6 +550,51 @@ class SettingsDrawer(BaseDrawer):
             except Exception:
                 pass
             self._set_status(f"Not saved: {tui_security._safe_config_error_text(exc)}")
+        self._refresh_api_providers()
+
+    def _refresh_api_providers(self) -> None:
+        try:
+            payload = parse_yaml_config(self.query_one("#yaml-editor", TextArea).text)
+            entries = payload.get("api_providers") or {}
+            self.query_one("#settings-api-provider", Select).set_options([
+                (str(entry.get("display_name") or name), name) for name, entry in entries.items()
+            ])
+            self.query_one("#settings-api-edit", Button).disabled = not bool(entries)
+        except Exception:
+            self.query_one("#settings-api-edit", Button).disabled = True
+
+    @on(Button.Pressed, "#settings-api-add, #settings-api-edit")
+    def edit_api_provider(self, event: Button.Pressed) -> None:
+        from tesis.tui_providers import ProviderDrawer
+        try:
+            payload = parse_yaml_config(self.query_one("#yaml-editor", TextArea).text)
+            payload = tui_security._restore_yaml_secrets(payload, self.preserved_secret_placeholders)
+            entries = payload.get("api_providers") or {}
+            selected = self.query_one("#settings-api-provider", Select).value
+            if event.button.id == "settings-api-edit" and selected is Select.NULL:
+                self._set_status("Select an API provider to edit.")
+                return
+            provider_id = str(selected) if event.button.id == "settings-api-edit" else ""
+            self.app.push_screen(ProviderDrawer(config_path=tui_state.CONFIG_PATH, entries=entries,
+                                               provider_id=provider_id, pending_keys=self._pending_api_keys),
+                                 self._apply_api_provider)
+        except Exception as exc:
+            self._set_status(f"Cannot edit provider: {tui_security._safe_config_error_text(exc)}")
+
+    def _apply_api_provider(self, draft: Any) -> None:
+        if draft is None:
+            return
+        try:
+            editor = self.query_one("#yaml-editor", TextArea)
+            payload = parse_yaml_config(editor.text)
+            payload.setdefault("api_providers", {})[draft.provider_id] = draft.entry
+            editor.text = dump_yaml_config(payload)
+            self._pending_api_keys.update(draft.keys)
+            self._refresh_api_providers()
+            self.query_one("#settings-api-provider", Select).value = draft.provider_id
+            self._set_status(f"Updated {draft.provider_id}. Save Settings to persist the provider, models, and .env key.")
+        except Exception as exc:
+            self._set_status(f"Provider not applied: {tui_security._safe_config_error_text(exc)}")
 
     def _set_section(self, selector: str, lines: list[str]) -> None:
         try:
@@ -599,6 +659,8 @@ class SettingsDrawer(BaseDrawer):
 
     @on(Button.Pressed, "#settings-save")
     def save_settings(self) -> None:
+        if self._saving:
+            return
         self._settings_generation += 1
         try:
             text = self.query_one("#yaml-editor", TextArea).text
@@ -630,30 +692,56 @@ class SettingsDrawer(BaseDrawer):
                 self._set_status("Not saved: llm_max_concurrency must be between 1 and 4")
                 return
         payload = tui_security._restore_yaml_secrets(payload, self.preserved_secret_placeholders)
-        try:
-            with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as temp:
-                temp.write(dump_yaml_config(payload))
-                temp_path = temp.name
+        self._saving = True
+        self._set_save_controls(True)
+        self._set_status("Saving config and provider credentials...")
+        generation = self._settings_generation
+        path = tui_state.CONFIG_PATH
+        keys = dict(self._pending_api_keys)
+
+        def save() -> None:
+            from tesis.provider_settings import save_provider_settings
+            error = None
             try:
-                load_and_resolve_config(config_path=temp_path, cli_args={})
-            finally:
-                try:
-                    os.unlink(temp_path)
-                except OSError:
-                    pass
-            save_yaml_config(tui_state.CONFIG_PATH, payload)
-        except Exception as exc:
-            self._set_status(f"Not saved: {tui_security._safe_config_error_text(exc)}")
+                save_provider_settings(path, payload, keys)
+            except Exception as exc:
+                error = tui_security._safe_config_error_text(exc)
+            if not self._tesis_closing:
+                self.post_message(SettingsSaved(generation, payload, error))
+
+        Thread(target=save, daemon=True, name="tesis-settings-save").start()
+
+    def _set_save_controls(self, disabled: bool) -> None:
+        for selector in ("#settings-save", "#settings-api-add", "#settings-api-edit", "#yaml-editor"):
+            self.query_one(selector).disabled = disabled
+        if not disabled:
+            self._refresh_api_providers()
+
+    @on(SettingsSaved)
+    def settings_saved(self, message: SettingsSaved) -> None:
+        if self._tesis_closing or message.generation != self._settings_generation:
+            return
+        self._saving = False
+        self._set_save_controls(False)
+        if message.error:
+            self._set_status(f"Not saved: {message.error}")
             return
         try:
-            masked, self.preserved_secret_placeholders = tui_security._mask_yaml_secrets(payload)
+            masked, self.preserved_secret_placeholders = tui_security._mask_yaml_secrets(message.payload)
             masked = tui_security._mask_url_credentials(masked, self.preserved_secret_placeholders)
             self.query_one("#yaml-editor", TextArea).text = dump_yaml_config(masked)
         except Exception:
             pass
         self.literal_warning_acknowledged = False
+        self._pending_api_keys.clear()
+        self._refresh_api_providers()
+        self._render_sections()
         self._set_status("Saved config.")
 
     def prepare_shutdown(self) -> None:
         self._tesis_closing = True
         self._settings_generation += 1
+        self._pending_api_keys.clear()
+
+    def on_unmount(self) -> None:
+        self.prepare_shutdown()

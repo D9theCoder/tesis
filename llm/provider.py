@@ -193,6 +193,9 @@ def get_llm(provider_name: str, **kwargs):
         )
     elif normalized_provider == "claude":
         from langchain_anthropic import ChatAnthropic
+        kwargs.pop("system_prompt", None)
+        if "request_timeout" in kwargs:
+            kwargs.setdefault("timeout", kwargs.pop("request_timeout"))
         temperature = kwargs.pop("temperature", 0)
         model_name = kwargs.pop("model_name", kwargs.pop("model", "claude-3-sonnet-20240229"))
         api_key = kwargs.pop("api_key", None) or os.getenv("ANTHROPIC_API_KEY") or ""

@@ -941,7 +941,8 @@ def run_provider_matrix(
                 index, coordinate, coordinate_output_dir, run_execution_id = prepared[next_to_submit]
                 next_to_submit += 1
                 provider = str(coordinate["provider"])
-                if provider not in SUPPORTED_PROVIDERS:
+                adapter = str(((model_configs or {}).get(provider) or {}).get("provider", provider))
+                if adapter not in SUPPORTED_PROVIDERS:
                     ordered_artifacts[index] = skipped_artifact(coordinate, run_execution_id)
                     continue
                 completed = sum(item is not None for item in ordered_artifacts)
