@@ -230,7 +230,7 @@ def candidate_base(artifact, cid, method, refs):
             if oracle:
                 tier = 3
             elif tier is not None or row.get('signal_detected') is True:
-                tier = min(tier or 2, 2)  # Session/permission labels cannot replace an independent oracle.
+                tier = min(2 if tier is None else tier, 2)  # Session/permission labels cannot replace an independent oracle.
         if tier is not None:
             if verifier.get('decision') == 'not_confirmed' and tier >= 3 or verifier.get('decision') == 'unverified' and tier >= 3 and not oracle:
                 tier = 2

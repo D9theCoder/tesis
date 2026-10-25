@@ -1477,6 +1477,7 @@ def run_single_engagement(
     artifact.update(status_fields)
     artifact["final_state"].update(status_fields)
     final_state = {**final_state, **status_fields}
+    report = artifact.setdefault("report", {})
     report.setdefault("summary", {}).update(status_fields)
     link_exported_request_evidence(artifact)
     build_candidate_dispositions(artifact)

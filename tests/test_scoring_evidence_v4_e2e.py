@@ -282,6 +282,104 @@ def oracle_artifact(monkeypatch, method):
     return a, row, att
 
 
+@pytest.mark.parametrize('method', ['ac_idor', 'bf_dictionary'])
+def test_oracle_free_verified_negative_stays_zero_through_review(monkeypatch, method):
+    from evaluation.thesis_scoring import review_queue
+    a, row, _ = oracle_artifact(monkeypatch, method)
+    a['config']['scoring_oracles'] = []
+    for evidence in a['final_state']['response_evidence']:
+        evidence.pop('oracle_ref', None)
+        evidence.update(verification_reason='login_not_confirmed' if method.startswith('bf_')
+            else 'no_verified_exploit_signal', signal_detected=False, success=False)
+    for decision in a['final_state']['verifier_history']:
+        decision['decision'] = 'not_confirmed'
+    queue = review_queue(export(a, f'oracle-free-negative-{method}'))
+    candidate = next(c for c in queue['candidates'] if c['candidate_id'] == row['candidate_id'])
+    assert candidate['proof_ceiling'] == candidate['base_proof'] == 0
+    assert candidate['status'] == 'signal_absent'
+    assert queue['components']['Sexploit'] == 0
+
+
+@pytest.mark.parametrize('kind', ['permission', 'session', 'dependency'])
+def test_collected_oracle_observations_do_not_split_final_repeats(monkeypatch, kind):
+    from evaluation.thesis_scoring import review_queue, finalize_reviews, compare_receipts
+    receipts, oracle_configs = [], []
+    for index in range(2):
+        a, row, _ = oracle_artifact(monkeypatch, 'ac_idor')
+        final_method(a, 'ac_idor', row['visit_id'])
+        document = {'fixture_id': a['config']['fixture_id'],
+            'protocol_version': a['config']['protocol_version'],
+            'oracle_protocol': {'kind': kind, 'enabled': True}}
+        protocol = {'source_id': f'{kind}-protocol', 'origin': 'offline_control',
+            'document': document, 'sha256': digest(document)}
+        collected = {**document, 'protocol_source_sha256': protocol['sha256'],
+            'candidate_replay': {'session_fingerprint': f'session-{index}',
+                'response_sha256': f'replay-{index}'},
+            'requests': [{'response_sha256': f'response-{index}'}],
+            'attestations': [], 'dependencies': [], 'controls': []}
+        a['config']['scoring_oracles'].extend([protocol, {
+            'source_id': f"{protocol['source_id']}:{row['evidence_id']}:{index}",
+            'origin': protocol['origin'], 'document': collected, 'sha256': digest(collected)}])
+        path = export(a, f'collected-repeat-{kind}-{index}')
+        queue = review_queue(path)
+        decisions = [{**d, 'rubric_version': queue['rubric_version']}
+            for d in grades(queue, 'human', 3)]
+        receipt = finalize_reviews(path, decisions)['receipts']['human']
+        receipts.append(receipt)
+        oracle_configs.append(json.loads(Path(receipt).read_bytes())['config']['scoring_oracles'])
+    groups = compare_receipts(receipts)['groups']
+    assert len(groups) == 1
+    assert groups[0]['n_final'] == 2
+    assert groups[0]['output_stability'] == 1
+    assert oracle_configs[0] != oracle_configs[1]
+    write_json_report(ROOT / f'collected-repeat-comparison-{kind}.json', {'groups': groups})
+
+
+def test_runner_updates_report_in_oracle_collector_copy(monkeypatch, tmp_path):
+    from evaluation.runner import run_single_engagement
+    from core.run_status import STATUS_FIELDS
+    a, row, _ = oracle_artifact(monkeypatch, 'ac_idor')
+    execution_id = a['execution_id']
+    run_id = 'openai_compatible-access_control-low-static_only-0'
+    a['run_id'] = run_id
+    bundle = a['config']['scoring_oracles'][0]
+    for attestation in [*bundle['document']['attestations'], *bundle['document']['controls']]:
+        attestation['run_id'] = run_id
+    bundle['sha256'] = digest(bundle['document'])
+    protocol_doc = {'fixture_id': 'synthetic-dvwa', 'protocol_version': 'offline.v1',
+        'oracle_protocol': {'kind': 'dvwa_candidate_permission.v1', 'enabled': True}}
+    protocol = {'source_id': 'permission-protocol', 'origin': 'offline_control',
+        'document': protocol_doc, 'sha256': digest(protocol_doc)}
+    state = deepcopy(a['final_state'])
+    for response in state['response_evidence']:
+        response.pop('oracle_ref', None)
+
+    class FakeApp:
+        def stream(self, initial, stream_mode=None, config=None):
+            yield {**initial, **state, 'task_result': 'SUCCESS'}
+
+    def enrich(artifact, raw_state):
+        result = deepcopy(artifact)
+        result['validation_scope'] = 'offline_synthetic_fixture'
+        result['config']['scoring_oracles'] = deepcopy(a['config']['scoring_oracles'])
+        result['final_state']['response_evidence'] = deepcopy(a['final_state']['response_evidence'])
+        return result
+
+    monkeypatch.setattr('evaluation.runner.build_framework', lambda **kwargs: FakeApp())
+    monkeypatch.setattr('evaluation.session_oracle.collect_session_oracles', lambda artifact, raw: artifact)
+    monkeypatch.setattr('evaluation.permission_oracle.collect_permission_oracles', enrich)
+    monkeypatch.setattr('evaluation.dependency_oracle.collect_dependency_oracles', lambda artifact, raw: artifact)
+    artifact = run_single_engagement(target_url='http://localhost/dvwa', security_level='low',
+        llm_provider='openai_compatible', surface='access_control', target_method='ac_idor',
+        payload_mode='static_only', execution_id=execution_id, output_dir=str(tmp_path),
+        scoring_rubric_version='scoring.v4', scoring_oracles=[protocol],
+        fixture_id='synthetic-dvwa', protocol_version='offline.v1')
+    saved = json.loads((tmp_path / f'{execution_id}.json').read_bytes())
+    assert artifact['security_outcome'] == saved['security_outcome'] == 'confirmed'
+    for field in STATUS_FIELDS:
+        assert saved[field] == saved['final_state'][field] == saved['report']['summary'][field]
+
+
 @pytest.mark.parametrize('change,ceiling', [('object', 2), ('action', 2),
     ('denied_identity', 2), ('allowed_identity', 2), ('independent_principals', 3)])
 def test_permission_control_bindings_match_candidate_resource(monkeypatch, change, ceiling):

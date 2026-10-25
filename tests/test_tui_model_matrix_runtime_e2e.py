@@ -219,3 +219,6 @@ def test_real_matrix_partial_artifacts(tmp_path, monkeypatch, outcome):
         assert len(child_artifacts) == 1
     else:
         assert len(child_artifacts) == 2
+        assert aggregate['execution_reason']['code'] == 'CHILD_EXECUTION_UNKNOWN'
+        assert aggregate['totals']['execution_unknown_runs'] == 2
+        assert all(artifact.get('execution_status') is None for artifact in child_artifacts)

@@ -218,7 +218,7 @@ def test_result_table_renders_execution_and_outcome_as_separate_cells():
     item = SimpleNamespace(run_id='unit', execution_id='unit-execution', status='success',
         execution_status='completed', security_outcome='fixture_limited', provider='offline',
         security_level='low', path='unit.json')
-    drawer = SimpleNamespace(_visible_items=lambda: [item], _cell=ResultsDrawer._cell, _items=[item],
+    drawer = SimpleNamespace(_visible_items=lambda: [item], _cell=ResultsDrawer._cell, _items=[item], _row_items={},
         query_one=lambda selector, kind: table if selector == '#results-table' else summary)
     ResultsDrawer._render_table(drawer)
     assert rows == [('unit', 'completed', 'fixture_limited', 'offline', 'low')]

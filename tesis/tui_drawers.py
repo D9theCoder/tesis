@@ -516,6 +516,7 @@ class ResultsDrawer(BaseDrawer):
         self._tesis_closing = False
         self._scan_thread: Thread | None = None
         self._items: list = []
+        self._row_items: dict[str, Any] = {}
         self._closing_guard = False
         self._filters: dict[str, str] = {}
         self._populating = False
@@ -647,14 +648,17 @@ class ResultsDrawer(BaseDrawer):
         try:
             table = self.query_one("#results-table", DataTable)
             table.clear()
-            for item in visible[:500]:
+            self._row_items.clear()
+            for index, item in enumerate(visible[:500]):
+                key = f"result-{index}"
+                self._row_items[key] = item
                 table.add_row(
                     self._cell(item, "run_id", "execution_id"),
                     self._cell(item, "execution_status", "status"),
                     self._cell(item, "security_outcome"),
                     self._cell(item, "provider"),
                     self._cell(item, "security_level"),
-                    key=str(getattr(item, "path", "") or id(item)),
+                    key=key,
                 )
             summary = (
                 f"{len(visible)}/{len(self._items)} artifacts match filters — scores missing render as —"
@@ -670,6 +674,8 @@ class ResultsDrawer(BaseDrawer):
         self._show_detail(str(event.row_key.value) if event.row_key is not None else "")
 
     def _find_item(self, key: str) -> Any:
+        if key in self._row_items:
+            return self._row_items[key]
         for item in self._items:
             candidates = {str(getattr(item, attr, "") or "") for attr in
                           ("run_id", "execution_id", "identifier", "path")}
@@ -678,6 +684,16 @@ class ResultsDrawer(BaseDrawer):
         return self._items[0] if self._items else None
 
     def _load_artifact(self, item: Any) -> dict:
+        if getattr(item, "artifact_kind", None) == "matrix":
+            # Use the repository's layout reader so detail/export select the
+            # child represented by this row, including compatibility wrappers.
+            records = ArtifactRepository(item.path).scan(retain_raw=True)
+            for record in records:
+                if (record.item_index == item.item_index
+                        and record.execution_id == item.execution_id
+                        and record.run_id == item.run_id):
+                    return dict(record.raw)
+            return {}
         try:
             payload = json.loads(Path(str(getattr(item, "path", "") or "")).read_text(encoding="utf-8"))
         except Exception:

@@ -437,7 +437,9 @@ def _run_kwargs(config, plan: dict, layout) -> dict:
         "llm_cache_scope": config.llm_runtime.cache_scope,
         "resume": False,
         "checkpoint_dir": None,
-        "experiment_id": Path(plan["output_epoch"]).name,
+        # experiment_id is a checkpoint opt-in in the runner. This plan's
+        # identity is carried by execution_id and the frozen epoch manifest.
+        "experiment_id": None,
         "execution_id": plan["matrix_execution_id"],
         "experiment_condition": CONDITIONS[0],
         "experiment_conditions": list(CONDITIONS),
@@ -546,7 +548,7 @@ def main(argv: list[str] | None = None) -> int:
         result = run_plan(args.manifest)
         print(json.dumps({key: result[key] for key in (
             "status", "matrix_execution_id", "completed_artifacts", "plan_sha256")}, sort_keys=True))
-        return 0
+        return 0 if str(result.get("status", "error")).lower() in {"success", "cancelled"} else 1
     except (OSError, ValueError, KeyError, TypeError) as exc:
         parser.exit(1, f"Matrix {args.command} failed: {type(exc).__name__}: {exc}\n")
 

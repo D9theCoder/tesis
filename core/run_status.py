@@ -159,8 +159,9 @@ def matrix_terminal_status(artifacts: list[dict], *, interrupted: bool = False, 
     """Summarize child evidence independently of the matrix execution lifecycle."""
     fields = [terminal_status(artifact) for artifact in artifacts if artifact.get("status") != "skipped"]
     interrupted = interrupted or any(item["execution_status"] == "interrupted" for item in fields)
-    lifecycle = "interrupted" if interrupted else "failed" if any(
-        item["execution_status"] == "failed" for item in fields) else "completed"
+    failed = any(item["execution_status"] == "failed" for item in fields)
+    unknown = any(item["execution_status"] is None for item in fields)
+    lifecycle = "interrupted" if interrupted else "failed" if failed or unknown else "completed"
     outcome = ("confirmed" if any(item["security_outcome"] == "confirmed" for item in fields)
         else "no_finding" if fields and all(item["security_outcome"] == "no_finding" for item in fields)
         else "fixture_limited" if any(item["security_outcome"] == "fixture_limited" for item in fields)
@@ -168,4 +169,5 @@ def matrix_terminal_status(artifacts: list[dict], *, interrupted: bool = False, 
     return terminal_status({"security_outcome": outcome,
         "security_outcome_reason": None if outcome == "confirmed" else reason("CHILD_OUTCOMES", "See child reasons and separate outcome counts.")},
         execution_status=lifecycle, execution_reason=reason("CANCELLED", interruption_reason) if interrupted
-        else reason("CHILD_EXECUTION_FAILED") if lifecycle == "failed" else None)
+        else reason("CHILD_EXECUTION_FAILED") if failed
+        else reason("CHILD_EXECUTION_UNKNOWN", "Child lifecycle evidence is insufficient to establish matrix completion.") if unknown else None)

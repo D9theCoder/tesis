@@ -311,6 +311,10 @@ def write_json_report(path: str | Path, payload: dict) -> Path:
     out_path = Path(path)
     serialized = json.dumps(payload, indent=2, sort_keys=True)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        destination_mode = stat.S_IMODE(out_path.stat().st_mode)
+    except FileNotFoundError:
+        destination_mode = None
     temporary = None
     try:
         while True:
@@ -318,20 +322,17 @@ def write_json_report(path: str | Path, payload: dict) -> Path:
             try:
                 # Let file creation apply the process umask without changing
                 # that process-wide setting while other writers are active.
-                descriptor = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+                descriptor = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    destination_mode if destination_mode is not None else 0o666)
             except FileExistsError:
                 continue
             temporary = candidate
             break
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            if destination_mode is not None:
+                os.fchmod(handle.fileno(), destination_mode)
             handle.write(serialized)
             handle.flush()
-            try:
-                destination_mode = stat.S_IMODE(out_path.stat().st_mode)
-            except FileNotFoundError:
-                pass
-            else:
-                os.chmod(temporary, destination_mode)
             os.fsync(handle.fileno())
         os.replace(temporary, out_path)
     finally:

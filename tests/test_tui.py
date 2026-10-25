@@ -2166,7 +2166,7 @@ def test_results_detail_is_triage_only_truncated_and_redacted(tmp_path, monkeypa
                     chain_of_thought="think step by step")
     _write_artifact(artifact_dir, "run-nonscore", scores={})
     monkeypatch.setattr(tui_drawers, "DETAIL_LOG_MAX_LINES", 64)
-    monkeypatch.setattr(tui_drawers, "DETAIL_RENDER_MAX_CHARS", 256)
+    monkeypatch.setattr(tui_drawers, "DETAIL_RENDER_MAX_CHARS", 20000)
     monkeypatch.setattr(tui_state, "CONFIG_PATH", tmp_path / "config.yaml")
     (tmp_path / "config.yaml").write_text(
         "target_url: http://localhost/dvwa\nprovider: gemini\nlevel: low\n"
@@ -2199,6 +2199,13 @@ def test_results_detail_is_triage_only_truncated_and_redacted(tmp_path, monkeypa
             assert "sk-live-prompt-secret" not in detail
             assert "think step by step" not in detail
             assert "x" * 100 not in detail, "large raw payload must be truncated"
+            # Status reasons can precede method details. Check the full triage
+            # fields above, then independently exercise the small preview cap.
+            monkeypatch.setattr(tui_drawers, "DETAIL_RENDER_MAX_CHARS", 256)
+            drawer._show_detail("run-1")
+            await pilot.pause()
+            detail = str(drawer.query_one("#results-detail").render())
+            assert "run-1" in detail
             assert "truncat" in detail.lower()
             drawer._show_detail("run-nonscore")
             await pilot.pause()

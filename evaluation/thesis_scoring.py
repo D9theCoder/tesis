@@ -842,8 +842,12 @@ def _comparison_fingerprint(record):
         config['scoring_oracles'] = [{
             'source_id': source['source_id'], 'origin': source['origin'],
             'document': {k: v for k, v in source['document'].items()
-                if k not in {'attestations', 'dependencies', 'controls', 'dependency_controls'}},
-        } for source in config['scoring_oracles'] or []]
+                if k not in {'attestations', 'dependencies', 'controls', 'dependency_controls',
+                    'candidate_replay', 'requests', 'policy_evidence'}},
+        } for source in config['scoring_oracles'] or []
+            # Collectors append candidate/route-specific sources alongside the
+            # frozen protocol. Their IDs and documents describe observations.
+            if 'protocol_source_sha256' not in source['document']]
     return config_fingerprint({**config, 'assessed_method': record['method'],
         'scoring_rule_sha256': record['scoring_rule_sha256']})
 

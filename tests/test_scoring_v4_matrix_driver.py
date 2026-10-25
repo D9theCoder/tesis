@@ -65,6 +65,30 @@ def test_matrix_frozen_settings_are_sanitized_and_include_effective_budget(offli
     assert not (epoch / 'matrix-run-start.json').exists()
 
 
+def test_checkpoint_free_plan_does_not_create_runner_stores(monkeypatch, offline_matrix_plan):
+    from evaluation.runner import run_single_engagement
+    matrix, plan, manifest = offline_matrix_plan
+    _, config, epoch = matrix._verify_plan(manifest)
+    layout = SimpleNamespace(root=epoch, child_directory=lambda coordinate, index: epoch)
+    kwargs = matrix._run_kwargs(config, plan, layout)
+
+    class FakeApp:
+        def stream(self, state, stream_mode=None, config=None):
+            yield {**state, 'task_result': 'INCOMPLETE', 'iteration_count': 1}
+
+    monkeypatch.setattr('evaluation.runner.build_framework', lambda **kwargs: FakeApp())
+    artifact = run_single_engagement(target_url=kwargs['target_url'], security_level='low',
+        llm_provider='openai_compatible', target_method='sqli_union', payload_mode='static_only',
+        output_dir=kwargs['output_dir'], resume=kwargs['resume'],
+        checkpoint_dir=kwargs['checkpoint_dir'], experiment_id=kwargs['experiment_id'],
+        execution_id=kwargs['execution_id'])
+    assert artifact['execution_status'] == 'completed'
+    assert artifact['execution_id'] == plan['matrix_execution_id']
+    assert artifact['checkpoint_store'] is None
+    assert artifact['graph_checkpoint_store'] is None
+    assert not list(epoch.rglob('*.sqlite*'))
+
+
 @pytest.mark.parametrize('variable,value', [
     ('TESIS_MAX_ITERATIONS', '11'),
     ('TESIS_GUARDRAIL_RETRY_ENABLED', 'true'),
