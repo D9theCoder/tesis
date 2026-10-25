@@ -48,6 +48,32 @@ driving a terminal, `python -m tesis run --headless --mode single|matrix`
 accepts explicit coordinate flags and uses the same runners. The repository
 root `config.yaml` remains the default configuration document.
 
+The workspace uses a narrow pipeline beside runs and evidence at wide sizes,
+and one selected pane at smaller sizes. Tab/Shift+Tab move focus; arrows,
+PageUp/PageDown, and Home/End navigate the focused control. `/` opens commands
+with keyboard selection while typing; `?` opens a centered help popup. Settings
+fills the window, with separate API provider, ChatGPT account, runtime, and
+evaluator categories. Plan and launch Review show approved fields and effective
+API protocols without rendering model objects or credentials. These UI changes
+retain profile identities, role-specific reasoning inheritance, and independent
+evaluator configuration. See the [TUI design](tui-design.md) for the keyboard
+contract and the distinction between implementation and validation evidence.
+
+Settings presents labeled configuration rows and compact evaluator forms.
+Up/Down selects categories; Left/Right moves between the category rail, content,
+and optional evaluator context while text inputs retain caret navigation.
+Selectors use plain option lists, and boolean/multiple selection uses ASCII
+`[*]` and `[-]` markers throughout the TUI, including provider model selection.
+
+UI redraws reuse configuration and draft projections until their source inputs
+change. Launch previews and YAML-derived controls debounce independently of
+typing, while live display work is limited to 30 Hz without skipping state
+events. Tables update changed cells and navigation avoids full dashboard
+rebuilds. Every Start still performs fresh canonical configuration validation.
+Direct local data-method profiling is documented in the
+[responsiveness notes](tui-design.md#responsiveness); it does not establish
+physical terminal or keyboard latency.
+
 Core runtime code is presentation-independent. Runners optionally accept a
 `RuntimeEventSink` and `CancellationToken`, attach normalized LangChain model
 callbacks, and emit lifecycle, graph, payload, verification, safety, scoring,

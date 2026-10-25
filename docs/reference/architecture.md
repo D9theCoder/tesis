@@ -54,20 +54,29 @@ python -m tesis run --headless --mode matrix \
 ```
 
 ```text
-Main menu
+Experiment workspace
 ├── Single experiment setup ─┐
 ├── Experiment matrix setup ─┴── Runtime dashboard ── In-app summary
-├── Settings (typed + raw round-trip YAML)
+├── Full-window Settings (categories + masked round-trip YAML)
 ├── Recent results ── Result detail ── Export
 ├── Framework validation
-├── Framework information
+├── Centered keyboard help and framework information
 └── Exit
 ```
 
-All screens are keyboard navigable. Esc returns, `q` exits at the main menu,
-Ctrl+C requests cooperative runtime cancellation, and Tab switches the runtime
-pane between the model stream and redacted trace. Live rendering is bounded;
-the complete execution log remains in the artifact.
+Tab and Shift+Tab cycle interactive panels and controls. Arrow keys navigate
+lists, tabs, action rows, and viewports; Enter activates the selection. `/`
+opens the command list, whose selection also responds to arrows while its
+filter input retains typing focus. `?` opens a centered help popup. Escape
+closes the current overlay, `q` exits the idle workspace, and Ctrl+C requests
+cooperative runtime cancellation. Wide terminals show a narrow pipeline beside
+runs and detail panes; smaller terminals switch between single panes using
+tabs or keys 1-4. Settings fills the window; other inspections are centered
+dialogs. Plan and Review display approved model/configuration fields and the
+effective API protocol rather than model-object representations. Live rendering
+is bounded; the complete execution log remains in the artifact. See the
+[design and keyboard contract](tui-design.md) for layout rules and the current
+validation scope.
 
 ## Separation of concerns
 
@@ -187,6 +196,18 @@ module has a focused responsibility:
   doctor, plan, help, and about views.
 - `tesis.tui_mission` owns the mission screen, live rendering, event delivery,
   and runtime cancellation.
+- `tesis.tui_widgets` owns shared keyboard tables, tabs, action rows, the
+  command-filter input, plain text checkbox/selection markers, structured
+  settings rows and fields, and approved model/configuration summaries.
+- `tesis.tui_config` owns screen-local configuration and draft projection
+  caches. File metadata, environment, overrides, and referenced scoring JSON
+  invalidate cached resolution. Execution requests use fresh canonical loading.
+
+Dashboard navigation reuses unchanged content. Live events update the UI state
+in order; display work and inspection observers are coalesced to at most 30 Hz.
+Tables update changed cells rather than clearing all rows. Launch previews and
+YAML draft projections debounce independently of input, and animations are
+disabled. See [responsiveness and profiling scope](tui-design.md#responsiveness).
 
 State and security modules provide the shared lower-level helpers. Screen,
 drawer, and launcher links that would otherwise create import cycles use

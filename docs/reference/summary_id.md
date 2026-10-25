@@ -49,6 +49,35 @@ mengendalikan terminal, `python -m tesis run --headless --mode single|matrix`
 menerima flag koordinat eksplisit dan memakai runner yang sama. `config.yaml`
 di root repository tetap menjadi dokumen konfigurasi default.
 
+Pada terminal lebar, workspace menampilkan pipeline yang lebih ramping di
+samping daftar run dan evidence. Pada ukuran lebih kecil, satu pane ditampilkan
+sesuai pilihan. Tab/Shift+Tab memindahkan fokus; tombol panah, PageUp/PageDown,
+serta Home/End mengendalikan kontrol yang sedang fokus. `/` membuka daftar
+perintah yang dapat dipilih dengan keyboard sambil mengetik, sedangkan `?`
+membuka popup bantuan di tengah layar. Settings memakai seluruh jendela dengan
+kategori API provider, akun ChatGPT, runtime, dan evaluator yang terpisah. Plan
+dan Review menampilkan field yang dipilih beserta protokol API efektif tanpa
+menampilkan objek model atau kredensial. Identitas profile, pewarisan reasoning
+per role, dan konfigurasi evaluator independen tetap dipertahankan. Lihat
+[desain TUI](tui-design.md) untuk aturan keyboard serta cakupan bukti validasi.
+
+Settings menyajikan konfigurasi dalam baris berlabel dan form evaluator yang
+ringkas. Up/Down memilih kategori, sedangkan Left/Right memindahkan fokus antara
+daftar kategori, isi, dan panel konteks evaluator yang tersedia pada layar lebar.
+Input teks tetap memakai tombol panah untuk memindahkan kursor. Selector memakai
+daftar opsi teks, sementara pilihan boolean dan pilihan jamak memakai penanda
+ASCII `[*]` dan `[-]` di seluruh TUI, termasuk pemilihan model provider.
+
+Redraw UI memakai kembali proyeksi konfigurasi dan draft sampai input sumbernya
+berubah. Preview peluncuran dan kontrol yang berasal dari YAML memakai debounce
+tanpa menunda input teks. Pembaruan tampilan live dibatasi sampai 30 Hz, sedangkan
+seluruh event tetap diterapkan ke state secara berurutan. Tabel memperbarui sel
+yang berubah dan navigasi tidak membangun ulang seluruh dashboard. Setiap Start
+tetap memvalidasi konfigurasi melalui loader utama dengan data terbaru. Hasil
+profiling metode data lokal dijelaskan pada
+[catatan responsivitas](tui-design.md#responsiveness); hasil ini belum mengukur
+latensi keyboard atau terminal fisik.
+
 Core runtime tidak bergantung pada presentation layer. Runner menerima
 `RuntimeEventSink` dan `CancellationToken` secara opsional, memasang callback
 model LangChain yang dinormalisasi, lalu mengirim event lifecycle, graph,
