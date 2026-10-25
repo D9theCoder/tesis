@@ -227,7 +227,7 @@ def _validate_config(config) -> dict:
     if any(role.model_profile not in (None, PROVIDER) for role in config.llm_runtime.roles.values()):
         raise ValueError("LLM role profiles must follow openai_compatible")
     evaluator = config.scoring_evaluator
-    if evaluator.get("provider") != PROVIDER or evaluator.get("model") != model.model_name:
+    if evaluator.get("adapter", evaluator.get("provider")) != PROVIDER or evaluator.get("model") != model.model_name:
         raise ValueError("AI evaluator must use the pinned openai_compatible model")
 
     pending_references = [

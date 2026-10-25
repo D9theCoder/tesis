@@ -449,6 +449,10 @@ SettingsDrawer .drawer {
     overflow-y: auto;
 }
 
+#settings-evaluator-details, #settings-evaluator-status {
+    height: auto;
+}
+
 /* API provider form: one scroll area and two fixed actions at every width. */
 #provider-fields {
     overflow-x: hidden;

@@ -569,6 +569,22 @@ class SettingsDrawer(BaseDrawer):
             yield Button("Use selected model", id="settings-chatgpt-apply", disabled=True)
         with Collapsible(title="LLM runtime", collapsed=True, id="settings-section-llm"):
             yield Static("", id="settings-llm-body", markup=False)
+        with Collapsible(title="AI evaluator", collapsed=True, id="settings-section-evaluator"):
+            yield Label("Payload review")
+            yield Select([("Human", "human"), ("AI", "ai"), ("Human and AI", "both")],
+                         value="human", allow_blank=False, id="settings-scoring-mode")
+            yield Label("Evaluator provider / model")
+            yield Select([], prompt="Choose a saved provider and model", id="settings-evaluator-provider")
+            yield Static("", id="settings-evaluator-details", markup=False)
+            yield Label("Maximum review attempts (1-3)")
+            yield Input(value="2", type="integer", id="settings-evaluator-attempts")
+            yield Label("Output token limit (1-8192)")
+            yield Input(value="1024", type="integer", id="settings-evaluator-tokens")
+            yield Label("Request timeout in seconds (1-120)")
+            yield Input(value="60", type="integer", id="settings-evaluator-timeout")
+            yield Button("Apply evaluator", id="settings-evaluator-apply", disabled=True)
+            yield Static("Apply updates the draft. Save Settings to keep it. Existing reviews retain their frozen evaluator.",
+                         markup=False, id="settings-evaluator-status")
         with Collapsible(title="Policy & output", collapsed=True, id="settings-section-policy"):
             yield Static("", id="settings-policy-body", markup=False)
         with Collapsible(title="Advanced YAML", collapsed=False, id="settings-section-yaml"):
@@ -597,6 +613,99 @@ class SettingsDrawer(BaseDrawer):
                 pass
             self._set_status(f"Not saved: {tui_security._safe_config_error_text(exc)}")
         self._refresh_api_providers()
+        self._refresh_evaluator()
+
+    @on(TextArea.Changed, "#yaml-editor")
+    def evaluator_yaml_changed(self) -> None:
+        if self.is_mounted and not self._saving:
+            self._refresh_evaluator()
+
+    def _refresh_evaluator(self) -> None:
+        from tesis.provider_registry import expanded_model_sections, model_profile_labels
+        picker = self.query_one("#settings-evaluator-provider", Select)
+        try:
+            payload = parse_yaml_config(self.query_one("#yaml-editor", TextArea).text)
+            sections = expanded_model_sections(payload)
+            labels = model_profile_labels(payload)
+            choices = [(labels[name] if labels[name] != name else f"{name} / {section['model_name']}", name)
+                       for name, section in sections.items() if section.get("model_name")]
+            evaluator = payload.get("scoring_evaluator") or {}
+            selected = evaluator.get("model_profile") or evaluator.get("provider")
+            if (not evaluator.get("model_profile") and evaluator.get("model")) or selected not in {value for _, value in choices}:
+                matches = [name for name, section in sections.items()
+                           if section.get("provider", name) == evaluator.get("provider")
+                           and section.get("model_name") == evaluator.get("model")]
+                selected = matches[0] if len(matches) == 1 else Select.NULL
+            picker.set_options(choices)
+            picker.value = selected if selected in {value for _, value in choices} else Select.NULL
+            picker.disabled = not choices
+            self.query_one("#settings-scoring-mode", Select).value = payload.get("scoring_mode", "human")
+            for selector, key, default in (("attempts", "max_attempts", 2), ("tokens", "max_tokens", 1024),
+                                           ("timeout", "timeout", 60)):
+                self.query_one(f"#settings-evaluator-{selector}", Input).value = str(evaluator.get(key, default))
+            self.query_one("#settings-evaluator-apply", Button).disabled = self._saving
+            self._show_evaluator_connection()
+        except Exception as exc:
+            picker.disabled = True
+            self.query_one("#settings-evaluator-apply", Button).disabled = True
+            self.query_one("#settings-evaluator-details", Static).update(
+                f"Cannot load evaluator choices: {tui_security._safe_config_error_text(exc)}")
+
+    @on(Select.Changed, "#settings-evaluator-provider")
+    def evaluator_provider_changed(self) -> None:
+        self._show_evaluator_connection()
+
+    def _show_evaluator_connection(self) -> None:
+        from tesis.provider_registry import API_PROTOCOLS, expanded_model_sections
+        selected = self.query_one("#settings-evaluator-provider", Select).value
+        details = self.query_one("#settings-evaluator-details", Static)
+        if selected is Select.NULL:
+            details.update("Choose an evaluator model. Add providers and models in Model profile.")
+            return
+        try:
+            payload = parse_yaml_config(self.query_one("#yaml-editor", TextArea).text)
+            profile = expanded_model_sections(payload)[str(selected)]
+            adapter = profile.get("provider", str(selected))
+            protocol = "anthropic" if adapter == "claude" else adapter
+            if adapter in {"openai", "openai_compatible"}:
+                responses = (profile.get("extra") or {}).get("use_responses_api", profile.get("use_responses_api"))
+                if responses is not None:
+                    protocol = "openai" if responses else "openai_compatible"
+            endpoint = tui_security._safe_url(profile.get("base_url") or "provider default")
+            text = f"API format: {API_PROTOCOLS.get(protocol, adapter)}\nEndpoint: {endpoint}"
+            if adapter == "openai_codex_auth":
+                text = "API format: ChatGPT sign-in Responses\nTemperature and output-token limits are unsupported."
+            details.update(text)
+        except Exception:
+            details.update("The selected evaluator model is unavailable. Choose another saved model.")
+
+    @on(Button.Pressed, "#settings-evaluator-apply")
+    def apply_evaluator(self) -> None:
+        from evaluation.thesis_scoring import validate_scoring_config
+        from tesis.provider_registry import expanded_model_sections
+        status = self.query_one("#settings-evaluator-status", Static)
+        try:
+            editor = self.query_one("#yaml-editor", TextArea)
+            payload = parse_yaml_config(editor.text)
+            selected = self.query_one("#settings-evaluator-provider", Select).value
+            mode = str(self.query_one("#settings-scoring-mode", Select).value)
+            evaluator = dict(payload.get("scoring_evaluator") or {})
+            if selected is Select.NULL:
+                if mode != "human":
+                    raise ValueError("Choose a saved provider and model for AI review.")
+            else:
+                profile = expanded_model_sections(payload)[str(selected)]
+                for key in ("provider", "adapter", "model", "model_profile", "base_url", "api_key", "use_responses_api"):
+                    evaluator.pop(key, None)
+                evaluator["provider"] = str(selected)
+                for selector, key in (("attempts", "max_attempts"), ("tokens", "max_tokens"), ("timeout", "timeout")):
+                    evaluator[key] = int(self.query_one(f"#settings-evaluator-{selector}", Input).value)
+                validate_scoring_config(mode, {**evaluator, "model": profile["model_name"]})
+            payload.update(scoring_mode=mode, scoring_evaluator=evaluator)
+            editor.text = dump_yaml_config(payload)
+            status.update("Evaluator applied to the draft. Save Settings to keep it.")
+        except Exception as exc:
+            status.update(f"Evaluator not applied: {tui_security._safe_config_error_text(exc)}")
 
     def _refresh_api_providers(self) -> None:
         try:
@@ -856,10 +965,13 @@ class SettingsDrawer(BaseDrawer):
 
     def _set_save_controls(self, disabled: bool) -> None:
         for selector in ("#settings-save", "#settings-api-add", "#settings-api-edit", "#yaml-editor",
-                         "#settings-chatgpt-apply"):
+                         "#settings-chatgpt-apply", "#settings-evaluator-apply", "#settings-evaluator-provider",
+                         "#settings-scoring-mode", "#settings-evaluator-attempts", "#settings-evaluator-tokens",
+                         "#settings-evaluator-timeout"):
             self.query_one(selector).disabled = disabled
         if not disabled:
             self._refresh_api_providers()
+            self._refresh_evaluator()
             self.query_one("#settings-chatgpt-apply", Button).disabled = (
                 self._catalog_binding is None or self.query_one("#settings-chatgpt-model", Select).disabled
             )
@@ -882,6 +994,7 @@ class SettingsDrawer(BaseDrawer):
         self.literal_warning_acknowledged = False
         self._pending_api_keys.clear()
         self._refresh_api_providers()
+        self._refresh_evaluator()
         self._render_sections()
         self._set_status("Saved config.")
 

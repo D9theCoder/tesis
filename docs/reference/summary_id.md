@@ -264,6 +264,17 @@ milik evaluator. Pemanggilannya memakai adapter provider yang sama. Konfigurasi
 evaluator efektif yang berubah tidak boleh diam-diam mengganti konfigurasi
 penilaian yang sudah dibekukan dalam artifact lama.
 
+`scoring_evaluator.provider` memilih ID pasangan provider/model yang sama dengan
+pemilih pada eksekusi tunggal dan *matrix*. *Profile* menyediakan model,
+*endpoint*, kredensial, dan protokol API. Evaluator hasil resolusi menyimpan
+*adapter* eksekusi secara terpisah dari identitas provider. Bagian **AI evaluator**
+pada Settings menyediakan pilihan pasangan tersebut, mode penilaian, serta
+batas percobaan, token, dan *timeout* yang mandiri. Apply memperbarui draf dan
+Save menyimpannya tanpa memulai penilaian. Konfigurasi evaluator lama tetap
+memakai bentuk hasil resolusi sebelumnya. Perubahan identitas atau pengaturan
+efektif memerlukan konfigurasi penilaian baru yang dibekukan; artifact lama
+tidak ditulis ulang.
+
 `python -m tesis doctor` mandiri hanya berjalan jika diminta. Sebelas check
 offline mencakup scope tetap 3 surface/9 method/3 level/3 payload mode/2
 condition, invariant AKG, kompilasi LangGraph, seluruh 81 koordinat static-seed,

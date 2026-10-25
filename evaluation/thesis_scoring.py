@@ -774,10 +774,11 @@ def evaluate_queue(queue, evaluator, *, invoke=None, candidate_ids=None, expecte
     if invoke is None:
         from llm.provider import get_llm
         options = {k: v for k, v in runtime_evaluator.items()
-            if k not in {'provider', 'model', 'model_profile', 'max_attempts'}}
+            if k not in {'provider', 'adapter', 'model', 'model_profile', 'max_attempts'}}
         options.setdefault('temperature', 0)
         options['max_retries'] = 0
-        model = get_llm(evaluator['provider'], model_name=evaluator['model'], **options)
+        adapter = evaluator.get('adapter', evaluator['provider'])
+        model = get_llm(adapter, model_name=evaluator['model'], **options)
         invoke = model.invoke
     from langchain_core.messages import SystemMessage, HumanMessage
     for row in queue['candidates']:

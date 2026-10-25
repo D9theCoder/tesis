@@ -116,6 +116,50 @@ Provider entries also accept shared `temperature`, `timeout`, `max_tokens`,
 Responses with `store: false`; new `openai_compatible` entries explicitly select
 Chat Completions. Historical profiles retain their configured behavior.
 
+## Independent AI evaluator
+
+`scoring_evaluator.provider` accepts the same provider/model profile ID as the
+run `provider` and matrix `providers` selectors:
+
+```yaml
+scoring_mode: ai
+scoring_evaluator:
+  provider: tokenharbor__deepseek-v4-1-flash_eb1394ac7fc4
+  max_attempts: 2
+  max_tokens: 1024
+  timeout: 60
+```
+
+The example ID requires the matching `api_providers.tokenharbor` entry and
+selected model. The provider entry owns its endpoint, credential, API protocol,
+and model list. Here `provider` selects one registered provider/model pair;
+`openai`, `openai_compatible`, and `anthropic` name wire protocols in the registry.
+The evaluator's model, endpoint, credentials, and protocol resolve from that
+selection. Its review attempts, token limit, and timeout remain independent.
+Switching the experiment's model does not switch the evaluator.
+
+In `/settings`, expand **AI evaluator**, choose the review mode and **Evaluator
+provider / model**, and inspect its API format and endpoint. Set the review
+limits, choose **Apply evaluator**, then **Save** in Advanced YAML. Choices
+include registered models and standalone profiles, including configured ChatGPT
+sign-in profiles. Add or edit providers in **Model profile** first. New model
+choices and edits in Advanced YAML refresh the evaluator choices. Applying
+updates the draft; closing without Save discards it. Selecting or saving never
+starts an experiment, model discovery, or evaluation.
+
+New resolved evaluator records retain the selected provider/model ID as
+`provider` and keep the execution `adapter` separately. Legacy evaluator
+sections with an adapter `provider`, explicit `model`, and optional
+`model_profile` still load with their historical resolved shape. When a profile
+is selected, conflicting endpoint, credential, model, or protocol overrides are
+rejected. Historical inline evaluators without a profile also remain supported.
+
+Every new execution freezes the complete resolved evaluator settings. Changing
+the provider/model, endpoint, or API format cannot silently regrade an existing
+queue: evaluation requires an exact match with that queue's frozen evaluator.
+Keep the original legacy configuration when reviewing an older artifact;
+changing to the new selector creates a distinct frozen evaluator identity.
+
 ## Sources and validation scope
 
 Discovery follows the official [OpenAI Models API](https://developers.openai.com/api/reference/resources/models/methods/list)

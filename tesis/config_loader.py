@@ -919,6 +919,14 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any],
     merged = merge_config(yaml_cfg, env_cfg)
     merged = merge_config(merged, cli_cfg)
 
+    # Role defaults must see registry profiles as well as legacy models.
+    # Expand once, after overrides, before resolving profile token budgets.
+    try:
+        model_sections = expanded_model_sections(merged)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from None
+    merged["models"] = model_sections
+
     provider = str(
         merged.get("provider")
         or merged.get("default_llm_provider")
@@ -1024,11 +1032,6 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any],
             value = json.loads(path.read_bytes())
         evidence_config[key] = value
 
-    try:
-        model_sections = expanded_model_sections(merged)
-    except ValueError as exc:
-        raise ConfigError(str(exc)) from None
-
     config = EngagementConfig(
         target_url=str(merged.get("target_url", "")).strip(),
         provider=provider,
@@ -1080,18 +1083,7 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any],
         ),
     )
 
-    evaluator = config.scoring_evaluator
-    profile_name = evaluator.get("model_profile")
-    if profile_name:
-        profile = config.models.get(profile_name)
-        if profile is None or evaluator.get("provider") != profile.provider or evaluator.get("model") != profile.model_name:
-            raise ConfigError("Scoring evaluator must match its frozen model profile")
-        options = {"temperature": profile.temperature, "reasoning_effort": profile.reasoning_effort,
-                   **profile.extra}
-        evaluator = merge_config(options, evaluator)
-        evaluator.update(api_key=profile.extra.get("api_key", profile.api_key),
-                         base_url=profile.extra.get("base_url", profile.base_url))
-        config.scoring_evaluator = evaluator
+    config.scoring_evaluator = _resolve_scoring_evaluator(config.scoring_evaluator, config.models)
     _validate_engagement_config(config)
     form_name = FORM_MATRIX if config.matrix else FORM_SINGLE
     field_errors = validate_field_schema(asdict(config), form=form_name)
@@ -1099,3 +1091,43 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any],
         details = "; ".join(f"{path}: {message}" for path, message in sorted(field_errors.items()))
         raise ConfigError(f"Invalid configuration fields: {details}")
     return config
+
+
+def _resolve_scoring_evaluator(
+    evaluator: Mapping[str, Any], models: Mapping[str, ModelConfig],
+) -> dict[str, Any]:
+    """Resolve the same provider/model selector used by run and matrix settings.
+
+    Historical provider/model configurations remain valid. Resolved records keep
+    their historical shape so frozen review queues still compare effective settings.
+    """
+    profile_name = evaluator.get("model_profile")
+    provider = evaluator.get("provider")
+    selected_provider = bool(provider and not profile_name and (
+        provider not in SUPPORTED_PROVIDERS or "model" not in evaluator
+    ))
+    if selected_provider:
+        profile_name = provider
+    if not profile_name:
+        if "adapter" in evaluator and evaluator["adapter"] != provider:
+            raise ConfigError("Inline evaluator adapter must match its legacy provider")
+        return dict(evaluator)
+    profile = models.get(profile_name)
+    if profile is None or not profile.model_name.strip():
+        raise ConfigError("Scoring evaluator must reference an available model profile")
+    connection = {
+        "provider": profile_name if selected_provider else profile.provider,
+        "model": profile.model_name,
+        "api_key": profile.extra.get("api_key", profile.api_key),
+        "base_url": profile.extra.get("base_url", profile.base_url),
+    }
+    if selected_provider or "adapter" in evaluator:
+        connection["adapter"] = profile.provider
+    if "use_responses_api" in profile.extra:
+        connection["use_responses_api"] = profile.extra["use_responses_api"]
+    if any(key in evaluator and evaluator[key] != value for key, value in connection.items()):
+        raise ConfigError("Scoring evaluator must match its frozen model profile; "
+                          "configure endpoint, credentials, and API protocol in the profile")
+    options = {"temperature": profile.temperature, "reasoning_effort": profile.reasoning_effort,
+               **profile.extra}
+    return {**merge_config(options, evaluator), **connection}

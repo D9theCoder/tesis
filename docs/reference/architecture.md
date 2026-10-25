@@ -31,6 +31,16 @@ workers. `llm/model_catalog.py` owns authenticated, paginated model discovery.
 `.env`, and atomically replaces YAML containing environment references. Settings
 saves run in a daemon worker. See [API providers and models](api_providers.md).
 
+The independent `scoring_evaluator.provider` uses the same provider/model profile
+IDs as launch and matrix selectors. `config_loader` resolves its model and
+connection from the profile, retaining provider identity separately from the
+execution `adapter`. `thesis_scoring.evaluate_queue` dispatches that adapter;
+the frozen evaluator includes its selected identity and effective connection.
+Legacy inline and `model_profile` evaluator configurations retain their resolved
+shape. The Settings **AI evaluator** section stages a profile selection, review
+mode, and independent limits into YAML; the existing settings worker validates
+and saves them. Applying or saving does not invoke the scorer or providers.
+
 Useful automation flags include `--condition`, `--target-method`,
 `--providers`, `--levels`, `--surfaces`, `--payload-modes`, `--repeats`,
 `--candidate-budget`, `--iterations`, `--model-profile`, `--output-dir`, and

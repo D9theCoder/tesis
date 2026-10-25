@@ -570,7 +570,8 @@ def _check_reasoning(config: EngagementConfig) -> DoctorCheck:
     if config.scoring_mode in {"ai", "both"} and config.scoring_evaluator:
         evaluator = config.scoring_evaluator
         settings.append(("scoring_evaluator", str(evaluator.get("reasoning_effort") or "provider-default"),
-                         str(evaluator.get("model_profile") or "inline"), str(evaluator["provider"])))
+                         str(evaluator.get("model_profile") or evaluator["provider"]),
+                         str(evaluator.get("adapter", evaluator["provider"]))))
     for role_name, effort, profile_name, provider in settings:
         requested.append(f"{role_name}={effort} ({profile_name}/{provider})")
         if effort != "provider-default" and effort not in REASONING_EFFORTS:

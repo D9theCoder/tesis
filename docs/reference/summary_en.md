@@ -256,6 +256,16 @@ token budget and retry limit. It uses the same provider adapter. A changed
 effective evaluator configuration cannot silently replace an older artifact's
 frozen judging configuration.
 
+`scoring_evaluator.provider` selects the same registered provider/model ID as
+the run and matrix selectors. The profile supplies the model, endpoint,
+credentials, and API protocol; the resolved evaluator retains its execution
+`adapter` separately from provider identity. Settings exposes an **AI evaluator**
+section for selecting that pair, the review mode, and independent attempt,
+token, and timeout limits. Apply stages the draft and Save persists it without
+starting evaluation. Legacy evaluator sections retain their historical resolved
+shape. Changed identities or effective settings require a new frozen review
+configuration; existing artifacts are never rewritten.
+
 Standalone `python -m tesis doctor` runs only when requested. Its 11 offline
 checks cover the fixed 3-surface/9-method/3-level/3-payload-mode/2-condition
 scope, AKG invariants, LangGraph compilation, all 81 static-seed coordinates,

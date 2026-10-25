@@ -7,9 +7,10 @@ import os
 from dotenv import dotenv_values
 import httpx
 import pytest
+from langchain_core.messages import HumanMessage
 
 from llm.model_catalog import ModelCatalogError, catalog_url, fetch_models
-from llm.provider import get_llm_from_model_config
+from llm.provider import get_llm, get_llm_from_model_config
 from llm.runtime import LLMRuntime
 from tesis.config_fields import configured_provider_choices
 from tesis.config_loader import ConfigError, load_and_resolve_config, load_yaml_config, save_yaml_config
@@ -51,6 +52,44 @@ def test_multiple_providers_and_models_resolve_without_overwriting_legacy_or_rol
             assert adapter == config.models[profile_id].provider
             assert settings["model_name"] == config.models[profile_id].model_name
             assert settings["api_key"] == "offline-key"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("selection", ["coordinate", "global", "role"])
+def test_registry_profiles_preserve_legacy_role_defaults_and_request_limits(tmp_path, selection):
+    entry = {**_entry(models=["reasoning-model"]), "reasoning_effort": "high"}
+    profile_id = model_profile_id("gateway", "reasoning-model")
+    registry = _config({"gateway": entry})
+    legacy = {key: value for key, value in registry.items() if key != "api_providers"}
+    legacy["models"] = expanded_model_sections(registry)
+    for payload in (legacy, registry):
+        if selection == "global":
+            payload["model_profile"] = profile_id
+        elif selection == "role":
+            payload["llm_runtime"] = {"roles": {
+                "payload_generator": {"model_profile": profile_id, "max_tokens": 2048},
+            }}
+    configs = []
+    for name, payload in (("legacy", legacy), ("registry", registry)):
+        path = save_yaml_config(tmp_path / f"{name}.yaml", payload)
+        configs.append(load_and_resolve_config(config_path=str(path), cli_args={}))
+
+    assert asdict(configs[1].llm_runtime) == asdict(configs[0].llm_runtime)
+    runtime = LLMRuntime()
+    try:
+        for role in ("orchestrator", "payload_generator"):
+            requests = []
+            for index, config in enumerate(configs):
+                with runtime.coordinate(
+                    coordinate_id=str(index), default_provider=config.provider,
+                    model_profiles={name: asdict(model) for name, model in config.models.items()},
+                    role_settings={name: asdict(settings) for name, settings in config.role_configs.items()},
+                ) as context:
+                    adapter, options, _ = context.role_config(role, max_tokens=96)
+                requests.append(get_llm(adapter, **options)._get_request_payload([HumanMessage(content="Return JSON")]))
+            assert requests[1] == requests[0]
+            assert requests[1]["max_completion_tokens"] == (2048 if selection == "role" and role == "payload_generator" else 8192)
     finally:
         runtime.close()
 
@@ -216,19 +255,29 @@ def test_selected_models_send_inference_over_the_selected_wire_protocol(tmp_path
 def test_named_model_coordinates_are_executed_and_keep_separate_matrix_identity(monkeypatch):
     from evaluation.multi_llm_runner import run_provider_matrix
 
-    profiles = expanded_model_sections({"api_providers": {"gateway": _entry()}})
+    profiles = expanded_model_sections({"api_providers": {"gateway": _entry(), "second": _entry()}})
     seen = []
 
     def fake_run(**kwargs):
         name = kwargs["llm_provider"]
-        seen.append((name, kwargs["model_config"]["model_name"]))
+        seen.append((name, kwargs["model_config"]["model_name"], kwargs["experiment_condition"],
+                     kwargs["target_method"], kwargs["payload_mode"], kwargs["repeat_index"]))
         return {"status": "success", "config": {"provider": name, "surface": "sqli", "security_level": "low",
-                "payload_mode": "static_only", "repeat_index": 0}, "report": {"summary": {}, "module_scores": {}},
+                "payload_mode": kwargs["payload_mode"], "repeat_index": kwargs["repeat_index"],
+                "experiment_condition": kwargs["experiment_condition"], "target_method": kwargs["target_method"]},
+                "report": {"summary": {}, "module_scores": {}},
                 "llm_performance": [], "llm_performance_summary": {}}
 
     monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", fake_run)
     artifacts = run_provider_matrix(target_url="http://localhost/dvwa", providers=list(profiles), model_configs=profiles,
-        security_levels=["low"], surfaces=["sqli"], payload_modes=["static_only"])
-    assert {name for name, _ in seen} == set(profiles)
-    assert {model for _, model in seen} == {"vendor/model-A", "vendor/model-a"}
+        security_levels=["low"], surfaces=["sqli"], payload_modes=["hybrid"], repeats=2,
+        experiment_conditions=["linear_hybrid", "akg_guided_hybrid"], target_method="sqli_union")
+    assert {row[0] for row in seen} == set(profiles)
+    assert {row[1] for row in seen} == {"vendor/model-A", "vendor/model-a"}
+    assert len(artifacts) == len(seen) == len(set(seen)) == 16
+    for name in profiles:
+        assert {row[2:] for row in seen if row[0] == name} == {
+            (condition, "sqli_union", "hybrid", repeat)
+            for condition in ("linear_hybrid", "akg_guided_hybrid") for repeat in (0, 1)
+        }
     assert {artifact["config"]["provider"] for artifact in artifacts} == set(profiles)
