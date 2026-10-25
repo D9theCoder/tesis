@@ -6,7 +6,7 @@ from threading import Event
 from dotenv import dotenv_values
 import pytest
 from textual.app import App
-from textual.widgets import Button, Collapsible, DataTable, Input, Select, SelectionList, Static, TextArea
+from textual.widgets import Button, DataTable, Input, Select, SelectionList, Static, TextArea, OptionList
 
 from tesis import tui_state
 from tesis.config_fields import configured_provider_choices
@@ -27,6 +27,68 @@ class ProviderApp(App):
     def on_mount(self):
         self.push_screen(ProviderDrawer(config_path=self.path, entries=self.entries, provider_id=self.provider_id),
                          lambda result: setattr(self, "result", result))
+
+
+def test_manual_effort_is_checked_before_provider_draft_can_be_applied(tmp_path, monkeypatch):
+    from tesis.tui_reasoning import ReasoningControl
+    calls = []
+    monkeypatch.setattr("tesis.tui_reasoning.probe_reasoning", lambda profile, effort: calls.append((profile, effort)))
+    entry = {"protocol": "openai_compatible", "base_url": "https://gateway.invalid/v1",
+             "api_key": "offline-secret", "models": ["unknown"]}
+
+    async def scenario():
+        app = ProviderApp(tmp_path / "config.yaml", {"gateway": entry}, "gateway")
+        async with app.run_test() as pilot:
+            drawer = app.screen
+            control = drawer.query_one("#provider-reasoning", ReasoningControl)
+            control.query_one(Select).value = "custom"
+            control.query_one(Input).value = "ultra"
+            await pilot.pause()
+            drawer.apply_provider()
+            assert app.result is None
+            for _ in range(50):
+                await pilot.pause(0.01)
+                if control._checked:
+                    break
+            drawer.apply_provider()
+            await pilot.pause()
+            assert app.result.entry["model_options"]["unknown"]["reasoning_effort"] == "ultra"
+            assert calls[0][0]["api_key"] == "offline-secret"
+            assert calls[0][1] == "ultra"
+    asyncio.run(scenario())
+
+
+def test_launch_codex_model_and_reasoning_override_only_experiment_roles(tmp_path, monkeypatch):
+    from tesis.tui_reasoning import ReasoningControl
+
+    path = save_yaml_config(tmp_path / "config.yaml", {"target_url": "http://localhost/dvwa", "provider": "codex",
+        "models": {"codex": {"provider": "openai_codex_auth", "model_name": "saved",
+                              "extra": {"account": "research"}}},
+        "reasoning_catalog": {"other": ["low", "high"]},
+        "scoring_evaluator": {"provider": "codex", "max_attempts": 2, "max_tokens": 1024, "timeout": 60}})
+    monkeypatch.setattr(tui_state, "CONFIG_PATH", path)
+
+    class LaunchApp(App):
+        CSS_PATH = "../tesis/tui.tcss"
+        def on_mount(self):
+            self.push_screen(LaunchDrawer())
+
+    async def scenario():
+        async with LaunchApp().run_test() as pilot:
+            drawer = pilot.app.screen
+            drawer._goto_step(1)
+            drawer.query_one("#launch-codex-model", Input).value = "other"
+            await pilot.pause()
+            control = drawer.query_one("#launch-reasoning-effort", ReasoningControl)
+            control.query_one(Select).value = "high"
+            await pilot.pause()
+            assert control.ensure_ready()
+            config = drawer._resolved_config()
+            assert all(role.model_name == "other" and role.reasoning_effort == "high"
+                       for role in config.llm_runtime.roles.values())
+            assert config.scoring_evaluator["model"] == "saved"
+            assert load_yaml_config(path)["models"]["codex"]["model_name"] == "saved"
+    asyncio.run(scenario())
 
 
 def _fill(drawer):
@@ -182,7 +244,7 @@ def test_settings_stages_key_until_save_then_exposes_all_models_in_launch_choice
         app = SettingsApp()
         async with app.run_test(size=(80, 24)) as pilot:
             settings = app.screen
-            settings.query_one("#settings-section-model", Collapsible).collapsed = False
+            settings.query_one("#settings-categories", OptionList).highlighted = 1
             settings.edit_api_provider(Button.Pressed(settings.query_one("#settings-api-add", Button)))
             await pilot.pause()
             drawer = app.screen

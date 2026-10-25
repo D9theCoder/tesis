@@ -145,8 +145,13 @@ class ChatGPTSubscriptionModel(BaseChatModel):
                     "incomplete_details": final.get("incomplete_details"), "usage": usage,
                     "response_id": final.get("id"),
                     "max_output_tokens_applied": False, "temperature_applied": False}
+        additional = {"refusal": refusal} if refusal else {}
+        summaries = [{"type": "reasoning", "summary": item["summary"]} for item in output
+                     if item.get("type") == "reasoning" and isinstance(item.get("summary"), list) and item["summary"]]
+        if summaries:
+            additional["reasoning"] = summaries
         message = AIMessage(content="" if refusal else final_text, response_metadata=metadata,
-            additional_kwargs={"refusal": refusal} if refusal else {})
+            additional_kwargs=additional)
         return ChatResult(generations=[ChatGeneration(message=message)])
 
 

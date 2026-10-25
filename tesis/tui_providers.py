@@ -16,11 +16,13 @@ from textual.message import Message
 from textual.widgets import Button, DataTable, Input, Label, Select, Static
 
 from llm.model_catalog import fetch_models
+from llm.reasoning import model_efforts
 from tesis.provider_registry import API_PROTOCOLS, provider_key_variable, validate_provider_entry
 from tesis.provider_settings import resolved_provider_key
 from tesis.tui_commands import BaseDrawer
 from tesis.tui_security import _safe_url
 from tesis.tui_widgets import KeyboardActions, KeyboardTable, key_hints
+from tesis.tui_reasoning import ReasoningControl
 
 
 @dataclass
@@ -31,7 +33,7 @@ class ProviderDraft:
 
 
 class CatalogLoaded(Message):
-    def __init__(self, generation: int, models: list[dict[str, str]], error: str | None):
+    def __init__(self, generation: int, models: list[dict[str, Any]], error: str | None):
         super().__init__()
         self.generation, self.models, self.error = generation, models, error
 
@@ -44,7 +46,7 @@ class ProviderDrawer(BaseDrawer):
     """A draft only. Settings Save commits the provider and its dotenv key."""
 
     def __init__(self, *, config_path: Path, entries: dict[str, Any], provider_id: str = "",
-                 pending_keys: dict[str, str] | None = None):
+                 pending_keys: dict[str, str] | None = None, reasoning_catalog: dict | None = None):
         super().__init__()
         self._config_path = config_path
         self._entries = deepcopy(entries)
@@ -55,6 +57,8 @@ class ProviderDrawer(BaseDrawer):
         self._models = {model: model for model in self._entry.get("models") or []}
         self._generation = 0
         self._closed = False
+        self._reasoning_catalog = reasoning_catalog or {}
+        self._model_options = deepcopy(self._entry.get("model_options") or {})
         self._url_seeds = {key: _safe_url(self._entry.get(key) or "") for key in ("base_url", "fetch_url")}
 
     def compose(self) -> ComposeResult:
@@ -92,6 +96,10 @@ class ProviderDrawer(BaseDrawer):
             yield Label("Manual model ID")
             yield Input(placeholder="Exact model ID", id="provider-manual")
             yield Button("Add model", id="provider-add-model")
+            yield Label("Reasoning effort per model")
+            yield Select([], prompt="Model to configure", id="provider-reasoning-model")
+            yield ReasoningControl(id="provider-reasoning")
+            yield Button("Apply effort to model", id="provider-reasoning-apply")
         with KeyboardActions(classes="provider-actions", id="provider-footer"):
             yield Button("Apply provider", id="provider-apply", variant="primary")
             yield Button("Cancel", id="provider-cancel")
@@ -128,6 +136,55 @@ class ProviderDrawer(BaseDrawer):
         empty.update("No matching models." if self._models else "Fetch a catalog or add an exact model ID below.")
         self.query_one("#provider-selection", Static).update(
             f"{len(self._selected)} selected · {len(visible)} shown")
+        picker = self.query_one("#provider-reasoning-model", Select)
+        selected = picker.value
+        picker.set_options([(name, name) for name in self._models if name in self._selected])
+        picker.value = selected if selected in self._selected else next(
+            (name for name in self._models if name in self._selected), Select.NULL)
+        self._configure_reasoning()
+
+    @on(Select.Changed, "#provider-reasoning-model")
+    def reasoning_model_changed(self) -> None:
+        self._configure_reasoning(reset=True)
+
+    def _configure_reasoning(self, *, reset: bool = False) -> None:
+        from tesis.provider_registry import expanded_model_sections, model_profile_id
+        model = self.query_one("#provider-reasoning-model", Select).value
+        control = self.query_one("#provider-reasoning", ReasoningControl)
+        if model is Select.NULL:
+            control.configure([], None, reset=True)
+            return
+        try:
+            draft = self._draft()
+            draft.entry["models"] = [str(model)]
+            draft.entry["model_options"] = {str(model): self._model_options.get(str(model), {})}
+            draft.entry.setdefault("api_key", "pending")
+            profile = expanded_model_sections({"api_providers": {draft.provider_id or "draft": draft.entry}})[
+                model_profile_id(draft.provider_id or "draft", str(model))]
+            profile["api_key"] = resolved_provider_key(draft.entry, self._config_path,
+                                                       {**self._pending_keys, **draft.keys})
+            efforts = model_efforts({"reasoning_catalog": self._reasoning_catalog}, str(model), profile)
+            control.configure([profile], efforts, value=profile.get("reasoning_effort"), reset=reset)
+        except ValueError:
+            efforts = model_efforts({"reasoning_catalog": self._reasoning_catalog}, str(model),
+                                    self._model_options.get(str(model)))
+            control.configure([], efforts, value=self._model_options.get(str(model), {}).get("reasoning_effort"), reset=reset)
+
+    def _save_model_reasoning(self) -> None:
+        model = self.query_one("#provider-reasoning-model", Select).value
+        if model is not Select.NULL:
+            self._configure_reasoning()
+            control = self.query_one("#provider-reasoning", ReasoningControl)
+            control.ensure_ready()
+            self._model_options.setdefault(str(model), {})["reasoning_effort"] = control.value
+
+    @on(Button.Pressed, "#provider-reasoning-apply")
+    def apply_model_reasoning(self) -> None:
+        try:
+            self._save_model_reasoning()
+            self._status("Reasoning effort staged for this model.")
+        except ValueError as exc:
+            self._status(str(exc))
 
     @on(Input.Changed, "#provider-filter")
     def filter_models(self) -> None:
@@ -143,6 +200,7 @@ class ProviderDrawer(BaseDrawer):
         table = self.query_one("#provider-models", DataTable)
         table.update_cell(model, table.ordered_columns[0].key, "[*]" if model in self._selected else "[-]")
         self.query_one("#provider-selection", Static).update(f"{len(self._selected)} selected.")
+        self._render_models()
 
     @on(Button.Pressed, "#provider-select-shown")
     def select_shown(self) -> None:
@@ -176,6 +234,10 @@ class ProviderDrawer(BaseDrawer):
                      protocol=str(self.query_one("#provider-protocol", Select).value),
                      fetch_url=self.query_one("#provider-fetch-url", Input).value.strip(),
                      models=[model for model in self._models if model in self._selected])
+        entry["model_options"] = {name: settings for name, settings in self._model_options.items()
+                                  if name in self._selected}
+        if not entry["model_options"]:
+            entry.pop("model_options")
         key = self.query_one("#provider-key", Input).value
         stored_key = str(self._entry.get("api_key") or "")
         if not key and stored_key and not stored_key.startswith("${"):
@@ -197,6 +259,7 @@ class ProviderDrawer(BaseDrawer):
     def connection_changed(self) -> None:
         self._generation += 1
         self.query_one("#provider-fetch", Button).disabled = False
+        self._configure_reasoning()
 
     @on(Button.Pressed, "#provider-fetch")
     def fetch_catalog(self) -> None:
@@ -239,6 +302,9 @@ class ProviderDrawer(BaseDrawer):
             return
         # Saved/manual IDs survive discovery. Only explicit selection persists a fetched model.
         self._models.update({model["id"]: model["display_name"] for model in message.models})
+        for model in message.models:
+            if "reasoning_efforts" in model:
+                self._model_options.setdefault(model["id"], {})["reasoning_efforts"] = model["reasoning_efforts"]
         self._render_models()
         self._status(f"{len(message.models)} models returned. Select models to keep; existing IDs are retained."
                      if message.models else "The endpoint returned no models. Add IDs manually.")
@@ -246,6 +312,7 @@ class ProviderDrawer(BaseDrawer):
     @on(Button.Pressed, "#provider-apply")
     def apply_provider(self) -> None:
         try:
+            self._save_model_reasoning()
             draft = self._draft()
             if draft.provider_id in self._entries and draft.provider_id != self._provider_id:
                 raise ValueError("This provider ID already exists. Edit the existing provider or choose a new ID.")

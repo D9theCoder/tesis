@@ -204,13 +204,13 @@ def test_missing_dependency_is_reported(
 
 
 def test_invalid_reasoning_effort_is_reported(valid_config: EngagementConfig) -> None:
-    valid_config.llm_runtime.roles["orchestrator"].reasoning_effort = "impossible"
+    valid_config.llm_runtime.roles["orchestrator"].reasoning_effort = "has spaces"
 
     check = check_by_id(doctor.run_doctor(valid_config), "reasoning.controls")
 
     assert check["status"] == "failed"
-    assert "requests invalid effort 'impossible'" in check["details"]
-    assert "orchestrator=impossible" in check["details"]
+    assert "requests invalid effort 'has spaces'" in check["details"]
+    assert "orchestrator=has spaces" in check["details"]
 
 
 def test_explicit_reasoning_on_unsupported_provider_is_reported(

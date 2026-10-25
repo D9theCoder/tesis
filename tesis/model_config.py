@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+from llm.reasoning import REASONING_EFFORTS
 
 EVASION_MODES: frozenset[str] = frozenset({"reactive", "proactive", "disabled"})
 PAYLOAD_MODES: frozenset[str] = frozenset({"static_only", "hybrid", "llm_mutation_only"})
 LLM_CACHE_SCOPES: frozenset[str] = frozenset({"none", "run"})
 STRUCTURED_OUTPUT_MODES: frozenset[str] = frozenset({"auto", "native", "json_prompt"})
 LLM_RUNTIME_ROLES: tuple[str, ...] = ("orchestrator", "payload_generator")
-REASONING_EFFORTS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
 
 # Backward-compatible alias
 EVASION_STRATEGIES = EVASION_MODES

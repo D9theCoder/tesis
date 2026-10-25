@@ -91,6 +91,25 @@ def test_evaluator_cannot_silently_change_a_historical_frozen_configuration():
         evaluate_queue(queue, evaluator)
 
 
+@pytest.mark.parametrize("content", ['{"score":1,"reason":"Observed signal","evidence_refs":["probe"]}', "invalid JSON"])
+def test_evaluator_receipt_retains_redacted_reasoning_for_accepted_and_failed_answers(content):
+    from langchain_core.messages import AIMessage
+    evaluator = {"provider": "openai_compatible", "model": "judge", "max_attempts": 1,
+                 "max_tokens": 1024, "timeout": 20, "api_key": "private-evaluator-credential"}
+    queue = {"selection": "ai", "source_sha256": "0" * 64, "run_id": "reasoning-unit",
+             "execution_id": "reasoning-unit", "rubric_version": "scoring.v4",
+             "evaluator": redact_secrets(evaluator), "candidates": [{"candidate_id": "candidate",
+             "status": "pending_review", "method": "sqli_union", "stage": "probe", "proof_ceiling": 1,
+             "evidence_refs": ["probe"], "candidate": {}, "evidence": {}}]}
+    response = AIMessage(content=content, additional_kwargs={
+        "reasoning_content": "Review trace private-evaluator-credential"})
+    result = evaluate_queue(queue, evaluator, invoke=lambda messages: response)
+    receipt = result["telemetry"][0]
+    assert receipt["reasoning_trace"] == "Review trace [REDACTED]"
+    assert receipt["reasoning_summary"] is None
+    assert receipt["status"] == ("abstained" if content == "invalid JSON" else "accepted")
+
+
 def test_legacy_inline_evaluator_keeps_its_frozen_shape(tmp_path):
     evaluator = {"provider": "openai", "model": "historical-judge", "max_attempts": 2,
                  "max_tokens": 1024, "timeout": 60, "base_url": "https://legacy.invalid/v1"}

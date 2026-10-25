@@ -30,7 +30,6 @@ from tesis.model_config import (
     EngagementConfig,
     LLM_RUNTIME_ROLES,
     PAYLOAD_MODES,
-    REASONING_EFFORTS,
 )
 
 EXIT_OK = 0
@@ -574,8 +573,12 @@ def _check_reasoning(config: EngagementConfig) -> DoctorCheck:
                          str(evaluator.get("adapter", evaluator["provider"]))))
     for role_name, effort, profile_name, provider in settings:
         requested.append(f"{role_name}={effort} ({profile_name}/{provider})")
-        if effort != "provider-default" and effort not in REASONING_EFFORTS:
-            problems.append(f"role {role_name!r} requests invalid effort {effort!r}")
+        if effort != "provider-default":
+            from llm.reasoning import validate_reasoning_effort
+            try:
+                validate_reasoning_effort(effort)
+            except ValueError:
+                problems.append(f"role {role_name!r} requests invalid effort {effort!r}")
         if effort != "provider-default" and not supports_reasoning_effort(provider):
             problems.append(
                 f"role {role_name!r} requests {effort!r} for {provider}, whose adapter cannot forward portable reasoning_effort"

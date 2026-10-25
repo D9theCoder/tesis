@@ -39,8 +39,9 @@ class SettingValueRow(Vertical):
 class SettingField(Grid):
     """Aligned label, editable control, and explanation for settings forms."""
 
-    def __init__(self, label: str, control: Widget, description: str, *, label_id: str | None = None) -> None:
-        super().__init__(classes="settings-form-row")
+    def __init__(self, label: str, control: Widget, description: str, *, label_id: str | None = None,
+                 id: str | None = None) -> None:
+        super().__init__(classes="settings-form-row", id=id)
         self._field_label, self._field_control = label, control
         self._field_description, self._label_id = description, label_id
 

@@ -7,7 +7,7 @@ to work. `openai_codex_auth` uses the separate
 
 ## TUI setup
 
-1. Open `/settings`, expand **Model profile**, and choose **Add API provider**.
+1. Open `/settings`, select **API providers**, and choose **Add provider**.
 2. Enter a unique provider ID, an optional display name, a base URL, a protocol,
    and an API key. IDs begin with a lowercase letter and accept lowercase
    letters, digits, underscores, and hyphens, up to 64 characters. An empty
@@ -32,6 +32,70 @@ To add models later, select the saved API provider and choose
 **Edit provider / models**. Uncheck models to remove them from future pickers.
 Update any default or role profile that references a removed model before
 saving. Provider IDs are permanent; add a new entry to use a different ID.
+
+## Reasoning effort
+
+Run/Matrix setup exposes reasoning effort in **Coordinates**. API provider
+editing also has a per-model effort selector; choose a model and **Apply effort
+to model** before moving to another model. ChatGPT accounts and AI evaluator
+settings use the same control. Evaluator effort remains independent of run roles.
+
+An exact-ID catalog in YAML supplies known choices. Provider-advertised
+`reasoning_efforts` or `supported_reasoning_efforts` take precedence:
+
+```yaml
+reasoning_catalog:
+  zai-org/GLM-5.3-Flash: [low, high, xhigh]
+  deepseek-ai/DeepSeek-V4.1-Flash-1017: [off, low, high, xhigh]
+  gpt-6.1-sol: [low, medium, high, xhigh, max]
+api_providers:
+  gateway:
+    # connection, key reference, protocol and selected models omitted here
+    model_options:
+      deepseek-ai/DeepSeek-V4.1-Flash-1017:
+        reasoning_effort: high
+```
+
+The GLM and DeepSeek presets are user supplied. GPT presets were checked against
+official model documentation on 2026-10-26:
+[GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol),
+[GPT-6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra),
+[GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol),
+[GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna),
+[GPT-5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol),
+[GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna), and
+[GPT-5.4](https://developers.openai.com/api/docs/models/gpt-5.4).
+Exact IDs avoid assuming that similarly named gateway models share capabilities.
+OpenAI's explicit `none` and a gateway's `off` are preserved as separate values.
+Neither means an omitted setting; **Provider default** omits the effort override.
+
+Unknown models show a red warning followed by `[off, minimal, low, medium, high,
+xhigh, max]` and **Type another effort**. An explicit effort outside a known
+catalog requires a support check. **Check reasoning support**, or the first
+Apply/Start attempt, sends a benign text request through the selected adapter,
+using the current model, endpoint and credential. After a successful check,
+apply/start again. Changing the effort or connection invalidates the result;
+late results from a previous selection are discarded. The check runs in a worker
+with no inference retry, no fallback, and no DVWA traffic. Successful acceptance
+does not prove that a provider performed internal reasoning.
+
+Provider-returned reasoning text is saved as `reasoning_trace` in each physical
+call's `llm_performance` record and evaluator receipt, with
+`reasoning_trace_source` naming the provider field. River AI DeepSeek and GLM
+use `reasoning_content`, which is preserved for both complete and streamed
+responses. Provider summaries use separate `reasoning_summary` and
+`reasoning_summary_source` fields. Missing evidence stays `null`; encrypted
+content is not a trace. Capture applies redaction before artifact writing and
+does not enable streaming or request additional reasoning from the provider.
+
+Saved ChatGPT models remain selectable without catalog refresh. Exact model IDs
+can also be entered manually. Run setup can override the Codex model for its
+Codex roles. Choosing a different Codex model for the evaluator creates a separate
+saved profile so the experiment profile and frozen evaluator identity stay intact.
+
+Cleared matrix lists accept YAML `null`. Removed default/evaluator references
+must be replaced with saved profiles. **Target & defaults** provides a default
+model selector for repairing a stale default without editing YAML.
 
 The form uses one scrolling column with fixed Apply/Cancel actions at 80×24
 and at 60×18. Below 80 columns the drawer takes the full width. Below 60×18 the

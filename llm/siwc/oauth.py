@@ -19,6 +19,7 @@ import httpx
 import jwt
 
 from llm.diagnostics import redact_diagnostic_text
+from llm.reasoning import advertised_efforts
 from llm.siwc import INFERENCE_SCOPES, ISSUER, RESOURCE, SCOPES
 from llm.siwc.storage import CredentialStore, SIWCError, clear_tokens
 
@@ -381,14 +382,24 @@ class SIWCSession:
             self.store.write(document)
         return confirmed
 
-    def list_models(self, account: str = "default") -> list[dict[str, str]]:
+    def list_models(self, account: str = "default") -> list[dict[str, Any]]:
         token = self.access_token(account)
         data = self.request_json("GET", f"{RESOURCE}/models", operation="ChatGPT model discovery",
                                  headers={"Authorization": f"Bearer {token}"})
-        models = data.get("models")
+        public_catalog = "data" in data
+        models = data.get("data") if public_catalog else data.get("models")
         if not isinstance(models, list):
             raise SIWCError("OpenAI returned an invalid ChatGPT model catalog.")
-        return [{"slug": model["slug"], "display_name": model["display_name"]
-                 if isinstance(model.get("display_name"), str) and model["display_name"] else model["slug"]}
-                for model in models if isinstance(model, dict) and model.get("visibility") == "list"
-                and isinstance(model.get("slug"), str) and model["slug"]]
+        result = []
+        for model in models:
+            if not isinstance(model, dict) or model.get("visibility", "list") != "list":
+                continue
+            slug = model.get("id" if public_catalog else "slug")
+            if not isinstance(slug, str) or not slug or any(c.isspace() or ord(c) < 32 for c in slug):
+                continue
+            item = {"slug": slug, "display_name": model.get("display_name") or slug}
+            efforts = advertised_efforts(model)
+            if efforts is not None:
+                item["reasoning_efforts"] = efforts
+            result.append(item)
+        return result

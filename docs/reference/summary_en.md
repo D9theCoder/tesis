@@ -189,11 +189,20 @@ select models to retain, and save keys to `.env`. The runtime continues to
 resolve role settings per coordinate and preserves method orchestration and
 artifact identity. See [API provider configuration](api_providers.md).
 
+Reasoning choices use provider metadata or the exact-model `reasoning_catalog`
+in YAML. Each registered model can save its own effort under `model_options`.
+Unknown models show a red warning, editable effort, and fallback choices
+`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Explicit unknown efforts
+require a benign provider support check before TUI Apply/Start; acceptance does
+not establish internal reasoning. Evaluator effort and Codex model selection
+remain independent of experiment roles. Catalog metadata never enters inference.
+
 The optional `openai_codex_auth` provider uses official Sign in with ChatGPT
 OAuth and subscription-backed public Responses streaming. It preserves the
 existing API-key providers and agent topology. Account credentials stay in
 protected local storage; model choices come from the signed-in account's live
-catalog through TUI Settings. The SIWC preview does not accept temperature or
+catalog through TUI Settings, or an exact model ID entered manually. Saved model
+IDs remain usable without a catalog refresh. The SIWC preview does not accept temperature or
 output-token-limit fields, so those shared controls are omitted for this
 provider and the limitation is recorded in call telemetry. An equal configured
 token limit must not be reported as an equal enforced limit across providers.
@@ -408,7 +417,18 @@ Every call preserves `llm_activity` and adds secret-free role performance
 records containing prompt hash, role, model fingerprint, cache hit/miss, queue
 wait, call duration, structured-output mode, parse status,
 `reasoning_effort_requested`, `provider_usage`, and
-`reasoning_token_evidence` when explicitly reported. Aggregate telemetry
+`reasoning_token_evidence` when explicitly reported. Per-call records and AI
+evaluator receipts also retain nullable `reasoning_trace`, `reasoning_summary`,
+and their `reasoning_trace_source` / `reasoning_summary_source` fields. Traces
+contain provider-returned reasoning text, including River AI DeepSeek and GLM
+`reasoning_content`; summaries remain separate. Both complete responses and
+streamed deltas are preserved before SDK conversion discards nonstandard fields.
+Secrets are redacted before artifact writing. Returned reasoning is retained
+even when final JSON validation fails or the provider marks output incomplete.
+A cache hit records null reasoning fields because it makes no new provider call;
+the original call's evidence remains available. Missing reasoning is never
+inferred from the answer or token count, and encrypted reasoning is excluded.
+Aggregate telemetry
 reports time by role, cache-hit rate, invalid-output rate, and peak
 LLM/DVWA-node concurrency. Raw prompts and secrets are excluded from
 performance summaries.
@@ -1255,7 +1275,15 @@ method, `final_state`, and fallback events. Parent and child execution IDs stay
 separate in the runtime descriptor and event journal. Runtime completion does
 not imply final scoring acceptance.
 
-Each run produces a JSON artifact with at least the following fields:
+Each run produces a JSON artifact.
+
+Each `llm_performance` call and its returned physical attempt may additionally
+contain `reasoning_trace`, `reasoning_trace_source`, `reasoning_summary`, and
+`reasoning_summary_source`. New records use explicit nulls for unavailable
+values. Independent evaluator telemetry uses the same fields. These are
+provider evidence; their text does not change verifier proof or score dimensions.
+
+The minimum fields are:
 
 ```text
 schema_version

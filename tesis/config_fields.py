@@ -38,6 +38,7 @@ from core.state import (
     SURFACES as CANONICAL_SURFACES,
 )
 from llm.provider import SUPPORTED_PROVIDERS
+from llm.reasoning import REASONING_EFFORTS as REASONING_EFFORT_CHOICES
 from tesis.model_config import EVASION_MODES, PAYLOAD_MODES as MODEL_PAYLOAD_MODES
 
 
@@ -214,7 +215,6 @@ def _logging_choices() -> tuple[str, ...]:
 
 LOG_VERBOSITY_CHOICES: tuple[str, ...] = _logging_choices()
 LOG_LEVEL_CHOICES = LOG_VERBOSITY_CHOICES
-REASONING_EFFORT_CHOICES: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
 
 
 # ---------------------------------------------------------------------------
@@ -888,8 +888,7 @@ MODEL_REASONING_EFFORT = _field(
     label="Reasoning effort",
     category=FieldCategory.MODEL.value,
     value_type=str,
-    kind="discrete_slider",
-    choices=REASONING_EFFORT_CHOICES,
+    kind="text",
     allow_none=True,
     forms=_SETTINGS_ONLY,
     normalize="lower",

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
 from tesis.provider_registry import API_PROTOCOLS, validate_api_url
+from llm.reasoning import advertised_efforts
 
 
 class ModelCatalogError(ValueError):
@@ -28,7 +30,7 @@ def catalog_url(base_url: str, protocol: str, fetch_url: str = "") -> str:
 
 def fetch_models(*, base_url: str, protocol: str, api_key: str, fetch_url: str = "",
                  transport: httpx.BaseTransport | None = None,
-                 cancelled: Callable[[], bool] = lambda: False) -> list[dict[str, str]]:
+                 cancelled: Callable[[], bool] = lambda: False) -> list[dict]:
     """Read the configured endpoint, following cursor pages on the same URL.
 
     Redirects are deliberately disabled: credentials belong to the explicitly
@@ -43,7 +45,7 @@ def fetch_models(*, base_url: str, protocol: str, api_key: str, fetch_url: str =
             headers["Authorization"] = f"Bearer {api_key}"
     if protocol == "anthropic":
         headers["anthropic-version"] = "2023-06-01"
-    models: dict[str, dict[str, str]] = {}
+    models: dict[str, dict[str, Any]] = {}
     cursors: set[str] = set()
     try:
         with httpx.Client(transport=transport, timeout=20, follow_redirects=False) as client:
@@ -63,6 +65,9 @@ def fetch_models(*, base_url: str, protocol: str, api_key: str, fetch_url: str =
                         raise ModelCatalogError("The catalog contains an invalid model ID.")
                     display = str(item.get("display_name") or model_id)
                     models.setdefault(model_id, {"id": model_id, "display_name": display})
+                    efforts = advertised_efforts(item)
+                    if efforts is not None:
+                        models[model_id]["reasoning_efforts"] = efforts
                 if not payload.get("has_more"):
                     return list(models.values())
                 cursor = payload.get("last_id") or (data[-1].get("id") if data else None)

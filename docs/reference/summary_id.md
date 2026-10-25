@@ -197,11 +197,23 @@ key ke `.env`. Pengaturan *role* tetap diresolusikan per koordinat, dengan
 orkestrasi metode dan identitas artefak yang dipertahankan.
 Lihat [konfigurasi API provider](api_providers.md).
 
+Pilihan *reasoning effort* memakai metadata provider atau `reasoning_catalog`
+di YAML dengan ID model yang persis sama. Setiap model dapat menyimpan effort
+sendiri melalui `model_options`. Model yang belum dikenal menampilkan peringatan
+merah, isian effort, dan pilihan *fallback* `off`, `minimal`, `low`, `medium`,
+`high`, `xhigh`, `max`. Effort yang belum diketahui harus melewati pemeriksaan
+dukungan provider dengan permintaan teks sederhana sebelum Apply/Start pada TUI.
+Penerimaan permintaan belum membuktikan penalaran internal. Effort evaluator dan
+pilihan model Codex tetap terpisah dari *role* eksperimen. Metadata katalog tidak
+dikirim dalam permintaan inferensi.
+
 Provider opsional `openai_codex_auth` menggunakan OAuth Sign in with ChatGPT
 resmi dan *streaming* Responses API publik yang memakai paket ChatGPT.
 Provider dengan API key dan topologi agent yang ada tetap dipertahankan.
 Kredensial akun disimpan secara lokal dengan akses terbatas. Pilihan model
-pada Settings TUI diambil dari katalog terkini akun yang sudah masuk.
+pada Settings TUI diambil dari katalog terkini akun yang sudah masuk, atau ID
+model yang dimasukkan secara manual. Model tersimpan dapat digunakan tanpa
+mengambil ulang katalog.
 *Preview* SIWC belum menerima parameter temperatur dan batas token keluaran,
 sehingga kontrol bersama tersebut tidak dikirim untuk provider ini dan
 keterbatasannya dicatat dalam telemetri pemanggilan. Batas token pada
@@ -422,7 +434,19 @@ Setiap call mempertahankan `llm_activity` dan menambahkan record performance
 per role yang bebas secret: prompt hash, role, model fingerprint, cache
 hit/miss, queue wait, durasi call, structured-output mode, parse status,
 `reasoning_effort_requested`, `provider_usage`, serta
-`reasoning_token_evidence` jika dilaporkan secara eksplisit. Telemetry agregat
+`reasoning_token_evidence` jika dilaporkan secara eksplisit. Record per call dan
+receipt evaluator AI juga menyimpan `reasoning_trace`, `reasoning_summary`, serta
+`reasoning_trace_source` / `reasoning_summary_source`, dengan nilai `null` saat
+tidak tersedia. Trace berisi teks penalaran yang dikembalikan provider, termasuk
+`reasoning_content` dari DeepSeek dan GLM melalui River AI. Ringkasan penalaran
+disimpan secara terpisah. Respons lengkap maupun delta *streaming* dipertahankan
+sebelum konversi SDK membuang field tambahan. Secret disamarkan sebelum artefak
+ditulis. Penalaran yang sudah dikembalikan tetap disimpan saat validasi JSON
+gagal atau provider menyatakan keluaran belum lengkap. Cache hit menyimpan
+field penalaran bernilai `null` karena tidak ada panggilan provider baru; bukti
+panggilan awal tetap tersedia. Penalaran tidak disimpulkan dari jawaban atau
+jumlah token, dan penalaran terenkripsi tidak disimpan sebagai trace.
+Telemetry agregat
 memuat waktu per role, cache-hit rate, invalid-output rate, dan peak concurrency
 LLM/DVWA node. Raw prompt dan secret tidak disimpan dalam performance summary.
 
@@ -1273,7 +1297,16 @@ metode terpilih, `final_state`, dan fallback events. Identitas eksekusi parent
 dan child tetap terpisah pada descriptor runtime dan jurnal event. Selesainya
 runtime belum berarti scoring final diterima.
 
-Setiap run menghasilkan JSON artifact dengan field minimal:
+Setiap run menghasilkan JSON artifact.
+
+Setiap call pada `llm_performance` dan attempt fisik yang mengembalikan respons
+juga dapat memuat `reasoning_trace`, `reasoning_trace_source`,
+`reasoning_summary`, dan `reasoning_summary_source`. Record baru memakai `null`
+secara eksplisit saat nilai tidak tersedia. Telemetry evaluator independen
+memakai field yang sama. Teks ini merupakan bukti dari provider dan tidak
+mengubah bukti verifier maupun dimensi skor.
+
+Field minimalnya adalah:
 
 ```text
 schema_version

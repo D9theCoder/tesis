@@ -29,7 +29,25 @@ provider form and sends catalog results through Textual messages from daemon
 workers. `llm/model_catalog.py` owns authenticated, paginated model discovery.
 `provider_settings.py` validates staged settings, writes keys to the colocated
 `.env`, and atomically replaces YAML containing environment references. Settings
-saves run in a daemon worker. See [API providers and models](api_providers.md).
+saves run in a daemon worker. `llm/reasoning.py` normalizes effort names and
+resolves exact-model YAML catalogs after provider metadata. Per-model
+`model_options` override provider-wide effort defaults. Catalog metadata is
+removed before SDK construction. `tui_reasoning.py` owns the reusable selector,
+red unknown-model warning, fallback choices, and asynchronous support probe.
+Probe results are bound to the effort and effective connection; changing either
+invalidates acceptance. See [API providers and models](api_providers.md).
+
+`llm/openai_chat.py` extends the existing ChatOpenAI conversion hooks to preserve
+gateway `reasoning_content` and typed `reasoning_details` for complete responses
+and streamed deltas. It does not combine reasoning with answer content or alter
+requests. `llm/reasoning_evidence.py` extracts nullable trace and summary text
+with native source fields; encrypted content is excluded. The runtime redacts
+and saves this evidence in physical attempt records and per-call performance,
+including returned invalid/incomplete responses. The evaluator saves the same
+fields in its review receipts. Cache hits add no new reasoning evidence.
+The SIWC adapter retains returned summaries separately from answer text. This
+capture support does not change streaming defaults or the SIWC compatibility
+failures documented in the [live check](provider-reasoning-live-check-2026-10-26.md).
 
 The independent `scoring_evaluator.provider` uses the same provider/model profile
 IDs as launch and matrix selectors. `config_loader` resolves its model and
@@ -39,7 +57,9 @@ the frozen evaluator includes its selected identity and effective connection.
 Legacy inline and `model_profile` evaluator configurations retain their resolved
 shape. The Settings **AI evaluator** section stages a profile selection, review
 mode, and independent limits into YAML; the existing settings worker validates
-and saves them. Applying or saving does not invoke the scorer or providers.
+and saves them. A different Codex evaluator model is staged in a separate profile.
+An unverified explicit effort starts a benign provider support probe before
+Apply/Start can proceed. Saving does not invoke the scorer or providers.
 
 Useful automation flags include `--condition`, `--target-method`,
 `--providers`, `--levels`, `--surfaces`, `--payload-modes`, `--repeats`,

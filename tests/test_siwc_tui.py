@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 from textual.app import App
-from textual.widgets import Button, Collapsible, Input, Select, Static, TextArea
+from textual.widgets import Button, Input, Select, Static, TextArea, OptionList
 
 from llm.siwc.oauth import SIWCSession
 from llm.siwc.storage import SIWCError
@@ -57,7 +57,7 @@ def test_catalog_selection_updates_only_selected_profile_and_saves(settings_conf
         async with app.run_test(size=size) as pilot:
             await pilot.pause()
             drawer = app.screen
-            drawer.query_one("#settings-section-model", Collapsible).collapsed = False
+            drawer.query_one("#settings-categories", OptionList).highlighted = 2
             drawer.query_one("#settings-chatgpt-account", Input).value = "research"
             await pilot.pause()
             drawer.refresh_chatgpt_models()

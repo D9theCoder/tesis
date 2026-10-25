@@ -150,7 +150,7 @@ def _headless_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target-method")
     parser.add_argument("--scoring-mode", choices=("human", "ai", "both"))
     parser.add_argument("--model")
-    parser.add_argument("--reasoning-effort", choices=("low", "medium", "high", "xhigh", "max"),
+    parser.add_argument("--reasoning-effort",
                         help="Override reasoning effort for both LLM roles.")
     parser.add_argument("--llm-max-concurrency", type=_llm_concurrency)
     parser.add_argument(

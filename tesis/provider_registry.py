@@ -7,6 +7,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+from llm.reasoning import advertised_efforts, validate_reasoning_effort
 
 
 API_PROTOCOLS = {
@@ -68,6 +69,14 @@ def validate_provider_entry(provider_id: str, entry: Mapping[str, Any]) -> None:
         raise ValueError("Provider extra settings must be a mapping.")
     if entry.get("display_name") is not None and not isinstance(entry["display_name"], str):
         raise ValueError("Provider display name must be a string.")
+    options = entry.get("model_options") or {}
+    if not isinstance(options, Mapping) or any(name not in models for name in options):
+        raise ValueError("model_options must map selected model IDs to settings.")
+    for settings in options.values():
+        if not isinstance(settings, Mapping) or set(settings) - {"reasoning_effort", "reasoning_efforts"}:
+            raise ValueError("Model options support reasoning_effort and reasoning_efforts.")
+        validate_reasoning_effort(settings.get("reasoning_effort"))
+        advertised_efforts(settings)
 
 
 def expanded_model_sections(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -90,6 +99,7 @@ def expanded_model_sections(config: Mapping[str, Any]) -> dict[str, Any]:
             section = {key: entry[key] for key in (
                 "temperature", "timeout", "max_tokens", "reasoning_effort", "extra",
             ) if key in entry}
+            section.update((entry.get("model_options") or {}).get(model_id) or {})
             extra = dict(section.get("extra") or {})
             # A custom provider's selected wire protocol is authoritative.
             if entry["protocol"] in {"openai", "openai_compatible"}:

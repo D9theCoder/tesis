@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from typing import Any, Mapping
 
 from dotenv import load_dotenv
+from llm.reasoning import REASONING_EFFORTS, validate_reasoning_effort
 SUPPORTED_PROVIDERS = ["gemini", "openai", "claude", "openai_compatible", "openai_codex_auth"]
 # Provider APIs treat an omitted output limit as unbounded.  That is unsafe for
 # streamed experiment calls: a model can keep the HTTP response open long
@@ -20,23 +21,12 @@ SUPPORTED_PROVIDERS = ["gemini", "openai", "claude", "openai_compatible", "opena
 # override this explicitly through ``max_tokens`` (or ``max_output_tokens``
 # where the provider uses that spelling).
 DEFAULT_MAX_OUTPUT_TOKENS = 512
-REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 REASONING_EFFORT_PROVIDERS = frozenset({"openai", "openai_compatible", "openai_codex_auth"})
 
 # NOTE: Callers must load env vars before importing if needed (e.g. via load_dotenv())
 
 if TYPE_CHECKING:
     from tesis.model_config import ModelConfig
-
-
-def validate_reasoning_effort(value: Any) -> str | None:
-    """Validate our portable control without assuming model capabilities."""
-    if value is None or value == "":
-        return None
-    effort = str(value).strip().lower()
-    if effort not in REASONING_EFFORTS:
-        raise ValueError(f"reasoning_effort must be one of {', '.join(REASONING_EFFORTS)} or null")
-    return effort
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +146,7 @@ def get_llm(provider_name: str, **kwargs):
             **constructor_kwargs,
         )
     elif normalized_provider == "openai":
-        from langchain_openai import ChatOpenAI
+        from llm.openai_chat import ReasoningChatOpenAI
         temperature = kwargs.pop("temperature", 0)
         model_name = kwargs.pop("model_name", kwargs.pop("model", "gpt-4o-mini"))
         api_key = kwargs.pop("api_key", None) or os.getenv("OPENAI_API_KEY") or ""
@@ -172,14 +162,14 @@ def get_llm(provider_name: str, **kwargs):
         # multi-minute stall before the runner records a provider failure.
         if constructor_kwargs.get("max_retries") is None:
             constructor_kwargs["max_retries"] = 0
-        return ChatOpenAI(
+        return ReasoningChatOpenAI(
             model=model_name,
             temperature=temperature,
             api_key=api_key,
             **constructor_kwargs,
         )
     elif normalized_provider == "openai_compatible":
-        from langchain_openai import ChatOpenAI
+        from llm.openai_chat import ReasoningChatOpenAI
         temperature = kwargs.pop("temperature", 0)
         model_name = kwargs.pop("model_name", kwargs.pop("model", ""))
         api_key = kwargs.pop("api_key", None) or os.getenv("OPENAI_COMPATIBLE_API_KEY") or ""
@@ -197,7 +187,7 @@ def get_llm(provider_name: str, **kwargs):
         # that need retry semantics can pass an explicit ``max_retries``.
         if kwargs.get("max_retries") is None:
             kwargs["max_retries"] = 0
-        return ChatOpenAI(
+        return ReasoningChatOpenAI(
             model=model_name,
             temperature=temperature,
             api_key=api_key,

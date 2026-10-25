@@ -16,6 +16,7 @@ from ruamel.yaml.error import YAMLError
 
 from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS, SURFACES
 from llm.provider import SUPPORTED_PROVIDERS
+from llm.reasoning import model_efforts, validate_reasoning_effort
 from tesis.model_config import (
     EVASION_MODES,
     LLM_CACHE_SCOPES,
@@ -26,7 +27,6 @@ from tesis.model_config import (
     ModelConfig,
     PAYLOAD_MODES,
     RoleConfig,
-    REASONING_EFFORTS,
 )
 from tesis.config_fields import FORM_MATRIX, FORM_SINGLE, validate_config as validate_field_schema
 from tesis.provider_registry import expanded_model_sections
@@ -468,7 +468,9 @@ def validate_provider(provider: str, models: Mapping[str, ModelConfig] | None = 
         provider: Value used by this function."""
     adapter = models[provider].provider if models and provider in models else provider
     if adapter not in SUPPORTED_PROVIDERS:
-        raise ConfigError(f"Unsupported provider: {provider}")
+        available = ", ".join(models or {}) or "none configured"
+        raise ConfigError(f"Unsupported provider: {provider}. It may have been removed. "
+                          f"Choose a saved provider/model in Settings. Available: {available}")
 
 
 def validate_level(level: str) -> None:
@@ -519,12 +521,10 @@ def _default_api_key(provider: str) -> str:
 
 
 def _reasoning_effort(value: Any, path: str) -> str | None:
-    if value is None or value == "":
-        return None
-    normalized = str(value).strip().lower()
-    if normalized not in REASONING_EFFORTS:
-        raise ConfigError(f"{path} must be one of {', '.join(REASONING_EFFORTS)} or null (inherit)")
-    return normalized
+    try:
+        return validate_reasoning_effort(value)
+    except ValueError as exc:
+        raise ConfigError(f"{path}: {exc}") from None
 
 
 _MISSING = object()
@@ -596,6 +596,7 @@ def _parse_model_configs(raw_models: Mapping[str, Any]) -> dict[str, ModelConfig
             continue
 
         section = dict(raw_section)
+        section.pop("reasoning_efforts", None)  # Catalog metadata never enters an SDK request.
         provider = str(section.pop("provider", model_key))
         model_name = str(section.pop("model_name", _default_model_name(provider)))
         api_key = str(section.pop("api_key", _default_api_key(provider)))
@@ -967,10 +968,26 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any],
         candidate_budget=max(candidate_budget, 1),
     )
 
-    providers = [str(p).strip().lower() for p in merged.get("providers", merged.get("llm_providers", []))]
-    levels = [str(l).strip().lower() for l in merged.get("levels", merged.get("security_levels", []))]
-    surfaces = [str(s).strip().lower() for s in merged.get("surfaces", [])]
-    payload_modes = [str(s).strip().lower() for s in merged.get("payload_modes", [])]
+    def matrix_values(name: str, legacy: str | None = None) -> list[str]:
+        values = merged.get(name, merged.get(legacy) if legacy else None)
+        if values is None:
+            return []
+        if not isinstance(values, list):
+            raise ConfigError(f"{name} must be a list or null")
+        return [str(value).strip().lower() for value in values]
+
+    providers = matrix_values("providers", "llm_providers")
+    levels = matrix_values("levels", "security_levels")
+    surfaces = matrix_values("surfaces")
+    payload_modes = matrix_values("payload_modes")
+    catalogs = merged.get("reasoning_catalog") or {}
+    if not isinstance(catalogs, Mapping):
+        raise ConfigError("reasoning_catalog must map exact model IDs to effort lists")
+    try:
+        for name in catalogs:
+            model_efforts(merged, name)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from None
 
     # ``guardrail_retry`` / ``guardrail_handling`` are canonical.  The older
     # ``evasion`` forms are intentionally retained as a final compatibility

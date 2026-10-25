@@ -145,6 +145,12 @@ SettingsDrawer .drawer, SettingsDrawer.drawer-full .drawer { width: 100%; max-wi
 #settings-workspace { height: 1fr; }
 #settings-categories { width: 23; margin-right: 2; padding-right: 1; border-right: solid $surface-lighten-2; }
 #settings-categories:focus { border: none; border-right: solid $primary; }
+#settings-categories > .option-list--option-highlighted { background: $surface; color: $primary; text-style: bold; }
+#settings-categories:focus > .option-list--option-highlighted { background: $block-cursor-background; color: $block-cursor-foreground; }
+ReasoningControl { height: auto; }
+ReasoningControl Input, ReasoningControl Select { margin-bottom: 1; }
+ReasoningControl Static { height: auto; }
+ReasoningControl .unknown-model { color: $error; text-style: bold; }
 #settings-content { width: 1fr; height: 1fr; }
 .settings-section { height: 1fr; padding: 0 2; overflow-x: hidden; }
 .settings-section > Input, .settings-section > Select { max-width: 90; }

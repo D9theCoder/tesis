@@ -21,6 +21,7 @@ from llm.diagnostics import (
     sanitize_endpoint,
 )
 from llm.provider import get_llm, provider_capabilities
+from llm.reasoning_evidence import reasoning_evidence
 
 
 ORCHESTRATOR_SCHEMA_VERSION = "orchestrator.v2"
@@ -918,6 +919,7 @@ class LLMRuntime:
             "provider_usage": {},
             "reasoning_effort_requested": reasoning_effort,
             "reasoning_token_evidence": None,
+            **reasoning_evidence(None),
         }
         try:
             capabilities = provider_capabilities(provider)
@@ -976,7 +978,8 @@ class LLMRuntime:
                     SystemMessage(content=system_message), HumanMessage(content=user_message),
                 ])
                 raw = result.get("raw") if isinstance(result, Mapping) else result
-                attempt.update(status="responded", provider_usage=self._usage(raw))
+                attempt.update(status="responded", provider_usage=self._usage(raw),
+                               **redact_secrets(reasoning_evidence(raw), known_secrets=config.get("api_key")))
                 return result
             except Exception as exc:
                 diagnostic = provider_error_details(exc, provider=provider, model=model,
@@ -1166,6 +1169,7 @@ class LLMRuntime:
                 "error_type": type(exc).__name__,
                 "provider_usage": failure_usage,
                 "reasoning_token_evidence": _reasoning_token_evidence(failure_usage),
+                **redact_secrets(reasoning_evidence(failure_usage_source), known_secrets=config.get("api_key")),
             }
             if incomplete:
                 reason = incomplete_reason or "provider_output_limit"
@@ -1245,6 +1249,7 @@ class LLMRuntime:
             "parse_status": "ok",
             "provider_usage": provider_usage,
             "reasoning_token_evidence": _reasoning_token_evidence(provider_usage),
+            **redact_secrets(reasoning_evidence(usage_source), known_secrets=config.get("api_key")),
         }
         if role == 'orchestrator':
             record['method'] = parsed.get('next_agent') if parsed.get('next_agent') != 'scorer' else evidence_context.get('method')

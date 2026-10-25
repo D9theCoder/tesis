@@ -378,7 +378,7 @@ def test_explicit_null_effort_suppresses_stale_legacy_profile_effort(tmp_path):
     assert _count_key(payload, "reasoning_effort") == 0
 
 
-@pytest.mark.parametrize("value", ["bogus", "false", "0"])
+@pytest.mark.parametrize("value", ["has spaces", "false", "0"])
 def test_invalid_effort_rejected_before_execution(tmp_path, value):
     path = tmp_path / "config.yaml"
     path.write_text(f"target_url: http://localhost/dvwa\nmodels:\n  openai:\n    reasoning_effort: {value}\n")

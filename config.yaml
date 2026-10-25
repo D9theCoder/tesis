@@ -31,7 +31,7 @@ security_levels:
 # Explicit model-profile ID/level/surface for non-matrix runs.
 # If omitted, loader falls back to default_* keys above.
 # tokenharbor / deepseek-v4.1-flash (generated from api_providers below).
-provider: tokenharbor__deepseek-v4-1-flash_eb1394ac7fc4
+provider: river-ai__deepseek-ai-deepseek-v4-1-flash-1017_15efb2abf693
 level: low
 surface: sqli
 payload_mode: static_only
@@ -106,8 +106,7 @@ matrix: false
 # Model-profile IDs and levels to use in matrix mode. Each provider/model pair
 # has its own coordinate, even when pairs share an API protocol or endpoint.
 # Keep providers and levels nonempty when matrix mode is enabled.
-providers:
-  - tokenharbor__deepseek-v4-1-flash_eb1394ac7fc4
+providers: []
   # - opencode__gpt-5-6-luna_e33230db3dd7
 
 levels:
@@ -171,34 +170,6 @@ dvwa_password: password
 # Add only model IDs actually available at the configured endpoint.
 # See docs/reference/api_providers.md for discovery and profile-ID inspection.
 api_providers:
-  opencode:
-    display_name: OpenCode Zen Go
-    protocol: openai
-    base_url: https://opencode.ai/zen/go/v1
-    api_key: ${OPENAI_API_KEY}
-    models:
-      - gpt-5.6-luna
-      # - another-model-id
-    reasoning_effort: medium
-    temperature: 1
-    timeout: 60
-    extra:
-      max_retries: 0
-
-  tokenharbor:
-    display_name: TokenHarbor
-    protocol: openai_compatible
-    base_url: https://tokenharbor.ai/v1/
-    api_key: ${OPENAI_COMPATIBLE_API_KEY}
-    models:
-      - deepseek-v4.1-flash
-      # - another-model-id
-    reasoning_effort: low
-    temperature: 1
-    timeout: 60
-    # Keep each model-backed experiment call within its configured timeout.
-    extra:
-      max_retries: 0
 
   # Optional second provider using the Responses protocol. Configure its key
   # and model IDs before uncommenting; add generated IDs to providers above.
@@ -229,6 +200,15 @@ api_providers:
 # -----------------------------------------------------------------------------
 # API-key provider/model pairs above expand into models automatically.
 # Keep standalone profiles here for Gemini or openai_codex_auth.
+  river-ai:
+    display_name: river-ai
+    base_url: https://api.river.ai/v1
+    protocol: openai_compatible
+    fetch_url: https://api.river.ai/v1/models
+    models:
+      - zai-org/GLM-5.3-Flash
+      - deepseek-ai/DeepSeek-V4.1-Flash-1017
+    api_key: ${TESIS_PROVIDER_RIVER_AI_8DE913F7_API_KEY}
 models: {}
   # To opt in, replace {} with the mapping below, sign in with
   # `.venv/bin/python -m tesis auth login --account default`, then select an
@@ -258,4 +238,21 @@ scoring_evaluator:
   max_attempts: 2
   max_tokens: 1024
   timeout: 60
-  provider: opencode__gpt-5-6-luna_e33230db3dd7
+  provider: river-ai__deepseek-ai-deepseek-v4-1-flash-1017_15efb2abf693
+# Exact model IDs. Provider catalog metadata takes precedence. Unknown models use the fallback picker and a support check.
+# GLM and DeepSeek catalogs supplied by the user. GPT catalogs: official model docs, checked 2026-10-26.
+# https://developers.openai.com/api/docs/models/gpt-6.1-sol
+# https://developers.openai.com/api/docs/models/gpt-6-astra
+# https://developers.openai.com/api/docs/models/gpt-6-luna
+# https://developers.openai.com/api/docs/models/gpt-5.4
+reasoning_catalog:
+  zai-org/GLM-5.3-Flash: [low, high, xhigh]
+  deepseek-ai/DeepSeek-V4.1-Flash-1017: [off, low, high, xhigh]
+  gpt-6.1-sol: [low, medium, high, xhigh, max]
+  gpt-6-astra: [low, medium, high, xhigh, max]
+  gpt-6-luna: [none, low, medium, high, xhigh, max]
+  gpt-5.4: [none, low, medium, high, xhigh]
+  gpt-6-sol: [none, low, medium, high, xhigh, max]
+  gpt-5.6: [none, low, medium, high, xhigh, max]
+  gpt-5.6-sol: [none, low, medium, high, xhigh, max]
+  gpt-5.6-luna: [none, low, medium, high, xhigh, max]

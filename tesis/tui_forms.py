@@ -25,7 +25,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from tesis.config_fields import ALL_FIELD_SPECS, REASONING_EFFORT_CHOICES
+from tesis.config_fields import ALL_FIELD_SPECS
 from tesis.config_loader import (
     dump_yaml_config,
     load_and_resolve_config,
@@ -33,6 +33,8 @@ from tesis.config_loader import (
 )
 from tesis.tui_commands import BaseDrawer
 from tesis.tui_config import DraftConfigCache, TuiConfigCache
+from tesis.tui_reasoning import ReasoningControl
+from llm.reasoning import model_efforts
 from textual.widgets.option_list import Option
 from tesis.tui_widgets import (
     KeyboardActions, SettingField, SettingValueRow, TextCheckbox, TextSelectionList,
@@ -248,6 +250,13 @@ class LaunchDrawer(BaseDrawer):
                 if self.mode == "matrix":
                     yield from self._yield_step(_LAUNCH_MATRIX_FIELDS, config, resolved)
                 yield Static("", id="launch-model-connection", markup=False)
+                yield Label("ChatGPT / Codex model ID (optional override)", id="launch-codex-model-label", classes="field-label")
+                yield Input(placeholder="Use the saved model or enter an exact model ID", id="launch-codex-model")
+                yield Label("Reasoning effort", classes="field-label")
+                yield ReasoningControl(id="launch-reasoning-effort", modes=(
+                    ("Keep per-role reasoning settings", "preserve"),
+                    ("Inherit profile effort for both roles", "inherit"),
+                ))
             with VerticalScroll(id="launch-step-runtime", classes="launch-step"):
                 primary = ("candidate_budget", "iterations", "stop_policy", "output_dir", "report_format")
                 yield from self._yield_step(primary, config, resolved)
@@ -271,12 +280,6 @@ class LaunchDrawer(BaseDrawer):
                         f"{name}: {getattr(settings, 'reasoning_effort', None) or 'inherit profile'}"
                         for name, settings in roles.items()
                     ), markup=False, id="launch-role-reasoning")
-                    yield Label("Reasoning effort", classes="field-label")
-                    yield Select([
-                        ("Keep per-role reasoning settings", "preserve"),
-                        ("Inherit profile effort for both roles", "inherit"),
-                        *[(choice, choice) for choice in REASONING_EFFORT_CHOICES],
-                    ], value="preserve", allow_blank=False, id="launch-reasoning-effort")
                     orchestrator = _role_attr(roles, "orchestrator", "model_profile")
                     payload_role = _role_attr(roles, "payload_generator", "model_profile")
                     yield Label("Orchestrator model profile", classes="field-label")
@@ -305,12 +308,46 @@ class LaunchDrawer(BaseDrawer):
             return ()
 
     def on_mount(self) -> None:
+        self._configure_launch_reasoning()
         self._goto_step(0)
 
     @on(Select.Changed, "#launch-field-provider, #launch-field-model-profile, #launch-orchestrator-profile, #launch-payload-profile")
+    @on(SelectionList.SelectedChanged, "#launch-field-providers")
+    @on(Input.Changed, "#launch-codex-model")
     def launch_profile_changed(self) -> None:
         if self.is_mounted:
+            self._configure_launch_reasoning()
             self._schedule_preview()
+
+    def _configure_launch_reasoning(self) -> None:
+        from dataclasses import asdict
+        from tesis.provider_registry import expanded_model_sections
+        try:
+            cfg = self._resolved_config()
+            raw = self._raw_config()
+            sections = expanded_model_sections(raw)
+            primary = cfg.models.get(cfg.model_profile or cfg.provider)
+            codex = primary is not None and primary.provider == "openai_codex_auth"
+            self.query_one("#launch-codex-model").display = codex
+            self.query_one("#launch-codex-model-label").display = codex
+            profiles, catalogs = [], []
+            for coordinate in (cfg.providers if self.mode == "matrix" else [cfg.provider]):
+                for role in cfg.llm_runtime.roles.values():
+                    profile_id = role.model_profile or cfg.model_profile or coordinate
+                    profile = cfg.models.get(profile_id)
+                    if profile is None:
+                        continue
+                    section = asdict(profile)
+                    section["model_name"] = role.model_name or profile.model_name
+                    if section not in profiles:
+                        profiles.append(section)
+                        metadata = sections.get(profile_id) if section["model_name"] == profile.model_name else None
+                        catalogs.append(model_efforts(raw, section["model_name"], metadata))
+            efforts = ([x for x in catalogs[0] if all(x in values for values in catalogs)]
+                       if catalogs and all(values is not None for values in catalogs) else None)
+            self.query_one("#launch-reasoning-effort", ReasoningControl).configure(profiles, efforts)
+        except Exception:
+            self.query_one("#launch-reasoning-effort", ReasoningControl).configure([], None)
 
     def _schedule_preview(self) -> None:
         if self._preview_timer is not None:
@@ -377,7 +414,6 @@ class LaunchDrawer(BaseDrawer):
             args[_LAUNCH_CLI_KEYS.get(path, path)] = value
         for key, widget_id in (
             ("llm_max_concurrency", "launch-llm-concurrency"),
-            ("reasoning_effort", "launch-reasoning-effort"),
             ("orchestrator_model_profile", "launch-orchestrator-profile"),
             ("payload_model_profile", "launch-payload-profile"),
         ):
@@ -388,21 +424,31 @@ class LaunchDrawer(BaseDrawer):
             raw = widget.value
             if raw in (None, "", Select.NULL):
                 continue
-            if key == "reasoning_effort":
-                if raw == "preserve":
-                    continue
-                if raw == "inherit":
-                    args["llm_runtime"] = {"roles": {
-                        role: {"reasoning_effort": None}
-                        for role in ("orchestrator", "payload_generator")
-                    }}
-                    continue
             if isinstance(widget, Input):
                 try:
                     raw = int(str(raw).strip())
                 except (TypeError, ValueError):
                     continue
             args[key] = raw
+        if self.is_mounted:
+            control = self.query_one("#launch-reasoning-effort", ReasoningControl)
+            if control.mode == "inherit":
+                args["llm_runtime"] = {"roles": {role: {"reasoning_effort": None}
+                    for role in ("orchestrator", "payload_generator")}}
+            elif control.mode != "preserve":
+                args["reasoning_effort"] = control.value
+            from tesis.provider_registry import expanded_model_sections
+            sections = expanded_model_sections(self._raw_config())
+            primary = args.get("model_profile") or args.get("provider") or self._raw_config().get("provider")
+            override = self.query_one("#launch-codex-model", Input).value.strip()
+            if override and any(c.isspace() or ord(c) < 32 for c in override):
+                raise ValueError("Model ID must not contain spaces or control characters.")
+            if override and sections.get(primary, {}).get("provider", primary) == "openai_codex_auth":
+                for role, key, profile_key in (("orchestrator", "orchestrator_model", "orchestrator_model_profile"),
+                                               ("payload_generator", "payload_model", "payload_model_profile")):
+                    selected_profile = args.get(profile_key) or (((self._raw_config().get("llm_runtime") or {}).get("roles") or {}).get(role) or {}).get("model_profile") or primary
+                    if sections.get(selected_profile, {}).get("provider", selected_profile) == "openai_codex_auth":
+                        args[key] = override
         try:
             args["llm_cache"] = bool(self.query_one("#launch-llm-cache", Checkbox).value)
         except Exception:
@@ -511,6 +557,11 @@ class LaunchDrawer(BaseDrawer):
         if self._frozen is not None:
             return
         try:
+            model_id = self.query_one("#launch-codex-model", Input).value.strip()
+            if model_id and any(c.isspace() or ord(c) < 32 for c in model_id):
+                raise ValueError("Model ID must not contain spaces or control characters.")
+            self._configure_launch_reasoning()
+            self.query_one("#launch-reasoning-effort", ReasoningControl).ensure_ready()
             cfg = self._resolved_config(fresh=True)
         except Exception as exc:
             try:
@@ -548,7 +599,7 @@ class ChatGPTModelsLoaded(Message):
     """Thread-safe delivery without blocking the worker on the UI loop."""
 
     def __init__(self, generation: int, profile: str, account: str,
-                 models: list[dict[str, str]], error: str | None):
+                 models: list[dict[str, Any]], error: str | None):
         super().__init__()
         self.generation = generation
         self.profile = profile
@@ -602,6 +653,9 @@ class SettingsDrawer(BaseDrawer):
         self._evaluator_has_choices = False
         self._evaluator_valid = False
         self._evaluator_preview_text: str | None = None
+        self._evaluator_reasoning_key: Any = None
+        self._chatgpt_models: dict[str, dict] = {}
+        self._chatgpt_account_value: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Label("Settings", id="settings-title", classes="drawer-title")
@@ -621,6 +675,8 @@ class SettingsDrawer(BaseDrawer):
                         yield SettingValueRow("Condition", "Experiment condition for the default run.", id="setting-condition")
                         yield SettingValueRow("Target method", "An empty value leaves method selection to the orchestrator.", id="setting-method")
                     with Vertical(id="settings-target-actions", classes="settings-card"):
+                        yield Select([], prompt="Choose default provider / model", id="settings-default-provider")
+                        yield Button("Apply default model to draft", id="settings-default-apply")
                         yield Button("Edit defaults in YAML", id="settings-edit-target", classes="edit-yaml")
                         yield Static("Edit the default settings in the masked configuration draft.", classes="setting-description", markup=False)
                 with VerticalScroll(id="settings-section-model", classes="settings-section"):
@@ -667,6 +723,9 @@ class SettingsDrawer(BaseDrawer):
                     yield Static("Connect an account: python -m tesis auth login --account default", markup=False, id="settings-chatgpt-status")
                     yield Button("Refresh models", id="settings-chatgpt-refresh")
                     yield Select([], prompt="Available OpenAI models", disabled=True, id="settings-chatgpt-model")
+                    yield Input(placeholder="Or enter an exact ChatGPT / Codex model ID", id="settings-chatgpt-manual")
+                    yield Label("Reasoning effort", classes="field-label")
+                    yield ReasoningControl(id="settings-chatgpt-reasoning")
                     yield Button("Use selected model", id="settings-chatgpt-apply", disabled=True)
                 with VerticalScroll(id="settings-section-llm", classes="settings-section"):
                     yield Label("LLM runtime", classes="section-heading")
@@ -684,6 +743,9 @@ class SettingsDrawer(BaseDrawer):
                             yield SettingField("Payload review", Select([("Human", "human"), ("AI", "ai"), ("Human and AI", "both")], value="human", allow_blank=False, id="settings-scoring-mode"), "Who reviews payload evidence.")
                             yield SettingField("Provider / model", Select([], prompt="Choose a saved model", id="settings-evaluator-provider"), "Use a registered API or ChatGPT model profile.")
                             yield Static("", id="settings-evaluator-details", markup=False)
+                            yield SettingField("Codex model ID", Input(placeholder="Use saved model or enter exact ID", id="settings-evaluator-model"), "Optional independent ChatGPT / Codex model selection.", id="settings-evaluator-model-row")
+                            yield Label("Reasoning effort", classes="field-label")
+                            yield ReasoningControl(id="settings-evaluator-reasoning")
                         with Vertical(id="settings-evaluator-limits-card", classes="settings-card"):
                             for name, label, value, description in (
                                 ("attempts", "Review attempts", "2", "Maximum attempts per payload (1-3)."),
@@ -748,6 +810,8 @@ class SettingsDrawer(BaseDrawer):
             return
         self._refresh_api_providers()
         self._refresh_evaluator()
+        self._refresh_default_provider()
+        self._sync_saved_chatgpt_model()
         self._saved_text = self.query_one("#yaml-editor", TextArea).text
         self._loaded_ok = True
         self.query_one("#settings-categories", OptionList).focus()
@@ -864,6 +928,33 @@ class SettingsDrawer(BaseDrawer):
         if not self._tesis_closing and not self._saving:
             self._refresh_api_providers()
             self._refresh_evaluator()
+            self._refresh_default_provider()
+
+    def _refresh_default_provider(self) -> None:
+        try:
+            text = self.query_one("#yaml-editor", TextArea).text
+            payload = self._draft_cache.read(text)
+            sections, labels = self._draft_cache.profiles(text)
+            picker = self.query_one("#settings-default-provider", Select)
+            selected = picker.value if picker.value in sections else payload.get("provider")
+            picker.set_options([(labels[name], name) for name, section in sections.items() if section.get("model_name")])
+            picker.value = selected if selected in sections else Select.NULL
+        except Exception:
+            pass
+
+    @on(Button.Pressed, "#settings-default-apply")
+    def apply_default_provider(self) -> None:
+        try:
+            editor = self.query_one("#yaml-editor", TextArea)
+            payload = self._draft_cache.edit(editor.text)
+            selected = self.query_one("#settings-default-provider", Select).value
+            if selected is Select.NULL:
+                raise ValueError("Choose a saved provider / model first.")
+            payload["provider"] = str(selected)
+            editor.text = dump_yaml_config(payload)
+            self._set_status("Default model applied to draft. Save Settings to keep it.")
+        except Exception as exc:
+            self._set_status(tui_security._safe_config_error_text(exc))
 
     def _refresh_evaluator(self) -> None:
         picker = self.query_one("#settings-evaluator-provider", Select)
@@ -910,6 +1001,11 @@ class SettingsDrawer(BaseDrawer):
     def evaluator_provider_changed(self) -> None:
         self._show_evaluator_connection()
 
+    @on(Input.Changed, "#settings-evaluator-model")
+    def evaluator_model_changed(self) -> None:
+        if self.is_mounted:
+            self._show_evaluator_connection()
+
     def _show_evaluator_connection(self) -> None:
         selected = self.query_one("#settings-evaluator-provider", Select).value
         details = self.query_one("#settings-evaluator-details", Static)
@@ -924,10 +1020,33 @@ class SettingsDrawer(BaseDrawer):
                 info = model_connection(str(selected), profile)
                 self._evaluator_display_info = info
                 self._evaluator_supports_tokens = info["adapter"] != "openai_codex_auth"
+                self.query_one("#settings-evaluator-model-row").display = not self._evaluator_supports_tokens
+                profile = self._probe_profile(profile)
+                override = self.query_one("#settings-evaluator-model", Input).value.strip()
+                if override and any(c.isspace() or ord(c) < 32 for c in override):
+                    raise ValueError("Model ID must not contain spaces or control characters.")
+                if override and not self._evaluator_supports_tokens:
+                    if override != profile["model_name"]:
+                        profile.pop("reasoning_efforts", None)
+                    profile["model_name"] = override
+                    info["model"] = override
+                payload = self._draft_cache.read(self.query_one("#yaml-editor", TextArea).text)
+                key = (str(selected), profile)
+                control = self.query_one("#settings-evaluator-reasoning", ReasoningControl)
+                current = payload.get("scoring_evaluator") or {}
+                initial = current.get("reasoning_effort") if current.get("provider") == selected else None
+                control.configure([profile], model_efforts(payload, profile["model_name"], profile),
+                                  value=initial, reset=key != self._evaluator_reasoning_key)
+                self._evaluator_reasoning_key = key
                 endpoint = tui_security._safe_url(profile.get("base_url") or "provider default")
                 details.update(summary_rows([("API protocol", info["protocol"]), ("Endpoint", endpoint)]))
         except Exception:
             details.update("The selected model is unavailable. Choose another saved model.")
+            self.query_one("#settings-evaluator-reasoning", ReasoningControl).configure([], None)
+            self._evaluator_reasoning_key = None
+        if selected is Select.NULL:
+            self.query_one("#settings-evaluator-reasoning", ReasoningControl).configure([], None)
+            self.query_one("#settings-evaluator-model-row").display = False
         tokens = self.query_one("#settings-evaluator-tokens", Input)
         tokens.disabled = self._saving or not self._evaluator_supports_tokens
         self.query_one("#settings-evaluator-tokens-label", Label).update("Output token limit")
@@ -976,9 +1095,24 @@ class SettingsDrawer(BaseDrawer):
                     raise ValueError("Choose a saved provider and model for AI review.")
             else:
                 profile = expanded_model_sections(payload)[str(selected)]
-                for key in ("provider", "adapter", "model", "model_profile", "base_url", "api_key", "use_responses_api"):
+                self._show_evaluator_connection()
+                control = self.query_one("#settings-evaluator-reasoning", ReasoningControl)
+                control.ensure_ready()
+                override = self.query_one("#settings-evaluator-model", Input).value.strip()
+                if profile.get("provider", str(selected)) == "openai_codex_auth" and override and override != profile["model_name"]:
+                    from tesis.provider_registry import model_profile_id
+                    from copy import deepcopy
+                    selected = model_profile_id(str(selected), override)
+                    profile = deepcopy(profile)
+                    profile["model_name"] = override
+                    profile.pop("reasoning_efforts", None)
+                    payload["models"] = dict(payload.get("models") or {})
+                    payload["models"][selected] = profile
+                for key in ("provider", "adapter", "model", "model_profile", "base_url", "api_key", "use_responses_api", "account", "reasoning_effort"):
                     evaluator.pop(key, None)
                 evaluator["provider"] = str(selected)
+                if control.value is not None:
+                    evaluator["reasoning_effort"] = control.value
                 for selector, key in (("attempts", "max_attempts"), ("tokens", "max_tokens"), ("timeout", "timeout")):
                     evaluator[key] = int(self.query_one(f"#settings-evaluator-{selector}", Input).value)
                 validate_scoring_config(mode, {**evaluator, "model": profile["model_name"]})
@@ -1038,7 +1172,8 @@ class SettingsDrawer(BaseDrawer):
                 return
             provider_id = str(selected) if event.button.id == "settings-api-edit" else ""
             self.app.push_screen(ProviderDrawer(config_path=tui_state.CONFIG_PATH, entries=entries,
-                                               provider_id=provider_id, pending_keys=self._pending_api_keys),
+                                               provider_id=provider_id, pending_keys=self._pending_api_keys,
+                                               reasoning_catalog=payload.get("reasoning_catalog")),
                                  self._apply_api_provider)
         except Exception as exc:
             self._set_status(f"Cannot edit provider: {tui_security._safe_config_error_text(exc)}")
@@ -1123,6 +1258,7 @@ class SettingsDrawer(BaseDrawer):
     def _clear_model_catalog(self) -> None:
         self._model_generation += 1
         self._catalog_binding = None
+        self._chatgpt_models = {}
         picker = self.query_one("#settings-chatgpt-model", Select)
         picker.set_options([])
         picker.disabled = True
@@ -1131,7 +1267,13 @@ class SettingsDrawer(BaseDrawer):
 
     @on(Input.Changed, "#settings-chatgpt-account")
     def chatgpt_account_changed(self) -> None:
+        account = self.query_one("#settings-chatgpt-account", Input).value.strip()
+        if account == self._chatgpt_account_value:
+            return
+        self._chatgpt_account_value = account
         self._clear_model_catalog()
+        self.query_one("#settings-chatgpt-manual", Input).value = ""
+        self._configure_chatgpt_reasoning()
         self.query_one("#settings-chatgpt-status", Static).update("Account changed. Refresh OpenAI models.")
 
     @on(Select.Changed, "#settings-chatgpt-profile")
@@ -1144,6 +1286,58 @@ class SettingsDrawer(BaseDrawer):
             profile = raw.get("models", {}).get(str(event.value), {})
             account = profile.get("account", (profile.get("extra") or {}).get("account", "default"))
             self.query_one("#settings-chatgpt-account", Input).value = str(account)
+            self._sync_saved_chatgpt_model()
+        except Exception:
+            pass
+
+    def _probe_profile(self, profile: dict) -> dict:
+        from copy import deepcopy
+        from tesis.provider_settings import resolved_provider_key
+        result = tui_security._restore_yaml_secrets(deepcopy(profile), self.preserved_secret_placeholders)
+        if result.get("api_key"):
+            result["api_key"] = resolved_provider_key(result, tui_state.CONFIG_PATH, self._pending_api_keys)
+        return result
+
+    def _sync_saved_chatgpt_model(self) -> None:
+        try:
+            payload = self._draft_cache.read(self.query_one("#yaml-editor", TextArea).text)
+            name = str(self.query_one("#settings-chatgpt-profile", Select).value)
+            profile = (payload.get("models") or {}).get(name) or {}
+            account = str(profile.get("account", (profile.get("extra") or {}).get("account", "default")))
+            self._chatgpt_account_value = account
+            self.query_one("#settings-chatgpt-account", Input).value = account
+            model = profile.get("model_name")
+            picker = self.query_one("#settings-chatgpt-model", Select)
+            picker.set_options([(model, model)] if model else [])
+            picker.value = model if model else Select.NULL
+            picker.disabled = not bool(model)
+            self._catalog_binding = (name, account) if model else None
+            self._chatgpt_models = {model: profile} if model else {}
+            self.query_one("#settings-chatgpt-apply", Button).disabled = not bool(model)
+            self._configure_chatgpt_reasoning(reset=True)
+        except Exception:
+            pass
+
+    @on(Select.Changed, "#settings-chatgpt-model")
+    @on(Input.Changed, "#settings-chatgpt-manual")
+    def chatgpt_model_changed(self) -> None:
+        self._configure_chatgpt_reasoning(reset=True)
+
+    def _configure_chatgpt_reasoning(self, *, reset: bool = False) -> None:
+        try:
+            payload = self._draft_cache.read(self.query_one("#yaml-editor", TextArea).text)
+            name = str(self.query_one("#settings-chatgpt-profile", Select).value)
+            account = self.query_one("#settings-chatgpt-account", Input).value.strip()
+            manual = self.query_one("#settings-chatgpt-manual", Input).value.strip()
+            selected = self.query_one("#settings-chatgpt-model", Select).value
+            model = manual or (str(selected) if selected is not Select.NULL and self._catalog_binding == (name, account) else "")
+            profile = dict((payload.get("models") or {}).get(name) or {})
+            profile.update(provider="openai_codex_auth", model_name=model, extra={"account": account})
+            metadata = self._chatgpt_models.get(model) or {}
+            self.query_one("#settings-chatgpt-reasoning", ReasoningControl).configure(
+                [profile] if model else [], model_efforts(payload, model, metadata),
+                value=profile.get("reasoning_effort"), reset=reset)
+            self.query_one("#settings-chatgpt-apply", Button).disabled = not model or self._saving
         except Exception:
             pass
 
@@ -1177,7 +1371,7 @@ class SettingsDrawer(BaseDrawer):
                                   message.models, message.error)
 
     def _chatgpt_models_ready(self, generation: int, profile: str, account: str,
-                             models: list[dict[str, str]], error: str | None) -> None:
+                             models: list[dict[str, Any]], error: str | None) -> None:
         if self._tesis_closing or generation != self._model_generation or not self.is_mounted:
             return
         status = self.query_one("#settings-chatgpt-status", Static)
@@ -1186,31 +1380,50 @@ class SettingsDrawer(BaseDrawer):
             status.update(str(tui_security.redact_secrets(error)))
             return
         picker = self.query_one("#settings-chatgpt-model", Select)
+        self._chatgpt_models = {model["slug"]: model for model in models}
         # Preserve OpenAI's ordering and display names. There is no model allowlist.
         picker.set_options([(model["display_name"], model["slug"]) for model in models])
         picker.disabled = not models
+        if models:
+            picker.value = models[0]["slug"]
         self.query_one("#settings-chatgpt-apply", Button).disabled = not models
         self._catalog_binding = (profile, account)
+        self._configure_chatgpt_reasoning(reset=True)
         status.update(f"{len(models)} models available for {account}. Select a model, then save Settings."
                       if models else "OpenAI returned no visible models for this account.")
 
     @on(Button.Pressed, "#settings-chatgpt-apply")
     def apply_chatgpt_model(self) -> None:
-        model = self.query_one("#settings-chatgpt-model", Select).value
-        if self._catalog_binding is None or model is Select.NULL:
+        manual = self.query_one("#settings-chatgpt-manual", Input).value.strip()
+        model = manual or self.query_one("#settings-chatgpt-model", Select).value
+        if not manual and (self._catalog_binding is None or model is Select.NULL):
             return
-        profile_name, account = self._catalog_binding
+        profile_name = str(self.query_one("#settings-chatgpt-profile", Select).value)
+        account = self.query_one("#settings-chatgpt-account", Input).value.strip()
         try:
+            if any(c.isspace() or ord(c) < 32 for c in str(model)):
+                raise ValueError("Model ID must not contain spaces or control characters.")
+            self._configure_chatgpt_reasoning()
+            control = self.query_one("#settings-chatgpt-reasoning", ReasoningControl)
+            control.ensure_ready()
             editor = self.query_one("#yaml-editor", TextArea)
             payload = self._draft_cache.edit(editor.text)
             if not isinstance(payload, dict):
                 raise ValueError("Config must be a YAML mapping")
-            profile = payload.setdefault("models", {}).setdefault(profile_name, {})
+            payload["models"] = dict(payload.get("models") or {})
+            profile = payload["models"].setdefault(profile_name, {})
             profile.update(provider="openai_codex_auth", model_name=str(model))
-            profile.setdefault("extra", {})["account"] = account
+            profile["reasoning_effort"] = control.value
+            profile["extra"] = {**(profile.get("extra") or {}), "account": account}
             profile.pop("account", None)
+            metadata = self._chatgpt_models.get(str(model)) or {}
+            profile.pop("reasoning_efforts", None)
+            if "reasoning_efforts" in metadata:
+                profile["reasoning_efforts"] = metadata["reasoning_efforts"]
             # This picker never switches the experiment's primary provider.
             editor.text = dump_yaml_config(payload)
+            self._refresh_evaluator()
+            self._refresh_default_provider()
             self._set_status(f"Updated models.{profile_name}. Save Settings to keep the selected model.")
         except Exception as exc:
             self._set_status(f"Model not applied: {tui_security._safe_config_error_text(exc)}")
@@ -1276,13 +1489,16 @@ class SettingsDrawer(BaseDrawer):
         for selector in ("#settings-save", "#settings-api-add", "#settings-api-edit", "#yaml-editor",
                          "#settings-chatgpt-apply", "#settings-evaluator-apply", "#settings-evaluator-provider",
                          "#settings-scoring-mode", "#settings-evaluator-attempts", "#settings-evaluator-tokens",
-                         "#settings-evaluator-timeout"):
+                         "#settings-evaluator-timeout", "#settings-evaluator-model", "#settings-evaluator-reasoning",
+                         "#settings-chatgpt-reasoning", "#settings-chatgpt-manual", "#settings-chatgpt-profile",
+                         "#settings-chatgpt-account", "#settings-default-provider", "#settings-default-apply"):
             self.query_one(selector).disabled = disabled
         if not disabled:
             self._refresh_api_providers()
             self._refresh_evaluator()
             self.query_one("#settings-chatgpt-apply", Button).disabled = (
-                self._catalog_binding is None or self.query_one("#settings-chatgpt-model", Select).disabled
+                not self.query_one("#settings-chatgpt-manual", Input).value.strip() and (
+                    self._catalog_binding is None or self.query_one("#settings-chatgpt-model", Select).disabled)
             )
 
     @on(SettingsSaved)

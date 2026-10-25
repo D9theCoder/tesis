@@ -391,6 +391,17 @@ def test_model_discovery_uses_account_token_and_server_order(oauth):
     assert request.headers["authorization"] == "Bearer access-initial"
 
 
+def test_public_model_catalog_keeps_reasoning_metadata(oauth, monkeypatch):
+    oauth.connect()
+    monkeypatch.setattr(oauth.session, "request_json", lambda *_args, **_kwargs: {"data": [
+        {"id": "future-model", "supported_reasoning_efforts": [
+            {"reasoning_effort": "low"}, {"reasoning_effort": "max"}]},
+        {"id": "hidden", "visibility": "hidden"},
+    ]})
+    assert oauth.session.list_models() == [{"slug": "future-model", "display_name": "future-model",
+                                           "reasoning_efforts": ["low", "max"]}]
+
+
 def _model(oauth):
     model = get_llm("openai_codex_auth", model_name="future-model-b", api_key="", temperature=0,
                     max_tokens=512, streaming=True, reasoning_effort="low")
@@ -417,6 +428,20 @@ def test_inference_serializes_only_siwc_supported_fields_and_keeps_usage(oauth):
     assert result.response_metadata["usage"]["output_tokens_details"]["reasoning_tokens"] == 3
     assert result.response_metadata["request_id"] == "req-test"
     assert "access-initial" not in json.dumps(result.model_dump())
+
+
+def test_siwc_preserves_returned_summary_separately_from_encrypted_reasoning(oauth):
+    from llm.reasoning_evidence import reasoning_evidence
+    oauth.connect()
+    oauth.inference = _completed()
+    oauth.inference[-1]["response"]["output"].insert(0, {"type": "reasoning", "encrypted_content": "opaque",
+        "summary": [{"type": "summary_text", "text": "Provider summary"}]})
+    message = _model(oauth).invoke("Return JSON")
+    assert message.content == '{"answer":"ok"}'
+    fields = reasoning_evidence(message)
+    assert fields["reasoning_trace"] is None
+    assert fields["reasoning_summary"] == "Provider summary"
+    assert "opaque" not in json.dumps(message.model_dump())
 
 
 def test_cached_model_resolves_refreshed_credentials_on_each_inference(oauth):

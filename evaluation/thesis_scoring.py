@@ -22,6 +22,7 @@ from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.reporter import write_json_report
 from core.run_status import terminal_status
 from tesis.runtime_events import redact_secrets
+from llm.reasoning_evidence import reasoning_evidence
 
 
 RUBRIC_VERSION = 'scoring.v3'
@@ -797,9 +798,10 @@ def evaluate_queue(queue, evaluator, *, invoke=None, candidate_ids=None, expecte
                 'source_sha256': source_sha256, 'run_id': queue.get('run_id'),
                 'execution_id': queue.get('execution_id'),
                 'prompt_sha256': sha256(messages[-1].content.encode()).hexdigest(),
-                'requested_max_tokens': runtime_evaluator['max_tokens']}
+                'requested_max_tokens': runtime_evaluator['max_tokens'], **reasoning_evidence(None)}
             try:
                 response = invoke(messages)
+                entry.update(redact_secrets(reasoning_evidence(response), known_secrets=evaluator.get('api_key')))
                 raw_content = _evaluator_response_text(response)
                 native_metadata = _evaluator_native_metadata(response)
                 sanitized_content = redact_secrets(raw_content, known_secrets=evaluator.get('api_key'))
