@@ -12,20 +12,24 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from rich.text import Text
-from textual import on
+from rich.cells import cell_len, set_cell_size
+from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import DataTable, Label, Static
+from textual.widgets import Button, DataTable, Input, OptionList, Static, Tab, Tabs
+from textual.widgets.option_list import Option
 
 from evaluation.multi_llm_runner import run_provider_matrix
 from evaluation.runner import run_single_engagement
 from tesis.config_loader import load_and_resolve_config
+from tesis.tui_config import TuiConfigCache
 from tesis.runtime_events import CancellationToken, RunEvent
 import tesis.tui_commands as tui_commands
 import tesis.tui_security as tui_security
 import tesis.tui_state as tui_state
+from tesis.tui_widgets import KeyboardActions, KeyboardTable, KeyboardTabs, model_connection
 
 
 def _invoke_runner(runner: Any, kwargs: dict[str, Any]) -> Any:
@@ -65,11 +69,6 @@ _TERMINAL_EVENT_TYPES = frozenset({
 
 # ---------------------------------------------------------------- mission control screen
 
-_STAGE_GLYPH = {"queued": "○", "running": "●", "succeeded": "✓", "warning": "!", "failed": "×"}
-
-_STATUS_GLYPH = {"ready": "○", "running": "●", "succeeded": "✓",
-                 "degraded": "!", "failed": "×", "cancelled": "!"}
-
 _RUN_STATUSES = ("ready", "running", "degraded", "succeeded", "failed", "cancelled", "unknown")
 
 _TOO_SMALL_FOOTER = "? help · q quit"
@@ -83,7 +82,7 @@ _FOOTER_IDLE_EXTRA = ("plan", "doctor")
 _FOOTER_IDLE_TAIL = ("help", "quit")
 _FOOTER_IDLE_NAV = ("/",)
 _FOOTER_ACTIVE_TAIL = ("cancel", "help")
-_FOOTER_ACTIVE_NAV = ("1", "2", "3", "Tab/Shift+Tab", "Enter", "/")
+_FOOTER_ACTIVE_NAV = ("1", "2", "3", "4", "Tab/Shift+Tab", "Enter", "/")
 _FOOTER_ACTIVE_NAV_COMPACT = ("Enter", "/")
 
 # Concise pipeline labels for the narrow (60-79 column) layout, where the full
@@ -92,6 +91,16 @@ _NARROW_STAGE_LABELS = {
     "payload_candidate_builder": "candidates",
     "payload_validator": "validation",
     "chaining_router": "chain router",
+}
+
+_STAGE_DESCRIPTIONS = {
+    "recon": "Discover the DVWA target",
+    "orchestrator": "Select the next method",
+    "payload_candidate_builder": "Build payload candidates",
+    "payload_validator": "Validate scope and provenance",
+    "method_agent": "Execute and verify the method",
+    "chaining_router": "Route confirmed outcomes",
+    "scorer": "Score and write artifacts",
 }
 
 
@@ -106,7 +115,7 @@ def _clip(value: Any, limit: int) -> str:
     text = "" if value is None else str(value).strip()
     if limit < 1:
         return ""
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    return text if cell_len(text) <= limit else set_cell_size(text, limit - 1) + "…"
 
 
 def _command_hints(names: tuple[str, ...]) -> list[str]:
@@ -130,17 +139,6 @@ def _target_host(url: str) -> str:
         return str(urlsplit(url).hostname or "")
     except Exception:
         return ""
-
-
-class MissionPane(Static):
-    """A mission-control pane body that can hold keyboard focus.
-
-    In the wide layout `1`/`2`/`3` and Tab/Shift+Tab move focus between the
-    pipeline, coordinate, and evidence panes, so each pane body must be a
-    focus target in its own right.
-    """
-
-    can_focus = True
 
 
 class NoticeBody(VerticalScroll):
@@ -167,7 +165,9 @@ class MissionControlScreen(Screen):
         Binding("1", "show_pipeline", "Pipeline", show=True),
         Binding("2", "show_coordinates", "Coordinates", show=True),
         Binding("3", "show_evidence", "Evidence", show=True),
+        Binding("4", "show_activity", "Activity", show=False),
         Binding("enter", "inspect", "Inspect", show=True, key_display="Enter"),
+        Binding("escape", "overview", "Overview", show=False),
         Binding("/", "open_launcher", "Command", show=True),
         Binding("question_mark", "open_help", "Help", show=True, key_display="?"),
         Binding("ctrl+c", "cancel_or_exit", "Cancel", show=True, priority=True,
@@ -177,6 +177,9 @@ class MissionControlScreen(Screen):
         Binding("m", "launch_matrix", "Matrix", show=False),
         Binding("p", "open_plan", "Plan", show=False),
         Binding("d", "open_doctor", "Doctor", show=False),
+        Binding("s", "open_settings", "Settings", show=False),
+        Binding("v", "open_results", "Results", show=False),
+        Binding("l", "open_trace", "Logs", show=False),
         Binding(":", "open_launcher", "Command", show=False),
         Binding("ctrl+p", "open_launcher", "Palette", show=False),
     ]
@@ -194,6 +197,7 @@ class MissionControlScreen(Screen):
         self._tesis_closing = False
         self._journal_path: Path | None = None
         self._run_result: dict[str, Any] | None = None
+        self._run_config: Any = None
         self._artifact_root: Path | None = None
         self._drawer_observers: list = []
         # Notice auto-follow: following the bottom, else paused with a count of
@@ -201,6 +205,14 @@ class MissionControlScreen(Screen):
         self._notice_following = True
         self._notice_new = 0
         self._notice_seen_version = 0
+        self._active_pane = "pipeline"
+        self._layout_mode = ""
+        self._coordinate_cursor: int | None = None
+        self._config_cache = TuiConfigCache()
+        self._layout_key: tuple | None = None
+        self._coordinate_values: dict[int, tuple[str, ...]] = {}
+        self._pending_regions: set[str] = set()
+        self._render_timer: Any = None
 
     @property
     def run_active(self) -> bool:
@@ -209,19 +221,35 @@ class MissionControlScreen(Screen):
     # -- layout -----------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield Static("TESIS", id="context-bar")
+        with Horizontal(id="header"):
+            yield Static("TESIS", id="context-bar")
+            yield Static("Ready", id="header-status")
+        with Horizontal(id="workspace-nav"):
+            yield KeyboardTabs(Tab("1 Pipeline", id="tab-pipeline"), Tab("2 Runs", id="tab-runs"),
+                       Tab("3 Evidence", id="tab-evidence"), Tab("4 Activity", id="tab-activity"),
+                       id="workspace-tabs")
+            with KeyboardActions(id="workspace-actions"):
+                yield Button("v Results", id="nav-results")
+                yield Button("s Settings", id="nav-settings")
+                yield Button("l Logs", id="nav-logs")
         with Vertical(id="mission-body"):
-            yield MissionPane("", id="pipeline-pane")
-            yield DataTable(id="coordinate-pane")
-            with Vertical(id="notice-pane"):
-                yield Static("", id="notice-new-badge", markup=False, classes="notice-new-badge")
-                with NoticeBody(self._notice_scroll_changed, id="notice-body"):
-                    yield Static("", id="notice-text", markup=False)
-            with Vertical(id="evidence-pane"):
-                yield Static("", id="evidence-badge", classes="evidence-badge")
-                yield MissionPane("", id="evidence-body")
+            with Vertical(id="pipeline-panel", classes="workspace-panel"):
+                yield OptionList(id="pipeline-pane")
+            with Vertical(id="coordinate-panel", classes="workspace-panel"):
+                yield KeyboardTable(id="coordinate-pane", cursor_type="row", show_row_labels=False)
+                yield Static("No runs yet\n\nPress r to configure a run or m to build a matrix.", id="coordinate-empty")
+            with Horizontal(id="detail-panels"):
+                with Vertical(id="notice-pane", classes="workspace-panel"):
+                    yield Static("", id="notice-new-badge", markup=False, classes="notice-new-badge")
+                    with NoticeBody(self._notice_scroll_changed, id="notice-body"):
+                        yield Static("", id="notice-text", markup=False)
+                with Vertical(id="evidence-pane", classes="workspace-panel"):
+                    yield Static("", id="evidence-badge", classes="evidence-badge")
+                    with VerticalScroll(id="evidence-body"):
+                        yield Static("", id="evidence-text", markup=False)
         yield Static("", id="triage-line")
         yield Static("", id="size-notice")
+        yield Input(placeholder="/ commands    r run    m matrix    p plan    ? help", id="mission-command")
         with Horizontal(id="status-strip"):
             yield Static("", id="status-rail")
             yield Static("", id="status-label")
@@ -251,17 +279,16 @@ class MissionControlScreen(Screen):
             _nav_hint(_FOOTER_IDLE_NAV),
             *_command_hints(_FOOTER_IDLE_TAIL),
         ]
+        if width >= 120:
+            hints.insert(0, "Tab focus · ↑/↓ select · Enter open")
         return " · ".join(hints)
 
     def on_mount(self) -> None:
-        try:
-            table = self.query_one("#coordinate-pane", DataTable)
-            table.add_columns("#", "status", "provider", "surface", "level",
-                              "mode", "method", "outcome", "findings", "elapsed")
-            # Row cursor: Enter inspects a whole coordinate, never a single cell.
-            table.cursor_type = "row"
-        except Exception:
-            pass
+        self._configure_coordinate_columns()
+        self.query_one("#pipeline-panel").border_title = "Pipeline"
+        self.query_one("#coordinate-panel").border_title = "Coordinates / Runs"
+        self.query_one("#notice-pane").border_title = "Run details"
+        self.query_one("#evidence-pane").border_title = "Evidence"
         self._update_responsive_layout()
         self._restore_default_focus()
 
@@ -275,14 +302,14 @@ class MissionControlScreen(Screen):
         # Returning from the launcher or a drawer must land on a live surface,
         # never on a dead widget. Already-focused widgets are left alone.
         self._restore_default_focus()
+        if self.is_mounted:
+            self._render_regions({"header", "notices"})
 
     def _restore_default_focus(self) -> None:
         try:
-            if self.app.focused is not None:
+            if self.app.focused in self.focus_chain:
                 return
-            table = self.query_one("#coordinate-pane", DataTable)
-            if table.display and table.can_focus:
-                table.focus()
+            self._pane_target(self._active_pane).focus()
         except Exception:
             pass
 
@@ -304,6 +331,11 @@ class MissionControlScreen(Screen):
             mode = "standard"
         else:
             mode = "narrow"
+        layout_key = (width, height, None if mode == "wide" else self._active_pane)
+        if layout_key == self._layout_key:
+            return
+        resized = self._layout_key is None or self._layout_key[:2] != layout_key[:2]
+        self._layout_mode = mode
         for name in ("wide", "standard", "narrow", "too-small"):
             self.set_class(mode == name, name)
         try:
@@ -311,26 +343,38 @@ class MissionControlScreen(Screen):
             strip = self.query_one("#status-strip", Horizontal)
             notice = self.query_one("#size-notice", Static)
             footer = self.query_one("#context-footer", Static)
-            pipeline = self.query_one("#pipeline-pane", Static)
-            coordinates = self.query_one("#coordinate-pane", DataTable)
+            pipeline = self.query_one("#pipeline-panel", Vertical)
+            coordinates = self.query_one("#coordinate-panel", Vertical)
             evidence = self.query_one("#evidence-pane", Vertical)
             notices = self.query_one("#notice-pane", Vertical)
             triage = self.query_one("#triage-line", Static)
         except Exception:
             return
+        self._layout_key = layout_key
         too_small = mode == "too-small"
         body.display = not too_small
         strip.display = not too_small
         notice.display = too_small
         if too_small:
-            notice.update(f"Terminal too small — need 60×18; current {width}×{height}")
+            notice.update(f"Terminal too small\n\nNeed 60×18 · current {width}×{height}\nResize to continue.")
         # Below the floor only quit/help stay reachable, so only they are hinted.
         footer.update(_TOO_SMALL_FOOTER if too_small else self._footer_text())
-        for widget in (coordinates, evidence, notices):
-            widget.display = mode == "wide"
-        pipeline.display = not too_small
+        pipeline.display = mode == "wide" or (not too_small and self._active_pane == "pipeline")
+        coordinates.display = mode == "wide" or (not too_small and self._active_pane == "runs")
+        self.query_one("#detail-panels").display = mode == "wide" or (
+            not too_small and self._active_pane in {"evidence", "activity"})
+        evidence.display = mode == "wide" or self._active_pane == "evidence"
+        notices.display = mode == "wide" or self._active_pane == "activity"
+        self.query_one("#workspace-nav").display = not too_small
+        self.query_one("#workspace-actions").display = width >= 145
+        self.query_one("#mission-command").display = not too_small and height >= 22
         triage.display = mode in ("standard", "narrow")
-        self._render_all()
+        self._configure_coordinate_columns()
+        if resized:
+            self._render_all()
+        focused = self.app.focused
+        if focused is None or focused not in self.focus_chain:
+            self._restore_default_focus()
 
     # -- rendering ---------------------------------------------------
 
@@ -356,7 +400,10 @@ class MissionControlScreen(Screen):
         try:
             # A Text renderable keeps the pane literal: bracketed content such
             # as a redaction placeholder or event text is never read as markup.
-            self.query_one(selector, Static).update(Text(text))
+            widget = self.query_one(selector, Static)
+            content = Text(text)
+            if widget.content != content:
+                widget.update(content)
         except Exception:
             pass
 
@@ -368,27 +415,28 @@ class MissionControlScreen(Screen):
             context = "TESIS · unconfigured · — · —"
             artifacts = self._artifact_hint()
         else:
-            context = (
-                f"TESIS · {_clip(fields['target'], 48)} · {_clip(fields['condition'], 24)} · "
-                f"{_clip(fields['provider'], 20)}/{_clip(fields['model'], 28)}"
-            )
+            context = f"TESIS  ·  DVWA  ·  {_clip(fields['target'], 42)}"
+            if self._dims()[0] >= 120:
+                context += f"  ·  {fields['provider']} / {fields['model']}"
             artifacts = fields.get("artifacts") or self._artifact_hint()
-        self._update("#context-bar", context)
+        context_text = Text(context)
+        context_text.stylize("bold", 0, 5)
+        self.query_one("#context-bar", Static).update(context_text)
+        self._update("#header-status", f"{state.status.capitalize()}  {state.elapsed if state.status != 'ready' else ''}")
 
-        glyph = _STATUS_GLYPH.get(state.status, "○")
-        progress = f" {state.completed}/{state.total}" if state.total else ""
+        progress = f"{state.completed}/{state.total} coordinates" if state.total else "No run active"
         containment = (
             f"containment {state.containment_count}" if state.containment_count else "contained"
         )
         line = " · ".join((
-            f"{glyph} {state.status.upper()}{progress}",
-            containment,
+            progress,
+            f"DVWA scope {containment}",
             state.selected_method or "—",
-            state.elapsed,
             _clip(artifacts, 60),
         ))
         self._update("#status-label", _clip(line, max(24, self._dims()[0] - 2)))
         self._update("#context-footer", self._footer_text())
+        self.query_one("#nav-settings", Button).disabled = self._run_active
         try:
             strip: Any = self.query_one("#status-strip")
         except Exception:
@@ -401,19 +449,32 @@ class MissionControlScreen(Screen):
 
     def _render_pipeline(self) -> None:
         state = self.state
-        narrow = self._dims()[0] < 80
-        rows = []
-        for row in state.stages:
-            glyph = _STAGE_GLYPH.get(row.status, "○")
-            label = row.label or row.stage_id
-            if narrow:
+        options = self.query_one("#pipeline-pane", OptionList)
+        initial_population = options.option_count == 0
+        roomy = self._dims()[1] >= 34
+        width = self._dims()[0]
+        available = max(20, int((width - 3) * 0.28) - 4 if self._layout_mode == "wide" else width - 6)
+        for index, row in enumerate(state.stages):
+            label = row.label or row.stage_id.replace("_", " ")
+            status = "pending" if row.status == "queued" else row.status
+            if available < 40:
                 label = _NARROW_STAGE_LABELS.get(row.stage_id, label)
-            if row.stage_id == "method_agent" and state.selected_method:
-                rows.append(f"{glyph} {label} · {state.selected_method}")
-                continue
-            detail = f" — {row.detail[:60]}" if row.detail else ""
-            rows.append(f"{glyph} {label}{detail}")
-        self._update("#pipeline-pane", "Pipeline\n" + "\n".join(rows))
+            text = Text(f" {index + 1}  ")
+            text.append(_clip(label, max(10, available - 6 - len(status))), style="bold")
+            text.append(f"  {status}", style="dim" if row.status == "queued" else "bold")
+            if roomy:
+                detail = row.detail or _STAGE_DESCRIPTIONS.get(row.stage_id, "")
+                if row.stage_id == "method_agent" and state.selected_method:
+                    detail = state.selected_method
+                text.append("\n    " + _clip(detail, available - 4), style="dim")
+            if index < options.option_count:
+                if options.get_option_at_index(index).prompt != text:
+                    options.replace_option_prompt_at_index(index, text)
+            else:
+                options.add_option(Option(text, id=row.stage_id))
+        if initial_population and options.option_count:
+            options.action_first()
+        self.query_one("#pipeline-panel").border_subtitle = f"{len(state.stages)} stages · Enter inspect"
 
     def _render_coordinates(self) -> None:
         try:
@@ -423,7 +484,17 @@ class MissionControlScreen(Screen):
         # The pane and the coordinate drawer declare their own column sets, so
         # cells are matched by column label instead of assumed column order.
         labels = [str(column.label).strip().lower() for column in table.ordered_columns]
-        table.clear()
+        column_keys = [column.key for column in table.ordered_columns]
+        selected = table.cursor_row if self._coordinate_cursor is None else self._coordinate_cursor
+        self._coordinate_cursor = None
+        selected_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key if table.row_count else None
+        scroll_x, scroll_y = table.scroll_x, table.scroll_y
+        changed = False
+        added = False
+        for index in set(self._coordinate_values) - set(self.state.coordinates):
+            table.remove_row(str(index))
+            self._coordinate_values.pop(index)
+            changed = True
         for index in sorted(self.state.coordinates):
             row = self.state.coordinates[index]
             cells = {
@@ -431,7 +502,7 @@ class MissionControlScreen(Screen):
                 "index": str(index),
                 "status": _cell(row.execution_status or row.status),
                 "outcome": _cell(row.security_outcome),
-                "provider": _cell(row.provider),
+                "provider": _cell(row.provider.split("__", 1)[0] if row.provider else None),
                 "surface": _cell(row.surface),
                 "level": _cell(row.level),
                 "mode": _cell(row.mode),
@@ -443,19 +514,63 @@ class MissionControlScreen(Screen):
                              else "—"),
                 "elapsed": _cell(row.elapsed),
             }
-            table.add_row(*[cells.get(label, "—") for label in labels], key=str(index))
+            values = tuple(cells.get(label, "—") for label in labels)
+            previous = self._coordinate_values.get(index)
+            if previous is None:
+                table.add_row(*values, key=str(index))
+                added = changed = True
+            elif previous != values:
+                for column, old, new in zip(column_keys, previous, values):
+                    if old != new:
+                        table.update_cell(str(index), column, new)
+                changed = True
+            self._coordinate_values[index] = values
+        if added:
+            table.sort(column_keys[0], key=int)
+        if changed:
+            if selected_key is not None and selected_key.value in {str(index) for index in self.state.coordinates}:
+                selected = table.get_row_index(selected_key)
+            table.move_cursor(row=min(selected, max(0, table.row_count - 1)), scroll=False)
+            table.scroll_to(x=scroll_x, y=scroll_y, animate=False, force=True)
+        self.query_one("#coordinate-empty").display = not bool(self.state.coordinates)
+        self.query_one("#coordinate-panel").border_subtitle = f"{self.state.completed}/{self.state.total or len(self.state.coordinates)} completed"
+
+    def _configure_coordinate_columns(self) -> None:
+        width = self._dims()[0]
+        available = int(width * 0.72) - 8 if self._layout_mode == "wide" else width - 8
+        if available >= 134:
+            columns = ("#", "status", "provider", "surface", "level", "mode", "method", "outcome", "findings", "elapsed")
+        elif available >= 104:
+            columns = ("#", "status", "provider", "surface", "level", "method", "outcome", "elapsed")
+        elif available >= 78:
+            columns = ("#", "status", "surface", "method", "outcome", "elapsed")
+        else:
+            columns = ("#", "status", "method", "outcome")
+        table = self.query_one("#coordinate-pane", DataTable)
+        if tuple(str(column.label) for column in table.ordered_columns) == columns:
+            return
+        widths = {"#": 2, "status": 10, "provider": 14, "surface": 12, "level": 5,
+                  "mode": 10, "method": 21, "outcome": 14, "findings": 8, "elapsed": 7}
+        if self._coordinate_cursor is None:
+            self._coordinate_cursor = table.cursor_row
+        table.clear(columns=True)
+        self._coordinate_values.clear()
+        for label in columns:
+            table.add_column(label, width=widths[label])
 
     def _render_evidence(self) -> None:
         state = self.state
-        self._update("#evidence-badge", f"evidence · {state.unseen_evidence} new")
+        self._update("#evidence-badge", f"{state.unseen_evidence} new" if state.unseen_evidence else "No new evidence")
         lines = [
-            "Evidence",
-            f"execution={state.execution_status or '—'} security={state.security_outcome or '—'} "
-            f"reason={(state.security_outcome_reason or {}).get('code', '—')}",
-            f"findings={len(state.confirmed_vulns)} outcomes={len(state.achieved_outcomes)} "
-            f"verifier={state.verifier_decision or '—'}",
-            f"guardrails={state.guardrail_count} containment={state.containment_count} "
-            f"fallbacks={state.fallback_count}",
+            f"Execution   {state.execution_status or '—'}",
+            f"Security    {state.security_outcome or '—'}",
+            f"Reason      {(state.security_outcome_reason or {}).get('code', '—')}",
+            f"Findings    {len(state.confirmed_vulns)}",
+            f"Outcomes    {len(state.achieved_outcomes)}",
+            f"Verifier    {state.verifier_decision or '—'}",
+            f"Guardrails  {state.guardrail_count}",
+            f"Containment {state.containment_count}",
+            f"Fallbacks   {state.fallback_count}",
         ]
         # The latest failure summary is already redacted when it enters the
         # state; only the fields the failure actually carries are rendered.
@@ -472,7 +587,7 @@ class MissionControlScreen(Screen):
                 lines.append(f"message={_clip(message, 160)}")
             if remediation:
                 lines.append(f"remediation={_clip(remediation, 160)}")
-        self._update("#evidence-body", "\n".join(lines))
+        self._update("#evidence-text", "\n".join(lines))
 
     def _notice_scroll_changed(self) -> None:
         """Paused auto-follow: bottom resumes it, scrolling away pauses it.
@@ -522,7 +637,7 @@ class MissionControlScreen(Screen):
 
     def _readiness_text(self) -> str:
         """Idle body: everything an operator needs before starting a run."""
-        lines = ["Ready — no run active"]
+        lines = []
         fields = self._readiness_fields()
         if fields is None:
             lines.append("target      —")
@@ -531,7 +646,9 @@ class MissionControlScreen(Screen):
         else:
             lines.append(f"target      {fields['target'][:80]}")
             lines.append(f"condition   {fields['condition']} · method {fields['method']}")
-            lines.append(f"provider    {fields['provider']} · model {fields['model']}")
+            lines.append(f"provider    {fields['provider']}")
+            lines.append(f"model       {fields['model']}")
+            lines.append(f"API         {fields['protocol']}")
             lines.append(f"coordinates {fields['coordinates']} default")
             lines.append("config      valid")
             host = _target_host(fields.get("raw_target", ""))
@@ -539,7 +656,6 @@ class MissionControlScreen(Screen):
                 "containment enforced — DVWA scope only"
                 + (f" · host {host}" if host else "")
             )
-        lines.append("r run · m matrix · p plan · d doctor")
         return "\n".join(lines)
 
     def _readiness_fields(self) -> dict[str, str] | None:
@@ -549,18 +665,20 @@ class MissionControlScreen(Screen):
             return None
         target = str(getattr(config, "target_url", "") or "—")
         provider = str(getattr(config, "provider", "") or "—")
-        model = "—"
+        connection = {"provider": provider, "model": "—", "protocol": "—"}
         models = getattr(config, "models", None)
         if isinstance(models, dict):
             profile = models.get(provider)
-            model = str(getattr(profile, "model_name", "") or "—") if profile is not None else "—"
+            if profile is not None:
+                connection = model_connection(provider, profile)
         return {
             "target": str(tui_security._sanitize_endpoint(target)),
             "raw_target": target,
             "condition": str(getattr(config, "experiment_condition", "") or "—"),
             "method": str(getattr(config, "target_method", "") or "orchestrator-selected"),
-            "provider": provider,
-            "model": model,
+            "provider": connection["provider"],
+            "model": connection["model"],
+            "protocol": connection["protocol"],
             "coordinates": str(self._default_coordinate_count(config)),
             "artifacts": str(getattr(config, "output_dir", "results") or "results"),
         }
@@ -608,8 +726,10 @@ class MissionControlScreen(Screen):
         )
 
     def _resolved_config(self) -> Any:
+        if self._run_config is not None and self.state.status != "ready":
+            return self._run_config
         try:
-            return load_and_resolve_config(config_path=str(tui_state.CONFIG_PATH), cli_args={})
+            return self._config_cache.resolve(loader=load_and_resolve_config)
         except Exception:
             return None
 
@@ -641,6 +761,7 @@ class MissionControlScreen(Screen):
         self.cancel_token = CancellationToken()
         self._cancel_requested = False
         self._run_active = True
+        self._run_config = config
         self._tesis_closing = False
         self.state.run_mode = "matrix" if mode == "matrix" else "single"
         prefix = "matrix" if self.state.run_mode == "matrix" else "run"
@@ -731,13 +852,23 @@ class MissionControlScreen(Screen):
                 dirty.update(tui_state.apply_run_event(self.state, event))
             except Exception:
                 self.state.dropped_events += 1
-        self._notify_drawer_observers()
         if not dirty:
             return
-        try:
-            self._render_regions(dirty)
-        except Exception:
-            pass
+        self._pending_regions.update(dirty)
+        if self._render_timer is None:
+            self._render_timer = self.set_timer(1 / 30, self._flush_render)
+
+    def _flush_render(self) -> None:
+        self._render_timer = None
+        if self._tesis_closing:
+            return
+        regions, self._pending_regions = self._pending_regions, set()
+        self._notify_drawer_observers()
+        if regions:
+            try:
+                self._render_regions(regions)
+            except Exception:
+                pass
 
     def request_cancel(self) -> None:
         if self.cancel_token.cancel("user requested cancellation"):
@@ -748,6 +879,10 @@ class MissionControlScreen(Screen):
             pass
 
     def prepare_shutdown(self) -> None:
+        if self._render_timer is not None:
+            self._render_timer.stop()
+            self._render_timer = None
+        self._pending_regions.clear()
         with self._event_lock:
             self._tesis_closing = True
             self._event_queue.clear()
@@ -778,7 +913,7 @@ class MissionControlScreen(Screen):
     def action_launch_single(self) -> None:
         from tesis.tui_forms import LaunchDrawer
 
-        if not self._floor_ok():
+        if not self._floor_ok() or self._run_active:
             return
         try:
             self.app.push_screen(LaunchDrawer(mode="single"))
@@ -788,7 +923,7 @@ class MissionControlScreen(Screen):
     def action_launch_matrix(self) -> None:
         from tesis.tui_forms import LaunchDrawer
 
-        if not self._floor_ok():
+        if not self._floor_ok() or self._run_active:
             return
         try:
             self.app.push_screen(LaunchDrawer(mode="matrix"))
@@ -798,7 +933,7 @@ class MissionControlScreen(Screen):
     def action_open_plan(self) -> None:
         from tesis.tui_drawers import PlanDrawer
 
-        if not self._floor_ok():
+        if not self._floor_ok() or self._run_active:
             return
         self._push_drawer(PlanDrawer())
 
@@ -814,42 +949,84 @@ class MissionControlScreen(Screen):
 
         self._push_drawer(HelpDrawer())
 
+    def action_open_settings(self) -> None:
+        from tesis.tui_forms import SettingsDrawer
+
+        if self._floor_ok() and not self._run_active:
+            self._push_drawer(SettingsDrawer())
+
+    def action_open_results(self) -> None:
+        from tesis.tui_drawers import ResultsDrawer
+
+        if self._floor_ok():
+            self._push_drawer(ResultsDrawer())
+
+    def action_open_trace(self) -> None:
+        from tesis.tui_drawers import TraceDrawer
+
+        if self._floor_ok():
+            self._push_drawer(TraceDrawer())
+
+    @on(Button.Pressed, "#nav-results, #nav-settings, #nav-logs")
+    def open_workspace_action(self, event: Button.Pressed) -> None:
+        actions = {"nav-results": self.action_open_results,
+                   "nav-settings": self.action_open_settings, "nav-logs": self.action_open_trace}
+        actions[event.button.id]()
+
+    @on(Input.Changed, "#mission-command")
+    def open_composer(self, event: Input.Changed) -> None:
+        if event.value.strip() and self._floor_ok():
+            from tesis.tui_commands import CommandLauncher
+
+            event.input.value = ""
+            self.app.push_screen(CommandLauncher(query=event.value))
+
+    @on(Tabs.TabActivated, "#workspace-tabs")
+    def workspace_tab_changed(self, event: Tabs.TabActivated) -> None:
+        pane = (event.tab.id or "tab-pipeline").removeprefix("tab-")
+        if pane == self._active_pane:
+            return
+        self._active_pane = pane
+        if self.is_mounted:
+            self._update_responsive_layout()
+
+    @on(KeyboardTabs.Confirmed, "#workspace-tabs")
+    def enter_workspace_tab(self) -> None:
+        self._activate_pane(self._active_pane)
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        pane = {"pipeline-pane": "pipeline", "coordinate-pane": "runs",
+                "notice-body": "activity", "evidence-body": "evidence"}.get(event.widget.id or "")
+        if pane is not None:
+            self._active_pane = pane
+            self.query_one("#workspace-tabs", Tabs).active = f"tab-{pane}"
+
+    def action_overview(self) -> None:
+        self._activate_pane("pipeline")
+
+    def _pane_target(self, pane: str) -> Any:
+        return self.query_one({"pipeline": "#pipeline-pane", "runs": "#coordinate-pane",
+                               "evidence": "#evidence-body", "activity": "#notice-body"}[pane])
+
+    def _activate_pane(self, pane: str) -> None:
+        if not self._floor_ok():
+            return
+        self._active_pane = pane
+        self.query_one("#workspace-tabs", Tabs).active = f"tab-{pane}"
+        self._update_responsive_layout()
+        self._pane_target(pane).focus()
+
     def action_show_pipeline(self) -> None:
-        self._focus_pane("#pipeline-pane")
+        self._activate_pane("pipeline")
 
     def action_show_coordinates(self) -> None:
-        from tesis.tui_drawers import CoordinateDrawer
-
-        self._focus_pane("#coordinate-pane", drawer=CoordinateDrawer)
+        self._activate_pane("runs")
 
     def action_show_evidence(self) -> None:
-        from tesis.tui_drawers import EvidenceDrawer
+        self._activate_pane("evidence")
 
-        self._focus_pane("#evidence-pane", "#evidence-body", drawer=EvidenceDrawer)
-
-    def _focus_pane(self, pane_selector: str, focus_selector: str | None = None,
-                    drawer: type[Screen] | None = None) -> None:
-        """Focus a visible pane; when the pane is hidden, open its drawer.
-
-        The wide layout shows all three panes, so 1/2/3 and Tab move focus
-        between them there. Standard and narrow hide coordinates and evidence,
-        so those keys open the full-height drawer instead of focusing nothing.
-        """
-        if self.has_class("too-small"):
-            return
-        try:
-            pane = self.query_one(pane_selector)
-        except Exception:
-            pane = None
-        if pane is not None and pane.display:
-            try:
-                target = pane if focus_selector is None else self.query_one(focus_selector)
-                target.focus()
-                return
-            except Exception:
-                pass
-        if drawer is not None:
-            self._push_drawer(drawer())
+    def action_show_activity(self) -> None:
+        self._activate_pane("activity")
 
     def _push_drawer(self, drawer: Screen) -> None:
         """BaseDrawer decides its own panel width; the shell only pushes it."""
@@ -860,11 +1037,27 @@ class MissionControlScreen(Screen):
 
     def action_inspect(self) -> None:
         """Enter inspects the selected coordinate; nothing selected is a no-op."""
-        from tesis.tui_drawers import CoordinateDrawer
+        from tesis.tui_drawers import CoordinateDrawer, EvidenceDrawer
 
-        if not self._floor_ok() or self.state.selected_coordinate is None:
+        if not self._floor_ok():
             return
-        self._push_drawer(CoordinateDrawer())
+        focused = self.app.focused
+        if isinstance(focused, Tabs):
+            self._activate_pane(self._active_pane)
+        elif focused is self.query_one("#evidence-body"):
+            self._push_drawer(EvidenceDrawer())
+        elif focused is self.query_one("#notice-body"):
+            self.action_open_plan() if self.state.status == "ready" else self.action_open_trace()
+        elif self.state.selected_coordinate is not None:
+            self._push_drawer(CoordinateDrawer())
+
+    @on(OptionList.OptionSelected, "#pipeline-pane")
+    def inspect_stage(self, event: OptionList.OptionSelected) -> None:
+        from tesis.tui_drawers import StageDrawer
+
+        row = next((r for r in self.state.stages if r.stage_id == event.option.id), None)
+        if row is not None:
+            self._push_drawer(StageDrawer(row, self.state.selected_method))
 
     @on(DataTable.RowSelected, "#coordinate-pane")
     def select_coordinate(self, event: DataTable.RowSelected) -> None:

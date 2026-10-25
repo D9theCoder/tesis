@@ -5,13 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widgets import Input, Label, OptionList
+from textual.widgets import Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
+
+from tesis.tui_widgets import PaletteInput, key_hints
 
 
 # ---------------------------------------------------------------- command registry
@@ -37,10 +40,11 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("coordinates", "Coordinates", "Inspect live coordinate rows", "2", "always"),
     CommandSpec("evidence", "Evidence", "Inspect verified findings and outcomes", "3", "always"),
     CommandSpec("failure", "Failure", "Inspect latest failure summary", "", "always"),
-    CommandSpec("trace", "Trace", "Bounded redacted event stream", "", "always"),
+    CommandSpec("activity", "Activity", "Focus run details and recent activity", "4", "always"),
+    CommandSpec("trace", "Trace", "Bounded redacted event stream", "l", "always"),
     CommandSpec("doctor", "Doctor", "Configuration and target checks", "d", "always"),
-    CommandSpec("results", "Results", "Scan and triage saved artifacts", "", "always"),
-    CommandSpec("settings", "Settings", "Edit config YAML with secret masking", "", "idle"),
+    CommandSpec("results", "Results", "Browse saved experiments and reviews", "v", "always"),
+    CommandSpec("settings", "Settings", "Configure target, models, runtime and output", "s", "idle"),
     CommandSpec("export", "Export", "Export triage summary as JSON", "", "always"),
     CommandSpec("about", "About", "Harness and runtime summary", "", "always"),
     CommandSpec("help", "Help", "Command registry and keys", "?", "always"),
@@ -55,9 +59,15 @@ NAVIGATION_KEYS: tuple[tuple[str, str], ...] = (
     ("1", "pipeline"),
     ("2", "coordinates"),
     ("3", "evidence"),
+    ("4", "activity"),
     ("Tab/Shift+Tab", "focus"),
     ("Enter", "inspect"),
     ("/", "command"),
+    ("↑/↓", "select"),
+    ("←/→", "tabs"),
+    ("PgUp/PgDn", "scroll"),
+    ("Home/End", "first/last"),
+    ("Esc", "back"),
 )
 
 
@@ -99,21 +109,20 @@ def _dismisses_below_floor(screen: Screen) -> bool:
 # ---------------------------------------------------------------- drawers
 
 class BaseDrawer(Screen):
-    """Shared drawer shell.
+    """Centered inspection dialog, or a full-window settings surface.
 
-    A Textual ``Screen`` is always laid out at the full terminal size, so the
-    docked panel has to be an inner container: every drawer's composed content
-    is wrapped in one ``.drawer`` panel, which is what makes it a 76-cell
-    right-docked surface at 80+ columns and a full-screen surface below 80.
-    The wrapping happens here so no drawer has to repeat the shell.
-
-    Below the supported 60x18 floor the shell renders nothing but the size
-    notice, so an overlay must not stay on top of it: a drawer dismisses itself
-    on mount or on resize below the floor. Help is the documented exception,
-    because it is one of the only two actions a too-small terminal still has.
+    Public class names remain compatible with existing callers. Screens own
+    their focus chain, so Tab stays inside the active dialog and popping it
+    restores the previous context. Help remains available below the size floor.
     """
 
-    BINDINGS = [Binding("escape", "back", "Back", show=True)]
+    BINDINGS = [
+        Binding("escape", "back", "Back", show=False),
+        Binding("/", "open_launcher", "Commands", show=False),
+        Binding("ctrl+p", "open_launcher", "Commands", show=False),
+        Binding("question_mark", "open_help", "Help", show=False),
+        Binding("ctrl+c", "cancel_or_exit", "Cancel", show=False, priority=True),
+    ]
 
     #: Set on a drawer that is allowed to stay open below the 60x18 floor.
     ALLOW_BELOW_FLOOR = False
@@ -123,8 +132,6 @@ class BaseDrawer(Screen):
         compose = cls.__dict__.get("compose")
         if compose is not None:
             def composed(self: Screen, _compose: Any = compose) -> ComposeResult:
-                # Below 80 columns the panel takes the whole screen; at 80 and
-                # above it stays the 76-cell right-docked panel.
                 try:
                     self.set_class(self.app.size.width < 80, "drawer-full")
                 except Exception:
@@ -144,6 +151,9 @@ class BaseDrawer(Screen):
                 return
             if on_mount is not None:
                 on_mount(self)
+            titles = self.query(".drawer Label")
+            if titles:
+                titles.first().add_class("drawer-title")
 
         mounted.__name__ = "on_mount"
         cls.on_mount = mounted  # type: ignore[method-assign]
@@ -163,29 +173,51 @@ class BaseDrawer(Screen):
     def action_back(self) -> None:
         self.app.pop_screen()
 
+    def action_open_launcher(self) -> None:
+        self.app.push_screen(CommandLauncher())
+
+    def action_open_help(self) -> None:
+        from tesis.tui_drawers import HelpDrawer
+
+        if not isinstance(self, HelpDrawer):
+            self.app.push_screen(HelpDrawer())
+
+    def action_cancel_or_exit(self) -> None:
+        from tesis.tui_mission import MissionControlScreen
+
+        mission = next((s for s in self.app.screen_stack if isinstance(s, MissionControlScreen)), None)
+        if mission is not None:
+            mission.action_cancel_or_exit()
+        else:
+            self.app.exit()
+
 
 class CommandLauncher(Screen):
-    """Bottom-anchored command modal; the only chrome border in the shell.
+    """Bottom-anchored command list above a compact text composer.
 
     ``/``, ``:``, and Ctrl+P all open this same registry-backed surface, so the
     footer hint, the help drawer, and typed dispatch never disagree.
     """
 
-    BINDINGS = [Binding("escape", "back", "Back", show=True)]
+    BINDINGS = [Binding("escape", "back", "Back", show=False),
+                Binding("ctrl+c", "cancel_or_exit", "Cancel", show=False, priority=True)]
 
-    def __init__(self) -> None:
+    def __init__(self, query: str = "") -> None:
         super().__init__()
         self._filtered: list[CommandSpec] = list(COMMANDS)
+        self._query = query
 
     def compose(self) -> ComposeResult:
         with Vertical(id="command-launcher"):
-            yield Label("Command — type to filter, Enter to dispatch, Esc to close", id="launcher-title")
-            yield Input(placeholder="command", id="launcher-input")
             yield OptionList(*(self._option(spec) for spec in COMMANDS), id="launcher-list")
+            yield Static("No matching commands", id="launcher-empty")
+            yield PaletteInput(value=self._query, placeholder="/ Type a command", id="launcher-input")
+            yield Label(key_hints(("↑/↓", "select"), ("Enter", "run"), ("Tab", "focus"), ("Esc", "close")), id="launcher-title")
 
     def on_mount(self) -> None:
         if _dismisses_below_floor(self):
             return
+        self._refilter(self._query)
         try:
             self.query_one("#launcher-input", Input).focus()
         except Exception:
@@ -204,20 +236,25 @@ class CommandLauncher(Screen):
 
     def _option(self, spec: CommandSpec) -> Option:
         enabled = self._enabled(spec)
-        text = f"/{spec.name} — {spec.summary}"
+        text = Text(f"  /{spec.name:<14}")
+        text.append(spec.summary)
+        if spec.keys:
+            text.append(f"  {spec.keys}", style="dim")
         if not enabled:
-            reason = "run active — cancel first" if spec.enabled_when == "idle" else "no active run"
-            text = f"{text}  [disabled: {reason}]"
+            reason = "run active" if spec.enabled_when == "idle" else "no active run"
+            text.append(f"  ({reason})", style="dim")
         return Option(text, id=spec.name, disabled=not enabled)
 
     def _refilter(self, text: str) -> None:
         needle = text.strip().lower().lstrip("/")
-        self._filtered = [s for s in COMMANDS if needle in s.name or needle in s.summary.lower()] or list(COMMANDS)
+        self._filtered = [s for s in COMMANDS if needle in s.name or needle in s.summary.lower()]
         try:
             options = self.query_one("#launcher-list", OptionList)
             options.clear_options()
             for spec in self._filtered:
                 options.add_option(self._option(spec))
+            options.action_first()
+            self.query_one("#launcher-empty").display = not self._filtered
         except Exception:
             pass
 
@@ -227,12 +264,16 @@ class CommandLauncher(Screen):
 
     @on(Input.Submitted, "#launcher-input")
     def dispatch_typed(self, event: Input.Submitted) -> None:
-        # Only an exact command name dispatches; anything else is a filter term,
-        # so a typo can never fire a neighbouring command.
-        needle = event.value.strip().lower().lstrip("/")
-        match = next((s for s in COMMANDS if s.name == needle), None)
-        if match is not None:
-            self._dispatch(match.name)
+        options = self.query_one("#launcher-list", OptionList)
+        if options.highlighted is not None:
+            self._dispatch(str(options.get_option_at_index(options.highlighted).id))
+
+    def action_cancel_or_exit(self) -> None:
+        mission = self._mission()
+        if mission is not None:
+            mission.action_cancel_or_exit()
+        else:
+            self.app.exit()
 
     @on(OptionList.OptionSelected, "#launcher-list")
     def dispatch_selected(self, event: OptionList.OptionSelected) -> None:
@@ -281,6 +322,11 @@ class CommandLauncher(Screen):
             from tesis.tui_drawers import TraceDrawer
 
             push(TraceDrawer())
+        elif name == "activity":
+            mission = self._mission()
+            if mission is not None:
+                self._return_to_mission()
+                mission.action_show_activity()
         elif name == "doctor":
             from tesis.tui_drawers import DoctorDrawer
 

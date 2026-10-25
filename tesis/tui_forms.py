@@ -9,7 +9,8 @@ from typing import Any, Literal
 from textual import on
 from textual.message import Message
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import (
     Button,
     Checkbox,
@@ -17,21 +18,26 @@ from textual.widgets import (
     ContentSwitcher,
     Input,
     Label,
+    OptionList,
     Select,
     SelectionList,
     Static,
     TextArea,
 )
 
-from tesis.artifact_repository import config_fingerprint
 from tesis.config_fields import ALL_FIELD_SPECS, REASONING_EFFORT_CHOICES
 from tesis.config_loader import (
     dump_yaml_config,
     load_and_resolve_config,
     load_yaml_config,
-    parse_yaml_config,
 )
 from tesis.tui_commands import BaseDrawer
+from tesis.tui_config import DraftConfigCache, TuiConfigCache
+from textual.widgets.option_list import Option
+from tesis.tui_widgets import (
+    KeyboardActions, SettingField, SettingValueRow, TextCheckbox, TextSelectionList,
+    execution_summary, key_hints, model_connection, summary_rows,
+)
 import tesis.tui_security as tui_security
 import tesis.tui_state as tui_state
 
@@ -65,6 +71,11 @@ _LAUNCH_GUARDRAIL_LABELS: dict[str, str] = {
     "guardrail_handling": "Guardrail handling",
     "guardrail_retry_max": "Guardrail retry max",
     "guardrail_retry_cooldown_threshold": "Guardrail retry cooldown",
+}
+_LAUNCH_PROFILE_LABELS = {
+    "provider": "Primary provider / model",
+    "model_profile": "Model profile for both roles (optional)",
+    "providers": "Provider / model profiles",
 }
 # Resolved attribute names per TUI field: canonical first, legacy fallback.
 _LAUNCH_VALUE_ATTRS: dict[str, tuple[str, ...]] = {
@@ -153,6 +164,8 @@ class LaunchDrawer(BaseDrawer):
         self._tesis_closing = False
         self._step = 0
         self._frozen = None
+        self._config_cache = TuiConfigCache()
+        self._preview_timer: Any = None
         # The target Input only ever displays a masked endpoint. The raw value
         # the operator typed is captured privately and is the only thing that
         # can become the resolver's ``target`` override.
@@ -173,7 +186,7 @@ class LaunchDrawer(BaseDrawer):
 
     def _raw_config(self) -> dict:
         try:
-            parsed = load_yaml_config(tui_state.CONFIG_PATH)
+            parsed = self._config_cache.raw(loader=load_yaml_config)
             return parsed if isinstance(parsed, dict) else {}
         except Exception:
             return {}
@@ -197,10 +210,10 @@ class LaunchDrawer(BaseDrawer):
                           allow_blank=True, prompt=label, id=field_id)
         if spec.multiple or spec.kind == "multi_select":
             selected = {str(item) for item in (value or [])}
-            return SelectionList(*[(profile_labels.get(choice, choice), choice, choice in selected) for choice in choices],
+            return TextSelectionList(*[(profile_labels.get(choice, choice), choice, choice in selected) for choice in choices],
                                  id=field_id)
         if spec.value_type is bool or spec.kind == "boolean":
-            return Checkbox(label, value=bool(value), id=field_id)
+            return TextCheckbox(label, value=bool(value), id=field_id)
         if path == "target_url":
             # The configured endpoint may carry userinfo/query/fragment secrets,
             # so the widget is seeded masked and the raw value never reaches it.
@@ -213,7 +226,11 @@ class LaunchDrawer(BaseDrawer):
     def _yield_step(self, paths: tuple[str, ...], config: dict, resolved: Any) -> None:
         for path in paths:
             if path in self._field_specs:
-                yield self._field_control(path, config, resolved)
+                label = _LAUNCH_PROFILE_LABELS.get(path, _LAUNCH_GUARDRAIL_LABELS.get(path, self._field_specs[path].label))
+                control = self._field_control(path, config, resolved)
+                if not isinstance(control, Checkbox):
+                    yield Label(label, classes="field-label")
+                yield control
 
     def compose(self) -> ComposeResult:
         config = self._raw_config()
@@ -221,18 +238,21 @@ class LaunchDrawer(BaseDrawer):
             resolved = self._resolved_config()
         except Exception:
             resolved = None
-        yield Label(f"Launch — {self.mode} (Esc to close)", id="launch-title")
+        yield Label("Run experiment" if self.mode == "single" else "Build experiment matrix", id="launch-title", classes="drawer-title")
         yield Static("", id="launch-step-indicator", markup=False)
         with ContentSwitcher(initial="launch-step-scope", id="launch-steps"):
-            with Vertical(id="launch-step-scope", classes="launch-step"):
+            with VerticalScroll(id="launch-step-scope", classes="launch-step"):
                 yield from self._yield_step(_LAUNCH_SCOPE_FIELDS, config, resolved)
-            with Vertical(id="launch-step-coordinates", classes="launch-step"):
+            with VerticalScroll(id="launch-step-coordinates", classes="launch-step"):
                 yield from self._yield_step(_LAUNCH_COORDINATE_FIELDS, config, resolved)
                 if self.mode == "matrix":
                     yield from self._yield_step(_LAUNCH_MATRIX_FIELDS, config, resolved)
-            with Vertical(id="launch-step-runtime", classes="launch-step"):
-                with Collapsible(title="Advanced", collapsed=False, id="launch-advanced"):
-                    yield from self._yield_step(_LAUNCH_RUNTIME_FIELDS, config, resolved)
+                yield Static("", id="launch-model-connection", markup=False)
+            with VerticalScroll(id="launch-step-runtime", classes="launch-step"):
+                primary = ("candidate_budget", "iterations", "stop_policy", "output_dir", "report_format")
+                yield from self._yield_step(primary, config, resolved)
+                with Collapsible(title="Advanced runtime & model roles", collapsed=True, id="launch-advanced"):
+                    yield from self._yield_step(tuple(path for path in _LAUNCH_RUNTIME_FIELDS if path not in primary), config, resolved)
                     runtime = getattr(resolved, "llm_runtime", None)
                     roles = getattr(runtime, "roles", {}) or {}
                     concurrency = getattr(runtime, "max_concurrency", None)
@@ -240,16 +260,18 @@ class LaunchDrawer(BaseDrawer):
                     labels = model_profile_labels(config)
                     profiles = [(labels.get(name, name), name) for name in self._profile_names(config)]
                     profile_names = {name for _, name in profiles}
+                    yield Label("LLM concurrency (1-4)", classes="field-label")
                     yield Input(value="" if concurrency in (None, "") else str(concurrency),
                                 placeholder="LLM max concurrency (1-4)",
                                 id="launch-llm-concurrency")
-                    yield Checkbox("LLM cache within run",
+                    yield TextCheckbox("LLM cache within run",
                                    value=bool(getattr(runtime, "cache_enabled", False)),
                                    id="launch-llm-cache")
                     yield Static("; ".join(
                         f"{name}: {getattr(settings, 'reasoning_effort', None) or 'inherit profile'}"
                         for name, settings in roles.items()
                     ), markup=False, id="launch-role-reasoning")
+                    yield Label("Reasoning effort", classes="field-label")
                     yield Select([
                         ("Keep per-role reasoning settings", "preserve"),
                         ("Inherit profile effort for both roles", "inherit"),
@@ -257,21 +279,24 @@ class LaunchDrawer(BaseDrawer):
                     ], value="preserve", allow_blank=False, id="launch-reasoning-effort")
                     orchestrator = _role_attr(roles, "orchestrator", "model_profile")
                     payload_role = _role_attr(roles, "payload_generator", "model_profile")
+                    yield Label("Orchestrator model profile", classes="field-label")
                     yield Select(profiles,
                                  value=orchestrator if orchestrator in profile_names else Select.NULL,
                                  allow_blank=True, prompt="orchestrator model profile",
                                  id="launch-orchestrator-profile")
+                    yield Label("Payload generator model profile", classes="field-label")
                     yield Select(profiles,
                                  value=payload_role if payload_role in profile_names else Select.NULL,
                                  allow_blank=True, prompt="payload model profile",
                                  id="launch-payload-profile")
-            with Vertical(id="launch-step-review", classes="launch-step"):
+            with VerticalScroll(id="launch-step-review", classes="launch-step"):
                 yield Static("", id="launch-review", markup=False)
-        with Horizontal(id="launch-nav"):
+        with KeyboardActions(id="launch-nav"):
             yield Button("Back", id="launch-back")
             yield Button("Next", id="launch-next")
             yield Button("Start", id="launch-start")
             yield Button("Close", id="launch-close")
+        yield Static(key_hints(("Tab", "next control"), ("↑/↓", "choices"), ("Enter", "activate"), ("Esc", "close")), classes="drawer-hint")
 
     def _profile_names(self, config: dict) -> tuple[str, ...]:
         try:
@@ -281,7 +306,37 @@ class LaunchDrawer(BaseDrawer):
 
     def on_mount(self) -> None:
         self._goto_step(0)
-        self._render_review()
+
+    @on(Select.Changed, "#launch-field-provider, #launch-field-model-profile, #launch-orchestrator-profile, #launch-payload-profile")
+    def launch_profile_changed(self) -> None:
+        if self.is_mounted:
+            self._schedule_preview()
+
+    def _schedule_preview(self) -> None:
+        if self._preview_timer is not None:
+            self._preview_timer.stop()
+        self._preview_timer = self.set_timer(0.15, self._refresh_preview)
+
+    def _refresh_preview(self) -> None:
+        self._preview_timer = None
+        if self._tesis_closing:
+            return
+        if self._step == 1:
+            self._render_model_connection()
+        elif self._step == 3:
+            self._render_review()
+
+    def _render_model_connection(self) -> None:
+        try:
+            cfg = self._resolved_config()
+            profile_id = cfg.model_profile or cfg.provider
+            info = model_connection(profile_id, cfg.models.get(profile_id))
+            self.query_one("#launch-model-connection", Static).update(summary_rows([
+                ("Provider", info["provider"]), ("Model", info["model"]),
+                ("API protocol", info["protocol"]),
+            ]))
+        except Exception as exc:
+            self.query_one("#launch-model-connection", Static).update(tui_security._safe_config_error_text(exc))
 
     # -- values ------------------------------------------------------
 
@@ -356,8 +411,8 @@ class LaunchDrawer(BaseDrawer):
             args["matrix"] = True
         return args
 
-    def _resolved_config(self) -> Any:
-        return load_and_resolve_config(config_path=str(tui_state.CONFIG_PATH), cli_args=self._cli_args())
+    def _resolved_config(self, *, fresh: bool = False) -> Any:
+        return self._config_cache.resolve(self._cli_args(), loader=load_and_resolve_config, fresh=fresh)
 
     # -- navigation --------------------------------------------------
 
@@ -371,6 +426,8 @@ class LaunchDrawer(BaseDrawer):
             pass
         if self._step == len(self.STEPS) - 1:
             self._render_review()
+        elif self._step == 1:
+            self._render_model_connection()
         try:
             indicator = "Steps: " + " · ".join(
                 f"> {name}" if position == self._step else name
@@ -382,6 +439,13 @@ class LaunchDrawer(BaseDrawer):
             self.query_one("#launch-start", Button).display = self._step == len(self.STEPS) - 1
         except Exception:
             pass
+        page = self.query_one(f"#launch-step-{self.STEPS[self._step].casefold()}")
+        descendants = set(page.walk_children())
+        controls = [widget for widget in self.focus_chain if widget in descendants]
+        if controls:
+            controls[0].focus()
+        elif self._step == len(self.STEPS) - 1:
+            self.query_one("#launch-start", Button).focus()
 
     @on(Button.Pressed, "#launch-next")
     def next_step(self) -> None:
@@ -425,43 +489,16 @@ class LaunchDrawer(BaseDrawer):
     @on(Input.Changed)
     @on(SelectionList.SelectedChanged)
     def refresh_review(self) -> None:
-        self._render_review()
+        if self.is_mounted and self._step == 3:
+            self._schedule_preview()
 
     def _render_review(self) -> None:
         try:
             cfg = self._resolved_config()
-            fingerprint = config_fingerprint({
-                "target_url": cfg.target_url,
-                "provider": getattr(cfg, "provider", ""),
-                "level": getattr(cfg, "level", ""),
-            })
-            runtime = getattr(cfg, "llm_runtime", None)
-            roles = getattr(runtime, "roles", {}) or {}
-            reasoning = next((getattr(role, "reasoning_effort", None) for role in roles.values()
-                              if getattr(role, "reasoning_effort", None)), "—")
-            text = (
-                "Review — resolved request (Start freezes these values)\n"
-                f"mode={self.mode} coordinates={tui_state._matrix_coordinate_count(cfg)}\n"
-                f"target={tui_security._safe_url(cfg.target_url)}\n"
-                f"condition={cfg.experiment_condition} target_method={cfg.target_method or '—'}\n"
-                f"provider={cfg.provider} model_profile={getattr(cfg, 'model_profile', None) or '—'} "
-                f"level={cfg.level} surface={cfg.surface} payload_mode={cfg.payload_mode}\n"
-                f"scoring={cfg.scoring_mode} rubric={cfg.scoring_rubric_version} "
-                f"ranking={cfg.scoring_profile.get('profile_id', 'unavailable')} "
-                f"evaluator={cfg.scoring_evaluator.get('model', 'not configured')}\n"
-                f"candidate_budget={cfg.candidate_budget} iterations={cfg.iterations} "
-                f"stop_policy={cfg.stop_policy} coverage_target={cfg.coverage_target}\n"
-                f"output_dir={cfg.output_dir} format={cfg.report_format}\n"
-                f"llm concurrency={getattr(runtime, 'max_concurrency', '—')} "
-                f"cache={getattr(runtime, 'cache_enabled', '—')} reasoning={reasoning}\n"
-                f"fingerprint={fingerprint}"
-            )
+            text = execution_summary(cfg, mode=self.mode)
         except Exception as exc:
-            text = f"Review\nconfig error: {tui_security._safe_config_error_text(exc)}"
-        try:
-            self.query_one("#launch-review", Static).update(str(tui_security.redact_secrets(text))[:8000])
-        except Exception:
-            pass
+            text = f"Configuration needs attention\n{tui_security._safe_config_error_text(exc)}"
+        self.query_one("#launch-review", Static).update(text)
 
     @on(Button.Pressed, "#launch-close")
     def close_drawer(self) -> None:
@@ -474,7 +511,7 @@ class LaunchDrawer(BaseDrawer):
         if self._frozen is not None:
             return
         try:
-            cfg = self._resolved_config()
+            cfg = self._resolved_config(fresh=True)
         except Exception as exc:
             try:
                 self.query_one("#launch-review", Static).update(
@@ -485,14 +522,26 @@ class LaunchDrawer(BaseDrawer):
             return
         self._frozen = cfg
         mission = next(
-            (s for s in self.app.screen_stack if isinstance(s, MissionControlScreen)), None
+            (s for s in reversed(self.app.screen_stack) if isinstance(s, MissionControlScreen)), None
         )
-        self.app.pop_screen()
-        if mission is not None:
+        if mission is None:
+            self.app.pop_screen()
+            return
+        # Launch may have been opened from Plan or another inspection dialog.
+        # Reveal the live monitor before starting, removing every setup layer.
+        with self.app.batch_update():
+            while self.app.screen is not mission:
+                self.app.pop_screen()
             mission.start_run(cfg, mode=self.mode)
 
     def prepare_shutdown(self) -> None:
+        if self._preview_timer is not None:
+            self._preview_timer.stop()
+            self._preview_timer = None
         self._tesis_closing = True
+
+    def on_unmount(self) -> None:
+        self.prepare_shutdown()
 
 
 class ChatGPTModelsLoaded(Message):
@@ -515,6 +564,21 @@ class SettingsSaved(Message):
 
 
 class SettingsDrawer(BaseDrawer):
+    """Full-window categories with one scrollable section and fixed Save controls."""
+
+    SECTIONS = (
+        ("target", "Target & defaults"), ("model", "API providers"),
+        ("chatgpt", "ChatGPT accounts"), ("llm", "LLM runtime"),
+        ("evaluator", "AI evaluator"), ("policy", "Policy & output"),
+        ("yaml", "Advanced YAML"),
+    )
+    BINDINGS = [
+        Binding("ctrl+s", "save", "Save", show=False, priority=True),
+        Binding("ctrl+e", "edit_yaml", "Edit YAML", show=False, priority=True),
+        Binding("left", "pane_left", "Left pane", show=False, priority=True),
+        Binding("right", "pane_right", "Right pane", show=False, priority=True),
+    ]
+
     def __init__(self) -> None:
         super().__init__()
         self.preserved_secret_placeholders: dict[str, str] = {}
@@ -525,108 +589,295 @@ class SettingsDrawer(BaseDrawer):
         self._catalog_binding: tuple[str, str] | None = None
         self._pending_api_keys: dict[str, str] = {}
         self._saving = False
+        self._loaded_ok = False
+        self._saved_text = ""
+        self._discard_armed = False
+        self._content_focus = None
+        self._evaluator_display_info: dict[str, str] = {}
+        self._evaluator_supports_tokens = True
+        self._config_cache = TuiConfigCache()
+        self._draft_cache = DraftConfigCache()
+        self._draft_timer: Any = None
+        self._evaluator_sync_key: tuple[str, bool] | None = None
+        self._evaluator_has_choices = False
+        self._evaluator_valid = False
+        self._evaluator_preview_text: str | None = None
 
     def compose(self) -> ComposeResult:
-        yield Label("Settings — config sections (Esc to close)", id="settings-title")
-        with Collapsible(title="Target & defaults", collapsed=True, id="settings-section-target"):
-            yield Static("", id="settings-target-body", markup=False)
-        with Collapsible(title="Model profile", collapsed=True, id="settings-section-model"):
-            yield Static("", id="settings-model-body", markup=False)
-            yield Label("API providers and models")
-            yield Button("Add API provider", id="settings-api-add")
-            yield Select([], prompt="Saved API providers", id="settings-api-provider")
-            yield Button("Edit provider / models", id="settings-api-edit", disabled=True)
-            yield Label("ChatGPT subscription models")
-            try:
-                raw = load_yaml_config(tui_state.CONFIG_PATH)
-            except Exception:
-                raw = {}
-            configured_models = raw.get("models")
-            if not isinstance(configured_models, dict):
-                configured_models = {}
-            profiles = {name: value for name, value in configured_models.items()
-                        if isinstance(value, dict) and value.get("provider", name) == "openai_codex_auth"}
-            if not profiles:
-                name = "openai_codex_auth"
-                suffix = 2
-                while name in configured_models:
-                    name = f"openai_codex_auth_{suffix}"
-                    suffix += 1
-                profiles = {name: {}}
-            selected = next(iter(profiles))
-            profile = profiles[selected]
-            extra = profile.get("extra") if isinstance(profile.get("extra"), dict) else {}
-            account = profile.get("account", extra.get("account", "default"))
-            yield Select([(name, name) for name in profiles], value=selected,
-                         allow_blank=False, id="settings-chatgpt-profile")
-            yield Input(value=str(account), placeholder="Saved ChatGPT account label",
-                        id="settings-chatgpt-account")
-            yield Static("Connect an account first: python -m tesis auth login --account default",
-                         markup=False, id="settings-chatgpt-status")
-            yield Button("Refresh OpenAI models", id="settings-chatgpt-refresh")
-            yield Select([], prompt="Available OpenAI models", disabled=True,
-                         id="settings-chatgpt-model")
-            yield Button("Use selected model", id="settings-chatgpt-apply", disabled=True)
-        with Collapsible(title="LLM runtime", collapsed=True, id="settings-section-llm"):
-            yield Static("", id="settings-llm-body", markup=False)
-        with Collapsible(title="AI evaluator", collapsed=True, id="settings-section-evaluator"):
-            yield Label("Payload review")
-            yield Select([("Human", "human"), ("AI", "ai"), ("Human and AI", "both")],
-                         value="human", allow_blank=False, id="settings-scoring-mode")
-            yield Label("Evaluator provider / model")
-            yield Select([], prompt="Choose a saved provider and model", id="settings-evaluator-provider")
-            yield Static("", id="settings-evaluator-details", markup=False)
-            yield Label("Maximum review attempts (1-3)")
-            yield Input(value="2", type="integer", id="settings-evaluator-attempts")
-            yield Label("Output token limit (1-8192)")
-            yield Input(value="1024", type="integer", id="settings-evaluator-tokens")
-            yield Label("Request timeout in seconds (1-120)")
-            yield Input(value="60", type="integer", id="settings-evaluator-timeout")
-            yield Button("Apply evaluator", id="settings-evaluator-apply", disabled=True)
-            yield Static("Apply updates the draft. Save Settings to keep it. Existing reviews retain their frozen evaluator.",
-                         markup=False, id="settings-evaluator-status")
-        with Collapsible(title="Policy & output", collapsed=True, id="settings-section-policy"):
-            yield Static("", id="settings-policy-body", markup=False)
-        with Collapsible(title="Advanced YAML", collapsed=False, id="settings-section-yaml"):
-            yield TextArea("", id="yaml-editor")
-            yield Button("Save", id="settings-save")
-            yield Static("", id="settings-status", markup=False)
+        yield Label("Settings", id="settings-title", classes="drawer-title")
+        with Horizontal(id="settings-workspace"):
+            yield OptionList(*(Option(label, id=section) for section, label in self.SECTIONS), id="settings-categories")
+            with ContentSwitcher(initial="settings-section-target", id="settings-content"):
+                with VerticalScroll(id="settings-section-target", classes="settings-section"):
+                    yield Label("Target & defaults", classes="section-heading")
+                    yield Static("Default DVWA target and experiment settings used by Run and Matrix setup.", classes="section-note", markup=False)
+                    yield Static("", id="settings-target-error", markup=False)
+                    with Vertical(id="settings-target-body", classes="settings-card"):
+                        yield SettingValueRow("Target URL", "Base URL of the authorized DVWA target.", id="setting-target")
+                        yield SettingValueRow("Provider / model", "Saved provider and model profile used by default.", id="setting-primary-model")
+                        yield SettingValueRow("Security level", "Configured DVWA protection level.", id="setting-level")
+                        yield SettingValueRow("Surface", "Vulnerability surface for the default run.", id="setting-surface")
+                        yield SettingValueRow("Payload mode", "Controls static seeds and constrained LLM candidates.", id="setting-payload-mode")
+                        yield SettingValueRow("Condition", "Experiment condition for the default run.", id="setting-condition")
+                        yield SettingValueRow("Target method", "An empty value leaves method selection to the orchestrator.", id="setting-method")
+                    with Vertical(id="settings-target-actions", classes="settings-card"):
+                        yield Button("Edit defaults in YAML", id="settings-edit-target", classes="edit-yaml")
+                        yield Static("Edit the default settings in the masked configuration draft.", classes="setting-description", markup=False)
+                with VerticalScroll(id="settings-section-model", classes="settings-section"):
+                    yield Label("API providers", classes="section-heading")
+                    with Vertical(id="settings-model-body", classes="settings-card"):
+                        yield SettingValueRow("Active provider", id="setting-provider")
+                        yield SettingValueRow("Active model", id="setting-model")
+                        yield SettingValueRow("API protocol", id="setting-protocol")
+                    with KeyboardActions(classes="compact-actions"):
+                        yield Button("Add provider", id="settings-api-add")
+                        yield Button("Edit provider / models", id="settings-api-edit", disabled=True)
+                    yield Select([], prompt="Saved API providers", id="settings-api-provider")
+                    yield Static("Choose a provider to inspect its API protocol and models.", id="settings-provider-details", markup=False)
+                with VerticalScroll(id="settings-section-chatgpt", classes="settings-section"):
+                    yield Label("ChatGPT accounts", classes="section-heading")
+                    yield Static("Uses a saved ChatGPT sign-in. Select the saved profile in Run or Matrix to use it.", classes="section-note", markup=False)
+                    try:
+                        raw = self._config_cache.raw(loader=load_yaml_config)
+                    except Exception:
+                        raw = {}
+                    if not isinstance(raw, dict):
+                        raw = {}
+                    configured_models = raw.get("models") or {}
+                    if not isinstance(configured_models, dict):
+                        configured_models = {}
+                    profiles = {name: value for name, value in configured_models.items()
+                                if isinstance(value, dict) and value.get("provider", name) == "openai_codex_auth"}
+                    if not profiles:
+                        name = "openai_codex_auth"
+                        suffix = 2
+                        while name in configured_models:
+                            name = f"openai_codex_auth_{suffix}"
+                            suffix += 1
+                        profiles = {name: {}}
+                    selected = next(iter(profiles))
+                    profile = profiles[selected]
+                    extra = profile.get("extra") if isinstance(profile.get("extra"), dict) else {}
+                    account = profile.get("account", extra.get("account", "default"))
+                    yield Label("Model profile", classes="field-label")
+                    yield Select([(name, name) for name in profiles], value=selected,
+                                 allow_blank=False, id="settings-chatgpt-profile")
+                    yield Label("Saved account label", classes="field-label")
+                    yield Input(value=str(account), placeholder="Saved ChatGPT account label", id="settings-chatgpt-account")
+                    yield Static("Connect an account: python -m tesis auth login --account default", markup=False, id="settings-chatgpt-status")
+                    yield Button("Refresh models", id="settings-chatgpt-refresh")
+                    yield Select([], prompt="Available OpenAI models", disabled=True, id="settings-chatgpt-model")
+                    yield Button("Use selected model", id="settings-chatgpt-apply", disabled=True)
+                with VerticalScroll(id="settings-section-llm", classes="settings-section"):
+                    yield Label("LLM runtime", classes="section-heading")
+                    with Vertical(id="settings-llm-body", classes="settings-card"):
+                        yield SettingValueRow("Concurrency", "Maximum concurrent LLM calls.", id="setting-concurrency")
+                        yield SettingValueRow("Cache scope", "Reuse of successful responses within one run.", id="setting-cache")
+                        for role, label in (("orchestrator", "Orchestrator"), ("payload_generator", "Payload generator")):
+                            yield SettingValueRow(label, id=f"setting-role-{role.replace('_', '-')}")
+                    yield Button("Edit runtime in YAML", id="settings-edit-runtime", classes="edit-yaml")
+                with Horizontal(id="settings-section-evaluator", classes="settings-section"):
+                    with VerticalScroll(id="settings-evaluator-form", classes="settings-form-body"):
+                        yield Label("AI evaluator", classes="section-heading")
+                        yield Static("Configure independent payload review using a saved provider and model.", classes="section-note", markup=False)
+                        with Vertical(id="settings-evaluator-model-card", classes="settings-card"):
+                            yield SettingField("Payload review", Select([("Human", "human"), ("AI", "ai"), ("Human and AI", "both")], value="human", allow_blank=False, id="settings-scoring-mode"), "Who reviews payload evidence.")
+                            yield SettingField("Provider / model", Select([], prompt="Choose a saved model", id="settings-evaluator-provider"), "Use a registered API or ChatGPT model profile.")
+                            yield Static("", id="settings-evaluator-details", markup=False)
+                        with Vertical(id="settings-evaluator-limits-card", classes="settings-card"):
+                            for name, label, value, description in (
+                                ("attempts", "Review attempts", "2", "Maximum attempts per payload (1-3)."),
+                                ("tokens", "Output token limit", "1024", "Independent evaluator token budget (1-8192)."),
+                                ("timeout", "Request timeout", "60", "Seconds per evaluator request (1-120)."),
+                            ):
+                                yield SettingField(label, Input(value=value, type="integer", id=f"settings-evaluator-{name}"), description, label_id=f"settings-evaluator-{name}-label")
+                        yield Button("Apply evaluator to draft", id="settings-evaluator-apply", disabled=True)
+                        yield Static("Apply stages the draft. Save persists it. Existing reviews keep their frozen evaluator.", markup=False, id="settings-evaluator-status")
+                    with VerticalScroll(id="settings-evaluator-context", classes="settings-context"):
+                        yield Label("Draft evaluator", classes="section-heading")
+                        yield Static("", id="settings-evaluator-preview", markup=False)
+                        yield Label("Review behavior", classes="section-heading")
+                        yield Static("Evaluator settings are independent of the run's model roles.\n\nApply updates the draft. Save settings to persist it. Saved reviews retain their frozen evaluator.", classes="section-note", markup=False)
+                with VerticalScroll(id="settings-section-policy", classes="settings-section"):
+                    yield Label("Policy & output", classes="section-heading")
+                    with Vertical(id="settings-policy-body", classes="settings-card"):
+                        for key, label in (("budget", "Candidate budget"), ("iterations", "Iterations"), ("stop-policy", "Stop policy"),
+                                           ("coverage", "Coverage target"), ("output", "Output directory"), ("format", "Report format"),
+                                           ("diagnostics", "Diagnostics"), ("enriched", "Enriched reporting"),
+                                           ("guardrail", "Guardrail handling"), ("retry", "Guardrail retry"),
+                                           ("retries", "Maximum retries"), ("cooldown", "Cooldown threshold")):
+                            yield SettingValueRow(label, id=f"setting-{key}")
+                    yield Button("Edit policy in YAML", id="settings-edit-policy", classes="edit-yaml")
+                with Vertical(id="settings-section-yaml", classes="settings-section"):
+                    yield Label("Advanced YAML", classes="section-heading")
+                    yield Static("Secrets are masked. Comments and unknown fields are preserved.", classes="section-note", markup=False)
+                    yield TextArea("", id="yaml-editor", tab_behavior="focus")
+        yield Static("", id="settings-status", markup=False)
+        with KeyboardActions(id="settings-actions"):
+            yield Button("Save settings", id="settings-save", variant="primary")
+            yield Button("Close", id="settings-close")
+            yield Static("", id="settings-draft-state", markup=False)
+        yield Static(key_hints(("↑/↓", "select"), ("←/→", "pane"), ("Tab", "control"), ("Ctrl+S", "save"), ("Esc", "close")), classes="drawer-hint")
 
     def on_mount(self) -> None:
+        self._apply_settings_layout()
+        for selector, title in (("settings-target-body", "Target configuration"), ("settings-target-actions", "Actions"),
+                                 ("settings-model-body", "Current model"), ("settings-llm-body", "Runtime defaults"),
+                                 ("settings-policy-body", "Execution & output"),
+                                 ("settings-evaluator-model-card", "Review model"), ("settings-evaluator-limits-card", "Evaluator limits")):
+            self.query_one(f"#{selector}").border_title = title
         self._render_sections()
         try:
             raw = tui_state.CONFIG_PATH.read_text(encoding="utf-8")
         except OSError as exc:
+            self.query_one("#settings-save", Button).disabled = True
             self._set_status(f"Not saved: cannot read config ({type(exc).__name__})")
             return
         try:
-            parsed = load_yaml_config(tui_state.CONFIG_PATH)
+            parsed = self._config_cache.raw(loader=load_yaml_config)
             masked, self.preserved_secret_placeholders = tui_security._mask_yaml_secrets(parsed)
             masked = tui_security._mask_url_credentials(masked, self.preserved_secret_placeholders)
             self.query_one("#yaml-editor", TextArea).text = (
                 dump_yaml_config(masked) if masked != parsed else raw
             )
         except Exception as exc:
-            try:
-                self.query_one("#yaml-editor", TextArea).text = raw
-            except Exception:
-                pass
+            self.query_one("#settings-save", Button).disabled = True
+            self.query_one("#yaml-editor", TextArea).text = "# Fix the YAML syntax in config.yaml, then reopen Settings.\n"
+            self._saved_text = self.query_one("#yaml-editor", TextArea).text
             self._set_status(f"Not saved: {tui_security._safe_config_error_text(exc)}")
+            return
         self._refresh_api_providers()
         self._refresh_evaluator()
+        self._saved_text = self.query_one("#yaml-editor", TextArea).text
+        self._loaded_ok = True
+        self.query_one("#settings-categories", OptionList).focus()
+
+    @on(OptionList.OptionHighlighted, "#settings-categories")
+    def highlight_section(self, event: OptionList.OptionHighlighted) -> None:
+        self.query_one("#settings-content", ContentSwitcher).current = f"settings-section-{event.option.id}"
+        self._content_focus = None
+
+    @on(OptionList.OptionSelected, "#settings-categories")
+    def enter_section(self) -> None:
+        self._focus_content_pane()
+
+    def on_resize(self, event: Any) -> None:
+        if self.is_mounted:
+            self._apply_settings_layout()
+
+    def _apply_settings_layout(self) -> None:
+        width = self.app.size.width
+        self.set_class(width < 115, "settings-stacked")
+        context = self.query_one("#settings-evaluator-context")
+        if width < 160 and self.app.focused is context:
+            self._focus_content_pane()
+        context.display = width >= 160
+
+    def _focus_content_pane(self) -> None:
+        current = self.query_one("#settings-content", ContentSwitcher).current
+        page = self.query_one(f"#{current}")
+        descendants = set(page.walk_children())
+        focus_chain = self.focus_chain
+        if self._content_focus in focus_chain and self._content_focus in descendants:
+            self._content_focus.focus()
+            return
+        if current in {"settings-section-target", "settings-section-llm", "settings-section-policy"}:
+            page.focus()
+            return
+        controls = [widget for widget in focus_chain if widget in descendants]
+        editable = [widget for widget in controls if isinstance(widget, (Input, Select, Button, TextArea, Checkbox, SelectionList))]
+        if editable:
+            editable[0].focus()
+        elif controls:
+            controls[0].focus()
+
+    def check_action(self, action: str, parameters: tuple[Any, ...]) -> bool | None:
+        if action in {"pane_left", "pane_right"}:
+            focused = self.app.focused
+            if isinstance(focused, (Input, TextArea)):
+                return False
+            if focused is not None and any(
+                isinstance(widget, KeyboardActions) or isinstance(widget, Select) and widget.expanded
+                for widget in focused.ancestors_with_self
+            ):
+                return False
+        return super().check_action(action, parameters)
+
+    def action_pane_left(self) -> None:
+        focused = self.app.focused
+        context = self.query_one("#settings-evaluator-context")
+        if focused is context:
+            self._focus_content_pane()
+        else:
+            self._content_focus = focused
+            self.query_one("#settings-categories", OptionList).focus()
+
+    def action_pane_right(self) -> None:
+        if self.app.focused is self.query_one("#settings-categories"):
+            self._focus_content_pane()
+            return
+        page = self.query_one("#settings-content", ContentSwitcher).current
+        context = self.query_one("#settings-evaluator-context")
+        if page == "settings-section-evaluator" and context.display and self.app.focused is not context:
+            self._content_focus = self.app.focused
+            context.focus()
+
+    @on(Button.Pressed, ".edit-yaml")
+    def edit_yaml_pressed(self) -> None:
+        self.action_edit_yaml()
+
+    def action_edit_yaml(self) -> None:
+        self.query_one("#settings-categories", OptionList).highlighted = len(self.SECTIONS) - 1
+        self.query_one("#settings-content", ContentSwitcher).current = "settings-section-yaml"
+        self.query_one("#yaml-editor", TextArea).focus()
+
+    def action_save(self) -> None:
+        self.save_settings()
+
+    def action_back(self) -> None:
+        if self._saving:
+            self._set_status("Saving settings…")
+            return
+        dirty = self.query_one("#yaml-editor", TextArea).text != self._saved_text
+        if dirty and not self._discard_armed:
+            self._discard_armed = True
+            self._set_status("Unsaved changes. Ctrl+S saves; Esc again discards.")
+            return
+        super().action_back()
+
+    @on(Button.Pressed, "#settings-close")
+    def close_settings(self) -> None:
+        self.action_back()
 
     @on(TextArea.Changed, "#yaml-editor")
     def evaluator_yaml_changed(self) -> None:
         if self.is_mounted and not self._saving:
+            self._discard_armed = False
+            dirty = self.query_one("#yaml-editor", TextArea).text != self._saved_text
+            self.query_one("#settings-draft-state", Static).update("Unsaved changes" if dirty else "Saved")
+            if self._draft_timer is not None:
+                self._draft_timer.stop()
+            self._draft_timer = self.set_timer(0.2, self._refresh_draft_views)
+
+    def _refresh_draft_views(self) -> None:
+        self._draft_timer = None
+        if not self._tesis_closing and not self._saving:
+            self._refresh_api_providers()
             self._refresh_evaluator()
 
     def _refresh_evaluator(self) -> None:
-        from tesis.provider_registry import expanded_model_sections, model_profile_labels
         picker = self.query_one("#settings-evaluator-provider", Select)
+        text = self.query_one("#yaml-editor", TextArea).text
+        key = (text, self._saving)
+        if key == self._evaluator_sync_key:
+            picker.disabled = not self._evaluator_has_choices or self._saving
+            self.query_one("#settings-evaluator-apply", Button).disabled = self._saving or not self._evaluator_valid
+            self._show_evaluator_connection()
+            return
+        self._evaluator_sync_key = key
         try:
-            payload = parse_yaml_config(self.query_one("#yaml-editor", TextArea).text)
-            sections = expanded_model_sections(payload)
-            labels = model_profile_labels(payload)
+            payload = self._draft_cache.read(text)
+            sections, labels = self._draft_cache.profiles(text)
             choices = [(labels[name] if labels[name] != name else f"{name} / {section['model_name']}", name)
                        for name, section in sections.items() if section.get("model_name")]
             evaluator = payload.get("scoring_evaluator") or {}
@@ -637,6 +888,8 @@ class SettingsDrawer(BaseDrawer):
                            and section.get("model_name") == evaluator.get("model")]
                 selected = matches[0] if len(matches) == 1 else Select.NULL
             picker.set_options(choices)
+            self._evaluator_has_choices = bool(choices)
+            self._evaluator_valid = True
             picker.value = selected if selected in {value for _, value in choices} else Select.NULL
             picker.disabled = not choices
             self.query_one("#settings-scoring-mode", Select).value = payload.get("scoring_mode", "human")
@@ -646,6 +899,8 @@ class SettingsDrawer(BaseDrawer):
             self.query_one("#settings-evaluator-apply", Button).disabled = self._saving
             self._show_evaluator_connection()
         except Exception as exc:
+            self._evaluator_has_choices = False
+            self._evaluator_valid = False
             picker.disabled = True
             self.query_one("#settings-evaluator-apply", Button).disabled = True
             self.query_one("#settings-evaluator-details", Static).update(
@@ -656,28 +911,54 @@ class SettingsDrawer(BaseDrawer):
         self._show_evaluator_connection()
 
     def _show_evaluator_connection(self) -> None:
-        from tesis.provider_registry import API_PROTOCOLS, expanded_model_sections
         selected = self.query_one("#settings-evaluator-provider", Select).value
         details = self.query_one("#settings-evaluator-details", Static)
-        if selected is Select.NULL:
-            details.update("Choose an evaluator model. Add providers and models in Model profile.")
-            return
+        self._evaluator_display_info = {}
+        self._evaluator_supports_tokens = True
         try:
-            payload = parse_yaml_config(self.query_one("#yaml-editor", TextArea).text)
-            profile = expanded_model_sections(payload)[str(selected)]
-            adapter = profile.get("provider", str(selected))
-            protocol = "anthropic" if adapter == "claude" else adapter
-            if adapter in {"openai", "openai_compatible"}:
-                responses = (profile.get("extra") or {}).get("use_responses_api", profile.get("use_responses_api"))
-                if responses is not None:
-                    protocol = "openai" if responses else "openai_compatible"
-            endpoint = tui_security._safe_url(profile.get("base_url") or "provider default")
-            text = f"API format: {API_PROTOCOLS.get(protocol, adapter)}\nEndpoint: {endpoint}"
-            if adapter == "openai_codex_auth":
-                text = "API format: ChatGPT sign-in Responses\nTemperature and output-token limits are unsupported."
-            details.update(text)
+            if selected is Select.NULL:
+                details.update("Choose a saved API provider or ChatGPT model.")
+            else:
+                sections, _ = self._draft_cache.profiles(self.query_one("#yaml-editor", TextArea).text)
+                profile = sections[str(selected)]
+                info = model_connection(str(selected), profile)
+                self._evaluator_display_info = info
+                self._evaluator_supports_tokens = info["adapter"] != "openai_codex_auth"
+                endpoint = tui_security._safe_url(profile.get("base_url") or "provider default")
+                details.update(summary_rows([("API protocol", info["protocol"]), ("Endpoint", endpoint)]))
         except Exception:
-            details.update("The selected evaluator model is unavailable. Choose another saved model.")
+            details.update("The selected model is unavailable. Choose another saved model.")
+        tokens = self.query_one("#settings-evaluator-tokens", Input)
+        tokens.disabled = self._saving or not self._evaluator_supports_tokens
+        self.query_one("#settings-evaluator-tokens-label", Label).update("Output token limit")
+        self.query_one("#settings-evaluator-tokens-description", Static).update(
+            "Independent evaluator token budget (1-8192)." if self._evaluator_supports_tokens
+            else "Unsupported by ChatGPT sign-in; this limit is not sent."
+        )
+        self._refresh_evaluator_preview()
+
+    @on(Select.Changed, "#settings-scoring-mode")
+    @on(Input.Changed, "#settings-evaluator-attempts, #settings-evaluator-tokens, #settings-evaluator-timeout")
+    def evaluator_preview_changed(self) -> None:
+        if self.is_mounted:
+            self._refresh_evaluator_preview()
+
+    def _refresh_evaluator_preview(self) -> None:
+        info = self._evaluator_display_info
+        mode = str(self.query_one("#settings-scoring-mode", Select).value)
+        values = []
+        for key, label in (("attempts", "Attempts"), ("timeout", "Timeout (s)"), ("tokens", "Output tokens")):
+            value = self.query_one(f"#settings-evaluator-{key}", Input).value or "—"
+            if key == "tokens" and not self._evaluator_supports_tokens:
+                value = "Unsupported"
+            values.append((label, value))
+        rows = [("Review", {"human": "Human", "ai": "AI", "both": "Human and AI"}.get(mode, "—")),
+                ("Provider", info.get("provider")), ("Model", info.get("model")),
+                ("API protocol", info.get("protocol")), *values]
+        text = "\n\n".join(f"{label}\n{value or '—'}" for label, value in rows)
+        if text != self._evaluator_preview_text:
+            self._evaluator_preview_text = text
+            self.query_one("#settings-evaluator-preview", Static).update(str(tui_security.redact_secrets(text)))
 
     @on(Button.Pressed, "#settings-evaluator-apply")
     def apply_evaluator(self) -> None:
@@ -686,7 +967,7 @@ class SettingsDrawer(BaseDrawer):
         status = self.query_one("#settings-evaluator-status", Static)
         try:
             editor = self.query_one("#yaml-editor", TextArea)
-            payload = parse_yaml_config(editor.text)
+            payload = self._draft_cache.edit(editor.text)
             selected = self.query_one("#settings-evaluator-provider", Select).value
             mode = str(self.query_one("#settings-scoring-mode", Select).value)
             evaluator = dict(payload.get("scoring_evaluator") or {})
@@ -709,20 +990,46 @@ class SettingsDrawer(BaseDrawer):
 
     def _refresh_api_providers(self) -> None:
         try:
-            payload = parse_yaml_config(self.query_one("#yaml-editor", TextArea).text)
+            payload = self._draft_cache.read(self.query_one("#yaml-editor", TextArea).text)
             entries = payload.get("api_providers") or {}
-            self.query_one("#settings-api-provider", Select).set_options([
+            picker = self.query_one("#settings-api-provider", Select)
+            selected = picker.value
+            picker.set_options([
                 (str(entry.get("display_name") or name), name) for name, entry in entries.items()
             ])
-            self.query_one("#settings-api-edit", Button).disabled = not bool(entries)
+            if selected in entries:
+                picker.value = selected
+            elif entries:
+                picker.value = next(iter(entries))
+            self.query_one("#settings-api-edit", Button).disabled = not bool(entries) or self._saving
         except Exception:
             self.query_one("#settings-api-edit", Button).disabled = True
+
+    @on(Select.Changed, "#settings-api-provider")
+    def show_api_provider(self) -> None:
+        from tesis.provider_registry import API_PROTOCOLS
+
+        try:
+            payload = self._draft_cache.read(self.query_one("#yaml-editor", TextArea).text)
+            selected = self.query_one("#settings-api-provider", Select).value
+            entry = (payload.get("api_providers") or {}).get(str(selected))
+            if not entry:
+                return
+            text = summary_rows([
+                ("API protocol", API_PROTOCOLS.get(entry.get("protocol"), "—")),
+                ("Endpoint", tui_security._safe_url(entry.get("base_url") or "—")),
+                ("Models", ", ".join(entry.get("models") or []) or "None selected"),
+                ("Credential", "Configured" if entry.get("api_key") else "Not configured"),
+            ])
+            self.query_one("#settings-provider-details", Static).update(text)
+        except Exception:
+            self.query_one("#settings-provider-details", Static).update("Provider unavailable in this draft.")
 
     @on(Button.Pressed, "#settings-api-add, #settings-api-edit")
     def edit_api_provider(self, event: Button.Pressed) -> None:
         from tesis.tui_providers import ProviderDrawer
         try:
-            payload = parse_yaml_config(self.query_one("#yaml-editor", TextArea).text)
+            payload = self._draft_cache.edit(self.query_one("#yaml-editor", TextArea).text)
             payload = tui_security._restore_yaml_secrets(payload, self.preserved_secret_placeholders)
             entries = payload.get("api_providers") or {}
             selected = self.query_one("#settings-api-provider", Select).value
@@ -741,72 +1048,71 @@ class SettingsDrawer(BaseDrawer):
             return
         try:
             editor = self.query_one("#yaml-editor", TextArea)
-            payload = parse_yaml_config(editor.text)
+            payload = self._draft_cache.edit(editor.text)
             payload.setdefault("api_providers", {})[draft.provider_id] = draft.entry
             editor.text = dump_yaml_config(payload)
             self._pending_api_keys.update(draft.keys)
             self._refresh_api_providers()
             self.query_one("#settings-api-provider", Select).value = draft.provider_id
-            self._set_status(f"Updated {draft.provider_id}. Save Settings to persist the provider, models, and .env key.")
+            self._set_status(f"Updated {draft.provider_id}. Save settings to keep these changes.")
         except Exception as exc:
             self._set_status(f"Provider not applied: {tui_security._safe_config_error_text(exc)}")
 
-    def _set_section(self, selector: str, lines: list[str]) -> None:
-        try:
-            self.query_one(selector, Static).update(str(tui_security.redact_secrets("\n".join(lines)))[:4000])
-        except Exception:
-            pass
+    def _set_setting_value(self, key: str, value: Any) -> None:
+        text = "—" if value in (None, "") else str(value)
+        self.query_one(f"#setting-{key}-value", Static).update(str(tui_security.redact_secrets(text)))
 
     def _render_sections(self) -> None:
-        """Summarize the resolved config; credentials are never rendered."""
+        """Populate structured setting rows with approved configuration fields."""
+        error = self.query_one("#settings-target-error", Static)
         try:
-            cfg = load_and_resolve_config(config_path=str(tui_state.CONFIG_PATH), cli_args={})
+            cfg = self._config_cache.resolve(loader=load_and_resolve_config)
         except Exception as exc:
-            self._set_section("#settings-target-body", [tui_security._safe_config_error_text(exc)])
+            error.update(tui_security._safe_config_error_text(exc))
+            error.display = True
             return
+        error.display = False
         runtime = getattr(cfg, "llm_runtime", None)
         roles = getattr(runtime, "roles", {}) or {}
-        self._set_section("#settings-target-body", [
-            f"target: {tui_security._safe_url(getattr(cfg, 'target_url', '—'))}",
-            f"provider: {getattr(cfg, 'provider', '—')} · level: {getattr(cfg, 'level', '—')}",
-            f"surface: {getattr(cfg, 'surface', '—')} · mode: {getattr(cfg, 'payload_mode', '—')}",
-            f"condition: {getattr(cfg, 'experiment_condition', '—')} · "
-            f"target method: {getattr(cfg, 'target_method', None) or '—'}",
-        ])
-        model_lines = [f"selected profile: {getattr(cfg, 'model_profile', None) or '—'}"]
-        for name, model in (getattr(cfg, "models", {}) or {}).items():
-            key_state = ("SIWC account " + str(model.extra.get("account", "default"))
-                         if model.provider == "openai_codex_auth"
-                         else "api key " + ("set" if getattr(model, "api_key", "") else "—"))
-            model_lines.append(
-                f"{name}: {getattr(model, 'model_name', '—') or '—'} · {key_state}"
-            )
-        self._set_section("#settings-model-body", model_lines or ["no model profiles configured"])
-        llm_lines = [
-            f"max concurrency: {getattr(runtime, 'max_concurrency', '—')} · "
-            f"cache scope: {getattr(runtime, 'cache_scope', '—')}",
-        ]
-        for role, settings in roles.items():
-            llm_lines.append(
-                f"{role}: {getattr(settings, 'model_profile', None) or '—'} · "
-                f"reasoning {getattr(settings, 'reasoning_effort', None) or '—'}"
-            )
-        self._set_section("#settings-llm-body", llm_lines)
-        self._set_section("#settings-policy-body", [
-            f"candidate budget: {getattr(cfg, 'candidate_budget', '—')} · "
-            f"iterations: {getattr(cfg, 'iterations', '—')}",
-            f"stop policy: {getattr(cfg, 'stop_policy', '—')} · "
-            f"coverage target: {getattr(cfg, 'coverage_target', '—')}",
-            f"output: {getattr(cfg, 'output_dir', '—')} · format: {getattr(cfg, 'report_format', '—')}",
-            f"diagnostics: {getattr(cfg, 'diagnose', '—')} · "
-            f"enriched reporting: {getattr(cfg, 'enriched_reporting', '—')}",
-            # Labels are canonical guardrail vocabulary; the attribute names are
-            # the ones the resolver actually produces on EngagementConfig.
-            f"guardrail handling: {getattr(cfg, 'evasion_mode', '—')} · "
-            f"guardrail retry: {getattr(cfg, 'evasion_enabled', '—')} · "
-            f"max retries: {getattr(cfg, 'evasion_max_retries', '—')} · "
-            f"cooldown: {getattr(cfg, 'evasion_cooldown_threshold', '—')}",
-        ])
+        profile_id = getattr(cfg, "model_profile", None) or getattr(cfg, "provider", "")
+        models = getattr(cfg, "models", {}) or {}
+        connection = model_connection(profile_id, models.get(profile_id))
+        values = {
+            "target": tui_security._safe_url(cfg.target_url),
+            "primary-model": f"{connection['provider']} / {connection['model']}",
+            "level": cfg.level,
+            "surface": cfg.surface,
+            "payload-mode": cfg.payload_mode,
+            "condition": cfg.experiment_condition,
+            "method": cfg.target_method,
+            "provider": connection["provider"],
+            "model": connection["model"],
+            "protocol": connection["protocol"],
+            "concurrency": getattr(runtime, "max_concurrency", None),
+            "cache": getattr(runtime, "cache_scope", None),
+            "budget": cfg.candidate_budget,
+            "iterations": cfg.iterations,
+            "stop-policy": cfg.stop_policy,
+            "coverage": cfg.coverage_target,
+            "output": cfg.output_dir,
+            "format": cfg.report_format,
+            "diagnostics": "Enabled" if cfg.diagnose else "Disabled",
+            "enriched": "Enabled" if cfg.enriched_reporting else "Disabled",
+            "guardrail": cfg.evasion_mode,
+            "retry": "Enabled" if cfg.evasion_enabled else "Disabled",
+            "retries": cfg.evasion_max_retries,
+            "cooldown": cfg.evasion_cooldown_threshold,
+        }
+        for key, value in values.items():
+            self._set_setting_value(key, value)
+        for role in ("orchestrator", "payload_generator"):
+            settings = roles.get(role)
+            role_profile = getattr(settings, "model_profile", None) or profile_id
+            info = model_connection(role_profile, models.get(role_profile))
+            model_name = getattr(settings, "model_name", None) or info["model"]
+            effort = getattr(settings, "reasoning_effort", None) or info["reasoning"]
+            self._set_setting_value(f"role-{role.replace('_', '-')}",
+                                    f"{info['provider']} / {model_name}\n{info['protocol']} · reasoning {effort}")
 
     def _set_status(self, text: str) -> None:
         try:
@@ -834,7 +1140,7 @@ class SettingsDrawer(BaseDrawer):
             return
         self._clear_model_catalog()
         try:
-            raw = parse_yaml_config(self.query_one("#yaml-editor", TextArea).text) or {}
+            raw = self._draft_cache.read(self.query_one("#yaml-editor", TextArea).text) or {}
             profile = raw.get("models", {}).get(str(event.value), {})
             account = profile.get("account", (profile.get("extra") or {}).get("account", "default"))
             self.query_one("#settings-chatgpt-account", Input).value = str(account)
@@ -896,7 +1202,7 @@ class SettingsDrawer(BaseDrawer):
         profile_name, account = self._catalog_binding
         try:
             editor = self.query_one("#yaml-editor", TextArea)
-            payload = parse_yaml_config(editor.text)
+            payload = self._draft_cache.edit(editor.text)
             if not isinstance(payload, dict):
                 raise ValueError("Config must be a YAML mapping")
             profile = payload.setdefault("models", {}).setdefault(profile_name, {})
@@ -913,6 +1219,9 @@ class SettingsDrawer(BaseDrawer):
     def save_settings(self) -> None:
         if self._saving:
             return
+        if not self._loaded_ok:
+            self._set_status("Settings could not be loaded. Fix config.yaml and reopen Settings.")
+            return
         self._settings_generation += 1
         try:
             text = self.query_one("#yaml-editor", TextArea).text
@@ -920,7 +1229,7 @@ class SettingsDrawer(BaseDrawer):
             self._set_status(f"Not saved: {type(exc).__name__}")
             return
         try:
-            payload = parse_yaml_config(text)
+            payload = self._draft_cache.edit(text)
         except Exception as exc:
             self._set_status(f"Not saved: invalid YAML ({tui_security._safe_config_error_text(exc)})")
             return
@@ -996,9 +1305,15 @@ class SettingsDrawer(BaseDrawer):
         self._refresh_api_providers()
         self._refresh_evaluator()
         self._render_sections()
+        self._saved_text = self.query_one("#yaml-editor", TextArea).text
+        self.query_one("#settings-draft-state", Static).update("Saved")
+        self._discard_armed = False
         self._set_status("Saved config.")
 
     def prepare_shutdown(self) -> None:
+        if self._draft_timer is not None:
+            self._draft_timer.stop()
+            self._draft_timer = None
         self._tesis_closing = True
         self._settings_generation += 1
         self._model_generation += 1

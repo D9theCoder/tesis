@@ -11,7 +11,7 @@ from typing import Any
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.message import Message
 from textual.widgets import Button, DataTable, Input, Label, Select, Static
 
@@ -20,6 +20,7 @@ from tesis.provider_registry import API_PROTOCOLS, provider_key_variable, valida
 from tesis.provider_settings import resolved_provider_key
 from tesis.tui_commands import BaseDrawer
 from tesis.tui_security import _safe_url
+from tesis.tui_widgets import KeyboardActions, KeyboardTable, key_hints
 
 
 @dataclass
@@ -35,7 +36,7 @@ class CatalogLoaded(Message):
         self.generation, self.models, self.error = generation, models, error
 
 
-class ModelCatalogTable(DataTable):
+class ModelCatalogTable(KeyboardTable):
     BINDINGS = [("space", "select_cursor", "Toggle model")]
 
 
@@ -59,8 +60,9 @@ class ProviderDrawer(BaseDrawer):
     def compose(self) -> ComposeResult:
         yield Label("Edit API provider" if self._provider_id else "Add API provider", classes="drawer-title")
         with VerticalScroll(id="provider-fields", classes="drawer-body"):
-            yield Label("Provider ID (a-z, 0-9, _ or -; starts with a letter)")
-            yield Input(value=self._provider_id, disabled=bool(self._provider_id), id="provider-id")
+            yield Static("Connection", classes="section-heading", markup=False)
+            yield Label("Provider ID")
+            yield Input(value=self._provider_id, placeholder="e.g. research-gateway", disabled=bool(self._provider_id), id="provider-id")
             yield Label("Display name (optional)")
             yield Input(value=str(self._entry.get("display_name") or ""), id="provider-name")
             yield Label("Base URL")
@@ -70,30 +72,35 @@ class ProviderDrawer(BaseDrawer):
             yield Select([(label, value) for value, label in API_PROTOCOLS.items()],
                          value=self._entry.get("protocol", "openai_compatible"),
                          allow_blank=False, id="provider-protocol")
-            yield Label("API key (saved to .env when Settings is saved)")
+            yield Label("API key")
             yield Input(password=True, placeholder="Leave blank to keep saved key" if self._entry else "API key",
                         id="provider-key")
-            yield Label("Fetch URL (optional; defaults to the protocol's models endpoint)")
+            yield Label("Model catalog URL (optional)")
             yield Input(value=self._url_seeds["fetch_url"],
                         placeholder="https://gateway.example/v1/models", id="provider-fetch-url")
+            yield Static("Models", classes="section-heading", markup=False)
             yield Button("Fetch available models", id="provider-fetch")
             yield Static("Fetch a catalog or add model IDs manually. Space/Enter toggles a row.",
                          id="provider-status", markup=False)
             yield Input(placeholder="Filter model IDs or names", id="provider-filter")
             yield ModelCatalogTable(id="provider-models", cursor_type="row", show_row_labels=False)
-            with Horizontal(classes="provider-actions"):
+            yield Static("", id="provider-models-empty", markup=False)
+            with KeyboardActions(classes="provider-actions", id="provider-model-actions"):
                 yield Button("Select shown", id="provider-select-shown")
                 yield Button("Ignore shown", id="provider-ignore-shown")
             yield Static("", id="provider-selection", markup=False)
             yield Label("Manual model ID")
             yield Input(placeholder="Exact model ID", id="provider-manual")
             yield Button("Add model", id="provider-add-model")
-        with Horizontal(classes="provider-actions", id="provider-footer"):
+        with KeyboardActions(classes="provider-actions", id="provider-footer"):
             yield Button("Apply provider", id="provider-apply", variant="primary")
             yield Button("Cancel", id="provider-cancel")
+        yield Static(key_hints(("Tab", "focus"), ("↑/↓", "model"), ("Space/Enter", "toggle"), ("Esc", "cancel")), classes="drawer-hint")
 
     def on_mount(self) -> None:
-        self.query_one("#provider-models", DataTable).add_columns("Use", "Model")
+        table = self.query_one("#provider-models", DataTable)
+        table.add_column("", width=3)
+        table.add_column("Model")
         self._render_models()
         self.query_one("#provider-url" if self._provider_id else "#provider-id", Input).focus()
 
@@ -107,11 +114,20 @@ class ProviderDrawer(BaseDrawer):
 
     def _render_models(self) -> None:
         table = self.query_one("#provider-models", DataTable)
+        cursor = table.cursor_row
         table.clear()
-        for model in self._visible_models():
-            table.add_row("x" if model in self._selected else " ", Text(model), key=model)
+        visible = self._visible_models()
+        for model in visible:
+            table.add_row("[*]" if model in self._selected else "[-]", Text(model), key=model)
+        table.move_cursor(row=min(cursor, max(0, table.row_count - 1)))
+        table.display = bool(visible)
+        self.query_one("#provider-filter").display = bool(self._models)
+        self.query_one("#provider-model-actions").display = bool(self._models)
+        empty = self.query_one("#provider-models-empty", Static)
+        empty.display = not visible
+        empty.update("No matching models." if self._models else "Fetch a catalog or add an exact model ID below.")
         self.query_one("#provider-selection", Static).update(
-            f"{len(self._selected)} selected; {len(self._visible_models())} shown. Unchecked models are ignored.")
+            f"{len(self._selected)} selected · {len(visible)} shown")
 
     @on(Input.Changed, "#provider-filter")
     def filter_models(self) -> None:
@@ -125,7 +141,7 @@ class ProviderDrawer(BaseDrawer):
         else:
             self._selected.add(model)
         table = self.query_one("#provider-models", DataTable)
-        table.update_cell(model, table.ordered_columns[0].key, "x" if model in self._selected else " ")
+        table.update_cell(model, table.ordered_columns[0].key, "[*]" if model in self._selected else "[-]")
         self.query_one("#provider-selection", Static).update(f"{len(self._selected)} selected.")
 
     @on(Button.Pressed, "#provider-select-shown")

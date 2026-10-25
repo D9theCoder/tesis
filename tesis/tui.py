@@ -73,6 +73,21 @@ def _build_mono_theme() -> Theme:
 SHELL_MONO_THEME = _build_mono_theme()
 SHELL_MONO_THEME_NAME = SHELL_MONO_THEME.name
 
+SHELL_TERMINAL_THEME = Theme(
+    name="tesis-terminal", primary="#78b7ff", secondary="#9ba8b9",
+    accent="#78b7ff", foreground="#dde3ec", background="#0a0c0f",
+    surface="#101318", panel="#101318", success="#78dba9",
+    warning="#e5c17d", error="#ef8b91", dark=True,
+    variables={
+        "block-cursor-background": "#78b7ff",
+        "block-cursor-foreground": "#0a0c0f",
+        "block-cursor-text-style": "bold",
+        "block-cursor-blurred-background": "#1b2635",
+        "block-cursor-blurred-foreground": "#dde3ec",
+        "text-muted": "#94a0b1",
+    },
+)
+
 
 # ---------------------------------------------------------------- app
 
@@ -86,7 +101,10 @@ class TesisApp(App[None]):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self.animation_level = "none"
         self.register_theme(SHELL_MONO_THEME)
+        self.register_theme(SHELL_TERMINAL_THEME)
+        self.theme = SHELL_TERMINAL_THEME.name
         if os.environ.get("NO_COLOR"):
             try:
                 self.theme = SHELL_MONO_THEME_NAME

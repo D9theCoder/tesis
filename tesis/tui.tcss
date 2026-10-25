@@ -1,564 +1,232 @@
-/* TESIS mission-control stylesheet. Single replacement for the dual-system shell.
- *
- * Expected compose contract (see HANDOFF_TUI_MISSION_CONTROL_REDESIGN_2026-09-21):
- * - Root is MissionControlScreen with ONE responsive class: wide (>=120x24),
- *   standard (>=80x20), narrow (>=60x18), or too-small (below 60x18).
- * - Chrome: #context-bar, #mission-body, #status-strip, #context-footer.
- * - Wide grid DOM order: #pipeline-pane, #coordinate-pane, #notice-pane,
- *   #evidence-pane (row-wise: pipeline/coords top, notices/evidence bottom).
- * - Pane visibility (which panes exist on screen) is decided in Python from the
- *   same size classes; this file never sets `display`, so there is one owner.
- * - In the wide layout 1/2/3 and Tab/Shift+Tab move focus between
- *   #pipeline-pane, #coordinate-pane, and #evidence-body; focus is a
- *   background lift ($boost), never a second border.
- * - Run status uses ONE of status-ready/running/degraded/succeeded/failed/
- *   cancelled on #status-strip (mirrored on the screen as fallback).
- * - #command-launcher is bottom-docked; drawers dock right at 80+ columns and
- *   take the whole screen (.drawer-full) below 80.
- * - Semantic theme vars only: no hardcoded palette, so dark / light /
- *   tesis-mono all work. Glyphs/text (not color) carry status meaning.
+/* Terminal-native workspace. One frame per panel; selection carries focus.
+ * Python owns visibility and the 120x24 / 80x20 / 60x18 breakpoints.
+ * All colors use semantic theme tokens, including the NO_COLOR theme.
  */
-
-MissionControlScreen {
-    layout: vertical;
+Screen {
     background: $background;
     color: $foreground;
-}
-
-/* ---- one-row chrome: context / status / footer ---- */
-
-#context-bar {
-    height: 1;
-    padding: 0 1;
-    background: $background;
-    color: $text-muted;
-    text-overflow: ellipsis;
-    overflow: hidden;
-}
-
-#mission-body {
-    height: 1fr;
-    padding: 0 1;
-}
-
-#status-strip {
-    height: 1;
-    padding: 0 1;
-    background: $background;
-    color: $text-muted;
-    text-overflow: ellipsis;
-    overflow: hidden;
-}
-
-#status-rail {
-    width: 1;
-    height: 1;
-}
-
-#status-label {
-    height: 1;
-    text-style: bold;
-    padding: 0 1;
-}
-
-#context-footer {
-    height: 1;
-    padding: 0 1;
-    background: $background;
-    color: $text-muted;
-    text-overflow: ellipsis;
-    overflow: hidden;
-}
-
-Footer {
-    background: $background;
-    color: $text-muted;
-}
-
-/* ---- run-status semantics: rail + label only, never whole-screen tint ---- */
-
-#status-strip.status-ready #status-label,
-MissionControlScreen.status-ready #status-label {
-    color: $text-muted;
-}
-
-#status-strip.status-running #status-rail,
-MissionControlScreen.status-running #status-rail {
-    background: $primary;
-}
-
-#status-strip.status-running #status-label,
-MissionControlScreen.status-running #status-label {
-    color: $primary;
-}
-
-#status-strip.status-succeeded #status-rail,
-MissionControlScreen.status-succeeded #status-rail {
-    background: $success;
-}
-
-#status-strip.status-succeeded #status-label,
-MissionControlScreen.status-succeeded #status-label {
-    color: $success;
-}
-
-#status-strip.status-degraded #status-rail,
-MissionControlScreen.status-degraded #status-rail,
-#status-strip.status-failed #status-rail,
-MissionControlScreen.status-failed #status-rail {
-    background: $error;
-}
-
-#status-strip.status-degraded #status-label,
-MissionControlScreen.status-degraded #status-label,
-#status-strip.status-failed #status-label,
-MissionControlScreen.status-failed #status-label {
-    color: $error;
-}
-
-#status-strip.status-cancelled #status-rail,
-MissionControlScreen.status-cancelled #status-rail {
-    background: $warning;
-}
-
-#status-strip.status-cancelled #status-label,
-MissionControlScreen.status-cancelled #status-label {
-    color: $warning;
-}
-
-/* ---- panes: spacing and type, never nested boxes ---- */
-
-.panel {
-    background: $surface;
-}
-
-.panel-title {
-    height: 1;
-    color: $text-muted;
-    text-style: bold;
-}
-
-#pipeline-pane,
-#coordinate-pane,
-#evidence-pane,
-#notice-pane {
-    layout: vertical;
-    height: 1fr;
-    border: none;
-    background: $background;
     scrollbar-size: 1 1;
+    scrollbar-background: $background;
+    scrollbar-color: $surface-lighten-2;
+    scrollbar-color-hover: $primary;
+    scrollbar-color-active: $primary;
 }
-
-/* Focus is a lift on the focused pane, never a second border. `$boost` is
- * invisible in the monochrome theme (it resolves to transparent), so bold
- * carries the focus meaning where colour cannot. */
-
-#pipeline-pane:focus,
-#coordinate-pane:focus,
-#evidence-body:focus,
-#evidence-pane:focus-within,
-#notice-body:focus,
-#notice-pane:focus-within {
-    background: $boost;
-    text-style: bold;
+MissionControlScreen { layout: vertical; }
+#header { height: 2; padding: 0 1; }
+#context-bar { width: 1fr; height: 1; text-overflow: ellipsis; overflow: hidden; color: $text-muted; }
+#header-status { width: 20; height: 1; text-align: right; color: $success; }
+.status-running #header-status { color: $primary; }
+.status-failed #header-status, .status-degraded #header-status { color: $error; }
+.status-cancelled #header-status { color: $warning; }
+#workspace-nav { height: 2; margin: 0 1; }
+#workspace-tabs { width: 1fr; }
+Tabs { height: 2; background: $background; }
+Tabs > #tabs-scroll { height: 2; }
+Tabs Tab { height: 1; padding: 0 2; color: $text-muted; }
+Tabs Tab.-active { color: $primary; background: $surface; text-style: bold; }
+Tabs:focus Tab.-active { text-style: bold; background: $block-cursor-background; color: $block-cursor-foreground; }
+Tabs Underline { height: 1; background: $background; color: $surface-lighten-2; }
+Tabs Underline > .underline--bar { color: $primary; background: $background; }
+#workspace-actions { width: auto; height: 1; }
+#workspace-actions Button { height: 1; min-width: 0; margin: 0 0 0 2; padding: 0 1; border: none; }
+#mission-body { height: 1fr; padding: 0 1; }
+.workspace-panel {
+    border: round $surface-lighten-2;
+    border-title-color: $text-muted;
+    border-title-align: left;
+    border-subtitle-color: $text-muted;
+    padding: 0 1;
+    background: $background;
 }
-
-/* the evidence pane stacks its badge above the triage body */
-
-#evidence-body {
-    height: 1fr;
-    scrollbar-size: 1 1;
-}
-
-/* the notice pane stacks a fixed badge above a scrollable bounded stream */
-
-#notice-body {
-    height: 1fr;
-    scrollbar-size: 1 1;
-}
-
-#notice-text {
-    height: auto;
-}
-
-.notice-new-badge {
-    color: $warning;
-    text-style: bold;
-}
-
-#triage-line {
-    height: auto;
-    max-height: 4;
-    color: $text-muted;
-    text-overflow: ellipsis;
-    overflow: hidden;
-}
-
-/* Truthful minimum-size state: the body is replaced, nothing is clipped. */
-
-#size-notice {
-    height: 1fr;
-    padding: 2 3;
-    color: $warning;
-    text-style: bold;
-}
-
-/* ---- wide (>=120x24): pipeline + coordinates top, notices + evidence bottom ----
- * Pane visibility is driven from the screen (one `.display` source of truth);
- * this stylesheet only decides how the visible panes are arranged and painted. */
-
+.workspace-panel:focus-within { border: round $primary; border-title-color: $primary; border-title-style: bold; }
 MissionControlScreen.wide #mission-body {
     layout: grid;
-    grid-size: 2;
-    grid-columns: 3fr 2fr;
-    grid-rows: 1fr 1fr;
+    grid-size: 2 2;
+    grid-columns: 28% 1fr;
+    grid-rows: 3fr 2fr;
     grid-gutter: 0 1;
 }
-
-/* ---- standard (>=80x20) and narrow (>=60x18): one primary pane + triage ---- */
-
-MissionControlScreen.standard #mission-body,
-MissionControlScreen.narrow #mission-body {
-    layout: vertical;
-}
-
-MissionControlScreen.standard #pipeline-pane,
-MissionControlScreen.narrow #pipeline-pane {
-    height: 1fr;
-}
-
-/* ---- pipeline stages: glyph row colored, label text stays readable ---- */
-
-.stage-row {
-    height: 1;
-    color: $foreground;
-}
-
-.stage-active {
-    color: $primary;
-    text-style: bold;
-}
-
-.stage-ok {
-    color: $success;
-}
-
-.stage-warn {
-    color: $warning;
-}
-
-.stage-bad {
-    color: $error;
-    text-style: bold;
-}
-
-.evidence-badge {
-    color: $warning;
-    text-style: bold;
-}
-
-/* ---- bottom-anchored command launcher: the single allowed chrome border ---- */
-
-CommandLauncher {
-    background: transparent;
-}
-
-#command-launcher {
-    dock: bottom;
-    height: auto;
-    max-height: 12;
-    padding: 0 1;
-    background: $surface;
-    border-top: solid $primary;
-}
-
-#launcher-input {
-    height: 3;
-    margin: 0 0 1 0;
-}
-
-#launcher-list {
-    height: auto;
-    max-height: 8;
-    scrollbar-size: 1 1;
-}
-
-/* ---- uniform drawers: one left-edge border, full-width below 80 columns ----
- * The drawer screen stays transparent and covers the terminal; its single
- * .drawer panel docks right at a fixed 76 cells, so the mission surface stays
- * visible to its left. Below 80 columns the shell tags the screen
- * `drawer-full` and the panel takes the whole width instead.
- */
-
-.drawer {
-    dock: right;
-    width: 76;
-    height: 100%;
-    padding: 1 2;
-    background: $surface;
-    border-left: solid $primary;
-    scrollbar-size: 1 1;
-}
-
-BaseDrawer {
-    background: transparent;
-}
-
-BaseDrawer.drawer-full .drawer {
-    dock: top;
-    width: 100%;
-    border: none;
-}
-
-.drawer-title {
-    height: 1;
-    text-style: bold;
-    margin-bottom: 1;
-}
-
-.drawer-body {
-    height: 1fr;
-    scrollbar-size: 1 1;
-}
-
-.drawer-hint {
-    height: 1;
-    margin-top: 1;
-    color: $text-muted;
-}
-
-.launch-step {
-    height: auto;
-    margin-bottom: 1;
-}
-
-#launch-step-indicator {
-    height: 1;
-    color: $text-muted;
-}
-
-#launch-steps {
-    height: 1fr;
-}
-
-#launch-nav {
-    height: auto;
-    margin-top: 1;
-}
-
-#launch-nav Button {
-    margin-right: 1;
-}
-
-/* ---- tables: selectable rows, no boxes, focused table is obvious ---- */
-
-#coordinate-pane,
-#coordinates-table,
-#results-table {
-    height: 1fr;
-    border: none;
-    scrollbar-size: 1 1;
-}
-
-#coordinate-pane:focus,
-#coordinates-table:focus,
-#results-table:focus {
-    background: $boost;
-}
-
-#results-actions {
-    height: 3;
-}
-
-#results-actions Button {
-    width: 1fr;
-    min-width: 0;
-}
-
-#results-filter-scroll {
-    height: auto;
-    max-height: 6;
-    scrollbar-size: 1 1;
-}
-
-/* ---- forms: dense grid, grouping by spacing not boxes ---- */
-
-.screen-title {
-    height: 1;
-    text-style: bold;
-    padding: 0 1;
-}
-
-.section-title {
-    height: 1;
-    color: $text-muted;
-    text-style: bold;
-    margin-top: 1;
-}
-
-.form-grid {
-    grid-size: 2;
-    grid-columns: 1fr 2fr;
-    grid-gutter: 0 1;
-    height: auto;
-}
-
-.inline-form {
-    height: auto;
-}
-
-.checks {
-    height: auto;
-}
-
-.actions {
-    height: 3;
-    margin-top: 1;
-}
-
-.filters {
-    height: 3;
-}
-
-.filters Select {
-    width: 1fr;
-    margin-right: 1;
-}
-
-/* Below the wide threshold the filter row stacks so no select is clipped at
-   the 80-column floor (the .stacked class is toggled by on_resize). */
-.filters.stacked {
-    layout: vertical;
-    height: auto;
-}
-
-.filters.stacked Select {
-    width: 100%;
-    margin-right: 0;
-}
-
-.filters.stacked Label {
-    height: 1;
-}
-
-#yaml-editor {
-    height: 1fr;
-}
-
-SettingsDrawer .drawer {
-    overflow-y: auto;
-}
-
-#settings-evaluator-details, #settings-evaluator-status {
-    height: auto;
-}
-
-/* API provider form: one scroll area and two fixed actions at every width. */
-#provider-fields {
-    overflow-x: hidden;
-}
-
-#provider-fields Label, #provider-status, #provider-selection {
-    height: auto;
-}
-
-#provider-models {
-    height: 9;
-    min-height: 4;
-    border: none;
-}
-
-.provider-actions {
-    height: 3;
-}
-
-.provider-actions Button {
-    min-width: 12;
-    width: auto;
-    margin-right: 1;
-}
-
-/* ---- trace / results / doctor specifics ---- */
-
-#doctor-summary {
-    height: auto;
-    text-style: bold;
-}
-
-#doctor-title {
-    margin-bottom: 0;
-}
-
-DoctorDrawer .drawer-hint {
-    margin-top: 0;
-}
-
-#doctor-note {
-    height: auto;
-    color: $text-muted;
-}
-
-#doctor-scroll {
-    min-height: 1;
-    overflow-x: hidden;
-}
-
-#doctor-actions {
-    height: 3;
-}
-
-#doctor-actions Button {
-    width: 1fr;
-    min-width: 0;
-    margin-right: 1;
-}
-
-#doctor-details {
-    width: 14;
-    margin-right: 0;
-}
-
-#trace-body {
-    height: 1fr;
-    scrollbar-size: 1 1;
-}
-
-.trace-new-badge {
-    color: $warning;
-    text-style: bold;
-}
-
-.check-row {
-    height: 1;
-}
-
-.check-ok {
-    color: $success;
-}
-
-.check-warn {
-    color: $warning;
-}
-
-.check-bad {
-    color: $error;
-    text-style: bold;
-}
-
-/* ---- clear keyboard focus everywhere ---- */
-
-Input:focus,
-Select:focus,
-SelectionList:focus,
-TextArea:focus,
-#launcher-input:focus {
-    border: tall $primary;
-}
-
-Button:focus {
-    text-style: bold;
-}
-
-OptionList:focus {
-    background: $boost;
-}
+MissionControlScreen.wide #pipeline-panel { row-span: 2; }
+#pipeline-panel, #coordinate-panel, #detail-panels, #notice-pane, #evidence-pane { height: 1fr; }
+#notice-pane { width: 3fr; margin-right: 1; }
+#evidence-pane { width: 2fr; }
+#pipeline-pane { height: 1fr; padding: 0; border: none; }
+#pipeline-pane > .option-list--option { padding: 0; }
+#pipeline-pane > .option-list--option-highlighted { background: $surface; }
+#pipeline-pane:focus > .option-list--option-highlighted { background: $block-cursor-background; color: $block-cursor-foreground; }
+MissionControlScreen.standard #mission-body, MissionControlScreen.narrow #mission-body { layout: vertical; }
+MissionControlScreen.standard #notice-pane, MissionControlScreen.narrow #notice-pane { width: 1fr; margin-right: 0; }
+MissionControlScreen.standard #evidence-pane, MissionControlScreen.narrow #evidence-pane { width: 1fr; }
+MissionControlScreen.narrow #header-status { width: 12; }
+MissionControlScreen.narrow Tabs Tab { padding: 0 1; }
+#coordinate-empty { color: $text-muted; height: auto; padding: 1 1; }
+#notice-body, MissionControlScreen #evidence-body { height: 1fr; padding: 0; }
+EvidenceDrawer #evidence-body { height: auto; }
+#notice-text, #evidence-text { height: auto; }
+#notice-new-badge, #evidence-badge { height: 1; color: $text-muted; }
+#triage-line { height: auto; max-height: 4; color: $text-muted; padding: 0 1; }
+#size-notice { height: 1fr; padding: 2 3; color: $warning; }
+#mission-command { height: 3; margin: 1 1 0 1; padding: 0 1; border: none; border-top: solid $surface-lighten-2; background: $surface; }
+#mission-command:focus { border: none; border-top: solid $primary; }
+#status-strip { height: 1; padding: 0 1; color: $text-muted; }
+#status-rail { display: none; }
+#status-label { width: 1fr; height: 1; text-overflow: ellipsis; overflow: hidden; }
+#context-footer { height: 1; padding: 0 1; color: $text-muted; text-overflow: ellipsis; overflow: hidden; }
+/* Commands complete above a compact composer, with no nested input box. */
+CommandLauncher { background: transparent; align: center bottom; }
+#command-launcher { width: 100%; height: auto; max-height: 13; padding: 0 2 1 2; background: $surface; border-top: solid $surface-lighten-2; }
+#launcher-list { height: auto; max-height: 8; border: none; padding: 0; background: $surface; }
+#launcher-list > .option-list--option { padding: 0; }
+#launcher-list > .option-list--option-highlighted { background: $block-cursor-background; color: $block-cursor-foreground; text-style: bold; }
+#launcher-empty { height: 1; color: $text-muted; }
+#launcher-input { height: 1; border: none; padding: 0 1; margin: 1 0 0 0; background: $surface-lighten-1; }
+#launcher-input:focus { border: none; }
+#launcher-title { height: 1; margin-top: 1; color: $text-muted; }
+/* All inspections are centered. Settings owns the whole terminal. */
+BaseDrawer { background: $background 65%; align: center middle; }
+.drawer { width: 112; max-width: 96%; height: 88%; padding: 1 2; border: round $surface-lighten-3; background: $background; }
+BaseDrawer.drawer-full .drawer { width: 100%; max-width: 100%; height: 100%; padding: 0 1; border: none; }
+.drawer-title { height: 1; color: $foreground; text-style: bold; margin-bottom: 1; }
+.drawer-body { height: 1fr; min-height: 1; }
+.drawer-hint { height: auto; max-height: 2; color: $text-muted; margin-top: 1; }
+.section-heading { height: 1; text-style: bold; margin-bottom: 1; color: $primary; }
+.section-title { height: 1; text-style: bold; color: $text-muted; margin-top: 1; }
+.section-note { height: auto; margin-bottom: 1; color: $text-muted; }
+.field-label { height: auto; margin-top: 1; color: $text-muted; }
+Static { height: auto; }
+VerticalScroll { height: 1fr; min-height: 1; }
+Input, Select { height: 1; min-height: 1; margin: 0; padding: 0 1; background: $surface; border: none; }
+Input:focus, Select:focus { border: none; background: $surface-lighten-1; }
+Input:disabled, Select:disabled { opacity: 60%; }
+Select { padding: 0; }
+Select > SelectCurrent { height: 1; padding: 0 1; border: none; background: $surface; }
+Select:focus > SelectCurrent { border: none; background: $surface-lighten-1; }
+Select > SelectOverlay, Select > SelectOverlay:focus { border: none; padding: 0; max-height: 8; background: $surface; }
+SelectOverlay > .option-list--option { padding: 0 1; text-wrap: nowrap; text-overflow: ellipsis; }
+SelectOverlay > .option-list--option-highlighted { background: $block-cursor-background; color: $block-cursor-foreground; text-style: bold; }
+TextArea { background: $surface; border: none; }
+TextArea:focus { border-left: solid $primary; }
+OptionList { border: none; padding: 0; background: $background; }
+OptionList:focus { border: none; background: $background; }
+OptionList > .option-list--option { padding: 0 1; }
+OptionList > .option-list--option-highlighted { background: $surface; }
+OptionList:focus > .option-list--option-highlighted { background: $block-cursor-background; color: $block-cursor-foreground; text-style: bold; }
+SelectionList { height: auto; max-height: 7; padding: 0; border: none; }
+SelectionList:focus { border: none; }
+Checkbox { border: none; background: $background; padding: 0 1; margin: 0; height: 1; }
+TextCheckbox { width: 1fr; }
+TextCheckbox > .toggle--button, TextCheckbox > .toggle--label { background: transparent; color: $foreground; }
+TextCheckbox:focus { border: none; background: $block-cursor-background; color: $block-cursor-foreground; }
+TextCheckbox:focus > .toggle--button, TextCheckbox:focus > .toggle--label { background: $block-cursor-background; color: $block-cursor-foreground; }
+Button { height: 1; min-width: 10; width: auto; padding: 0 1; margin: 0 1 0 0; border: none; background: $surface; color: $foreground; text-style: none; }
+Button:hover { background: $surface-lighten-1; }
+Button:focus { background: $block-cursor-background; color: $block-cursor-foreground; text-style: bold; border: none; }
+Button.-primary { background: $surface; color: $primary; text-style: bold; }
+Button.-primary:focus { background: $block-cursor-background; color: $block-cursor-foreground; }
+Button:disabled { opacity: 45%; }
+.compact-actions, .actions, .provider-actions { height: 1; margin-top: 1; }
+DataTable { height: 1fr; min-height: 2; border: none; background: $background; }
+DataTable > .datatable--header { background: $surface; color: $text-muted; text-style: none; }
+DataTable > .datatable--cursor { background: $surface; color: $foreground; }
+DataTable:focus > .datatable--cursor { background: $block-cursor-background; color: $block-cursor-foreground; text-style: bold; }
+DataTable > .datatable--hover { background: $surface-lighten-1; }
+HelpDrawer .drawer { width: 88; height: 25; max-height: 90%; }
+HelpDrawer.drawer-full .drawer { width: 96%; max-width: 88; height: 25; max-height: 90%; padding: 0 1; border: round $surface-lighten-3; }
+#help-pages { height: 1fr; }
+#help-body, #help-command-body { height: auto; padding-top: 1; }
+HelpDrawer .drawer-hint { margin-top: 0; }
+PlanDrawer .drawer { width: 104; }
+#plan-body, #launch-review { height: auto; }
+StageDrawer .drawer { width: 76; height: 14; }
+/* Full-window settings: category rail, content viewport, fixed save bar. */
+SettingsDrawer { background: $background; }
+SettingsDrawer .drawer, SettingsDrawer.drawer-full .drawer { width: 100%; max-width: 100%; height: 100%; padding: 1 2; border: none; }
+#settings-title { color: $primary; }
+#settings-workspace { height: 1fr; }
+#settings-categories { width: 23; margin-right: 2; padding-right: 1; border-right: solid $surface-lighten-2; }
+#settings-categories:focus { border: none; border-right: solid $primary; }
+#settings-content { width: 1fr; height: 1fr; }
+.settings-section { height: 1fr; padding: 0 2; overflow-x: hidden; }
+.settings-section > Input, .settings-section > Select { max-width: 90; }
+.settings-section > Static { height: auto; margin-bottom: 1; }
+.settings-section > Button { margin-top: 1; }
+#settings-actions { height: 1; margin-top: 1; }
+#settings-draft-state { width: 1fr; height: 1; padding: 0 1; color: $text-muted; text-align: right; }
+#settings-status { height: auto; max-height: 2; color: $warning; margin-top: 1; }
+#yaml-editor { height: 1fr; min-height: 3; }
+SettingsDrawer.drawer-full .drawer { padding: 0 1; }
+SettingsDrawer.drawer-full #settings-categories { width: 20; margin-right: 0; }
+SettingsDrawer.drawer-full .settings-section { padding: 0 1; }
+SettingsDrawer.drawer-full .drawer-hint { max-height: 1; }
+SettingsDrawer.drawer-full .compact-actions { layout: vertical; height: auto; }
+SettingsDrawer.drawer-full .compact-actions Button { margin-bottom: 1; }
+.settings-card { height: auto; padding: 1 2; margin: 1 0; border: solid $surface-lighten-2; border-title-color: $primary; }
+.settings-card:focus-within { border: solid $surface-lighten-3; }
+.setting-summary-row { height: auto; margin-bottom: 1; }
+.setting-value-line { height: auto; }
+.setting-key { width: 23; height: auto; }
+.setting-separator { width: 2; height: 1; color: $text-muted; }
+.setting-value { width: 1fr; height: auto; }
+.setting-description { height: auto; color: $text-muted; }
+.settings-form-body { width: 1fr; height: 1fr; padding-right: 1; }
+.settings-form-row { height: auto; grid-size: 3; grid-columns: 19 30 1fr; grid-gutter: 0 2; margin-bottom: 1; }
+.settings-form-row Input, .settings-form-row Select { width: 1fr; min-width: 0; }
+.form-row-label { height: auto; }
+.form-row-description { height: auto; color: $text-muted; }
+.settings-context { width: 31; height: 1fr; border-left: solid $surface-lighten-2; padding-left: 2; margin-left: 1; }
+#settings-evaluator-preview { height: auto; margin-bottom: 2; }
+#settings-evaluator-details { height: auto; color: $text-muted; margin-top: 1; }
+#settings-evaluator-status { height: auto; color: $text-muted; margin-top: 1; }
+SettingsDrawer.settings-stacked .settings-form-row { grid-size: 1; grid-columns: 1fr; grid-gutter: 0; }
+SettingsDrawer.settings-stacked .form-row-description { margin-top: 1; }
+SettingsDrawer.settings-stacked .setting-value-line { layout: vertical; }
+SettingsDrawer.settings-stacked .setting-key { width: 1fr; color: $text-muted; }
+SettingsDrawer.settings-stacked .setting-separator { display: none; }
+SettingsDrawer.settings-stacked .settings-card { padding: 0 1; }
+/* Launch steps keep their controls and scroll independently. */
+LaunchDrawer .drawer { width: 104; }
+#launch-step-indicator { height: 2; color: $text-muted; }
+#launch-steps { height: 1fr; }
+.launch-step { height: 1fr; padding-right: 1; }
+#launch-review { padding-top: 1; }
+#launch-model-connection { height: auto; margin-top: 1; color: $text-muted; }
+#launch-nav { height: 1; margin-top: 1; }
+#launch-nav Button { width: 1fr; min-width: 0; }
+Collapsible { background: $background; padding: 0; border: none; }
+Collapsible > Contents { padding: 0; }
+Collapsible CollapsibleTitle { height: 1; padding: 0; color: $text-muted; }
+/* Inspection views share compact controls and a result viewport. */
+.filters { height: 1; }
+.filters Select { width: 1fr; margin-right: 1; }
+.filters.stacked { layout: vertical; height: auto; }
+.filters.stacked Select { width: 100%; margin-right: 0; }
+.filters.stacked Label { height: 1; }
+#results-filter-scroll { height: auto; max-height: 6; }
+#results-actions { height: 1; margin-top: 1; }
+#results-actions Button, #doctor-actions Button { width: 1fr; min-width: 0; }
+#coordinates-detail { height: auto; color: $text-muted; }
+#coordinates-detail-scroll, #evidence-detail-scroll, #failure-detail-scroll { height: auto; max-height: 10; min-height: 1; }
+/* Share remaining height with the table so details cannot displace actions. */
+#results-detail-scroll { height: 1fr; max-height: 10; min-height: 1; }
+#failure-summary-scroll { height: auto; max-height: 6; min-height: 1; }
+#coordinates-hint { height: 1; color: $text-muted; }
+#doctor-summary { height: auto; text-style: bold; }
+#doctor-title { margin-bottom: 0; }
+#doctor-note { height: auto; margin-bottom: 1; color: $text-muted; }
+#doctor-scroll, #provider-fields { overflow-x: hidden; }
+#doctor-actions { height: 1; margin-top: 1; }
+#doctor-details { width: 14; }
+#trace-body { height: auto; }
+.trace-new-badge { height: 1; color: $warning; }
+#provider-models { height: auto; max-height: 8; min-height: 2; }
+#provider-selection, #provider-status { height: auto; color: $text-muted; }
+#provider-fields Label { height: auto; margin-top: 1; color: $text-muted; }
+.provider-actions Button { width: 1fr; min-width: 0; }
+ProviderDrawer .drawer { width: 100; max-width: 94%; border: solid $surface-lighten-2; }
+#provider-fields .section-heading { height: 1; color: $primary; margin-top: 1; margin-bottom: 0; }
+#provider-models-empty { height: auto; color: $text-muted; margin: 1 0; }
+#provider-footer { align-horizontal: right; }
+#provider-footer Button { width: auto; min-width: 12; }
+.form-grid { grid-size: 2; grid-columns: 1fr 2fr; grid-gutter: 0 1; height: auto; }
+.inline-form, .checks { height: auto; }
+.screen-title { height: 1; text-style: bold; }

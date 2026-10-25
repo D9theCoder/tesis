@@ -14,7 +14,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.message import Message
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Button, DataTable, Input, Label, Select, Static
+from textual.widgets import Button, ContentSwitcher, DataTable, Input, Label, Select, Static, Tab, Tabs
 
 from tesis.artifact_repository import ArtifactRepository, config_fingerprint
 from tesis.config_loader import load_and_resolve_config
@@ -23,6 +23,7 @@ from tesis.tui_commands import BaseDrawer
 import tesis.tui_commands as tui_commands
 import tesis.tui_security as tui_security
 import tesis.tui_state as tui_state
+from tesis.tui_widgets import KeyboardActions, KeyboardTable, KeyboardTabs, execution_summary, key_hints, summary_rows
 
 
 DETAIL_LOG_MAX_LINES = 2_000
@@ -54,9 +55,10 @@ class CoordinateDrawer(BaseDrawer):
             yield Label("Filters", id="coordinates-filters-label")
             for select_id, attr in self.FILTER_FIELDS:
                 yield Select([], prompt=attr, id=select_id, allow_blank=True)
-        yield DataTable(id="coordinates-table")
-        yield Static("Select a row and press Enter to inspect the coordinate",
-                     id="coordinates-detail", markup=False)
+        yield KeyboardTable(id="coordinates-table")
+        with VerticalScroll(id="coordinates-detail-scroll"):
+            yield Static("Select a row and press Enter to inspect the coordinate",
+                         id="coordinates-detail", markup=False)
         yield Static("Enter inspect · Esc back", id="coordinates-hint", markup=False)
 
     def on_mount(self) -> None:
@@ -79,6 +81,12 @@ class CoordinateDrawer(BaseDrawer):
         self._populate_filter_options()
         self._render_table()
         _stack_filter_row(self, "#coordinates-filters")
+        table = self.query_one("#coordinates-table", DataTable)
+        selected = getattr(getattr(mission, "state", None), "selected_coordinate", None)
+        if selected in self._rows:
+            table.move_cursor(row=sorted(self._rows).index(selected))
+            self._show_coordinate(int(selected))
+        table.focus()
 
     def on_resize(self, event: Any) -> None:
         _stack_filter_row(self, "#coordinates-filters")
@@ -137,7 +145,7 @@ class CoordinateDrawer(BaseDrawer):
                     _cell(row.level),
                     _cell(row.mode),
                     _cell(row.selected_method or row.target_method),
-                    str(row.finding_count),
+                    str(row.finding_count) if row.status not in {"queued", "running", ""} else "—",
                     _cell(getattr(row, "elapsed", None)),
                     key=str(index),
                 )
@@ -146,26 +154,26 @@ class CoordinateDrawer(BaseDrawer):
 
     @on(DataTable.RowSelected, "#coordinates-table")
     def inspect_row(self, event: DataTable.RowSelected) -> None:
-        from tesis.tui_mission import _cell
-
         key = str(event.row_key.value) if event.row_key is not None else ""
-        row = self._rows.get(int(key)) if key.isdigit() else None
+        if key.isdigit():
+            self._show_coordinate(int(key))
+
+    def _show_coordinate(self, index: int) -> None:
+        row = self._rows.get(index)
         if row is None:
             return
-        try:
-            detail = (
-                f"coordinate {key} · {_cell(row.execution_status or row.status)}\n"
-                f"security={_cell(row.security_outcome)} reason={_cell(row.security_outcome_reason)}\n"
-                f"provider={_cell(row.provider)} surface={_cell(row.surface)} "
-                f"level={_cell(row.level)} mode={_cell(row.mode)}\n"
-                f"method={_cell(row.selected_method or row.target_method)} "
-                f"run={_cell(row.run_id)} elapsed={_cell(getattr(row, 'elapsed', None))}\n"
-                f"findings={', '.join(str(v) for v in (row.confirmed_vulns or [])) or '—'}\n"
-                f"outcomes={', '.join(str(v) for v in (row.achieved_outcomes or [])) or '—'}"
-            )
-            self.query_one("#coordinates-detail", Static).update(str(redact_secrets(detail))[:4000])
-        except Exception:
-            pass
+        reason = row.security_outcome_reason or {}
+        detail = summary_rows([
+            ("Coordinate", index), ("Execution", row.execution_status or row.status),
+            ("Security", row.security_outcome),
+            ("Reason", reason.get("code") if isinstance(reason, dict) else reason),
+            ("Provider profile", row.provider), ("Surface / level", f"{row.surface} / {row.level}"),
+            ("Payload mode", row.mode), ("Method", row.selected_method or row.target_method),
+            ("Run", row.run_id), ("Elapsed", row.elapsed),
+            ("Findings", ", ".join(str(v) for v in row.confirmed_vulns) or "—"),
+            ("Outcomes", ", ".join(str(v) for v in row.achieved_outcomes) or "—"),
+        ], label_width=18)
+        self.query_one("#coordinates-detail", Static).update(str(redact_secrets(detail.plain))[:4000])
 
     def prepare_shutdown(self) -> None:
         self._tesis_closing = True
@@ -184,8 +192,9 @@ class EvidenceDrawer(BaseDrawer):
     def compose(self) -> ComposeResult:
         yield Label("Evidence (Esc to close)", id="evidence-title")
         yield Static("loading…", id="evidence-body", markup=False)
-        yield DataTable(id="evidence-records")
-        yield Static("Select a record and press Enter to expand it", id="evidence-detail", markup=False)
+        yield KeyboardTable(id="evidence-records")
+        with VerticalScroll(id="evidence-detail-scroll"):
+            yield Static("Select a record and press Enter to expand it", id="evidence-detail", markup=False)
 
     def on_mount(self) -> None:
         from tesis.tui_mission import MissionControlScreen
@@ -209,13 +218,12 @@ class EvidenceDrawer(BaseDrawer):
         verifier = str(redact_secrets(getattr(state, "verifier_decision", None) or "—"))[:300]
         self._update_static(
             "#evidence-body",
-            "Evidence\n"
-            f"method={method}\n"
-            f"findings={len(findings)} outcomes={len(outcomes)}\n"
-            f"verifier={verifier}\n"
-            f"guardrails={getattr(state, 'guardrail_count', 0)} "
-            f"containment={getattr(state, 'containment_count', 0)} "
-            f"fallbacks={getattr(state, 'fallback_count', 0)}",
+            f"Method      {method}\n"
+            f"Verified    {len(findings)} findings · {len(outcomes)} outcomes\n"
+            f"Verifier    {verifier}\n"
+            f"Events      {getattr(state, 'guardrail_count', 0)} guardrails · "
+            f"{getattr(state, 'containment_count', 0)} containment · "
+            f"{getattr(state, 'fallback_count', 0)} fallbacks",
         )
         records: list[tuple[str, list[str]]] = [
             ("verifier", [f"method: {method}", f"verifier decision: {verifier}"]),
@@ -282,17 +290,15 @@ class FailureDrawer(BaseDrawer):
         endpoint = str(self.failure.get("endpoint") or "—")
         message = str(self.failure.get("message") or self.failure.get("error") or "—")
         yield Label("Failure (Esc to close)", id="failure-title")
-        yield Static(
-            f"Remediation: {remediation}\n"
-            f"failure class: {failure_class}\n"
-            f"provider: {provider}\n"
-            f"request id: {request_id}\n"
-            f"endpoint: {endpoint}\n"
-            f"message: {message}",
-            id="failure-body", markup=False,
-        )
-        yield DataTable(id="failure-records")
-        yield Static("Select a record and press Enter to expand it", id="failure-detail", markup=False)
+        with VerticalScroll(id="failure-summary-scroll"):
+            yield Static(summary_rows([
+                ("Next step", remediation), ("Failure", failure_class),
+                ("Provider", provider), ("Request ID", request_id),
+                ("Endpoint", endpoint), ("Message", message),
+            ]), id="failure-body", markup=False)
+        yield KeyboardTable(id="failure-records")
+        with VerticalScroll(id="failure-detail-scroll"):
+            yield Static("Select a record and press Enter to expand it", id="failure-detail", markup=False)
 
     def on_mount(self) -> None:
         try:
@@ -330,10 +336,23 @@ class FailureDrawer(BaseDrawer):
         self._failure_generation += 1
 
 
+class TraceViewport(VerticalScroll):
+    """Scrolling back pauses follow; End explicitly resumes the latest events."""
+
+    BINDINGS = [Binding("end", "latest", show=False)]
+
+    def action_latest(self) -> None:
+        self.screen.action_resume_follow()
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        if self.is_mounted and not self.is_vertical_scroll_end:
+            self.screen.pause_follow()
+
+
 class TraceDrawer(BaseDrawer):
     # Paused on open: history holds position; ``f``/End resumes auto-follow.
     BINDINGS = [*BaseDrawer.BINDINGS, Binding("f", "toggle_follow", "Follow", show=True),
-                Binding("end", "toggle_follow", "Follow", show=False)]
+                Binding("end", "resume_follow", "Latest", show=False)]
 
     def __init__(self) -> None:
         super().__init__()
@@ -344,9 +363,11 @@ class TraceDrawer(BaseDrawer):
         self._seen = 0
 
     def compose(self) -> ComposeResult:
-        yield Label("Trace — bounded redacted stream (Esc to close)", id="trace-title")
+        yield Label("Activity log", id="trace-title")
         yield Static("new events: 0", id="trace-new-badge", markup=False, classes="trace-new-badge")
-        yield Static("loading…", id="trace-body", markup=False)
+        with TraceViewport(id="trace-scroll", classes="drawer-body"):
+            yield Static("loading…", id="trace-body", markup=False)
+        yield Static(key_hints(("f", "follow / pause"), ("End", "latest"), ("PgUp/PgDn", "scroll"), ("Esc", "close")), classes="drawer-hint")
 
     def on_mount(self) -> None:
         from tesis.tui_mission import MissionControlScreen
@@ -357,31 +378,39 @@ class TraceDrawer(BaseDrawer):
         register = getattr(self._mission, "add_drawer_observer", None)
         if callable(register):
             register(self.refresh_trace)
-        self._seen = len(self._entries())
+        self._seen = self._version()
         self._render_trace()
         self._set_badge(0)
+        self.query_one("#trace-scroll", TraceViewport).focus()
+
+    def _version(self) -> int:
+        version = getattr(getattr(self._mission, "state", None), "notice_version", None)
+        return int(version) if version is not None else len(self._entries())
 
     def _entries(self) -> list[str]:
         state = getattr(self._mission, "state", None)
         raw = list(getattr(state, "notices", []) or [])
-        return [str(redact_secrets(str(entry)))[:200] for entry in raw][-TRACE_MAX_ENTRIES:]
+        return [str(redact_secrets(str(entry)))[:200] for entry in raw[-TRACE_MAX_ENTRIES:]]
 
     def refresh_trace(self) -> None:
         """Called by the mission screen after each drained event batch."""
         if self._tesis_closing:
             return
-        count = len(self._entries())
+        count = self._version()
         new = max(0, count - self._seen)
         if self._following:
             self._seen = count
             self._render_trace()
+            self.query_one("#trace-scroll", TraceViewport).scroll_end(animate=False)
         self._set_badge(new)
 
     def _render_trace(self) -> None:
         entries = self._entries()
         body = "\n".join(entries) if entries else "no events yet"
+        if len(body) > 20000:
+            body = "Earlier events omitted\n" + body[-20000:].partition("\n")[2]
         try:
-            self.query_one("#trace-body", Static).update(body[:20000])
+            self.query_one("#trace-body", Static).update(body)
         except Exception:
             pass
 
@@ -393,11 +422,21 @@ class TraceDrawer(BaseDrawer):
             pass
 
     def action_toggle_follow(self) -> None:
-        self._following = not self._following
         if self._following:
-            self._seen = len(self._entries())
-            self._render_trace()
+            self.pause_follow()
+        else:
+            self.action_resume_follow()
+
+    def action_resume_follow(self) -> None:
+        self._following = True
+        self._seen = self._version()
+        self._render_trace()
+        self.query_one("#trace-scroll", TraceViewport).scroll_end(animate=False)
         self._set_badge(0)
+
+    def pause_follow(self) -> None:
+        self._following = False
+        self._set_badge(max(0, self._version() - self._seen))
 
     def on_unmount(self) -> None:
         self.prepare_shutdown()
@@ -472,8 +511,8 @@ _STACKED_FILTER_WIDTH = 90
 def _stack_filter_row(drawer: Any, row_id: str) -> None:
     """Stack the filter row when the surface it renders in is too narrow.
 
-    A docked drawer is a 76-cell panel inside a full-size screen, so the screen
-    width is the wrong measure: the panel is what the selects have to fit in.
+    A centered dialog has less room than its full-size screen: the panel is
+    what the selects have to fit in.
     The panel is used whenever it has been laid out, otherwise the drawer width
     stands in.
     """
@@ -504,6 +543,8 @@ class ResultsDrawer(BaseDrawer):
     stay in the web companion.
     """
 
+    BINDINGS = [Binding("d", "details", "Details", show=False)]
+
     FILTER_FIELDS: tuple[tuple[str, str], ...] = (
         ("filter-status", "status"), ("filter-provider", "provider"),
         ("filter-surface", "surface"), ("filter-level", "security_level"),
@@ -522,6 +563,8 @@ class ResultsDrawer(BaseDrawer):
         self._populating = False
         self._selected_path: Path | None = None
         self._selected_item = None
+        self._selected_key: str | None = None
+        self._details = False
 
     def compose(self) -> ComposeResult:
         yield Label("Results (Esc to close)", id="results-title")
@@ -532,22 +575,21 @@ class ResultsDrawer(BaseDrawer):
                 for select_id, _ in self.FILTER_FIELDS:
                     yield Select([], prompt=select_id.removeprefix("filter-"), id=select_id,
                                  allow_blank=True)
-        yield DataTable(id="results-table")
-        with VerticalScroll(classes="drawer-body"):
+        yield KeyboardTable(id="results-table")
+        with VerticalScroll(id="results-detail-scroll", classes="drawer-body"):
             yield Static("Select a row and press Enter for triage detail", id="results-detail", markup=False)
-        with Horizontal(id="results-actions"):
+        with KeyboardActions(id="results-actions"):
+            yield Button("Details", id="results-details")
             yield Button("Export JSON", id="results-export")
             yield Button("Review payload evidence", id="results-review")
         yield Static("", id="results-status", markup=False)
+        yield Static(key_hints(("Enter", "inspect"), ("d", "details"), ("Tab", "focus"), ("Esc", "close")), classes="drawer-hint")
 
     def on_mount(self) -> None:
         try:
             table = self.query_one("#results-table", DataTable)
             table.cursor_type = "row"
-            # A docked drawer gives this table roughly 70 cells, so the summary
-            # keeps only what is readable there: identity, outcome, provider and
-            # level. Surface and payload mode stay one keystroke away in the five
-            # filters above, and every field remains in the Enter detail view.
+            # Keep the list compact; Enter opens the selected run's summary.
             for key, label, width in (("run", "Run", 16), ("status", "Execution", 11),
                                       ("outcome", "Outcome", 15),
                                       ("provider", "Provider", 12), ("level", "Level", 6)):
@@ -775,7 +817,20 @@ class ResultsDrawer(BaseDrawer):
             return
         self._selected_path = Path(str(getattr(item, "path", "")))
         self._selected_item = item
-        text = "\n".join(f"{label}: {value}" for label, value in self._triage_fields(item))
+        self._selected_key = key
+        fields = self._triage_fields(item)
+        if not self._details:
+            summary = {"run", "execution status", "security outcome", "provider / model",
+                       "surface / level / mode", "condition / target method / repeat",
+                       "thesis scoring", "final payload / composite", "failure"}
+            fields = [(label, value) for label, value in fields if label in summary]
+            labels = {"run": "Run", "execution status": "Execution", "security outcome": "Security outcome",
+                      "provider / model": "Provider / model", "surface / level / mode": "Surface / level / mode",
+                      "condition / target method / repeat": "Condition / method / repeat",
+                      "thesis scoring": "Thesis scoring", "final payload / composite": "Final payload / composite",
+                      "failure": "Failure"}
+            fields = [(labels[label], value) for label, value in fields]
+        text = summary_rows(fields, label_width=24).plain
         limit = int(DETAIL_RENDER_MAX_CHARS)
         body = text[:limit]
         max_lines = int(DETAIL_LOG_MAX_LINES)
@@ -789,6 +844,13 @@ class ResultsDrawer(BaseDrawer):
             self.query_one("#results-detail", Static).update(body[:20000])
         except Exception:
             pass
+
+    @on(Button.Pressed, "#results-details")
+    def action_details(self) -> None:
+        self._details = not self._details
+        self.query_one("#results-details", Button).label = "Less detail" if self._details else "Details"
+        if self._selected_key is not None:
+            self._show_detail(self._selected_key)
 
     @on(Button.Pressed, "#results-export")
     def export_triage(self) -> None:
@@ -1027,7 +1089,7 @@ class DoctorDrawer(BaseDrawer):
         yield Static("Local checks only. Service connections are not checked.", id="doctor-note", markup=False)
         with VerticalScroll(id="doctor-scroll", classes="drawer-body"):
             yield Static("Starting checks…", id="doctor-results", markup=False)
-        with Horizontal(id="doctor-actions"):
+        with KeyboardActions(id="doctor-actions"):
             yield Button("Run again", id="doctor-run")
             yield Button("Check services", id="doctor-live")
             yield Button("Details", id="doctor-details", disabled=True)
@@ -1173,16 +1235,24 @@ class DoctorDrawer(BaseDrawer):
         self._stop_checks()
 
 class PlanDrawer(BaseDrawer):
+    BINDINGS = [Binding("d", "details", "Details", show=False)]
+
     def __init__(self, config: Any = None) -> None:
         super().__init__()
         self.config = config
         self._tesis_closing = False
         self._plan_generation = 0
+        self._details = False
 
     def compose(self) -> ComposeResult:
-        yield Label("Plan (Esc to close)", id="plan-title")
-        with VerticalScroll(id="plan-scroll"):
+        yield Label("Experiment plan", id="plan-title", classes="drawer-title")
+        with VerticalScroll(id="plan-scroll", classes="drawer-body"):
             yield Static("loading…", id="plan-body", markup=False)
+        with KeyboardActions(classes="compact-actions"):
+            yield Button("Details", id="plan-details")
+            yield Button("Run setup", id="plan-run")
+            yield Button("Matrix setup", id="plan-matrix")
+        yield Static(key_hints(("d", "details"), ("PgUp/PgDn", "scroll"), ("Esc", "close")), classes="drawer-hint")
 
     def on_mount(self) -> None:
         cfg = self.config
@@ -1192,30 +1262,27 @@ class PlanDrawer(BaseDrawer):
             except Exception as exc:
                 self._set(f"config error        {tui_security._safe_config_error_text(exc)}")
                 return
-        try:
-            fingerprint = config_fingerprint({
-                "target_url": getattr(cfg, "target_url", ""),
-                "provider": getattr(cfg, "provider", ""),
-                "level": getattr(cfg, "level", ""),
-            })
-        except Exception:
-            fingerprint = "—"
-        rows = [
-            ("target", tui_security._safe_url(getattr(cfg, "target_url", "—"))),
-            ("provider", getattr(cfg, "provider", "—")),
-            ("level", getattr(cfg, "level", "—")),
-            ("surface", getattr(cfg, "surface", "—")),
-            ("payload mode", getattr(cfg, "payload_mode", "—")),
-            ("condition", getattr(cfg, "experiment_condition", "—")),
-            ("target method", getattr(cfg, "target_method", None) or "—"),
-            ("coordinates", tui_state._matrix_coordinate_count(cfg)),
-            ("candidate budget", getattr(cfg, "candidate_budget", "—")),
-            ("iterations", getattr(cfg, "iterations", "—")),
-            ("output dir", getattr(cfg, "output_dir", "—")),
-            ("models", getattr(cfg, "models", "—")),
-            ("fingerprint", fingerprint),
-        ]
-        self._set("\n".join(f"{label:<18}{value}" for label, value in rows))
+        self.config = cfg
+        self._render_plan()
+        self.query_one("#plan-scroll", VerticalScroll).focus()
+
+    def _render_plan(self) -> None:
+        if self.config is None:
+            return
+        mode = "matrix" if getattr(self.config, "matrix", False) else "single"
+        self.query_one("#plan-body", Static).update(execution_summary(self.config, mode=mode, details=self._details))
+
+    @on(Button.Pressed, "#plan-details")
+    def action_details(self) -> None:
+        self._details = not self._details
+        self.query_one("#plan-details", Button).label = "Less detail" if self._details else "Details"
+        self._render_plan()
+
+    @on(Button.Pressed, "#plan-run, #plan-matrix")
+    def configure_run(self, event: Button.Pressed) -> None:
+        from tesis.tui_forms import LaunchDrawer
+
+        self.app.push_screen(LaunchDrawer(mode="matrix" if event.button.id == "plan-matrix" else "single"))
 
     def _set(self, text: str) -> None:
         try:
@@ -1234,24 +1301,63 @@ class HelpDrawer(BaseDrawer):
     ALLOW_BELOW_FLOOR = True
 
     def compose(self) -> ComposeResult:
-        yield Label("Help (Esc to close)", id="help-title")
-        with VerticalScroll(id="help-scroll"):
-            yield Static("", id="help-body")
+        yield Label("Keyboard shortcuts", id="help-title", classes="drawer-title")
+        yield KeyboardTabs(Tab("Navigation", id="help-navigation"), Tab("Commands", id="help-commands"), id="help-tabs")
+        with ContentSwitcher(initial="help-navigation-page", id="help-pages"):
+            with VerticalScroll(id="help-navigation-page"):
+                yield Static("", id="help-body", markup=False)
+            with VerticalScroll(id="help-commands-page"):
+                yield Static("", id="help-command-body", markup=False)
+        yield Static(key_hints(("←/→", "tab"), ("Tab", "focus"), ("PgUp/PgDn", "scroll"), ("Esc", "close")), classes="drawer-hint")
 
     def on_mount(self) -> None:
-        rows = [
-            f"{'NAVIGATION':<12}{tui_commands.navigation_hint()}",
-            "",
-            f"{'COMMAND':<12}{'KEYS':<10}SUMMARY",
-        ]
-        rows.extend(
-            f"{'/' + spec.name:<12}{(spec.keys or '—'):<10}{spec.summary}"
+        self.query_one("#help-body", Static).update(summary_rows([
+            ("Tab / Shift+Tab", "Next / previous interactive panel"),
+            ("↑ / ↓", "Select an item in the focused list"),
+            ("← / →", "Change tabs or move horizontal controls"),
+            ("Enter", "Open or activate the selection"),
+            ("Esc", "Close the overlay or return"),
+            ("/ · Ctrl+P", "Open commands; type to filter"),
+            ("?", "Open this help"),
+            ("PgUp / PgDn", "Scroll the focused list or viewport"),
+            ("Home / End", "First / last item or viewport boundary"),
+            ("1 / 2 / 3 / 4", "Pipeline / runs / evidence / activity"),
+            ("Ctrl+C", "Cancel a run; press again to exit"),
+            ("Ctrl+S", "Save settings"),
+            ("Ctrl+E", "Open the settings YAML editor"),
+            ("", "\nText fields keep normal typing and editing keys."),
+        ], label_width=18))
+        self.query_one("#help-command-body", Static).update(summary_rows([
+            (f"/{spec.name}" + (f"  {spec.keys}" if spec.keys else ""), spec.summary)
             for spec in tui_commands.COMMANDS
-        )
-        try:
-            self.query_one("#help-body", Static).update(str(redact_secrets("\n".join(rows)))[:8000])
-        except Exception:
-            pass
+        ], label_width=22))
+        self.query_one("#help-tabs", Tabs).focus()
+
+    @on(Tabs.TabActivated, "#help-tabs")
+    def change_help_tab(self, event: Tabs.TabActivated) -> None:
+        self.query_one("#help-pages", ContentSwitcher).current = f"{event.tab.id}-page"
+
+    @on(KeyboardTabs.Confirmed, "#help-tabs")
+    def enter_help_page(self) -> None:
+        page = self.query_one("#help-pages", ContentSwitcher).current
+        self.query_one(f"#{page}").focus()
+
+
+class StageDrawer(BaseDrawer):
+    """A selected pipeline stage, without the full runtime state dump."""
+
+    def __init__(self, stage: Any, method: str | None = None) -> None:
+        super().__init__()
+        self.stage, self.method = stage, method
+
+    def compose(self) -> ComposeResult:
+        yield Label(self.stage.label, classes="drawer-title")
+        with VerticalScroll(classes="drawer-body"):
+            yield Static(summary_rows([
+                ("Stage", self.stage.stage_id), ("Status", self.stage.status),
+                ("Method", self.method), ("Detail", self.stage.detail or "No activity yet"),
+            ]), markup=False)
+        yield Static(key_hints(("PgUp/PgDn", "scroll"), ("Esc", "back")), classes="drawer-hint")
 
 
 class AboutDrawer(BaseDrawer):
