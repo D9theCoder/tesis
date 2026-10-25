@@ -6,11 +6,21 @@ code."""
 import pytest
 import llm.provider as provider_module
 from langchain_openai import ChatOpenAI
+
+
 from llm.provider import (
     get_llm,
     get_llm_from_model_config,
 )
 from tesis.model_config import ModelConfig
+
+
+@pytest.mark.parametrize("provider", ["gemini", "claude"])
+def test_non_openai_sdk_retries_are_disabled_unless_explicit(provider):
+    client = get_llm(provider, api_key="offline-test-key")
+    assert client.max_retries == 0
+    configured = get_llm(provider, api_key="offline-test-key", max_retries=2)
+    assert configured.max_retries == 2
 
 
 def test_get_llm_openai(monkeypatch):

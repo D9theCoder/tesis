@@ -28,6 +28,7 @@ from core.checkpoint_store import (
 )
 from core.graph_builder import GRAPH_BUILD_VERSION, build_framework
 from agents.state_utils import validated_payload_candidates
+from foundation.session_manager import dvwa_credentials
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.scorer import build_score_report
 from core.state import (
@@ -287,6 +288,7 @@ def _effective_llm_runtime_config(
             "temperature": resolved.get("temperature", 0),
             "max_tokens": int(resolved.get("max_tokens", default_tokens)),
             "structured_output": settings.structured_output,
+            "reasoning_effort": resolved.get("reasoning_effort"),
             "model_fingerprint": model_fingerprint({"provider": provider, **resolved}),
         }
     return {
@@ -439,6 +441,8 @@ def run_single_engagement(
     scoring_oracles: list[dict[str, Any]] | None = None,
     fixture_id: str | None = None,
     protocol_version: str | None = None,
+    dvwa_username: str = "admin",
+    dvwa_password: str = "password",
 ) -> dict:
     """Run one configured DVWA framework engagement and write evaluation artifacts.
 
@@ -646,6 +650,7 @@ def run_single_engagement(
             runtime_event_emitter(event_type, data)
 
     runtime_stack = ExitStack()
+    runtime_stack.enter_context(dvwa_credentials(dvwa_username, dvwa_password))
     call_context = runtime_stack.enter_context(runtime_service.coordinate(
         coordinate_id=execution_id,
         default_provider=llm_provider,
@@ -1452,14 +1457,15 @@ def run_single_engagement(
     try:
         if scoring_rubric_version == 'scoring.v4' and scoring_oracles:
             from evaluation.session_oracle import collect_session_oracles
-            artifact = collect_session_oracles(artifact, final_state)
-            from evaluation.permission_oracle import collect_permission_oracles
-            artifact = collect_permission_oracles(artifact, final_state)
-            from evaluation.scoring_evidence import attach_oracle_evidence
-            attach_oracle_evidence(artifact)
-            from evaluation.dependency_oracle import collect_dependency_oracles
-            artifact = collect_dependency_oracles(artifact, final_state)
-            attach_oracle_evidence(artifact)
+            with dvwa_credentials(dvwa_username, dvwa_password):
+                artifact = collect_session_oracles(artifact, final_state)
+                from evaluation.permission_oracle import collect_permission_oracles
+                artifact = collect_permission_oracles(artifact, final_state)
+                from evaluation.scoring_evidence import attach_oracle_evidence
+                attach_oracle_evidence(artifact)
+                from evaluation.dependency_oracle import collect_dependency_oracles
+                artifact = collect_dependency_oracles(artifact, final_state)
+                attach_oracle_evidence(artifact)
             artifact['response_evidence'] = artifact['final_state']['response_evidence']
     except Exception as exc:
         status = "error"

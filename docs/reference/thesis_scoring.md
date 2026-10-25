@@ -244,8 +244,10 @@ The Results detail scrolls independently of its visible Export/Review actions;
 Enter selects a complete artifact row.
 
 The configured evaluator is `openai_compatible/deepseek-v4.1-flash`, using the
-existing profile, fresh judging context, temperature 0, 1,024 output tokens,
-60-second timeout and two attempts per positive candidate. Human mode never
+existing profile, fresh judging context, the profile's reasoning and API mode,
+1,024 output tokens, 60-second timeout and two attempts per positive candidate.
+Explicit reasoning suppresses incompatible temperature fields through the
+shared provider adapter. Human mode never
 calls it. The same model is used in a separate judging role; this is **not** an
 independent-model comparison. Model/profile changes after execution are rejected.
 Response text is untrusted evidence, attack-model identity is omitted, and the

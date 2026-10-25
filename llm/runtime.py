@@ -174,6 +174,20 @@ def model_fingerprint(config: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(_canonical(safe).encode("utf-8")).hexdigest()
 
 
+def provider_request_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Keep known dispatch counts separate from unobservable SDK retries."""
+    dispatched = [row for row in rows if not row.get("cache_hit")]
+    unknown = sum(row.get("provider_requests") is None for row in dispatched)
+    known = sum(int(row.get("provider_requests") or 0) for row in dispatched)
+    return {
+        "provider_dispatches": sum(int(row.get("provider_dispatches", row.get("attempts", 1)))
+                                   for row in dispatched),
+        "provider_requests": None if unknown else known,
+        "known_provider_requests": known,
+        "provider_request_count_unknown_calls": unknown,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class RoleSettings:
     """Resolved overrides for one runtime role."""
@@ -185,15 +199,16 @@ class RoleSettings:
     reasoning_effort: str | None = None
     structured_output: str = "auto"
     total_deadline_s: float | None = None
+    max_tokens_default: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class ModelCallSpec:
     """Immutable resolved plan for one logical model call (adapter, no dispatch change).
 
-    ``configured_max_retries`` is the raw profile value; ``effective_max_retries``
-    is forced to 0 while application retries stay disabled. ``retry_owner`` is
-    always ``"none"`` (SDK retries also default to 0). ``total_deadline_s`` is
+    ``configured_max_retries`` and ``effective_max_retries`` retain explicit SDK
+    retry settings; the default is zero. ``retry_owner`` is ``"sdk"`` only when
+    retries are configured. ``total_deadline_s`` is
     recorded but NOT enforced until telemetry proves attempt accounting.
     """
 
@@ -331,7 +346,7 @@ def build_model_call_spec(
         user_message=user_message,
         schema=dict(schema),
         schema_version=schema_version,
-        max_tokens=int(max_tokens),
+        max_tokens=int(config.get("max_tokens") or max_tokens),
         temperature=config.get("temperature", 0),
         reasoning_effort=config.get("reasoning_effort"),
         structured_output=settings.structured_output,
@@ -339,8 +354,8 @@ def build_model_call_spec(
         endpoint=sanitize_endpoint(config.get("base_url") or config.get("endpoint")),
         timeout_s=_numeric_setting(config.get("timeout", config.get("request_timeout"))),
         configured_max_retries=int(configured_retries),
-        effective_max_retries=0,
-        retry_owner="none",
+        effective_max_retries=int(configured_retries),
+        retry_owner="sdk" if configured_retries else "none",
         total_deadline_s=settings.total_deadline_s,
         coordinate_id=context.coordinate_id,
         call_id=call_id,
@@ -502,6 +517,8 @@ class CoordinateCallContext:
     def role_config(self, role: str, *, max_tokens: int | None) -> tuple[str, dict[str, Any], RoleSettings]:
         settings = self.role_settings.get(role, RoleSettings())
         profile = settings.model_profile or self.default_provider
+        if settings.model_profile and profile not in self.model_profiles:
+            raise ValueError(f"Unknown model profile: {profile}")
         base = dict(self.model_profiles.get(profile) or self.default_model_config)
         provider = str(base.pop("provider", profile or self.default_provider)).strip().lower()
         extra = base.pop("extra", {})
@@ -513,7 +530,12 @@ class CoordinateCallContext:
             base["temperature"] = settings.temperature
         if settings.reasoning_effort is not None:
             base["reasoning_effort"] = settings.reasoning_effort
-        resolved_tokens = settings.max_tokens if settings.max_tokens is not None else max_tokens
+        if settings.max_tokens is not None and not settings.max_tokens_default:
+            resolved_tokens = settings.max_tokens
+        else:
+            resolved_tokens = base.get("max_tokens") or base.get("max_output_tokens")
+            if resolved_tokens is None:
+                resolved_tokens = 8192 if base.get("reasoning_effort") else max_tokens
         if resolved_tokens is not None:
             base["max_tokens"] = int(resolved_tokens)
         return provider, base, settings
@@ -550,6 +572,8 @@ class CoordinateCallContext:
             "endpoint": record.get("endpoint"),
             "timeout_s": record.get("timeout_s"),
             "attempts": record.get("attempts"),
+            "provider_dispatches": record.get("provider_dispatches"),
+            "provider_requests": record.get("provider_requests"),
             "max_retries": record.get("max_retries"),
             "prompt_hash": record.get("prompt_hash"),
             "model_fingerprint": record.get("model_fingerprint"),
@@ -613,6 +637,7 @@ class CoordinateCallContext:
             payload["duration_ms"] += int(row.get("call_duration_ms", 0) or 0)
         return {
             "calls": calls,
+            **provider_request_summary(rows),
             "cache_hits": hits,
             "cache_hit_rate": round(hits / calls, 4) if calls else 0.0,
             "invalid_outputs": invalid,
@@ -869,7 +894,10 @@ class LLMRuntime:
             "coordinate_id": context.coordinate_id,
             "endpoint": endpoint,
             "timeout_s": timeout_s,
-            "attempts": 1,
+            "attempts": 0,
+            "attempt_records": [],
+            "provider_dispatches": 0,
+            "provider_requests": 0,
             "max_retries": max_retries,
             "model_fingerprint": fingerprint,
             "cache_hit": False,
@@ -925,6 +953,33 @@ class LLMRuntime:
         output_incomplete = False
         incomplete_reason: str | None = None
         structured_output_fallback: dict[str, Any] | None = None
+        attempt_records: list[dict[str, Any]] = []
+
+        def dispatch(client: Any, dispatch_mode: str) -> Any:
+            attempt = {"attempt_id": f"{call_id}:attempt-{len(attempt_records) + 1}",
+                       "structured_output_mode": dispatch_mode, "status": "started"}
+            attempt_records.append(attempt)
+            started = perf_counter()
+            try:
+                result = client.invoke([
+                    SystemMessage(content=system_message), HumanMessage(content=user_message),
+                ])
+                raw = result.get("raw") if isinstance(result, Mapping) else result
+                attempt.update(status="responded", provider_usage=self._usage(raw))
+                return result
+            except Exception as exc:
+                diagnostic = provider_error_details(exc, provider=provider, model=model,
+                    role=role, coordinate_id=context.coordinate_id)
+                attempt.update(status="provider_error", diagnostic=diagnostic)
+                raise
+            finally:
+                attempt["elapsed_ms"] = int((perf_counter() - started) * 1000)
+
+        def attempt_fields() -> dict[str, Any]:
+            return {"attempts": len(attempt_records), "attempt_records": list(attempt_records),
+                    "provider_dispatches": len(attempt_records),
+                    "provider_requests": None if max_retries and attempt_records else len(attempt_records)}
+
         try:
             capability_key = (role, fingerprint)
             native_allowed = settings.structured_output in {"auto", "native"}
@@ -964,10 +1019,7 @@ class LLMRuntime:
                         mode = "json_prompt_fallback"
                     if native_supported:
                         try:
-                            response = structured.invoke([
-                                SystemMessage(content=system_message),
-                                HumanMessage(content=user_message),
-                            ])
+                            response = dispatch(structured, mode)
                         except Exception as exc:
                             if (
                                 settings.structured_output == "auto"
@@ -986,10 +1038,7 @@ class LLMRuntime:
                             else:
                                 raise
                     if not native_supported:
-                        response = client.invoke([
-                            SystemMessage(content=system_message),
-                            HumanMessage(content=user_message),
-                        ])
+                        response = dispatch(client, mode)
                         incomplete_reason = _incomplete_reason(response)
                         output_incomplete = incomplete_reason is not None
                         content = getattr(response, "content", response)
@@ -1055,10 +1104,7 @@ class LLMRuntime:
                         parsed = validator(dict(parsed_raw))
                         usage_source = raw
                 else:
-                    response = client.invoke([
-                        SystemMessage(content=system_message),
-                        HumanMessage(content=user_message),
-                    ])
+                    response = dispatch(client, mode)
                     incomplete_reason = _incomplete_reason(response)
                     output_incomplete = incomplete_reason is not None
                     content = getattr(response, "content", response)
@@ -1096,6 +1142,7 @@ class LLMRuntime:
                 )
             record = {
                 **base_record,
+                **attempt_fields(),
                 'validation_status': 'invalid',
                 'output_sha256': evidence_hash(redact_secrets(text)),
                 "queue_wait_ms": int((acquired_at - queued_at) * 1000),
@@ -1175,6 +1222,7 @@ class LLMRuntime:
         provider_usage = self._usage(usage_source)
         record = {
             **base_record,
+            **attempt_fields(),
             'validation_status': 'valid', 'output': redact_secrets(parsed),
             'output_sha256': evidence_hash(redact_secrets(parsed)),
             "queue_wait_ms": int((acquired_at - queued_at) * 1000),

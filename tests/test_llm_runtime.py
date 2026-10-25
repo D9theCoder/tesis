@@ -69,6 +69,54 @@ def _invoke(runtime, context, *, schema_version="v1"):
     )
 
 
+def test_native_fallback_records_each_dispatch_and_cache_adds_no_request(monkeypatch):
+    class Unsupported(RuntimeError):
+        status_code = 400
+
+    class Client(_FakeClient):
+        def with_structured_output(self, *args, **kwargs):
+            return self
+
+        def invoke(self, messages):
+            if not self.calls:
+                self.calls += 1
+                raise Unsupported("unsupported tool_choice parameter")
+            return super().invoke(messages)
+
+    client = Client(contents=['{"value":"ok"}'])
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *args, **kwargs: client)
+    runtime = LLMRuntime()
+    try:
+        with runtime.coordinate(coordinate_id="fallback", default_provider="openai_compatible",
+                                cache_enabled=True) as context:
+            first = _invoke(runtime, context)
+            cached = _invoke(runtime, context)
+        assert first.performance["attempts"] == 2
+        assert [row["status"] for row in first.performance["attempt_records"]] == ["provider_error", "responded"]
+        assert first.performance["attempt_records"][0]["diagnostic"]["status_code"] == 400
+        assert cached.performance["attempts"] == 0
+        assert context.performance_summary()["provider_requests"] == client.calls == 2
+        assert context.performance_summary()["calls"] == 2
+        assert context.performance_summary()["cache_hits"] == 1
+    finally:
+        runtime.close()
+
+
+def test_sdk_retries_leave_actual_request_count_explicitly_unknown(monkeypatch):
+    client = _FakeClient(contents=['{"value":"ok"}'])
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *args, **kwargs: client)
+    runtime = LLMRuntime()
+    try:
+        with runtime.coordinate(coordinate_id="sdk", default_provider="openai",
+            default_model_config={"max_retries": 2}) as context:
+            _invoke(runtime, context)
+        assert context.performance_summary()["provider_requests"] is None
+        assert context.performance_summary()["provider_dispatches"] == 1
+        assert context.performance_summary()["provider_request_count_unknown_calls"] == 1
+    finally:
+        runtime.close()
+
+
 def test_cache_reuses_only_valid_output_within_one_coordinate(monkeypatch):
     client = _FakeClient(contents=[json.dumps({"value": "ok"})])
     monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: client)

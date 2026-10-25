@@ -13,13 +13,14 @@ def _single_config(tmp_path: Path) -> Path:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "target_url: http://localhost/dvwa\n"
-        "provider: gemini\n"
+        "provider: openai_compatible\n"
         "level: low\n"
         "surface: sqli\n"
         "payload_mode: static_only\n"
         "models:\n"
-        "  gemini:\n"
+        "  openai_compatible:\n"
         "    model_name: test-model\n"
+        "    base_url: http://localhost:9999/v1\n"
         "    api_key: provider-secret-key\n"
         f"output_dir: {tmp_path / 'results'}\n",
         encoding="utf-8",
@@ -28,16 +29,7 @@ def _single_config(tmp_path: Path) -> Path:
 
 
 def test_headless_single_run_allocates_dated_layout(monkeypatch, tmp_path: Path) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        "target_url: http://localhost/dvwa\n"
-        "provider: gemini\n"
-        "level: low\n"
-        "surface: sqli\n"
-        "payload_mode: static_only\n"
-        f"output_dir: {tmp_path / 'results'}\n",
-        encoding="utf-8",
-    )
+    config_path = _single_config(tmp_path)
 
     def fake_run(**kwargs):
         output_dir = Path(kwargs["output_dir"])
@@ -90,7 +82,7 @@ def test_headless_single_run_writes_active_then_terminal_descriptor_and_journal(
             "execution_id": execution_id,
             "run_id": "run-j",
             "status": "success",
-            "config": {"provider": "gemini", "surface": "sqli", "security_level": "low"},
+            "config": {"provider": "openai_compatible", "surface": "sqli", "security_level": "low"},
         }
 
     monkeypatch.setattr("tesis.headless.run_single_engagement", fake_run)
@@ -145,18 +137,15 @@ def test_headless_runner_exception_writes_terminal_failed_descriptor(
 
 
 def test_headless_keyboard_interrupt_persists_cancelled_matrix(tmp_path: Path, monkeypatch) -> None:
-    config_path = tmp_path / "config.yaml"
+    config_path = _single_config(tmp_path)
     config_path.write_text(
-        "target_url: http://localhost/dvwa\n"
-        "provider: gemini\n"
-        "level: low\n"
+        config_path.read_text(encoding="utf-8") +
         "matrix: true\n"
-        "providers: [gemini]\n"
+        "providers: [openai_compatible]\n"
         "levels: [low]\n"
         "surfaces: [sqli]\n"
         "payload_modes: [hybrid]\n"
-        "repeats: 1\n"
-        f"output_dir: {tmp_path / 'results'}\n",
+        "repeats: 1\n",
         encoding="utf-8",
     )
 

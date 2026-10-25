@@ -83,6 +83,8 @@ def _common_kwargs(config: EngagementConfig, *, output_dir: Path) -> dict[str, A
         **{k: getattr(config, k) for k in ("scoring_rubric_version", "scoring_profile", "scoring_oracles", "fixture_id", "protocol_version")},
         "scoring_mode": config.scoring_mode,
         "scoring_evaluator": config.scoring_evaluator,
+        "dvwa_username": config.dvwa_username,
+        "dvwa_password": config.dvwa_password,
     }
     kwargs.update(_runtime_kwargs(config))
     return kwargs

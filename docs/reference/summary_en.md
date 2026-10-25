@@ -206,33 +206,45 @@ overridden. Precedence is CLI `--reasoning-effort` > `TESIS_REASONING_EFFORT` >
 YAML role > profile, and either CLI/environment control applies to both roles.
 Within a profile or role block, canonical `reasoning_effort` wins over legacy
 `reasoning.effort`, `model_kwargs`, and `extra_body` forms; legacy values are
-normalized and stripped from the provider request.
+normalized and stripped from the provider request. Other LLM controls use the
+same CLI > environment > YAML precedence, including concurrency, cache, model,
+and role profile selectors. When profiles are configured, launcher provider
+choices contain only their configured adapters; removing a Gemini profile
+removes it from those choices.
 
 OpenAI and OpenAI-compatible adapters send one canonical effort field, remove
 temperature and conflicting legacy fields, and never silently lower a rejected
 value. An explicit portable effort for Gemini or Claude raises an actionable
 error; those providers require null/inherit plus native thinking configuration.
-When effective effort is explicit and `max_tokens` is omitted, each role
-defaults to the shared 8,192-token reasoning-and-output ceiling. Null/inherit
-preserves the historical role defaults. Artifacts distinguish
+An explicit role token limit wins over the effective model profile's limit.
+When both limits are omitted, an explicit effective effort defaults to the
+shared 8,192-token reasoning-and-output ceiling; otherwise the historical role
+defaults apply. Loader defaults are marked with `max_tokens_default` and are
+resolved again for each coordinate's actual profile. Artifacts distinguish
 `reasoning_effort_requested`, provider usage, and explicit
 `reasoning_token_evidence`; they do not infer hidden reasoning from response
 prose. Reasoning settings participate in client/cache fingerprints.
 
-The TUI has independent profile-level and global two-role reasoning sliders.
-The global slider displays a mixed state when the loaded explicit role values
-differ, including one explicit value and one inherited value, and shows both
-values (for example, `orchestrator=xhigh, payload_generator=inherit`). Saving
-without moving that control preserves the two loaded role settings; moving it
-replaces both. Pointer clicks are interpreted only on the rendered marker
-track.
+The launch form displays both role efforts and initially selects
+`Keep per-role reasoning settings`. Leaving that selection unchanged preserves
+different explicit or inherited values. Selecting one effort overrides both
+roles; `Inherit profile effort for both roles` clears their role overrides.
+Profile settings remain editable in the settings YAML editor.
+
+The independent scoring evaluator freezes its profile's effective API mode,
+reasoning effort, sampling settings, and provider options together with its own
+token budget and retry limit. It uses the same provider adapter. A changed
+effective evaluator configuration cannot silently replace an older artifact's
+frozen judging configuration.
 
 Standalone `python -m tesis doctor` runs only when requested. Its 11 offline
 checks cover the fixed 3-surface/9-method/3-level/3-payload-mode/2-condition
 scope, AKG invariants, LangGraph compilation, all 81 static-seed coordinates,
 request and redirect containment, profiles/roles, credentials, endpoints,
 dependencies (including SQLite checkpoints), output writability, and reasoning
-controls. Offline service checks are explicitly skipped; local success does not
+controls, including the selected evaluator's reasoning effort. Doctor rejects
+a missing requested config file before environment resolution. Offline service
+checks are explicitly skipped; local success does not
 prove server availability. The artifact check tests `output_dir/runs` and a
 temporary write/flush at its nearest existing directory. `--live` adds one
 benign structured model probe per role and contained DVWA authentication,
@@ -345,6 +357,16 @@ wait, call duration, structured-output mode, parse status,
 reports time by role, cache-hit rate, invalid-output rate, and peak
 LLM/DVWA-node concurrency. Raw prompts and secrets are excluded from
 performance summaries.
+
+`calls` counts logical calls, while `attempt_records`, `attempts`, and
+`provider_dispatches` retain the individual provider dispatches, including a
+native-schema rejection followed by JSON-prompt fallback. A cache hit makes
+zero dispatches. SDK retries default to zero on every adapter. With explicit
+SDK retries, the exact `provider_requests` count remains null;
+`known_provider_requests` and `provider_request_count_unknown_calls` keep known
+counts and uncertainty separate in run and matrix summaries. Configured DVWA
+credentials are scoped to each coordinate's session owner, including oracle
+collection, and are never added to graph state or checkpoint inputs.
 
 ### 3.7 Architecture Change Log: Before and After
 

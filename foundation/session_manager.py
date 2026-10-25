@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import logging
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from hashlib import sha256
-from typing import Any
+from typing import Any, Iterator
 
 from bs4 import BeautifulSoup
 
@@ -21,6 +23,19 @@ logger = logging.getLogger(__name__)
 
 # Valid DVWA security levels (canonical contract from core/state.py)
 VALID_LEVELS = ("low", "medium", "high")
+_DVWA_CREDENTIALS: ContextVar[tuple[str, str]] = ContextVar(
+    "dvwa_credentials", default=("admin", "password"),
+)
+
+
+@contextmanager
+def dvwa_credentials(username: str, password: str) -> Iterator[None]:
+    """Scope lab login defaults to one coordinate without putting secrets in state."""
+    token = _DVWA_CREDENTIALS.set((username, password))
+    try:
+        yield
+    finally:
+        _DVWA_CREDENTIALS.reset(token)
 
 
 def session_fingerprint(session) -> str | None:
@@ -155,7 +170,7 @@ class DVWASession:
             return token_el["value"]
         return None
 
-    def login(self, username: str = "admin", password: str = "password") -> bool:
+    def login(self, username: str | None = None, password: str | None = None) -> bool:
         """Authenticate to DVWA and persist the session.
 
         Follows the DVWA login flow:
@@ -174,6 +189,9 @@ class DVWASession:
             TransportError: On network failures.
             RequestTimeoutError: On timeouts.
         """
+        configured_username, configured_password = _DVWA_CREDENTIALS.get()
+        username = configured_username if username is None else username
+        password = configured_password if password is None else password
         # Step 1: Fetch login page and extract CSRF token
         login_page = self.http.get("login.php")
         token = self._extract_user_token(login_page.text)

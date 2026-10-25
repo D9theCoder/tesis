@@ -15,7 +15,7 @@ from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS
 from evaluation.metrics import aggregate_runs
 from evaluation.reporter import write_json_report
 from llm.provider import SUPPORTED_PROVIDERS
-from llm.runtime import LLMRuntime, RoleSettings
+from llm.runtime import LLMRuntime, RoleSettings, provider_request_summary
 from tesis.artifact_repository import config_fingerprint, new_execution_id
 from tesis.runtime_events import CancellationToken, RunEvent, RuntimeEventSink, redact_secrets
 
@@ -39,6 +39,8 @@ def _serialize_role_configs(
                 "temperature": value.temperature,
                 "max_tokens": value.max_tokens,
                 "structured_output": value.structured_output,
+                "reasoning_effort": value.reasoning_effort,
+                "max_tokens_default": value.max_tokens_default,
             }
         elif isinstance(value, dict):
             serialized[str(role)] = dict(value)
@@ -49,6 +51,7 @@ def _llm_performance_summary_defaults() -> dict[str, Any]:
     """Return the empty telemetry shape used by non-started coordinates."""
     return {
         "calls": 0,
+        **provider_request_summary([]),
         "cache_hits": 0,
         "cache_hit_rate": 0.0,
         "invalid_outputs": 0,
@@ -379,6 +382,7 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
         },
         "llm_performance_summary": {
             "calls": performance_calls,
+            **provider_request_summary(performance_rows),
             "cache_hits": cache_hits,
             "cache_hit_rate": round(cache_hits / performance_calls, 4) if performance_calls else 0.0,
             "invalid_outputs": invalid_outputs,
@@ -449,6 +453,8 @@ def run_provider_matrix(
     scoring_oracles: list[dict[str, Any]] | None = None,
     fixture_id: str | None = None,
     protocol_version: str | None = None,
+    dvwa_username: str = "admin",
+    dvwa_password: str = "password",
 ) -> list[dict] | tuple[list[dict], dict[str, Any]]:
     """Run a deterministic matrix over all requested DVWA experiment axes.
 
@@ -825,6 +831,8 @@ def run_provider_matrix(
         "scoring_mode": scoring_mode,
             "scoring_evaluator": scoring_evaluator or {},
             "target_url": target_url,
+            "dvwa_username": dvwa_username,
+            "dvwa_password": dvwa_password,
             "security_level": coordinate["security_level"],
             "llm_provider": provider,
             "surface": coordinate["surface"],

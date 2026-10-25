@@ -211,34 +211,46 @@ tidak dioverride. Urutan precedence adalah CLI `--reasoning-effort` >
 `TESIS_REASONING_EFFORT` > role YAML > profile; kontrol CLI/environment berlaku
 untuk kedua role. Dalam block profile atau role, `reasoning_effort` canonical
 mengalahkan bentuk lama `reasoning.effort`, `model_kwargs`, dan `extra_body`;
-nilai lama dinormalisasi lalu dibuang dari request provider.
+nilai lama dinormalisasi lalu dibuang dari request provider. Kontrol LLM lain
+juga mengikuti urutan CLI > environment > YAML, termasuk concurrency, cache,
+model, dan pemilihan profile role. Jika profile dikonfigurasi, pilihan provider
+pada launcher hanya memuat adapter dari profile tersebut. Menghapus profile
+Gemini juga menghapusnya dari pilihan launcher.
 
 Adapter OpenAI dan OpenAI-compatible mengirim satu field effort canonical,
 menghapus temperature dan field lama yang bertentangan, serta tidak pernah
 menurunkan nilai yang ditolak secara diam-diam. Effort portable eksplisit untuk
 Gemini atau Claude menghasilkan error yang actionable; provider tersebut
-memerlukan null/inherit plus konfigurasi thinking native. Jika effort efektif
-bersifat eksplisit dan `max_tokens` tidak ditentukan, setiap role mendapat
-default ceiling gabungan reasoning-dan-output 8.192 token. Null/inherit
-mempertahankan default role lama. Artifact membedakan
+memerlukan null/inherit plus konfigurasi thinking native. Batas token eksplisit
+pada role mengalahkan batas dari profile model yang efektif. Jika keduanya
+tidak ditentukan, effort efektif yang eksplisit memakai ceiling gabungan
+reasoning dan output sebesar 8.192 token; selain itu berlaku default role lama.
+Default dari loader ditandai `max_tokens_default` dan ditentukan kembali sesuai
+profile aktual setiap koordinat. Artifact membedakan
 `reasoning_effort_requested`, penggunaan provider, dan
 `reasoning_token_evidence` eksplisit; prose response tidak dipakai untuk
 menyimpulkan hidden reasoning. Setting reasoning masuk fingerprint client/cache.
 
-TUI memiliki slider reasoning level-profile dan slider global dua-role yang
-independen. Slider global menampilkan state mixed saat nilai eksplisit role yang
-dimuat berbeda, termasuk satu nilai eksplisit plus satu nilai inherit, dan
-menampilkan keduanya (misalnya
-`orchestrator=xhigh, payload_generator=inherit`). Save tanpa menggerakkan
-kontrol tersebut mempertahankan dua setting role yang dimuat; menggerakkannya
-mengganti keduanya. Klik pointer hanya dipetakan ke marker track yang dirender.
+Form launch menampilkan effort kedua role dan mula-mula memilih
+`Keep per-role reasoning settings`. Pilihan yang tidak diubah mempertahankan
+nilai eksplisit maupun inherit yang berbeda. Memilih satu effort mengganti
+kedua role; `Inherit profile effort for both roles` menghapus override pada
+role. Pengaturan profile tetap dapat diubah melalui editor YAML pada settings.
+
+Evaluator scoring mandiri membekukan mode API, effort reasoning, sampling, dan
+opsi provider efektif dari profile, bersama token budget serta batas retry
+milik evaluator. Pemanggilannya memakai adapter provider yang sama. Konfigurasi
+evaluator efektif yang berubah tidak boleh diam-diam mengganti konfigurasi
+penilaian yang sudah dibekukan dalam artifact lama.
 
 `python -m tesis doctor` mandiri hanya berjalan jika diminta. Sebelas check
 offline mencakup scope tetap 3 surface/9 method/3 level/3 payload mode/2
 condition, invariant AKG, kompilasi LangGraph, seluruh 81 koordinat static-seed,
 containment request dan redirect, profile/role, credentials, endpoint,
 dependency (termasuk SQLite checkpoint), output writability, serta reasoning
-controls. Check layanan pada mode offline dinyatakan skipped; keberhasilan lokal
+controls, termasuk effort reasoning evaluator yang dipilih. Doctor menolak
+path config yang tidak ada sebelum resolusi environment. Check layanan pada
+mode offline dinyatakan skipped; keberhasilan lokal
 tidak membuktikan server tersedia. Check artefak memeriksa `output_dir/runs` dan
 write/flush file sementara pada direktori terdekat yang sudah ada. `--live` menambahkan
 satu probe model terstruktur yang benign per role dan check contained DVWA untuk
@@ -352,6 +364,17 @@ hit/miss, queue wait, durasi call, structured-output mode, parse status,
 `reasoning_token_evidence` jika dilaporkan secara eksplisit. Telemetry agregat
 memuat waktu per role, cache-hit rate, invalid-output rate, dan peak concurrency
 LLM/DVWA node. Raw prompt dan secret tidak disimpan dalam performance summary.
+
+`calls` menghitung call logis, sedangkan `attempt_records`, `attempts`, dan
+`provider_dispatches` mencatat setiap dispatch provider, termasuk penolakan
+schema native yang diikuti fallback JSON-prompt. Cache hit tidak membuat
+dispatch. Default retry SDK adalah nol pada semua adapter. Jika retry SDK
+diaktifkan secara eksplisit, jumlah pasti `provider_requests` tetap null;
+`known_provider_requests` dan `provider_request_count_unknown_calls` memisahkan
+jumlah yang diketahui dari ketidakpastian pada ringkasan run maupun matriks.
+Credentials DVWA yang dikonfigurasi berlaku pada pemilik session setiap
+koordinat, termasuk pengumpulan oracle, dan tidak dimasukkan ke graph state
+atau input checkpoint.
 
 ### 3.7 Catatan Perubahan Arsitektur: Sebelum dan Sesudah
 

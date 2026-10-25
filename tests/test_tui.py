@@ -14,6 +14,8 @@ import json
 from dataclasses import fields
 from pathlib import Path
 
+import pytest
+
 from tesis import tui, tui_commands, tui_drawers, tui_forms, tui_mission, tui_security, tui_state
 from tesis.artifact_repository import ArtifactRepository
 from tesis.model_config import EngagementConfig, ModelConfig
@@ -92,6 +94,12 @@ def test_public_tui_exports_resolve():
 
 # ---------------------------------------------------------------- helpers
 
+@pytest.fixture(autouse=True)
+def isolated_output_directory(tmp_path, monkeypatch):
+    """Synthetic UI runs must never enter the operator's results directory."""
+    monkeypatch.chdir(tmp_path)
+
+
 def _require(name: str):
     value = getattr(tui, name, None)
     assert value is not None, f"core: tesis.tui.{name} missing (handoff contract)"
@@ -101,9 +109,11 @@ def _require(name: str):
 def _config(tmp_path: Path | None = None) -> EngagementConfig:
     kwargs: dict = {
         "target_url": "http://localhost/dvwa",
-        "provider": "gemini",
+        "provider": "openai_compatible",
         "level": "low",
-        "models": {"gemini": ModelConfig("gemini", "", "test-model")},
+        "models": {"openai_compatible": ModelConfig(
+            "openai_compatible", "", "test-model", base_url="http://localhost:9999/v1",
+        )},
     }
     if tmp_path is not None:
         kwargs["output_dir"] = str(tmp_path / "results")
@@ -398,7 +408,9 @@ def test_context_bar_shows_target_condition_and_provider_model(monkeypatch):
     config.target_url = "http://admin:hunter2@172.19.48.1/dvwa/?id=7"
     config.experiment_condition = "akg_guided_hybrid"
     config.provider = "openai_compatible"
-    config.models = {"openai_compatible": ModelConfig("openai_compatible", "", "test-model")}
+    config.models = {"openai_compatible": ModelConfig(
+        "openai_compatible", "", "test-model", base_url="http://localhost:9999/v1",
+    )}
     monkeypatch.setattr(tui_mission, "load_and_resolve_config", lambda **kwargs: config)
 
     async def scenario() -> None:
@@ -1967,12 +1979,13 @@ def test_single_runner_receives_serialized_model_config(tmp_path, monkeypatch):
         return {"status": "success"}
 
     config = _config(tmp_path)
-    config.provider = "openai"
+    config.provider = "openai_compatible"
     config.models = {
-        "openai": ModelConfig(
-            "openai",
+        "openai_compatible": ModelConfig(
+            "openai_compatible",
             "test-key",
             "test-model",
+            base_url="http://localhost:9999/v1",
             extra={"nested": {"enabled": True}},
         )
     }
@@ -1995,7 +2008,8 @@ def test_single_runner_receives_serialized_model_config(tmp_path, monkeypatch):
     asyncio.run(asyncio.wait_for(scenario(), timeout=15))
     model_config = captured["model_config"]
     assert isinstance(model_config, dict)
-    assert model_config["provider"] == "openai"
+    assert model_config["provider"] == "openai_compatible"
+    assert model_config["base_url"] == "http://localhost:9999/v1"
     assert model_config["api_key"] == "test-key"
     assert model_config["extra"] == {"nested": {"enabled": True}}
 

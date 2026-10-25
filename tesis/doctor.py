@@ -25,7 +25,7 @@ from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS, SURFACES, new_defaul
 from foundation.http_client import ContainmentError, HTTPClient
 from foundation.payload_library import PayloadLibrary
 from foundation.payload_validator import validate_payload_candidates
-from llm.provider import DEFAULT_MAX_OUTPUT_TOKENS, SUPPORTED_PROVIDERS, supports_reasoning_effort
+from llm.provider import SUPPORTED_PROVIDERS, supports_reasoning_effort
 from tesis.model_config import (
     EngagementConfig,
     LLM_RUNTIME_ROLES,
@@ -551,8 +551,13 @@ def _effective_reasoning(config: EngagementConfig, role_name: str) -> tuple[str,
 def _check_reasoning(config: EngagementConfig) -> DoctorCheck:
     problems: list[str] = []
     requested: list[str] = []
-    for role_name in sorted(config.llm_runtime.roles):
-        effort, profile_name, provider = _effective_reasoning(config, role_name)
+    settings = [(role_name, *_effective_reasoning(config, role_name))
+                for role_name in sorted(config.llm_runtime.roles)]
+    if config.scoring_mode in {"ai", "both"} and config.scoring_evaluator:
+        evaluator = config.scoring_evaluator
+        settings.append(("scoring_evaluator", str(evaluator.get("reasoning_effort") or "provider-default"),
+                         str(evaluator.get("model_profile") or "inline"), str(evaluator["provider"])))
+    for role_name, effort, profile_name, provider in settings:
         requested.append(f"{role_name}={effort} ({profile_name}/{provider})")
         if effort != "provider-default" and effort not in REASONING_EFFORTS:
             problems.append(f"role {role_name!r} requests invalid effort {effort!r}")
@@ -560,7 +565,7 @@ def _check_reasoning(config: EngagementConfig) -> DoctorCheck:
             problems.append(
                 f"role {role_name!r} requests {effort!r} for {provider}, whose adapter cannot forward portable reasoning_effort"
             )
-    details = f"roles={len(requested)}; requested_effort={'; '.join(requested)}"
+    details = f"roles={len(config.llm_runtime.roles)}; requested_effort={'; '.join(requested)}"
     if problems:
         return _failed(
             "reasoning.controls",
@@ -625,11 +630,8 @@ def _model_probe_checks(config: EngagementConfig) -> list[DoctorCheck]:
                 ))
                 continue
             try:
-                budget = (
-                    config.llm_runtime.roles[role_name].max_tokens or profile.max_tokens
-                    or (8192 if _effective_reasoning(config, role_name)[0] != "provider-default"
-                        else DEFAULT_MAX_OUTPUT_TOKENS)
-                )
+                default_budget = (96 if role_name == "orchestrator"
+                                  else min(512, 96 + 64 * config.candidate_budget))
                 with runtime.coordinate(
                     coordinate_id=f"doctor-{role_name}",
                     default_provider=config.provider,
@@ -638,6 +640,8 @@ def _model_probe_checks(config: EngagementConfig) -> list[DoctorCheck]:
                     role_settings=role_settings,
                     cache_enabled=False,
                 ) as context:
+                    _, options, _ = context.role_config(role_name, max_tokens=default_budget)
+                    budget = int(options["max_tokens"])
                     result = runtime.invoke(
                         context=context,
                         role=role_name,
@@ -1197,6 +1201,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     from tesis.config_loader import load_and_resolve_config
 
     try:
+        path_problem = _config_path_problem(args.config)
+        if path_problem:
+            raise ValueError(path_problem)
         config = load_and_resolve_config(config_path=args.config, cli_args={})
     except Exception as exc:
         # The documented contract is one report (JSON or human) plus exit code

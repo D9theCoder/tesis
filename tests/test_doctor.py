@@ -304,6 +304,7 @@ def test_cli_json_is_one_object_and_forwards_config_and_live(
 ) -> None:
     calls: dict[str, object] = {}
     config_path = tmp_path / "custom.yaml"
+    config_path.write_text("target_url: http://localhost/dvwa\n", encoding="utf-8")
 
     def load(*, config_path: str, cli_args: dict) -> EngagementConfig:
         calls["path"] = config_path
@@ -783,3 +784,27 @@ def test_doctor_rejects_missing_method_preconditions(valid_config, monkeypatch):
     monkeypatch.setattr(doctor.AttackKnowledgeGraph, 'METHOD_PRECONDITIONS', preconditions)
     report = doctor.run_doctor(valid_config)
     assert check_by_id(report, 'akg.integrity')['status'] == 'failed'
+
+
+def test_missing_config_is_rejected_even_with_valid_environment(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TESIS_TARGET_URL", "http://localhost/dvwa")
+    monkeypatch.setenv("TESIS_PROVIDER", "openai")
+    monkeypatch.setenv("TESIS_MODEL_OPENAI_API_KEY", "offline-test")
+    monkeypatch.setenv("TESIS_MODEL_OPENAI_MODEL_NAME", "test")
+
+    def unexpected_probe(*args, **kwargs):
+        raise AssertionError("Doctor must reject the requested path before running checks")
+
+    monkeypatch.setattr(doctor, "run_doctor", unexpected_probe)
+    assert doctor.main(["--config", str(tmp_path / "missing.yaml"), "--json"]) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "failed"
+    assert "not found" in json.dumps(report)
+
+
+def test_evaluator_reasoning_is_checked_offline(valid_config):
+    valid_config.scoring_mode = "ai"
+    valid_config.scoring_evaluator = {"provider": "claude", "reasoning_effort": "high"}
+    check = check_by_id(doctor.run_doctor(valid_config), "reasoning.controls")
+    assert check["status"] == "failed"
+    assert "scoring_evaluator" in check["details"]

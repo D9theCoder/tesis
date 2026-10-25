@@ -119,6 +119,9 @@ def get_llm(provider_name: str, **kwargs):
         provider_name: Value used by this function."""
     normalized_provider = provider_name.strip().lower()
     _reasoning_kwargs(normalized_provider, kwargs)
+    capabilities = _PROVIDER_CAPABILITIES.get(normalized_provider)
+    if capabilities is not None and kwargs.get("max_retries") is None:
+        kwargs["max_retries"] = capabilities.sdk_retries_default
     if normalized_provider in {"openai", "openai_compatible", "claude"}:
         output_tokens = kwargs.pop("max_output_tokens", None)
         if output_tokens is not None and kwargs.get("max_tokens") is None:

@@ -100,6 +100,14 @@ execution limits to the existing single or matrix runner, and owns the artifact
 layout, redacted journal, descriptor heartbeat, and terminal result. Runtime
 and evaluation modules do not import Textual.
 
+The launcher forwards the resolved DVWA username and password to each runner.
+`foundation.session_manager.dvwa_credentials` owns coordinate-local login
+defaults in a context variable, including the later oracle collection scope.
+Recon and method sessions use those defaults; an explicitly requested fixture
+principal still takes precedence. Credentials are not placed in graph state or
+checkpoints. Test launchers write to temporary output directories so synthetic
+Gemini fixtures do not enter the operator's results index.
+
 For matrices, `matrix.run.*` events update coordinate rows; child `run.*`
 lifecycle events cannot reset or finish the parent. The returned aggregate
 determines the final UI, journal, and descriptor status, including errors and
@@ -203,6 +211,29 @@ one profile for both standard LLM roles with `--model-profile PROFILE`; the
 same override is available as `TESIS_MODEL_PROFILE`. TUI run setup exposes the
 same selector. Role-specific profile flags remain available for deliberately
 different orchestrator and payload-generator models.
+
+Flat runtime aliases are normalized within each YAML/environment/CLI layer
+before the layers are merged. Explicit CLI controls win. Configured profile
+adapters determine launcher provider choices. The launch form preserves each
+role's reasoning value until the operator explicitly chooses a shared effort
+or clears both role overrides. Token limits resolve at coordinate dispatch:
+explicit role limit, then profile limit, then 8,192 tokens for explicit
+reasoning or the historical role default. `max_tokens_default` distinguishes a
+loader suggestion from an explicit role limit. Evaluator configuration freezes
+the effective profile options before execution; existing review sources retain
+their original configuration binding.
+
+One LLM record represents one logical call. `attempt_records` retains each
+native or JSON-prompt dispatch, including failure details and elapsed time;
+`attempts` and `provider_dispatches` count those dispatches. Cache hits count
+zero. Provider SDK retries default to zero for all adapters. If SDK retries are
+explicitly enabled, `provider_requests` is null and
+`provider_request_count_unknown_calls` preserves the uncertainty.
+`known_provider_requests` counts only requests with exact evidence. These
+fields are also aggregated across matrix children. Doctor validates the
+requested config path before loading and includes evaluator reasoning in its
+offline forwarding check; service availability still requires explicit live
+probes.
 
 ## Artifact service and identity
 

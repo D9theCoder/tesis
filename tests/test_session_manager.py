@@ -10,7 +10,24 @@ Validates:
 import pytest
 from unittest.mock import patch, MagicMock
 
-from foundation.session_manager import DVWASession, VALID_LEVELS, TransportError
+from foundation.session_manager import DVWASession, VALID_LEVELS, TransportError, dvwa_credentials
+
+
+def test_scoped_credentials_are_used_and_explicit_principals_still_win():
+    with patch("foundation.session_manager.HTTPClient") as factory:
+        client = factory.return_value
+        client.get.return_value.text = "<form></form>"
+        client.post.return_value.text = '<a href="logout.php">Logout</a>'
+        client.post.return_value.url = "http://localhost/dvwa/index.php"
+        with DVWASession("http://localhost/dvwa") as session:
+            with dvwa_credentials("custom-admin", "custom-password"):
+                assert session.login()
+                assert client.post.call_args.kwargs["data"]["username"] == "custom-admin"
+                assert client.post.call_args.kwargs["data"]["password"] == "custom-password"
+                assert session.login("fixture-user", "fixture-password")
+                assert client.post.call_args.kwargs["data"]["username"] == "fixture-user"
+            assert session.login()
+            assert client.post.call_args.kwargs["data"]["username"] == "admin"
 
 
 class TestExtractUserToken:

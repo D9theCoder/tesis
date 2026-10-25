@@ -16,6 +16,7 @@ def _config(path: Path, body: str = "") -> Path:
         "target_url: http://localhost/dvwa\n"
         "provider: openai_compatible\n"
         "level: low\n"
+        f"output_dir: {path.parent / 'results'}\n"
         + body,
         encoding="utf-8",
     )
@@ -193,6 +194,27 @@ def test_environment_model_profile_selects_both_runtime_roles(tmp_path: Path, mo
 def test_cli_concurrency_parser_rejects_out_of_bounds() -> None:
     with pytest.raises(SystemExit):
         cli._headless_parser().parse_args(["--llm-max-concurrency", "5"])
+
+
+def test_explicit_runtime_controls_override_environment(tmp_path, monkeypatch):
+    path = _config(tmp_path / "config.yaml")
+    for key, value in {
+        "TESIS_LLM_MAX_CONCURRENCY": "1", "TESIS_LLM_CACHE": "true",
+        "TESIS_ORCHESTRATOR_MODEL_PROFILE": "environment-profile",
+        "TESIS_ORCHESTRATOR_MODEL": "environment-model",
+        "TESIS_PAYLOAD_MODEL_PROFILE": "environment-profile",
+        "TESIS_PAYLOAD_MODEL": "environment-model",
+    }.items():
+        monkeypatch.setenv(key, value)
+    resolved = load_and_resolve_config(config_path=str(path), cli_args={
+        "llm_max_concurrency": 4, "llm_cache": False,
+        "orchestrator_model_profile": "cli-profile", "orchestrator_model": "cli-model",
+        "payload_model_profile": "cli-profile", "payload_model": "cli-model",
+    })
+    assert resolved.llm_max_concurrency == 4
+    assert resolved.llm_cache is False
+    assert all(role.model_profile == "cli-profile" and role.model_name == "cli-model"
+               for role in resolved.role_configs.values())
 
 
 def test_headless_forwards_runtime_and_all_model_profiles(tmp_path: Path, monkeypatch) -> None:

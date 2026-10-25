@@ -589,6 +589,7 @@ def test_runtime_calls_feed_runner_activity_and_effective_runtime_metadata(monke
         "temperature": 0,
         "max_tokens": 96,
         "structured_output": "json_prompt",
+        "reasoning_effort": None,
         "model_fingerprint": effective["roles"]["orchestrator"]["model_fingerprint"],
     }
     assert effective["roles"]["payload_generator"]["model_name"] == "mutator"

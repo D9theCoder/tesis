@@ -288,7 +288,36 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
 
         overrides[mapped] = value
 
-    return overrides
+    return _normalize_runtime_overrides(overrides)
+
+
+def _normalize_runtime_overrides(values: Mapping[str, Any]) -> dict[str, Any]:
+    """Fold flat runtime aliases before merging configuration precedence layers."""
+    normalized = dict(values)
+    flat = {}
+    for key, field in (("llm_max_concurrency", "max_concurrency"),
+                       ("llm_cache_scope", "cache_scope")):
+        if key in normalized:
+            flat[field] = normalized.pop(key)
+    if "llm_cache" in normalized:
+        flat["cache_scope"] = "run" if _coerce_bool(normalized.pop("llm_cache")) else "none"
+    roles = {}
+    for role, prefix in (("orchestrator", "orchestrator"), ("payload_generator", "payload")):
+        settings = {}
+        for suffix, field in (("model_profile", "model_profile"), ("model", "model_name")):
+            key = f"{prefix}_{suffix}"
+            if key in normalized:
+                settings[field] = normalized.pop(key)
+        if settings:
+            roles[role] = settings
+    if roles:
+        flat["roles"] = roles
+    if flat:
+        runtime = normalized.get("llm_runtime")
+        if runtime is not None and not isinstance(runtime, Mapping):
+            raise ConfigError("llm_runtime must be a mapping")
+        normalized["llm_runtime"] = merge_config(dict(runtime or {}), flat)
+    return normalized
 
 
 def merge_config(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
@@ -636,42 +665,6 @@ def _parse_llm_runtime_config(
         raise ConfigError("llm_runtime must be a mapping")
     runtime = dict(raw_runtime)
 
-    # Environment variables are intentionally flat for shell ergonomics.  CLI
-    # overrides already arrive nested via _extract_cli_overrides.  Since env
-    # values are merged after YAML, these flat values take precedence over the
-    # corresponding nested YAML value.
-    if merged.get("llm_max_concurrency") is not None:
-        runtime["max_concurrency"] = merged["llm_max_concurrency"]
-    if merged.get("llm_cache_scope") is not None:
-        runtime["cache_scope"] = merged["llm_cache_scope"]
-    if merged.get("llm_cache") is not None:
-        runtime["cache_scope"] = "run" if _coerce_bool(merged["llm_cache"]) else "none"
-
-    # Flat environment variables for role overrides are folded into the same
-    # nested shape used by YAML and CLI inputs.
-    runtime_roles = runtime.get("roles", {})
-    if runtime_roles is None:
-        runtime_roles = {}
-    if not isinstance(runtime_roles, Mapping):
-        raise ConfigError("llm_runtime.roles must be a mapping")
-    runtime_roles = dict(runtime_roles)
-    for role, profile_key, model_key in (
-        ("orchestrator", "orchestrator_model_profile", "orchestrator_model"),
-        ("payload_generator", "payload_model_profile", "payload_model"),
-    ):
-        role_override: dict[str, Any] = {}
-        if merged.get(profile_key) is not None:
-            role_override["model_profile"] = merged[profile_key]
-        if merged.get(model_key) is not None:
-            role_override["model_name"] = merged[model_key]
-        if not role_override:
-            continue
-        current_role = runtime_roles.get(role)
-        if current_role is not None and not isinstance(current_role, Mapping):
-            raise ConfigError(f"llm_runtime.roles.{role} must be a mapping")
-        runtime_roles[role] = {**dict(current_role or {}), **role_override}
-    runtime["roles"] = runtime_roles
-
     try:
         raw_concurrency = runtime.get("max_concurrency", 1)
         if isinstance(raw_concurrency, bool) or (
@@ -777,6 +770,7 @@ def _parse_llm_runtime_config(
             max_tokens=max_tokens,
             structured_output=structured_output,
             reasoning_effort=effort,
+            max_tokens_default="max_tokens" not in role,
         )
 
     config = LLMRuntimeConfig(
@@ -911,7 +905,7 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
     config_file = Path(config_path)
     load_dotenv(dotenv_path=config_file.with_name(".env"), override=False)
 
-    yaml_cfg = resolve_env_references(load_yaml_config(config_file))
+    yaml_cfg = _normalize_runtime_overrides(resolve_env_references(load_yaml_config(config_file)))
     env_cfg = load_env_overrides(prefix="TESIS_")
     cli_cfg = _extract_cli_overrides(cli_args)
 
@@ -1080,7 +1074,12 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any]) ->
         profile = config.models.get(profile_name)
         if profile is None or evaluator.get("provider") != profile.provider or evaluator.get("model") != profile.model_name:
             raise ConfigError("Scoring evaluator must match its frozen model profile")
-        evaluator.update(api_key=profile.api_key, base_url=profile.base_url)
+        options = {"temperature": profile.temperature, "reasoning_effort": profile.reasoning_effort,
+                   **profile.extra}
+        evaluator = merge_config(options, evaluator)
+        evaluator.update(api_key=profile.extra.get("api_key", profile.api_key),
+                         base_url=profile.extra.get("base_url", profile.base_url))
+        config.scoring_evaluator = evaluator
     _validate_engagement_config(config)
     form_name = FORM_MATRIX if config.matrix else FORM_SINGLE
     field_errors = validate_field_schema(asdict(config), form=form_name)

@@ -113,6 +113,18 @@ def provider_choices() -> tuple[str, ...]:
     return tuple(str(item) for item in SUPPORTED_PROVIDERS)
 
 
+def configured_provider_choices(config: Mapping[str, Any] | None = None) -> tuple[str, ...]:
+    """Limit launch choices to configured adapters, retaining legacy defaults."""
+    models = config.get("models") if isinstance(config, Mapping) else None
+    if not isinstance(models, Mapping) or not models:
+        return provider_choices()
+    configured = {
+        str(profile.get("provider", name)).strip().lower()
+        for name, profile in models.items() if isinstance(profile, Mapping)
+    }
+    return tuple(provider for provider in provider_choices() if provider in configured)
+
+
 def surface_choices() -> tuple[str, ...]:
     """Return the currently registered vulnerability surfaces."""
 
@@ -410,7 +422,7 @@ PROVIDER = _field(
     category=FieldCategory.RUN.value,
     value_type=str,
     kind="select",
-    choices=PROVIDER_CHOICES,
+    choices=configured_provider_choices,
     required=True,
     forms=_SINGLE_FORMS,
     normalize="lower",
@@ -551,7 +563,7 @@ PROVIDERS = _field(
     item_type=str,
     kind="multi_select",
     multiple=True,
-    choices=PROVIDER_CHOICES,
+    choices=configured_provider_choices,
     min_items=1,
     forms=_MATRIX_FORMS,
     normalize="lower",

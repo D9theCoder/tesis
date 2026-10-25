@@ -384,3 +384,40 @@ def test_invalid_effort_rejected_before_execution(tmp_path, value):
     path.write_text(f"target_url: http://localhost/dvwa\nmodels:\n  openai:\n    reasoning_effort: {value}\n")
     with pytest.raises(ConfigError, match="reasoning_effort"):
         load_and_resolve_config(config_path=str(path), cli_args={})
+
+
+@pytest.mark.parametrize(("primary_effort", "secondary_effort", "profile_limit", "role_limit", "expected"), [
+    (None, "high", None, None, 8192),
+    ("high", None, None, None, 96),
+    (None, "high", 4096, None, 4096),
+    (None, "high", 4096, 256, 256),
+])
+def test_token_budget_follows_effective_coordinate_profile(
+    tmp_path, primary_effort, secondary_effort, profile_limit, role_limit, expected,
+):
+    from tesis.config_loader import save_yaml_config
+    path = tmp_path / "config.yaml"
+    document = {"target_url": "http://localhost/dvwa", "provider": "openai",
+        "models": {
+            "openai": {"model_name": "primary", "reasoning_effort": primary_effort},
+            "openai_compatible": {"provider": "openai_compatible", "model_name": "secondary",
+                "reasoning_effort": secondary_effort, "base_url": "http://localhost:9999/v1"},
+        }}
+    if profile_limit is not None:
+        document["models"]["openai_compatible"]["max_tokens"] = profile_limit
+    if role_limit is not None:
+        document["llm_runtime"] = {"roles": {"orchestrator": {"max_tokens": role_limit}}}
+    save_yaml_config(path, document)
+    config = load_and_resolve_config(config_path=str(path), cli_args={})
+    runtime = LLMRuntime()
+    try:
+        with runtime.coordinate(coordinate_id="secondary", default_provider="openai_compatible",
+            model_profiles={name: asdict(value) for name, value in config.models.items()},
+            role_settings={name: asdict(value) for name, value in config.role_configs.items()}) as context:
+            provider, options, _ = context.role_config("orchestrator", max_tokens=96)
+        client = get_llm(provider, api_key="test", **{k:v for k,v in options.items() if k != "api_key"})
+        wire = client._get_request_payload([HumanMessage(content="Return JSON")])
+        assert wire["max_completion_tokens"] == expected
+        assert options["reasoning_effort"] == secondary_effort
+    finally:
+        runtime.close()

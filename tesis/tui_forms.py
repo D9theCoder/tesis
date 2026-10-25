@@ -235,13 +235,6 @@ class LaunchDrawer(BaseDrawer):
                     runtime = getattr(resolved, "llm_runtime", None)
                     roles = getattr(runtime, "roles", {}) or {}
                     concurrency = getattr(runtime, "max_concurrency", None)
-                    reasoning = next(
-                        (getattr(settings, "reasoning_effort", None) for settings in roles.values()
-                         if getattr(settings, "reasoning_effort", None)),
-                        None,
-                    )
-                    if reasoning is not None and str(reasoning) not in REASONING_EFFORT_CHOICES:
-                        reasoning = None
                     profiles = [(name, name) for name in self._profile_names(config)]
                     profile_names = {name for name, _ in profiles}
                     yield Input(value="" if concurrency in (None, "") else str(concurrency),
@@ -250,10 +243,15 @@ class LaunchDrawer(BaseDrawer):
                     yield Checkbox("LLM cache within run",
                                    value=bool(getattr(runtime, "cache_enabled", False)),
                                    id="launch-llm-cache")
-                    yield Select([(choice, choice) for choice in REASONING_EFFORT_CHOICES],
-                                 value=str(reasoning) if reasoning else Select.NULL,
-                                 allow_blank=True,
-                                 prompt="reasoning effort", id="launch-reasoning-effort")
+                    yield Static("; ".join(
+                        f"{name}: {getattr(settings, 'reasoning_effort', None) or 'inherit profile'}"
+                        for name, settings in roles.items()
+                    ), markup=False, id="launch-role-reasoning")
+                    yield Select([
+                        ("Keep per-role reasoning settings", "preserve"),
+                        ("Inherit profile effort for both roles", "inherit"),
+                        *[(choice, choice) for choice in REASONING_EFFORT_CHOICES],
+                    ], value="preserve", allow_blank=False, id="launch-reasoning-effort")
                     orchestrator = _role_attr(roles, "orchestrator", "model_profile")
                     payload_role = _role_attr(roles, "payload_generator", "model_profile")
                     yield Select(profiles,
@@ -332,6 +330,15 @@ class LaunchDrawer(BaseDrawer):
             raw = widget.value
             if raw in (None, "", Select.NULL):
                 continue
+            if key == "reasoning_effort":
+                if raw == "preserve":
+                    continue
+                if raw == "inherit":
+                    args["llm_runtime"] = {"roles": {
+                        role: {"reasoning_effort": None}
+                        for role in ("orchestrator", "payload_generator")
+                    }}
+                    continue
             if isinstance(widget, Input):
                 try:
                     raw = int(str(raw).strip())

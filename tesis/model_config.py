@@ -48,6 +48,8 @@ class RoleConfig:
     max_tokens: int | None = None
     structured_output: str = "auto"
     reasoning_effort: str | None = None
+    # Loader-generated defaults must be re-resolved for each matrix profile.
+    max_tokens_default: bool = False
 
 
 # More explicit name for callers that do not use the shorter role terminology.

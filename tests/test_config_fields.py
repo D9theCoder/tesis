@@ -7,6 +7,7 @@ import pytest
 from core.state import ALL_METHOD_AGENTS, SECURITY_LEVELS, SURFACES
 from llm.provider import SUPPORTED_PROVIDERS
 from tesis.config_fields import (
+    configured_provider_choices,
     FORM_MATRIX,
     FORM_SINGLE,
     FieldValidationError,
@@ -54,3 +55,10 @@ def test_nested_model_path_helpers_preserve_existing_shape():
         context={"provider": "gemini"},
     ) == "new"
     assert config["models"]["gemini"]["future"] == "kept"
+
+
+def test_unconfigured_providers_cannot_be_selected():
+    config = {"models": {"primary": {"provider": "openai_compatible", "model_name": "test"}}}
+    assert configured_provider_choices(config) == ("openai_compatible",)
+    with pytest.raises(FieldValidationError):
+        validate_field_value("provider", "gemini", config=config)
