@@ -284,6 +284,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     explicit coordinate flags for automation or LLM-driven terminal execution.
     """
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "auth":
+        from tesis.auth import main as auth_main
+        return auth_main(arguments[1:])
     if arguments and arguments[0] == "export-observer":
         from evaluation.observer_export import main as export_main
         return export_main(arguments[1:])
@@ -304,6 +307,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments != ["run"]:
         print(
             "Usage: python -m tesis run\n"
+            "       python -m tesis auth login|status|models|logout [options]\n"
             "       python -m tesis export-observer --source-root ID=PATH [--review-root EPOCH=PATH] --output results/FILE.json\n"
             "       python -m tesis doctor [--config config.yaml] [--live] [--json]\n"
             "       python -m tesis run --dry-run [--config config.yaml]\n"

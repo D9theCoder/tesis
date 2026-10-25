@@ -505,6 +505,8 @@ def _default_model_name(provider: str) -> str:
 
 def _default_api_key(provider: str) -> str:
     """Supports default api key behavior for this module."""
+    if provider == "openai_codex_auth":
+        return ""
     if provider == "gemini":
         return os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     if provider == "openai":

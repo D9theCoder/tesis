@@ -13,7 +13,7 @@ from typing import Any, Mapping
 from urllib.parse import urlsplit
 
 
-_SECRET_NAME = r"(?:api[_-]?key|authorization|access[_-]?token|secret|password)"
+_SECRET_NAME = r"(?:api[_-]?key|authorization|(?:access|refresh|id)[_-]?token(?:[_-]?hint)?|code[_-]?verifier|secret|password)"
 _URL = re.compile(r"(?i)https?://[^\s'\"<>]+")
 _REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)(https?://)[^/@\s]+@"), r"\1[REDACTED]@"),
@@ -23,6 +23,7 @@ _REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
         r"\1[REDACTED]",
     ),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"), "[REDACTED_API_KEY]"),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b"), "[REDACTED_JWT]"),
     (
         re.compile(r"(?is)\b(request\s+(?:body|payload)|request_body)\s*[:=].*$"),
         r"\1=[REDACTED]",
@@ -307,6 +308,11 @@ def provider_error_details(
         details["request_id"] = request_id
     if cause_type:
         details["cause_type"] = cause_type
+    # Explicit opt-in from adapters that already sanitize their response body.
+    # Never copy an arbitrary SDK exception's raw request/response payload.
+    safe_provider_error = getattr(exc, "safe_provider_error", None)
+    if isinstance(safe_provider_error, Mapping):
+        details["provider_response"] = dict(safe_provider_error)
     return details
 
 

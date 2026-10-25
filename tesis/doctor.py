@@ -385,7 +385,21 @@ def _credential_for_profile(profile: Any) -> str:
 
 
 def _check_credentials(config: EngagementConfig) -> DoctorCheck:
-    missing = [name for name, profile in config.models.items() if not _credential_for_profile(profile).strip()]
+    missing = []
+    for name, profile in config.models.items():
+        if profile.provider == "openai_codex_auth":
+            from llm.siwc.oauth import SIWCSession
+            from llm.siwc.storage import SIWCError
+            session = SIWCSession()
+            account = str(profile.extra.get("account", "default"))
+            try:
+                connected = session.store.path.exists() and session.status(account)[account]["plan_usage"]
+            except SIWCError:
+                connected = False
+            if not connected:
+                missing.append(name)
+        elif not _credential_for_profile(profile).strip():
+            missing.append(name)
     if not config.models:
         missing.append("<no model profiles>")
     if missing:
@@ -394,7 +408,7 @@ def _check_credentials(config: EngagementConfig) -> DoctorCheck:
             "configuration",
             "One or more model credentials did not resolve",
             f"profiles_missing_credentials={','.join(sorted(missing))}; configured_profiles={len(config.models)}",
-            "Set the documented provider API-key environment variable, a ${VAR} config reference, or the profile api_key secret.",
+            "Set the provider API-key environment variable or ${VAR} reference. For openai_codex_auth, run tesis auth login for its account label.",
         )
     return _passed(
         "config.credentials",

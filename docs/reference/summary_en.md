@@ -163,6 +163,16 @@ select models to retain, and save keys to `.env`. The runtime continues to
 resolve role settings per coordinate and preserves method orchestration and
 artifact identity. See [API provider configuration](api_providers.md).
 
+The optional `openai_codex_auth` provider uses official Sign in with ChatGPT
+OAuth and subscription-backed public Responses streaming. It preserves the
+existing API-key providers and agent topology. Account credentials stay in
+protected local storage; model choices come from the signed-in account's live
+catalog through TUI Settings. The SIWC preview does not accept temperature or
+output-token-limit fields, so those shared controls are omitted for this
+provider and the limitation is recorded in call telemetry. An equal configured
+token limit must not be reported as an equal enforced limit across providers.
+See [SIWC setup and acceptance scope](sign_in_with_chatgpt.md).
+
 All models are tested with the same configuration:
 
 * same AKG

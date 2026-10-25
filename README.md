@@ -13,6 +13,10 @@ uv run tesis run
 
 This opens mission control and reads the repository-root `config.yaml`. Use `uv run tesis run --dry-run` for local configuration checks. See the [usage guide](guide.md) for headless runs, Doctor, and detailed operation; see [architecture](docs/reference/architecture.md) and [methodology and artifact schema](docs/reference/summary_en.md) for research references. Scoped validation guidance is in [AGENTS.md](AGENTS.md).
 
+To use an eligible ChatGPT subscription, see [Sign in with ChatGPT](docs/reference/sign_in_with_chatgpt.md).
+The optional `openai_codex_auth` provider has its own browser sign-in and a TUI
+model selector populated from the account's current OpenAI catalog.
+
 For multiple API providers and models, open **Settings → Model profile → Add API
 provider**. Configure Responses, Chat Completions, or Anthropic Messages, fetch
 and select models, and save API keys to `.env`. See the

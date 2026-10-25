@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from typing import Any, Mapping
 
 from dotenv import load_dotenv
-SUPPORTED_PROVIDERS = ["gemini", "openai", "claude", "openai_compatible"]
+SUPPORTED_PROVIDERS = ["gemini", "openai", "claude", "openai_compatible", "openai_codex_auth"]
 # Provider APIs treat an omitted output limit as unbounded.  That is unsafe for
 # streamed experiment calls: a model can keep the HTTP response open long
 # enough to outlive the runner's per-request read timeout.  Callers may still
@@ -21,7 +21,7 @@ SUPPORTED_PROVIDERS = ["gemini", "openai", "claude", "openai_compatible"]
 # where the provider uses that spelling).
 DEFAULT_MAX_OUTPUT_TOKENS = 512
 REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
-REASONING_EFFORT_PROVIDERS = frozenset({"openai", "openai_compatible"})
+REASONING_EFFORT_PROVIDERS = frozenset({"openai", "openai_compatible", "openai_codex_auth"})
 
 # NOTE: Callers must load env vars before importing if needed (e.g. via load_dotenv())
 
@@ -48,12 +48,21 @@ class ProviderCapabilities:
     supports_reasoning: bool
     token_param: str = "max_tokens"
     sdk_retries_default: int = 0
+    default_endpoint: str | None = None
+    unsupported_request_fields: tuple[str, ...] = ()
+    requires_explicit_selection: bool = False
 
 
 _PROVIDER_CAPABILITIES: dict[str, ProviderCapabilities] = {
     "gemini": ProviderCapabilities(name="gemini", structured_output_method="json_schema", supports_reasoning=False),
     "openai": ProviderCapabilities(name="openai", structured_output_method="json_schema", supports_reasoning=True),
     "openai_compatible": ProviderCapabilities(name="openai_compatible", structured_output_method="function_calling", supports_reasoning=True),
+    "openai_codex_auth": ProviderCapabilities(
+        name="openai_codex_auth", structured_output_method="json_schema", supports_reasoning=True,
+        default_endpoint="https://api.openai.com/v1",
+        unsupported_request_fields=("max_output_tokens", "temperature"),
+        requires_explicit_selection=True,
+    ),
     "claude": ProviderCapabilities(name="claude", structured_output_method="json_schema", supports_reasoning=False),
 }
 
@@ -118,6 +127,10 @@ def get_llm(provider_name: str, **kwargs):
     Args:
         provider_name: Value used by this function."""
     normalized_provider = provider_name.strip().lower()
+    if normalized_provider == "openai_codex_auth":
+        from llm.siwc.provider import build_model
+        kwargs["reasoning_effort"] = validate_reasoning_effort(kwargs.get("reasoning_effort"))
+        return build_model(**kwargs)
     _reasoning_kwargs(normalized_provider, kwargs)
     capabilities = _PROVIDER_CAPABILITIES.get(normalized_provider)
     if capabilities is not None and kwargs.get("max_retries") is None:

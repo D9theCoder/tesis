@@ -495,6 +495,19 @@ class LaunchDrawer(BaseDrawer):
         self._tesis_closing = True
 
 
+class ChatGPTModelsLoaded(Message):
+    """Thread-safe delivery without blocking the worker on the UI loop."""
+
+    def __init__(self, generation: int, profile: str, account: str,
+                 models: list[dict[str, str]], error: str | None):
+        super().__init__()
+        self.generation = generation
+        self.profile = profile
+        self.account = account
+        self.models = models
+        self.error = error
+
+
 class SettingsSaved(Message):
     def __init__(self, generation: int, payload: dict[str, Any], error: str | None):
         super().__init__()
@@ -508,6 +521,8 @@ class SettingsDrawer(BaseDrawer):
         self.literal_warning_acknowledged = False
         self._tesis_closing = False
         self._settings_generation = 0
+        self._model_generation = 0
+        self._catalog_binding: tuple[str, str] | None = None
         self._pending_api_keys: dict[str, str] = {}
         self._saving = False
 
@@ -521,6 +536,37 @@ class SettingsDrawer(BaseDrawer):
             yield Button("Add API provider", id="settings-api-add")
             yield Select([], prompt="Saved API providers", id="settings-api-provider")
             yield Button("Edit provider / models", id="settings-api-edit", disabled=True)
+            yield Label("ChatGPT subscription models")
+            try:
+                raw = load_yaml_config(tui_state.CONFIG_PATH)
+            except Exception:
+                raw = {}
+            configured_models = raw.get("models")
+            if not isinstance(configured_models, dict):
+                configured_models = {}
+            profiles = {name: value for name, value in configured_models.items()
+                        if isinstance(value, dict) and value.get("provider", name) == "openai_codex_auth"}
+            if not profiles:
+                name = "openai_codex_auth"
+                suffix = 2
+                while name in configured_models:
+                    name = f"openai_codex_auth_{suffix}"
+                    suffix += 1
+                profiles = {name: {}}
+            selected = next(iter(profiles))
+            profile = profiles[selected]
+            extra = profile.get("extra") if isinstance(profile.get("extra"), dict) else {}
+            account = profile.get("account", extra.get("account", "default"))
+            yield Select([(name, name) for name in profiles], value=selected,
+                         allow_blank=False, id="settings-chatgpt-profile")
+            yield Input(value=str(account), placeholder="Saved ChatGPT account label",
+                        id="settings-chatgpt-account")
+            yield Static("Connect an account first: python -m tesis auth login --account default",
+                         markup=False, id="settings-chatgpt-status")
+            yield Button("Refresh OpenAI models", id="settings-chatgpt-refresh")
+            yield Select([], prompt="Available OpenAI models", disabled=True,
+                         id="settings-chatgpt-model")
+            yield Button("Use selected model", id="settings-chatgpt-apply", disabled=True)
         with Collapsible(title="LLM runtime", collapsed=True, id="settings-section-llm"):
             yield Static("", id="settings-llm-body", markup=False)
         with Collapsible(title="Policy & output", collapsed=True, id="settings-section-policy"):
@@ -620,9 +666,11 @@ class SettingsDrawer(BaseDrawer):
         ])
         model_lines = [f"selected profile: {getattr(cfg, 'model_profile', None) or '—'}"]
         for name, model in (getattr(cfg, "models", {}) or {}).items():
-            key_state = "set" if getattr(model, "api_key", "") else "—"
+            key_state = ("SIWC account " + str(model.extra.get("account", "default"))
+                         if model.provider == "openai_codex_auth"
+                         else "api key " + ("set" if getattr(model, "api_key", "") else "—"))
             model_lines.append(
-                f"{name}: {getattr(model, 'model_name', '—') or '—'} · api key {key_state}"
+                f"{name}: {getattr(model, 'model_name', '—') or '—'} · {key_state}"
             )
         self._set_section("#settings-model-body", model_lines or ["no model profiles configured"])
         llm_lines = [
@@ -656,6 +704,101 @@ class SettingsDrawer(BaseDrawer):
             self.query_one("#settings-status", Static).update(str(tui_security.redact_secrets(text)))
         except Exception:
             pass
+
+    def _clear_model_catalog(self) -> None:
+        self._model_generation += 1
+        self._catalog_binding = None
+        picker = self.query_one("#settings-chatgpt-model", Select)
+        picker.set_options([])
+        picker.disabled = True
+        self.query_one("#settings-chatgpt-apply", Button).disabled = True
+        self.query_one("#settings-chatgpt-refresh", Button).disabled = False
+
+    @on(Input.Changed, "#settings-chatgpt-account")
+    def chatgpt_account_changed(self) -> None:
+        self._clear_model_catalog()
+        self.query_one("#settings-chatgpt-status", Static).update("Account changed. Refresh OpenAI models.")
+
+    @on(Select.Changed, "#settings-chatgpt-profile")
+    def chatgpt_profile_changed(self, event: Select.Changed) -> None:
+        if event.value is Select.NULL:
+            return
+        self._clear_model_catalog()
+        try:
+            raw = parse_yaml_config(self.query_one("#yaml-editor", TextArea).text) or {}
+            profile = raw.get("models", {}).get(str(event.value), {})
+            account = profile.get("account", (profile.get("extra") or {}).get("account", "default"))
+            self.query_one("#settings-chatgpt-account", Input).value = str(account)
+        except Exception:
+            pass
+
+    @on(Button.Pressed, "#settings-chatgpt-refresh")
+    def refresh_chatgpt_models(self) -> None:
+        self._clear_model_catalog()
+        profile = str(self.query_one("#settings-chatgpt-profile", Select).value)
+        account = self.query_one("#settings-chatgpt-account", Input).value.strip()
+        self.query_one("#settings-chatgpt-status", Static).update("Loading models from OpenAI…")
+        self.query_one("#settings-chatgpt-refresh", Button).disabled = True
+        Thread(target=self._fetch_chatgpt_models, args=(self._model_generation, profile, account),
+               daemon=True, name="tesis-chatgpt-models").start()
+
+    def _fetch_chatgpt_models(self, generation: int, profile: str, account: str) -> None:
+        from llm.siwc.oauth import SIWCSession
+        from llm.siwc.storage import SIWCError
+        models = []
+        error = None
+        try:
+            models = SIWCSession().list_models(account)
+        except SIWCError as exc:
+            error = str(exc)
+        except Exception:
+            error = "Unable to load the OpenAI model catalog. Retry or check auth status."
+        if not self._tesis_closing:
+            self.post_message(ChatGPTModelsLoaded(generation, profile, account, models, error))
+
+    @on(ChatGPTModelsLoaded)
+    def chatgpt_models_loaded(self, message: ChatGPTModelsLoaded) -> None:
+        self._chatgpt_models_ready(message.generation, message.profile, message.account,
+                                  message.models, message.error)
+
+    def _chatgpt_models_ready(self, generation: int, profile: str, account: str,
+                             models: list[dict[str, str]], error: str | None) -> None:
+        if self._tesis_closing or generation != self._model_generation or not self.is_mounted:
+            return
+        status = self.query_one("#settings-chatgpt-status", Static)
+        self.query_one("#settings-chatgpt-refresh", Button).disabled = False
+        if error:
+            status.update(str(tui_security.redact_secrets(error)))
+            return
+        picker = self.query_one("#settings-chatgpt-model", Select)
+        # Preserve OpenAI's ordering and display names. There is no model allowlist.
+        picker.set_options([(model["display_name"], model["slug"]) for model in models])
+        picker.disabled = not models
+        self.query_one("#settings-chatgpt-apply", Button).disabled = not models
+        self._catalog_binding = (profile, account)
+        status.update(f"{len(models)} models available for {account}. Select a model, then save Settings."
+                      if models else "OpenAI returned no visible models for this account.")
+
+    @on(Button.Pressed, "#settings-chatgpt-apply")
+    def apply_chatgpt_model(self) -> None:
+        model = self.query_one("#settings-chatgpt-model", Select).value
+        if self._catalog_binding is None or model is Select.NULL:
+            return
+        profile_name, account = self._catalog_binding
+        try:
+            editor = self.query_one("#yaml-editor", TextArea)
+            payload = parse_yaml_config(editor.text)
+            if not isinstance(payload, dict):
+                raise ValueError("Config must be a YAML mapping")
+            profile = payload.setdefault("models", {}).setdefault(profile_name, {})
+            profile.update(provider="openai_codex_auth", model_name=str(model))
+            profile.setdefault("extra", {})["account"] = account
+            profile.pop("account", None)
+            # This picker never switches the experiment's primary provider.
+            editor.text = dump_yaml_config(payload)
+            self._set_status(f"Updated models.{profile_name}. Save Settings to keep the selected model.")
+        except Exception as exc:
+            self._set_status(f"Model not applied: {tui_security._safe_config_error_text(exc)}")
 
     @on(Button.Pressed, "#settings-save")
     def save_settings(self) -> None:
@@ -712,10 +855,14 @@ class SettingsDrawer(BaseDrawer):
         Thread(target=save, daemon=True, name="tesis-settings-save").start()
 
     def _set_save_controls(self, disabled: bool) -> None:
-        for selector in ("#settings-save", "#settings-api-add", "#settings-api-edit", "#yaml-editor"):
+        for selector in ("#settings-save", "#settings-api-add", "#settings-api-edit", "#yaml-editor",
+                         "#settings-chatgpt-apply"):
             self.query_one(selector).disabled = disabled
         if not disabled:
             self._refresh_api_providers()
+            self.query_one("#settings-chatgpt-apply", Button).disabled = (
+                self._catalog_binding is None or self.query_one("#settings-chatgpt-model", Select).disabled
+            )
 
     @on(SettingsSaved)
     def settings_saved(self, message: SettingsSaved) -> None:
@@ -741,6 +888,7 @@ class SettingsDrawer(BaseDrawer):
     def prepare_shutdown(self) -> None:
         self._tesis_closing = True
         self._settings_generation += 1
+        self._model_generation += 1
         self._pending_api_keys.clear()
 
     def on_unmount(self) -> None:

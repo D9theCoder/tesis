@@ -14,7 +14,7 @@ from typing import Any, Callable
 from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS
 from evaluation.metrics import aggregate_runs
 from evaluation.reporter import write_json_report
-from llm.provider import SUPPORTED_PROVIDERS
+from llm.provider import SUPPORTED_PROVIDERS, provider_capabilities
 from llm.runtime import LLMRuntime, RoleSettings, provider_request_summary
 from tesis.artifact_repository import config_fingerprint, new_execution_id
 from tesis.runtime_events import CancellationToken, RunEvent, RuntimeEventSink, redact_secrets
@@ -483,7 +483,10 @@ def run_provider_matrix(
         else ("run" if llm_cache_enabled else "none")
     )
 
-    chosen_providers = sorted(providers or list(SUPPORTED_PROVIDERS))
+    chosen_providers = sorted(providers or [
+        name for name in SUPPORTED_PROVIDERS
+        if not provider_capabilities(name).requires_explicit_selection
+    ])
     chosen_levels = sorted(security_levels or list(SECURITY_LEVELS))
     chosen_surfaces = sorted(surfaces or ["sqli", "access_control", "brute_force"])
     chosen_payload_modes = sorted(payload_modes or ["static_only", "hybrid"])

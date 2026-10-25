@@ -9,6 +9,17 @@ Headless execution uses the same runners and artifact schema without opening
 Textual; network-backed runs should be pointed at an authorized DVWA sandbox.
 The app and headless layer read the repository-root `config.yaml` by default.
 
+The optional `openai_codex_auth` provider authenticates through `tesis auth` and
+the official SIWC public-client OAuth flow. `llm/siwc/storage.py` owns protected
+local account records and refresh serialization; `oauth.py` owns discovery,
+PKCE, signed identity validation, refresh, revocation, and account model catalogs.
+`provider.py` adapts public Responses SSE to the existing LangChain/runtime
+contract without changing graph orchestration. Credentials are resolved at
+dispatch and remain outside YAML and experiment artifacts. Settings fetches
+available models in a worker, saves a selected server slug into the chosen
+profile, and retains `tesis.tui_state.CONFIG_PATH` as the configuration owner.
+See [setup, limitations, and validation](sign_in_with_chatgpt.md).
+
 `tesis/provider_registry.py` expands the optional `api_providers` mapping into
 one stable named model profile per selected provider/model. Existing `models`
 entries retain their keys. `config_fields` offers these profiles to launch and

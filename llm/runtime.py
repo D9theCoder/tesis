@@ -137,6 +137,7 @@ def _reasoning_token_evidence(usage: Mapping[str, Any]) -> dict[str, Any] | None
         ("reasoning",),
         ("output_token_details", "reasoning"),
         ("output_token_details", "reasoning_tokens"),
+        ("output_tokens_details", "reasoning_tokens"),
         ("completion_tokens_details", "reasoning_tokens"),
     )
     for path in candidates:
@@ -918,6 +919,16 @@ class LLMRuntime:
             "reasoning_effort_requested": reasoning_effort,
             "reasoning_token_evidence": None,
         }
+        try:
+            capabilities = provider_capabilities(provider)
+        except ValueError:
+            capabilities = None
+        if capabilities and capabilities.unsupported_request_fields:
+            base_record["provider_request_constraints"] = {
+                "unsupported_fields": list(capabilities.unsupported_request_fields),
+            }
+            if endpoint is None:
+                base_record["endpoint"] = capabilities.default_endpoint
         if context.cache_enabled and cache_key in context.cache:
             text, parsed = context.cache[cache_key]
             safe_output = redact_secrets(parsed)
@@ -1188,6 +1199,8 @@ class LLMRuntime:
                     "error_message": diagnostic["message"],
                     "remediation": diagnostic["remediation"],
                 })
+                if "provider_response" in diagnostic:
+                    record["provider_response"] = diagnostic["provider_response"]
             record["failure_class"] = classify_failure(
                 parse_status=record["parse_status"],
                 status_code=record.get("status_code"),

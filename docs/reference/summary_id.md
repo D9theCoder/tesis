@@ -168,6 +168,17 @@ key ke `.env`. Pengaturan *role* tetap diresolusikan per koordinat, dengan
 orkestrasi metode dan identitas artefak yang dipertahankan.
 Lihat [konfigurasi API provider](api_providers.md).
 
+Provider opsional `openai_codex_auth` menggunakan OAuth Sign in with ChatGPT
+resmi dan *streaming* Responses API publik yang memakai paket ChatGPT.
+Provider dengan API key dan topologi agent yang ada tetap dipertahankan.
+Kredensial akun disimpan secara lokal dengan akses terbatas. Pilihan model
+pada Settings TUI diambil dari katalog terkini akun yang sudah masuk.
+*Preview* SIWC belum menerima parameter temperatur dan batas token keluaran,
+sehingga kontrol bersama tersebut tidak dikirim untuk provider ini dan
+keterbatasannya dicatat dalam telemetri pemanggilan. Batas token pada
+konfigurasi tidak boleh dianggap sebagai batas yang diterapkan secara sama
+antarprovider. Lihat [pengaturan SIWC dan cakupan validasi](sign_in_with_chatgpt.md).
+
 Semua model diuji dengan konfigurasi yang sama:
 
 - AKG sama
