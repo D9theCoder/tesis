@@ -455,8 +455,8 @@ class TraceViewport(VerticalScroll):
 
 
 class TraceDrawer(BaseDrawer):
-    # Paused on open: history holds position; ``f``/End resumes auto-follow.
-    BINDINGS = [*BaseDrawer.BINDINGS, Binding("f", "toggle_follow", "Follow", show=True),
+    # Paused on open: history holds position; ``Ctrl+F``/End resumes auto-follow.
+    BINDINGS = [*BaseDrawer.BINDINGS, Binding("ctrl+f", "toggle_follow", "Follow", show=True),
                 Binding("end", "resume_follow", "Latest", show=False)]
 
     def __init__(self) -> None:
@@ -472,7 +472,7 @@ class TraceDrawer(BaseDrawer):
         yield Static("new events: 0", id="trace-new-badge", markup=False, classes="trace-new-badge")
         with TraceViewport(id="trace-scroll", classes="drawer-body"):
             yield Static("loading…", id="trace-body", markup=False)
-        yield Static(key_hints(("f", "follow / pause"), ("End", "latest"), ("PgUp/PgDn", "scroll"), ("Esc", "close")), classes="drawer-hint")
+        yield Static(key_hints(("Ctrl+F", "follow / pause"), ("End", "latest"), ("PgUp/PgDn", "scroll"), ("Esc", "close")), classes="drawer-hint")
 
     def on_mount(self) -> None:
         from tesis.tui_mission import MissionControlScreen
@@ -648,7 +648,7 @@ class ResultsDrawer(BaseDrawer):
     stay in the web companion.
     """
 
-    BINDINGS = [Binding("d", "details", "Details", show=False)]
+    BINDINGS = [Binding("ctrl+d", "details", "Details", show=False)]
 
     FILTER_FIELDS: tuple[tuple[str, str], ...] = (
         ("filter-status", "status"), ("filter-provider", "provider"),
@@ -694,7 +694,7 @@ class ResultsDrawer(BaseDrawer):
             yield Button("Export JSON", id="results-export")
             yield Button("Review payload evidence", id="results-review")
         yield Static("", id="results-status", markup=False)
-        yield Static(key_hints(("Enter", "inspect"), ("d", "details"), ("Tab", "focus"), ("Esc", "close")), classes="drawer-hint")
+        yield Static(key_hints(("Enter", "inspect"), ("Ctrl+D", "details"), ("Tab", "focus"), ("Esc", "close")), classes="drawer-hint")
 
     @on(Input.Changed, "#results-query")
     def search_rows(self) -> None:
@@ -1060,7 +1060,7 @@ class ResultsDrawer(BaseDrawer):
 
 
 class GradeRow(ControlRow):
-    BINDINGS = [Binding(str(grade), f"grade({grade})", str(grade), show=False) for grade in range(5)]
+    BINDINGS = [Binding(f"alt+{grade}", f"grade({grade})", str(grade), show=False) for grade in range(5)]
 
     def action_grade(self, grade: int) -> None:
         self.control_widget.value = grade
@@ -1104,7 +1104,7 @@ class ReviewDrawer(BaseDrawer):
             with Vertical(id="review-candidate-detail"):
                 yield Static("", id="review-identity", markup=False)
                 yield Static("", id="review-evidence", markup=False)
-                yield GradeRow("Grade (0-4 only while this row is focused)", ChoiceSelect([(str(i), i) for i in range(5)], prompt="Human grade 0-4", id="review-score"))
+                yield GradeRow("Grade (Alt+0-4 while this row is focused)", ChoiceSelect([(str(i), i) for i in range(5)], prompt="Human grade 0-4", id="review-score"))
                 yield Input(placeholder="Reviewer ID", id="review-reviewer")
                 yield Input(placeholder="Reason supported by the evidence", id="review-reason")
                 yield Button("Save / Next pending", id="review-save", disabled=True)
@@ -1312,9 +1312,9 @@ class ReviewDrawer(BaseDrawer):
 class DoctorDrawer(BaseDrawer):
     BINDINGS = [
         Binding("escape", "back", "Stop and close", priority=True),
-        Binding("r", "rerun", "Run again"),
-        Binding("l", "services", "Check services"),
-        Binding("d", "details", "Details"),
+        Binding("ctrl+r", "rerun", "Run again"),
+        Binding("ctrl+l", "services", "Check services"),
+        Binding("ctrl+d", "details", "Details"),
     ]
 
     _CHECK_NAMES = {
@@ -1358,7 +1358,7 @@ class DoctorDrawer(BaseDrawer):
             yield Button("Run again", id="doctor-run")
             yield Button("Check services", id="doctor-live")
             yield Button("Details", id="doctor-details", disabled=True)
-        yield Static("R rerun · L services · D details · Esc stop/close", classes="drawer-hint")
+        yield Static("Ctrl+R rerun · Ctrl+L services · Ctrl+D details · Esc stop/close", classes="drawer-hint")
 
     def on_mount(self) -> None:
         self.run_offline_pressed()
@@ -1507,7 +1507,7 @@ class DoctorDrawer(BaseDrawer):
         self._stop_checks()
 
 class PlanDrawer(BaseDrawer):
-    BINDINGS = [Binding("d", "details", "Details", show=False)]
+    BINDINGS = [Binding("ctrl+d", "details", "Details", show=False)]
 
     def __init__(self, config: Any = None) -> None:
         super().__init__()
@@ -1524,7 +1524,7 @@ class PlanDrawer(BaseDrawer):
             yield Button("Details", id="plan-details")
             yield Button("Run setup", id="plan-run")
             yield Button("Matrix setup", id="plan-matrix")
-        yield Static(key_hints(("d", "details"), ("PgUp/PgDn", "scroll"), ("Esc", "close")), classes="drawer-hint")
+        yield Static(key_hints(("Ctrl+D", "details"), ("PgUp/PgDn", "scroll"), ("Esc", "close")), classes="drawer-hint")
 
     def on_mount(self) -> None:
         cfg = self.config
@@ -1587,20 +1587,14 @@ class HelpDrawer(BaseDrawer):
         context = tui_commands.keyboard_context(origin)
         self.query_one("#help-body", Static).update(summary_rows([
             ("Current context", context),
-            ("Ctrl+Q", "Deliberate force exit"),
-            ("Tab / Shift+Tab", "Next / previous interactive panel"),
-            ("↑ / ↓", "Select an item in the focused list"),
-            ("← / →", "Change tabs or move horizontal controls"),
-            ("Enter", "Open or activate the selection"),
-            ("Esc", "Close the overlay or return"),
-            ("/ · Ctrl+P", "Open commands; type to filter"),
-            ("?", "Open this help"),
-            ("PgUp / PgDn", "Scroll the focused list or viewport"),
-            ("Home / End", "First / last item or viewport boundary"),
-            ("1 / 2 / 3 / 4", "Pipeline / runs / evidence / activity"),
+            ("Ctrl+Q", "Quit when idle; preserve unsaved drafts"),
+            ("Ctrl+Alt+Q", "Deliberate force exit"),
+            ("Ctrl+F1", "Open this help"),
             ("Ctrl+C", "Copy selection, cancel local work, or cancel run"),
             ("Ctrl+S", "Save settings"),
-            ("F4 / F6", "Advanced YAML / Settings categories"),
+            ("Ctrl+F4 / Ctrl+F6", "Advanced YAML / Settings categories"),
+            ("", "\nNavigation"),
+            *tui_commands.NAVIGATION_KEYS,
             ("", "\nText fields keep normal typing and editing keys."),
         ], label_width=18))
         self.query_one("#help-command-body", Static).update(summary_rows([

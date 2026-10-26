@@ -3,17 +3,37 @@ import asyncio
 
 import pytest
 from textual.app import App
+from textual.binding import Binding
 from textual.widgets import Button, Input, OptionList, Select, Static, TextArea
 
 from tesis import tui_state
 from tesis.config_loader import load_yaml_config, save_yaml_config
 from tesis.tui_choices import ChoicePicker, ChoiceSelect
-from tesis.tui_commands import CommandLauncher, open_workspace
+from tesis.tui_commands import CommandLauncher, open_workspace, request_quit
 from tesis.tui_forms import SettingsDrawer
 
 
 class WidgetApp(App):
     CSS_PATH = "../tesis/tui.tcss"
+    ENABLE_COMMAND_PALETTE = False
+    BINDINGS = [Binding("ctrl+q", "quit", priority=False)]
+
+    def action_quit(self):
+        request_quit(self.screen)
+
+    def action_force_exit(self):
+        self.exit()
+
+
+@pytest.fixture
+def mission_shell(monkeypatch):
+    """Keep only the mission screen's identity and keyboard dispatch."""
+    from tesis.tui_mission import MissionControlScreen
+    monkeypatch.setattr(MissionControlScreen, "compose", lambda self: iter([Button("Mission", id="mission-anchor")]))
+    monkeypatch.setattr(MissionControlScreen, "on_mount", lambda self: None)
+    monkeypatch.setattr(MissionControlScreen, "on_resize", lambda *args: None)
+    monkeypatch.setattr(MissionControlScreen, "on_screen_resume", lambda self: self.query_one(Button).focus())
+    return MissionControlScreen
 
 
 @pytest.mark.parametrize("size", [(160, 48), (120, 30), (80, 24), (60, 18)])
@@ -72,6 +92,173 @@ def settings_path(tmp_path, monkeypatch):
                            "scoring_mode": "ai", "scoring_evaluator": {"provider": "saved", "max_attempts": 2,
                                                                       "max_tokens": 1024, "timeout": 60}})
     return path
+
+
+@pytest.mark.parametrize("size", [(120, 30), (80, 24), (60, 18)])
+def test_settings_escape_keeps_mission_underneath(settings_path, mission_shell, size):
+    async def scenario():
+        app = WidgetApp()
+        async with app.run_test(size=size) as pilot:
+            mission = mission_shell()
+            app.push_screen(mission)
+            await pilot.pause()
+            for via_launcher in (False, True):
+                if via_launcher:
+                    app.push_screen(CommandLauncher())
+                    await pilot.pause()
+                    app.screen._dispatch("settings")
+                else:
+                    open_workspace(app, SettingsDrawer())
+                await pilot.pause()
+                assert mission in app.screen_stack, "Workspace navigation must retain the mission screen"
+                await pilot.press("escape")
+                await pilot.pause()
+                assert app.screen is mission
+                anchor = mission.query_one("#mission-anchor")
+                assert app.focused is anchor and anchor.region.width > 0
+    asyncio.run(scenario())
+
+
+def test_mission_actions_require_modifier_combinations(mission_shell, monkeypatch):
+    shortcuts = [
+        ("r", "ctrl+r", "launch_single"), ("m", "ctrl+alt+m", "launch_matrix"),
+        ("p", "ctrl+o", "open_plan"), ("d", "ctrl+d", "open_doctor"),
+        ("s", "ctrl+s", "open_settings"), ("v", "ctrl+v", "open_results"),
+        ("l", "ctrl+l", "open_trace"), ("q", "ctrl+q", "quit_if_idle"),
+        ("/", "ctrl+p", "open_launcher"), ("?", "ctrl+f1", "open_help"),
+        ("1", "alt+1", "show_pipeline"), ("2", "alt+2", "show_coordinates"),
+        ("3", "alt+3", "show_evidence"), ("4", "alt+4", "show_activity"),
+    ]
+    calls = []
+    for _, _, action in shortcuts:
+        monkeypatch.setattr(mission_shell, f"action_{action}", lambda self, name=action: calls.append(name))
+    async def scenario():
+        app = WidgetApp()
+        async with app.run_test() as pilot:
+            app.push_screen(mission_shell())
+            await pilot.pause()
+            await pilot.press(*(raw for raw, _, _ in shortcuts), ":")
+            assert calls == []
+            for _, combo, action in shortcuts:
+                await pilot.press(combo)
+                assert calls[-1] == action
+            assert len(calls) == len(shortcuts)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("size", [(160, 48), (120, 30), (80, 24), (60, 18)])
+def test_settings_arrows_follow_controls_and_restore_section_focus(settings_path, size):
+    async def scenario():
+        app = WidgetApp()
+        async with app.run_test(size=size) as pilot:
+            drawer = SettingsDrawer()
+            app.push_screen(drawer)
+            await pilot.pause()
+            first = drawer.query_one("#setting-target")
+            second = drawer.query_one("#setting-primary-model")
+            categories = drawer.query_one("#settings-categories", OptionList)
+            first.focus()
+            await pilot.press("up")
+            assert app.focused is first, "Up at the first field must not wrap"
+            await pilot.press("down")
+            assert app.focused is second
+            await pilot.press("left")
+            assert app.focused is categories
+            assert drawer.query_one("#settings-content").display == (size[0] >= 120)
+            await pilot.press("down", "right")
+            assert app.focused is drawer.query_one("#settings-api-add")
+            await pilot.press("left", "up", "right")
+            assert app.focused is second, "Returning to a category restores its last field"
+            drawer.query_one("#setting-method").focus()
+            await pilot.press("down")
+            assert app.focused is drawer.query_one("#settings-save"), "Hidden legacy controls must be skipped"
+            assert app.screen is drawer, "Arrows browse fields without opening a choice sheet"
+            await pilot.press("end")
+            assert app.focused is drawer.query_one("#settings-close")
+            await pilot.press("down")
+            assert app.focused is drawer.query_one("#settings-close"), "Down at the last action must not wrap"
+            await pilot.press("home")
+            assert app.focused is first
+            await pilot.press("ctrl+f6")
+            await pilot.resize_terminal(80, 24)
+            await pilot.pause()
+            assert app.focused is categories
+            assert not drawer.query_one("#settings-content").display
+            await pilot.press("escape")
+            assert app.screen is drawer and app.focused is first
+            await pilot.resize_terminal(160, 48)
+            await pilot.pause()
+            first.focus()
+            await pilot.pause()
+            await pilot.resize_terminal(80, 24)
+            await pilot.pause()
+            assert drawer.query_one("#settings-content").display
+            assert app.focused is first
+    asyncio.run(scenario())
+
+
+def test_settings_arrows_preserve_text_editing_and_filtered_lists(settings_path):
+    async def scenario():
+        app = WidgetApp()
+        async with app.run_test(size=(80, 24)) as pilot:
+            drawer = SettingsDrawer()
+            app.push_screen(drawer)
+            await pilot.pause()
+            categories = drawer.query_one("#settings-categories", OptionList)
+            categories.highlighted = 4
+            await pilot.pause()
+            drawer.enter_section()
+            row = drawer.query_one("#row-settings-evaluator-timeout")
+            row.focus()
+            await pilot.press("enter")
+            field = app.screen.query_one(Input)
+            field.value = "123"
+            field.cursor_position = 2
+            await pilot.press("left")
+            assert field.cursor_position == 1
+            assert app.focused is field
+            await pilot.press("escape")
+            drawer.action_edit_yaml()
+            editor = drawer.query_one("#yaml-editor", TextArea)
+            editor.move_cursor((1, 2))
+            await pilot.press("up")
+            assert app.focused is editor and editor.cursor_location[0] == 0
+            await pilot.press("ctrl+f6", "home", "down", "right")
+            query = drawer.query_one("#settings-provider-query", Input)
+            query.focus()
+            await pilot.press("down")
+            assert app.focused is query and app.screen is drawer
+    asyncio.run(scenario())
+
+
+def test_quit_combinations_preserve_dirty_settings_and_active_runs(settings_path, mission_shell):
+    async def scenario():
+        app = WidgetApp()
+        async with app.run_test() as pilot:
+            mission = mission_shell()
+            app.push_screen(mission)
+            await pilot.pause()
+            mission._run_active = True
+            await pilot.press("ctrl+q")
+            assert app.is_running and app.screen is mission
+            mission._run_active = False
+            open_workspace(app, SettingsDrawer())
+            await pilot.pause()
+            drawer = app.screen
+            drawer.query_one("#yaml-editor", TextArea).text += "\n# unsaved\n"
+            await pilot.press("ctrl+q")
+            assert app.is_running and app.screen is drawer
+            drawer.query_one("#setting-target").focus()
+            await pilot.press("enter", "ctrl+q")
+            assert app.is_running and app.screen is not drawer
+            await pilot.press("escape")
+            app.push_screen(ChoicePicker([("A", "a")]))
+            await pilot.pause()
+            await pilot.press("ctrl+q")
+            assert app.is_running and isinstance(app.screen, ChoicePicker)
+            await pilot.press("ctrl+alt+q")
+            assert not app.is_running
+    asyncio.run(scenario())
 
 
 def test_save_includes_visible_unapplied_evaluator_edit(settings_path):
@@ -197,17 +384,17 @@ def test_launch_steps_restore_row_and_escape_never_starts(settings_path):
             row.focus()
             await pilot.press("enter")
             assert isinstance(app.screen, FieldEditor)
-            await pilot.press("escape", "f8")
+            await pilot.press("escape", "ctrl+f8")
             await pilot.pause()
             assert drawer._step == 1
             await pilot.press("escape")
             assert drawer._step == 0 and app.focused is row
-            await pilot.press("f8", "f8", "f8")
+            await pilot.press("ctrl+f8", "ctrl+f8", "ctrl+f8")
             assert drawer._step == 3 and drawer._frozen is None
             assert app.focused is not drawer.query_one("#launch-start")
             drawer._goto_step(2)
             drawer.open_advanced()
-            await pilot.press("f8", "escape")
+            await pilot.press("ctrl+f8", "escape")
             assert drawer._step == 2, "Review Back restores the prior Runtime child"
             await pilot.press("escape")
             assert drawer._step == 2 and drawer.query_one("#launch-advanced").collapsed
@@ -262,6 +449,8 @@ def test_candidate_decisions_stay_with_identity_and_grade_keys_are_local(monkeyp
             await pilot.pause()
             assert app.focused is drawer.query_one(GradeRow)
             await pilot.press("3")
+            assert drawer.query_one("#review-score", Select).value is Select.NULL
+            await pilot.press("alt+3")
             drawer.query_one("#review-reason", Input).value = "Evidence for A"
             await pilot.pause()
             picker.value = "b"

@@ -15,9 +15,10 @@ from typing import Any
 
 from rich.text import Text
 from textual.app import App
+from textual.binding import Binding
 from textual.theme import Theme
 
-from tesis.tui_commands import COMMANDS, CommandLauncher, CommandSpec
+from tesis.tui_commands import COMMANDS, CommandLauncher, CommandSpec, request_quit
 from tesis.tui_drawers import (
     AboutDrawer,
     CoordinateDrawer,
@@ -98,6 +99,17 @@ class TesisApp(App[None]):
     CSS_PATH = "tui.tcss"
     # Ctrl+P belongs to CommandLauncher; the stock palette would shadow it.
     ENABLE_COMMAND_PALETTE = False
+    # Override Textual's priority Ctrl+Q exit so screen draft/run guards apply.
+    BINDINGS = [
+        Binding("ctrl+q", "quit", "Quit", priority=False),
+        Binding("ctrl+alt+q", "force_exit", "Force exit", show=False, priority=True),
+    ]
+
+    def action_quit(self) -> None:
+        request_quit(self.screen)
+
+    def action_force_exit(self) -> None:
+        self.exit()
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)

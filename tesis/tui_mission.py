@@ -71,19 +71,7 @@ _TERMINAL_EVENT_TYPES = frozenset({
 
 _RUN_STATUSES = ("ready", "running", "degraded", "succeeded", "failed", "cancelled", "unknown")
 
-_TOO_SMALL_FOOTER = "? help · q quit"
-
-# Footer hints are contextual: idle advertises the start actions, an active run
-# advertises inspection/navigation and cancellation. Both sets name registry
-# commands and NAVIGATION_KEYS entries, so the footer can never advertise a key
-# nothing binds; narrower terminals take the compact set instead of clipping.
-_FOOTER_IDLE_CORE = ("run", "matrix")
-_FOOTER_IDLE_EXTRA = ("plan", "doctor")
-_FOOTER_IDLE_TAIL = ("help", "quit")
-_FOOTER_IDLE_NAV = ("/",)
-_FOOTER_ACTIVE_TAIL = ("cancel", "help")
-_FOOTER_ACTIVE_NAV = ("1", "2", "3", "4", "Tab/Shift+Tab", "Enter", "/")
-_FOOTER_ACTIVE_NAV_COMPACT = ("Enter", "/")
+_TOO_SMALL_FOOTER = "ctrl+f1 help · ctrl+q quit"
 
 # Concise pipeline labels for the narrow (60-79 column) layout, where the full
 # canonical stage names plus detail no longer fit one row.
@@ -162,27 +150,25 @@ class MissionControlScreen(Screen):
     BINDINGS = [
         # show=True bindings are rendered verbatim in the footer hint, so the
         # advertised keys are the keys this screen actually binds.
-        Binding("1", "show_pipeline", "Pipeline", show=True),
-        Binding("2", "show_coordinates", "Coordinates", show=True),
-        Binding("3", "show_evidence", "Evidence", show=True),
-        Binding("4", "show_activity", "Activity", show=False),
+        Binding("alt+1", "show_pipeline", "Pipeline", show=True),
+        Binding("alt+2", "show_coordinates", "Coordinates", show=True),
+        Binding("alt+3", "show_evidence", "Evidence", show=True),
+        Binding("alt+4", "show_activity", "Activity", show=False),
         Binding("enter", "inspect", "Inspect", show=True, key_display="Enter"),
         Binding("escape", "overview", "Overview", show=False),
-        Binding("/", "open_launcher", "Command", show=True),
-        Binding("question_mark", "open_help", "Help", show=True, key_display="?"),
+        Binding("ctrl+p", "open_launcher", "Command", show=True),
+        Binding("ctrl+f1", "open_help", "Help", show=True, key_display="Ctrl+F1"),
         Binding("ctrl+c", "cancel_or_exit", "Cancel", show=True, priority=True,
                 key_display="Ctrl+C"),
-        Binding("q", "quit_if_idle", "Quit", show=True),
-        Binding("ctrl+q", "app.quit", "Force exit", show=False, priority=True),
-        Binding("r", "launch_single", "Run", show=False),
-        Binding("m", "launch_matrix", "Matrix", show=False),
-        Binding("p", "open_plan", "Plan", show=False),
-        Binding("d", "open_doctor", "Doctor", show=False),
-        Binding("s", "open_settings", "Settings", show=False),
-        Binding("v", "open_results", "Results", show=False),
-        Binding("l", "open_trace", "Logs", show=False),
-        Binding(":", "open_launcher", "Command", show=False),
-        Binding("ctrl+p", "open_launcher", "Palette", show=False),
+        Binding("ctrl+q", "quit_if_idle", "Quit", show=True, priority=True),
+        Binding("ctrl+alt+q", "app.force_exit", "Force exit", show=False, priority=True),
+        Binding("ctrl+r", "launch_single", "Run", show=False),
+        Binding("ctrl+alt+m", "launch_matrix", "Matrix", show=False),
+        Binding("ctrl+o", "open_plan", "Plan", show=False),
+        Binding("ctrl+d", "open_doctor", "Doctor", show=False),
+        Binding("ctrl+s", "open_settings", "Settings", show=False),
+        Binding("ctrl+v", "open_results", "Results", show=False),
+        Binding("ctrl+l", "open_trace", "Logs", show=False),
     ]
 
     def __init__(self) -> None:
@@ -226,19 +212,19 @@ class MissionControlScreen(Screen):
             yield Static("TESIS", id="context-bar")
             yield Static("Ready", id="header-status")
         with Horizontal(id="workspace-nav"):
-            yield KeyboardTabs(Tab("1 Pipeline", id="tab-pipeline"), Tab("2 Runs", id="tab-runs"),
-                       Tab("3 Evidence", id="tab-evidence"), Tab("4 Activity", id="tab-activity"),
+            yield KeyboardTabs(Tab("Pipeline", id="tab-pipeline"), Tab("Runs", id="tab-runs"),
+                       Tab("Evidence", id="tab-evidence"), Tab("Activity", id="tab-activity"),
                        id="workspace-tabs")
             with KeyboardActions(id="workspace-actions"):
-                yield Button("v Results", id="nav-results")
-                yield Button("s Settings", id="nav-settings")
-                yield Button("l Logs", id="nav-logs")
+                yield Button("Results", id="nav-results")
+                yield Button("Settings", id="nav-settings")
+                yield Button("Logs", id="nav-logs")
         with Vertical(id="mission-body"):
             with Vertical(id="pipeline-panel", classes="workspace-panel"):
                 yield OptionList(id="pipeline-pane")
             with Vertical(id="coordinate-panel", classes="workspace-panel"):
                 yield KeyboardTable(id="coordinate-pane", cursor_type="row", show_row_labels=False)
-                yield Static("No runs yet\n\nPress r to configure a run or m to build a matrix.", id="coordinate-empty")
+                yield Static("No runs yet\n\nCtrl+R configures a run; Ctrl+Alt+M builds a matrix.", id="coordinate-empty")
             with Horizontal(id="detail-panels"):
                 with Vertical(id="notice-pane", classes="workspace-panel"):
                     yield Static("", id="notice-new-badge", markup=False, classes="notice-new-badge")
@@ -250,38 +236,29 @@ class MissionControlScreen(Screen):
                         yield Static("", id="evidence-text", markup=False)
         yield Static("", id="triage-line")
         yield Static("", id="size-notice")
-        yield Input(placeholder="/ commands    r run    m matrix    p plan    ? help", id="mission-command")
+        yield Input(placeholder="Type /command    Ctrl+P commands    Ctrl+F1 help", id="mission-command")
         with Horizontal(id="status-strip"):
             yield Static("", id="status-rail")
             yield Static("", id="status-label")
         yield Static(self._footer_text(), id="context-footer")
 
     def _footer_text(self) -> str:
-        """Contextual footer: start actions while idle, inspect/cancel while active.
-
-        Every hint comes from its single source (``COMMANDS`` for command keys,
-        ``NAVIGATION_KEYS`` for navigation), so the footer can never advertise a
-        key nothing binds. The idle set fits from 80 columns, so it only drops to
-        the compact set below that; the active set keeps its pane/navigation keys
-        plus ``/ command``, cancel, and help, and only compact below 120 columns.
-        """
+        """Fit complete registry-backed hints, keeping essential actions first."""
         width, height = self._dims()
         if width < tui_commands.FLOOR_WIDTH or height < tui_commands.FLOOR_HEIGHT:
             # Below the floor only quit/help stay reachable.
             return _TOO_SMALL_FOOTER
         active = self._run_active or self.state.status in ("running", "degraded")
         if active:
-            nav = _FOOTER_ACTIVE_NAV if width >= 120 else _FOOTER_ACTIVE_NAV_COMPACT
-            hints = [_nav_hint(nav), *_command_hints(_FOOTER_ACTIVE_TAIL)]
-            return " · ".join(hints)
-        start = _FOOTER_IDLE_CORE if width < 80 else _FOOTER_IDLE_CORE + _FOOTER_IDLE_EXTRA
-        hints = [
-            *_command_hints(start),
-            _nav_hint(_FOOTER_IDLE_NAV),
-            *_command_hints(_FOOTER_IDLE_TAIL),
-        ]
-        if width >= 120:
-            hints.insert(0, "Tab focus · ↑/↓ select · Enter open")
+            essential = [*_command_hints(("cancel",)), _nav_hint(("ctrl+p",)), *_command_hints(("help",))]
+            optional = [_nav_hint((key,)) for key in ("Enter", "alt+1", "alt+2", "alt+3", "alt+4", "Tab/Shift+Tab")]
+        else:
+            essential = [*_command_hints(("run",)), _nav_hint(("ctrl+p",)), *_command_hints(("help", "quit"))]
+            optional = [*_command_hints(("matrix", "plan", "doctor")), _nav_hint(("Tab/Shift+Tab",))]
+        hints = essential[:]
+        for hint in optional:
+            if cell_len(" · ".join([*hints, hint])) <= width - 2:
+                hints.append(hint)
         return " · ".join(hints)
 
     def on_mount(self) -> None:
@@ -642,7 +619,7 @@ class MissionControlScreen(Screen):
         fields = self._readiness_fields()
         if fields is None:
             lines.append("target      —")
-            lines.append("config      invalid or unreadable (p for the resolved-config check)")
+            lines.append("config      invalid or unreadable (Ctrl+O for the resolved-config check)")
             lines.append("containment enforced — no target is contacted")
         else:
             lines.append(f"target      {fields['target'][:80]}")
@@ -700,7 +677,7 @@ class MissionControlScreen(Screen):
                     "target      —",
                     "condition   invalid configuration",
                     "provider    — · coordinates — · config invalid",
-                    "containment enforced · r run · m matrix · p plan · d doctor",
+                    "containment enforced · ctrl+r run · ctrl+p command",
                 )
             )
         method_tail = f" · method {fields['method']}"
@@ -709,7 +686,7 @@ class MissionControlScreen(Screen):
             _clip(f"target      {fields['target']}", available),
             _clip(f"condition   {fields['condition']}", max(8, available - len(method_tail))) + method_tail,
             _clip(f"provider    {fields['provider']}/{fields['model']}", max(8, available - len(coords_tail))) + coords_tail,
-            _clip("containment enforced · r run · m matrix · p plan · d doctor", available),
+            _clip("containment enforced · ctrl+r run · ctrl+p command", available),
         ))
 
     @staticmethod
@@ -1075,8 +1052,7 @@ class MissionControlScreen(Screen):
         self._push_drawer(CoordinateDrawer())
 
     def action_quit_if_idle(self) -> None:
-        if not self._run_active:
-            self.app.exit()
+        tui_commands.request_quit(self)
 
     def action_cancel_or_exit(self) -> None:
         focused = self.app.focused
@@ -1088,4 +1064,4 @@ class MissionControlScreen(Screen):
         elif self._run_active:
             self.app.exit()
         else:
-            self.notify("Idle. Use q to quit or Ctrl+Q to force exit.")
+            self.notify("Idle. Ctrl+Q quits; Ctrl+Alt+Q forces exit.")

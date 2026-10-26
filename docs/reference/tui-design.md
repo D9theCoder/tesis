@@ -41,17 +41,25 @@ cell widths and an explicit ellipsis. Inspection views retain full identifiers.
 | Left / Right | Change tabs, move between action buttons, or scroll a wide row table |
 | Enter | Open or activate the selected item; enter the selected tab's content |
 | Escape | Close the current overlay; return to Pipeline from the workspace |
-| `/` / Ctrl+P | Open the command palette |
-| `?` | Open the keyboard help popup |
+| Ctrl+P | Open the command palette |
+| Ctrl+F1 | Open the keyboard help popup |
 | PageUp / PageDown | Move a page in the focused list or viewport |
 | Home / End | First / last row, option, tab, or viewport boundary |
-| `1` / `2` / `3` / `4` | Pipeline / runs / evidence / activity |
-| `r` / `m` / `p` / `d` | Run / Matrix / Plan / Doctor |
-| `v` / `s` / `l` | Results / Settings / activity log |
+| Alt+1 / Alt+2 / Alt+3 / Alt+4 | Pipeline / runs / evidence / activity |
+| Ctrl+R / Ctrl+Alt+M / Ctrl+O / Ctrl+D | Run / Matrix / Plan / Doctor |
+| Ctrl+V / Ctrl+S / Ctrl+L | Results / Settings / activity log |
 | Ctrl+C | Copy selected text, cancel local work, or cancel an active experiment; a second experiment cancellation exits |
-| Ctrl+Q | Deliberate force exit |
-| F4 / F6 | Advanced YAML / Settings categories |
-| F7 / F8 | Previous / next launch step |
+| Ctrl+Q | Quit when idle; refuse to abandon unsaved drafts or active work |
+| Ctrl+Alt+Q | Deliberate force exit |
+| Ctrl+F4 / Ctrl+F6 | Advanced YAML / Settings categories |
+| Ctrl+F7 / Ctrl+F8 | Previous / next launch step |
+
+Action shortcuts require a modifier, including local Details (Ctrl+D), log
+follow (Ctrl+F), Doctor rerun (Ctrl+R), and service checks (Ctrl+L).
+Escape, Enter, Space, Tab, and navigation keys retain their normal roles.
+Bare letters, digits, slash, colon, and question mark do not invoke workspace
+commands. Ctrl+O avoids the palette's Ctrl+P; Ctrl+Alt+M avoids the legacy
+terminal encoding that makes Ctrl+M indistinguishable from Enter.
 
 Text inputs retain normal typing and caret navigation. The palette input is
 the exception: Up/Down, PageUp/PageDown, and Home/End move its command selection
@@ -62,8 +70,13 @@ list navigation. Tab can still move between the filter and command list.
 The pipeline initially selects its first stage so Enter works immediately;
 later updates preserve the operator's selection.
 
-In Settings, arrows browse rows and Enter opens a typed child editor. F6 opens
-categories; Tab and Shift+Tab move between focus zones. F4 opens Advanced YAML,
+In Settings, Up/Down browse visible fields and actions in order, skipping hidden
+or disabled controls and stopping at the first and last control. Enter opens a
+typed child editor. Left opens categories; Right or Enter returns to the chosen
+section and restores its last focused field. Lists retain their own navigation;
+text editors retain native caret keys. Home/End on a field row or button selects
+the first field or last action. Ctrl+F6 opens
+categories; Tab and Shift+Tab move between focus zones. Ctrl+F4 opens Advanced YAML,
 leaving Ctrl+E available for native text editing. Choice sheets keep a visible
 query, current selection, match count, arrow navigation, and explicit cancellation.
 Multiple selection uses Space to toggle and a labeled Apply action. A query
@@ -77,7 +90,8 @@ scroll position; changing the column set during resize retains the row.
 
 Settings occupies the entire terminal. At 120 columns and above its category
 rail accompanies the selected page. At 80x24 and 60x18 it shows one page and a
-breadcrumb; F6 opens categories. Save and Back remain fixed outside the content
+breadcrumb; Ctrl+F6 or Left opens categories. Escape from this category list
+returns to the selected section. Save and Back remain fixed outside the content
 scroller. Below 60x18 a size notice replaces the content while retaining its
 instance and draft. Resizing back restores the workspace. Help stays centered.
 
@@ -106,16 +120,17 @@ that request. Accepted support does not establish internal reasoning.
 Results has a searchable list, a short Filters page, Clear filters, and a detail
 page. Back restores query, filters, selected artifact identity, and scroll.
 Review binds each grade/reason draft to its candidate ID and displays the proof
-ceiling. Grade keys 0-4 apply only while the grade row owns focus. Save / Next
+ceiling. Grade keys Alt+0-4 apply only while the grade row owns focus. Save / Next
 pending is explicit; browsing never writes a research score.
 
 Help is a centered popup whose initial text describes the originating context.
 Footers distinguish browse, search, edit, pick, multi-select, and local busy
 states. Ctrl+C copies a selection first, otherwise cancels local work before an
-active experiment. Idle exit is explicit; Ctrl+Q is the force-exit path.
+active experiment. Ctrl+Q respects active experiments and unsaved drafts across
+the screen stack; Ctrl+Alt+Q is the force-exit path.
 
 Run and Matrix retain Scope, Coordinates, Runtime, and Review with rows in each
-step. F7/F8 change steps, and each step remembers its last focused field and
+step. Ctrl+F7/F8 change steps, and each step remembers its last focused field and
 scroll. Escape returns from Advanced or to the previous step before closing.
 Advanced runtime and role fields occupy their own child page. Start appears
 only in Review and never receives focus merely because Review opened. Enter on
@@ -136,7 +151,7 @@ table and scrolls, keeping the action row within the dialog at 80x24.
 
 Doctor retains separate local and explicit service checks, fixed actions, and
 optional technical detail. Logs have a focusable scroll area. Scrolling back
-pauses follow; `f` toggles follow and End resumes the newest events. Pending
+pauses follow; Ctrl+F toggles follow and End resumes the newest events. Pending
 event counts use the monotonic notice version rather than bounded history size.
 
 ## Provider and protocol presentation
@@ -174,7 +189,7 @@ setting are labeled as the SDK default rather than guessed.
 | Size | Intended layout |
 | --- | --- |
 | At least 120x24 | Pipeline, runs, details/activity, and evidence together |
-| At least 80x20 | One selected pane; tabs and keys 1-4 switch panes |
+| At least 80x20 | One selected pane; tabs and Alt+1-4 switch panes |
 | At least 60x18 | One pane with compact tabs and fewer run columns |
 | Below 60x18 | Size notice with Help and exit/cancellation controls |
 
@@ -221,11 +236,10 @@ input, and approved model/configuration summaries. Screen classes remain in
 their existing modules and `tesis.tui` remains the public facade.
 `tesis.tui_state.CONFIG_PATH` remains the configuration-path owner.
 
-For this change, validation is limited to Python compilation/imports,
-stylesheet parsing for the default, monochrome, and light themes, and Git
-whitespace checks, plus the direct data-method profiling described above.
-The user declined E2E checks. Interactive keyboard behavior,
-visual rendering at the size bands, physical terminal lifecycle, and live
-DVWA/provider execution have not been validated for this revision. No tests
-were added or run. Generated static-check evidence belongs under
-`results/validation/`.
+The original redesign used static checks and direct data-method profiling.
+The subsequent keyboard repair uses focused non-E2E widget checks for screen
+stack preservation, modifier shortcuts, Settings navigation and focus restoration,
+native editing, and guarded quit. The Settings regression isolates the mission
+screen from runtime rendering and does not start an experiment. Its report is
+`results/validation/tui-keyboard-fixes.xml`. Physical terminal lifecycle, E2E,
+and live DVWA/provider execution remain outside this validation scope.

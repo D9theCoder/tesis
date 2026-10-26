@@ -20,9 +20,10 @@ class ChoicePicker(ModalScreen):
 
     BINDINGS = [Binding("escape", "cancel", "Cancel"),
                 Binding("ctrl+c", "interrupt", "Copy / cancel", priority=True),
-                Binding("ctrl+q", "app.quit", "Force exit", priority=True),
+                Binding("ctrl+q", "quit", "Quit", priority=True),
+                Binding("ctrl+alt+q", "app.force_exit", "Force exit", priority=True),
                 Binding("space", "toggle", "Toggle", priority=True),
-                Binding("f1", "help", "Help")]
+                Binding("ctrl+f1", "help", "Help")]
 
     def __init__(self, choices: list[tuple[Any, Any]], *, current: Any = Select.NULL,
                  title: str = "Choose value", multiple: bool = False) -> None:
@@ -36,7 +37,7 @@ class ChoicePicker(ModalScreen):
         self._highlight = current if not multiple else None
 
     def compose(self) -> ComposeResult:
-        yield Static("Terminal too small. Minimum 60x18. Resize to resume.\nF1 Help · Esc cancel · Ctrl+Q force exit",
+        yield Static("Terminal too small. Minimum 60x18. Resize to resume.\nCtrl+F1 Help · Esc cancel · Ctrl+Q quit",
                      id="choice-size-notice", markup=False)
         with Vertical(id="choice-sheet"):
             yield Label(self.title_text, id="choice-title", markup=False)
@@ -124,11 +125,15 @@ class ChoicePicker(ModalScreen):
         self.refilter(self.query_one(Input).value)
 
     def check_action(self, action: str, parameters: tuple[Any, ...]) -> bool | None:
-        if self.has_class("too-small") and action not in {"cancel", "interrupt", "help"}:
+        if self.has_class("too-small") and action not in {"cancel", "interrupt", "help", "quit", "app.force_exit"}:
             return False
         if action == "toggle":
             return self.multiple and not isinstance(self.focused, Button)
         return super().check_action(action, parameters)
+
+    def action_quit(self) -> None:
+        from tesis.tui_commands import request_quit
+        request_quit(self)
 
     def action_toggle(self) -> None:
         self.toggle()

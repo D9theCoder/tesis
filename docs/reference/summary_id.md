@@ -52,8 +52,8 @@ di root repository tetap menjadi dokumen konfigurasi default.
 Pada terminal lebar, workspace menampilkan pipeline yang lebih ramping di
 samping daftar run dan evidence. Pada ukuran lebih kecil, satu pane ditampilkan
 sesuai pilihan. Tab/Shift+Tab memindahkan fokus; tombol panah, PageUp/PageDown,
-serta Home/End mengendalikan kontrol yang sedang fokus. `/` membuka daftar
-perintah yang dapat dipilih dengan keyboard sambil mengetik, sedangkan `?`
+serta Home/End mengendalikan kontrol yang sedang fokus. Ctrl+P membuka daftar
+perintah yang dapat dipilih dengan keyboard sambil mengetik, sedangkan Ctrl+F1
 membuka popup bantuan di tengah layar. Settings memakai seluruh jendela dengan
 kategori API provider, akun ChatGPT, runtime, dan evaluator yang terpisah. Plan
 dan Review menampilkan field yang dipilih beserta protokol API efektif tanpa
@@ -62,7 +62,7 @@ per role, dan konfigurasi evaluator independen tetap dipertahankan. Lihat
 [desain TUI](tui-design.md) untuk aturan keyboard serta cakupan bukti validasi.
 
 Settings memakai baris label/nilai yang dapat dipilih dan editor bertipe pada
-halaman anak. F6 membuka kategori, F4 membuka Advanced YAML, dan isian teks tetap
+halaman anak. Ctrl+F6 membuka kategori, Ctrl+F4 membuka Advanced YAML, dan isian teks tetap
 memakai tombol penyuntingan bawaan. Pemilih dengan kueri terlihat memakai
 pencarian, panah, Enter, dan Escape yang sama. Pilihan jamak memakai Space dan
 Apply eksplisit. Edit yang dikonfirmasi masuk ke satu *draft* konfigurasi yang
@@ -72,6 +72,13 @@ menampilkan kegagalan validasi. Membuka kembali *workspace* mempertahankan
 Di bawah batas itu, pemberitahuan ukuran menyimpan *workspace* sampai terminal
 diperbesar. Results memakai halaman daftar/detail yang dapat dicari, sedangkan
 keputusan review tetap terikat pada identitas kandidat.
+
+Pintasan aksi memakai kombinasi tombol. Ctrl+Q mempertahankan pekerjaan aktif
+dan *draft* yang belum disimpan, sedangkan Ctrl+Alt+Q menutup aplikasi secara
+paksa. Layar utama tetap berada di bawah Settings sehingga Escape kembali ke
+*workspace*. Panah atas/bawah mengikuti isian dan aksi yang terlihat, lalu
+berhenti di ujung daftar. Panah kiri/kanan memindahkan fokus antara kategori dan
+konten, serta mengembalikan fokus terakhir pada setiap bagian.
 
 Redraw UI memakai kembali proyeksi konfigurasi dan draft sampai input sumbernya
 berubah. Preview peluncuran dan kontrol yang berasal dari YAML memakai debounce

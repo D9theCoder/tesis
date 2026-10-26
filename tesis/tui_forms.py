@@ -162,8 +162,8 @@ class LaunchDrawer(BaseDrawer):
     """
 
     STEPS = ("Scope", "Coordinates", "Runtime", "Review")
-    BINDINGS = [Binding("f8", "next_step", "Next", show=False),
-                Binding("f7", "previous_step", "Previous", show=False)]
+    BINDINGS = [Binding("ctrl+f8", "next_step", "Next", show=False),
+                Binding("ctrl+f7", "previous_step", "Previous", show=False)]
 
     def __init__(self, mode: Literal["single", "matrix"] = "single") -> None:
         super().__init__()
@@ -309,7 +309,7 @@ class LaunchDrawer(BaseDrawer):
             yield Button("Next", id="launch-next")
             yield Button("Start", id="launch-start")
             yield Button("Close", id="launch-close")
-        yield Static(key_hints(("F7/F8", "previous / next"), ("Enter", "edit row"), ("Esc", "previous / back")), classes="drawer-hint")
+        yield Static(key_hints(("Ctrl+F7/F8", "previous / next"), ("Enter", "edit row"), ("Esc", "previous / back")), classes="drawer-hint")
 
     @on(ControlRow.Confirmed)
     def launch_field_confirmed(self, event: ControlRow.Confirmed) -> None:
@@ -711,8 +711,14 @@ class SettingsDrawer(BaseDrawer):
     )
     BINDINGS = [
         Binding("ctrl+s", "save", "Save", show=False, priority=True),
-        Binding("f6", "categories", "Categories", show=False),
-        Binding("f4", "edit_yaml", "Advanced YAML", show=False),
+        Binding("ctrl+f6", "categories", "Categories", show=False),
+        Binding("ctrl+f4", "edit_yaml", "Advanced YAML", show=False),
+        Binding("up", "setting_focus(-1)", show=False, priority=True),
+        Binding("down", "setting_focus(1)", show=False, priority=True),
+        Binding("home", "setting_boundary(0)", show=False),
+        Binding("end", "setting_boundary(-1)", show=False),
+        Binding("left", "focus_categories", show=False, priority=True),
+        Binding("right", "content", show=False),
     ]
 
     def __init__(self) -> None:
@@ -745,6 +751,7 @@ class SettingsDrawer(BaseDrawer):
         self._section_returns: dict[str, Any] = {}
         self._settings_values: dict[str, Any] = {}
         self._account_detail = False
+        self._browsing_categories = False
         self._settings_profile_id = ""
 
     def compose(self) -> ComposeResult:
@@ -876,7 +883,7 @@ class SettingsDrawer(BaseDrawer):
             yield Button("Save settings", id="settings-save", variant="primary")
             yield Button("Close", id="settings-close")
             yield Static("", id="settings-draft-state", markup=False)
-        yield Static(key_hints(("F6", "categories"), ("F4", "YAML"), ("Tab", "focus"), ("Ctrl+S", "save"), ("Esc", "back")), classes="drawer-hint")
+        yield Static(key_hints(("Ctrl+F6", "categories"), ("Ctrl+F4", "YAML"), ("Tab", "focus"), ("Ctrl+S", "save"), ("Esc", "back")), classes="drawer-hint")
 
     def on_mount(self) -> None:
         self._apply_settings_layout()
@@ -914,6 +921,8 @@ class SettingsDrawer(BaseDrawer):
         self._loaded_ok = True
         self._remember_forms()
         if self.app.size.width < 120:
+            self.query_one("#settings-categories").display = False
+            self.query_one("#settings-content").display = True
             self._focus_content_pane()
         else:
             self.query_one("#settings-categories", OptionList).focus()
@@ -921,7 +930,8 @@ class SettingsDrawer(BaseDrawer):
     @on(OptionList.OptionHighlighted, "#settings-categories")
     def highlight_section(self, event: OptionList.OptionHighlighted) -> None:
         switcher = self.query_one("#settings-content", ContentSwitcher)
-        if self.app.focused is not self.query_one("#settings-categories"):
+        page = self.query_one(f"#{switcher.current}")
+        if self.app.focused is not None and page in self.app.focused.ancestors:
             self._section_returns[str(switcher.current)] = self.app.focused
         switcher.current = f"settings-section-{event.option.id}"
         title = dict(self.SECTIONS).get(str(event.option.id), str(event.option.id))
@@ -930,6 +940,7 @@ class SettingsDrawer(BaseDrawer):
 
     @on(OptionList.OptionSelected, "#settings-categories")
     def enter_section(self) -> None:
+        self._browsing_categories = False
         if self.app.size.width < 120:
             self.query_one("#settings-categories").display = False
             self.query_one("#settings-content").display = True
@@ -941,15 +952,17 @@ class SettingsDrawer(BaseDrawer):
 
     def _apply_settings_layout(self) -> None:
         width = self.app.size.width
+        categories = self.query_one("#settings-categories")
+        if self._loaded_ok and width < 120 and not self.has_class("settings-single") and self.focused is categories:
+            self._browsing_categories = True
         self.set_class(width < 115, "settings-stacked")
         self.set_class(width < 120, "settings-single")
-        categories = self.query_one("#settings-categories")
         if width >= 120:
             categories.display = True
             self.query_one("#settings-content").display = True
-        elif self.app.focused is not categories:
-            categories.display = False
-            self.query_one("#settings-content").display = True
+        else:
+            categories.display = self._browsing_categories
+            self.query_one("#settings-content").display = not self._browsing_categories
         context = self.query_one("#settings-evaluator-context")
         if width < 160 and self.app.focused is context:
             self._focus_content_pane()
@@ -961,6 +974,7 @@ class SettingsDrawer(BaseDrawer):
         if current:
             page = self.query_one(f"#{current}")
             if page in event.widget.ancestors:
+                self._browsing_categories = False
                 self._section_returns[str(current)] = event.widget
                 self._content_focus = event.widget
 
@@ -972,7 +986,7 @@ class SettingsDrawer(BaseDrawer):
         if self._content_focus in focus_chain and self._content_focus in descendants:
             self._content_focus.focus()
             return
-        rows = [row for row in page.query(SettingValueRow) if row in self.focus_chain]
+        rows = [row for row in page.query(SettingValueRow) if row in focus_chain]
         if rows:
             rows[0].focus()
             return
@@ -984,19 +998,65 @@ class SettingsDrawer(BaseDrawer):
             controls[0].focus()
 
     def action_categories(self) -> None:
+        self._browsing_categories = True
         categories = self.query_one("#settings-categories", OptionList)
         current = self.query_one("#settings-content", ContentSwitcher).current
-        self._section_returns[str(current)] = self.app.focused
+        page = self.query_one(f"#{current}")
+        if self.app.focused is not None and page in self.app.focused.ancestors:
+            self._section_returns[str(current)] = self.app.focused
+            self._content_focus = self.app.focused
         categories.display = True
         if self.app.size.width < 120:
             self.query_one("#settings-content").display = False
         categories.focus()
+
+    def check_action(self, action: str, parameters: tuple[Any, ...]) -> bool | None:
+        if action == "focus_categories":
+            if self.has_class("too-small"):
+                return False
+            if isinstance(self.focused, Button):
+                actions = next((parent for parent in self.focused.ancestors if isinstance(parent, KeyboardActions)), None)
+                buttons = [button for button in actions.query(Button) if button in self.focus_chain] if actions else []
+                return not buttons or self.focused is buttons[0]
+            return isinstance(self.focused, (SettingValueRow, OptionList))
+        if action == "setting_focus":
+            return not self.has_class("too-small") and isinstance(self.focused, (SettingValueRow, Button, Select, Input, Checkbox)) and not isinstance(self.focused, PaletteInput)
+        if action == "setting_boundary":
+            return not self.has_class("too-small") and isinstance(self.focused, (SettingValueRow, Button, Select, Checkbox))
+        if action == "content":
+            return not self.has_class("too-small") and self.focused is self.query_one("#settings-categories")
+        return super().check_action(action, parameters)
+
+    def _setting_focus_chain(self) -> list[Any]:
+        current = self.query_one("#settings-content", ContentSwitcher).current
+        page = self.query_one(f"#{current}")
+        return [widget for widget in self.focus_chain
+                if isinstance(widget, (SettingValueRow, Button, Select, Input, Checkbox, TextArea, OptionList))
+                and (page in widget.ancestors or widget.id in {"settings-save", "settings-close"})]
+
+    def action_setting_focus(self, direction: int) -> None:
+        controls = self._setting_focus_chain()
+        if self.focused in controls:
+            index = max(0, min(len(controls) - 1, controls.index(self.focused) + direction))
+            controls[index].focus()
+
+    def action_setting_boundary(self, index: int) -> None:
+        controls = self._setting_focus_chain()
+        if controls:
+            controls[index].focus()
+
+    def action_content(self) -> None:
+        self.enter_section()
+
+    def action_focus_categories(self) -> None:
+        self.action_categories()
 
     @on(Button.Pressed, ".edit-yaml")
     def edit_yaml_pressed(self) -> None:
         self.action_edit_yaml()
 
     def action_edit_yaml(self) -> None:
+        self._browsing_categories = False
         self.query_one("#settings-categories", OptionList).highlighted = len(self.SECTIONS) - 1
         self.query_one("#settings-content", ContentSwitcher).current = "settings-section-yaml"
         if self.app.size.width < 120:
@@ -1016,6 +1076,9 @@ class SettingsDrawer(BaseDrawer):
             return
         if self.query_one(ChatGPTAuth).busy:
             self.query_one(ChatGPTAuth).cancel_login()
+            return
+        if self.app.size.width < 120 and not self.query_one("#settings-content").display:
+            self.enter_section()
             return
         if self._account_detail:
             self._account_detail = False

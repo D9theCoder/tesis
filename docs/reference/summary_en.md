@@ -50,8 +50,8 @@ root `config.yaml` remains the default configuration document.
 
 The workspace uses a narrow pipeline beside runs and evidence at wide sizes,
 and one selected pane at smaller sizes. Tab/Shift+Tab move focus; arrows,
-PageUp/PageDown, and Home/End navigate the focused control. `/` opens commands
-with keyboard selection while typing; `?` opens a centered help popup. Settings
+PageUp/PageDown, and Home/End navigate the focused control. Ctrl+P opens commands
+with keyboard selection while typing; Ctrl+F1 opens a centered help popup. Settings
 fills the window, with separate API provider, ChatGPT account, runtime, and
 evaluator categories. Plan and launch Review show approved fields and effective
 API protocols without rendering model objects or credentials. These UI changes
@@ -59,8 +59,13 @@ retain profile identities, role-specific reasoning inheritance, and independent
 evaluator configuration. See the [TUI design](tui-design.md) for the keyboard
 contract and the distinction between implementation and validation evidence.
 
-Settings uses selectable label/value rows and typed child editors. F6 opens
-categories, F4 opens Advanced YAML, and text fields retain native editing keys.
+Settings uses selectable label/value rows and typed child editors. Ctrl+F6 opens
+categories, Ctrl+F4 opens Advanced YAML, and text fields retain native editing keys.
+Action shortcuts require modifier combinations. Ctrl+Q respects active work and
+unsaved drafts; Ctrl+Alt+Q forces exit. Settings retains the mission screen
+underneath, so Escape returns to the workspace. Up/Down follows visible fields
+and actions without wrapping; Left/Right moves between categories and content,
+restoring the last focused field in each section.
 Visible-query choice sheets share search, arrow navigation, Enter, and Escape;
 multiple selection uses Space and explicit Apply. Confirmed edits stage into one
 round-trip draft, and Save includes pending form edits or reports validation

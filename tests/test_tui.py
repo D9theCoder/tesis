@@ -206,8 +206,9 @@ def test_idle_readiness_summarises_target_condition_provider_and_actions():
             screen = app.screen
             assert isinstance(screen, MissionControlScreen)
             body = _pane_text(screen, "#notice-text").lower()
-            for action in ("r run", "m matrix", "p plan", "d doctor"):
-                assert action in body, f"idle readiness must list {action!r}"
+            footer = _pane_text(screen, "#context-footer").lower()
+            for action in ("ctrl+r run", "ctrl+alt+m matrix", "ctrl+o plan", "ctrl+d doctor"):
+                assert action in footer, f"idle footer must list {action!r}"
             for field in ("target", "condition", "provider", "coordinates", "config", "containment"):
                 assert field in body, f"idle readiness must report {field!r}"
 
@@ -519,31 +520,31 @@ def test_footer_thresholds_at_80_and_120_columns():
     MissionControlScreen = _require("MissionControlScreen")
 
     async def scenario() -> None:
-        # Idle at 80 columns still fits the full idle set.
+        # Idle at 80 columns keeps essential actions and Matrix visible.
         app = tui.TesisApp()
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             idle = _pane_text(app.screen, "#context-footer")
-            for hint in ("r run", "m matrix", "p plan", "d doctor", "/ command", "? help", "q quit"):
+            for hint in ("ctrl+r run", "ctrl+alt+m matrix", "ctrl+p command", "ctrl+f1 help", "ctrl+q quit"):
                 assert hint in idle, f"idle footer at 80 columns must keep {hint!r}: {idle!r}"
 
-            # Active at 80 columns is compact: no full navigation keys, but the
-            # command/cancel/help hints the operator needs stay visible.
+            # Active at 80 columns keeps essential actions and only pane hints
+            # that fit without clipping.
             screen = app.screen
             assert isinstance(screen, MissionControlScreen)
             screen._post_event(RunEvent("run.started", timestamp=1000.0, message="go"))
             await _drain(screen)
-            await pilot.pause()
+            await pilot.pause(0.05)
             active_80 = _pane_text(screen, "#context-footer")
-            for hint in ("/ command", "ctrl+c cancel", "? help"):
+            for hint in ("ctrl+p command", "ctrl+c cancel", "ctrl+f1 help"):
                 assert hint in active_80, f"active 80-column footer missing {hint!r}: {active_80!r}"
-            for dropped in ("1 pipeline", "Tab/Shift+Tab"):
+            for dropped in ("alt+2 coordinates", "Tab/Shift+Tab"):
                 assert dropped not in active_80, (
-                    f"full active navigation starts at 120 columns: {active_80!r}"
+                    f"extra navigation must not crowd the 80-column footer: {active_80!r}"
                 )
             assert len(active_80) <= 78, f"the 80-column footer must not clip: {active_80!r}"
 
-        # Active at 120 columns gets the full navigation set.
+        # Active at 120 columns includes the first three pane shortcuts.
         app = tui.TesisApp()
         async with app.run_test(size=(120, 36)) as pilot:
             await pilot.pause()
@@ -551,10 +552,10 @@ def test_footer_thresholds_at_80_and_120_columns():
             assert isinstance(screen, MissionControlScreen)
             screen._post_event(RunEvent("run.started", timestamp=1000.0, message="go"))
             await _drain(screen)
-            await pilot.pause()
+            await pilot.pause(0.05)
             active_120 = _pane_text(screen, "#context-footer")
-            for hint in ("1 pipeline", "2 coordinates", "3 evidence", "Tab/Shift+Tab focus",
-                         "Enter inspect", "/ command", "ctrl+c cancel", "? help"):
+            for hint in ("alt+1 pipeline", "alt+2 coordinates", "alt+3 evidence",
+                         "Enter inspect", "ctrl+p command", "ctrl+c cancel", "ctrl+f1 help"):
                 assert hint in active_120, f"active 120-column footer missing {hint!r}: {active_120!r}"
             assert len(active_120) <= 118, f"the 120-column footer must not clip: {active_120!r}"
 
@@ -580,7 +581,7 @@ def test_compact_readiness_keeps_every_fact_visible_at_60_columns(monkeypatch):
             text = _pane_text(screen, "#triage-line")
             for expected in ("target", "akg_guided_hybrid", "method sqli_union", "provider",
                              "coordinates 1", "config valid", "containment enforced",
-                             "r run", "m matrix", "p plan", "d doctor"):
+                             "ctrl+r run", "ctrl+p command"):
                 assert expected in text, f"missing {expected!r} at 60 columns: {text!r}"
             lines = [line for line in text.splitlines() if line.strip()]
             assert len(lines) == 4, f"compact readiness must stay inside four rows: {text!r}"
@@ -600,35 +601,35 @@ def test_footer_is_contextual_for_idle_and_active_runs():
             screen = app.screen
             assert isinstance(screen, MissionControlScreen)
             idle = _pane_text(screen, "#context-footer")
-            for hint in ("r run", "m matrix", "p plan", "d doctor", "/ command", "? help", "q quit"):
+            for hint in ("ctrl+r run", "ctrl+alt+m matrix", "ctrl+o plan", "ctrl+d doctor", "ctrl+p command", "ctrl+f1 help", "ctrl+q quit"):
                 assert hint in idle, f"idle footer must advertise {hint!r}: {idle!r}"
             assert "ctrl+c cancel" not in idle.lower(), f"idle has nothing to cancel: {idle!r}"
 
             screen._post_event(RunEvent("run.started", timestamp=1000.0, message="go"))
             await _drain(screen)
-            await pilot.pause()
+            await pilot.pause(0.05)
             active = _pane_text(screen, "#context-footer")
-            for hint in ("1 pipeline", "2 coordinates", "3 evidence", "Enter inspect",
-                         "/ command", "ctrl+c cancel", "? help"):
+            for hint in ("alt+1 pipeline", "alt+2 coordinates", "alt+3 evidence", "Enter inspect",
+                         "ctrl+p command", "ctrl+c cancel", "ctrl+f1 help"):
                 assert hint in active, f"active footer must advertise {hint!r}: {active!r}"
-            assert "r run" not in active, f"an active run cannot be started again: {active!r}"
+            assert "ctrl+r run" not in active, f"an active run cannot be started again: {active!r}"
 
         app = tui.TesisApp()
         async with app.run_test(size=(60, 18)) as pilot:
             await pilot.pause()
             screen = app.screen
             compact = _pane_text(screen, "#context-footer")
-            for hint in ("r run", "m matrix", "/ command", "? help", "q quit"):
+            for hint in ("ctrl+r run", "ctrl+p command", "ctrl+f1 help", "ctrl+q quit"):
                 assert hint in compact, f"compact footer must keep {hint!r}: {compact!r}"
-            for dropped in ("p plan", "d doctor", "Tab/Shift+Tab", "1 pipeline"):
+            for dropped in ("ctrl+o plan", "ctrl+d doctor", "Tab/Shift+Tab", "alt+1 pipeline"):
                 assert dropped not in compact, f"compact footer must drop {dropped!r}: {compact!r}"
             screen._post_event(RunEvent("run.started", timestamp=1000.0, message="go"))
             await _drain(screen)
-            await pilot.pause()
+            await pilot.pause(0.05)
             compact_active = _pane_text(screen, "#context-footer")
-            for hint in ("Enter inspect", "/ command", "ctrl+c cancel", "? help"):
+            for hint in ("ctrl+p command", "ctrl+c cancel", "ctrl+f1 help"):
                 assert hint in compact_active, f"compact active footer missing {hint!r}: {compact_active!r}"
-            for dropped in ("1 pipeline", "Tab/Shift+Tab", "r run"):
+            for dropped in ("alt+1 pipeline", "Tab/Shift+Tab", "ctrl+r run"):
                 assert dropped not in compact_active, f"compact active footer must drop {dropped!r}: {compact_active!r}"
 
     asyncio.run(scenario())
@@ -642,17 +643,17 @@ def test_help_lists_navigation_keys_and_registry_commands():
         app = tui.TesisApp()
         async with app.run_test(size=(120, 36)) as pilot:
             await pilot.pause()
-            await pilot.press("?")
+            await pilot.press("ctrl+f1")
             await pilot.pause()
             assert isinstance(app.screen, tui.HelpDrawer)
-            body = str(app.screen.query_one("#help-body").render())
+            body = " ".join(_pane_text(app.screen, "#help-body").split())
             for key, label in NAVIGATION_KEYS:
                 assert f"{key} {label}" in body, f"help must list navigation {key} {label}"
-            for required in ("1 pipeline", "2 coordinates", "3 evidence",
+            for required in ("alt+1 pipeline", "alt+2 coordinates", "alt+3 evidence",
                              "Tab/Shift+Tab", "Enter"):
                 assert required in body, f"help must explicitly include {required!r}"
             for spec in COMMANDS:
-                assert f"/{spec.name}" in body, f"help must list /{spec.name}"
+                assert f"/{spec.name}" in _pane_text(app.screen, "#help-command-body"), f"help must list /{spec.name}"
             await pilot.press("escape")
             await pilot.pause()
 
@@ -985,17 +986,17 @@ def test_coordinate_elapsed_consumes_runner_reported_duration():
 EXPECTED_COMMANDS = {
     "run", "matrix", "plan", "cancel", "coordinates", "evidence",
     "failure", "trace", "doctor", "results", "settings", "export",
-    "about", "help", "quit",
+    "about", "help", "quit", "activity",
 }
 
 
 # Exact registry keymap. A key is listed only when the screen binds it, so the
 # footer and the `?` help can never advertise a keystroke that does nothing.
 EXPECTED_COMMAND_KEYS = {
-    "run": "r", "matrix": "m", "plan": "p", "cancel": "ctrl+c",
-    "coordinates": "2", "evidence": "3", "failure": "",
-    "trace": "", "doctor": "d", "results": "", "settings": "",
-    "export": "", "about": "", "help": "?", "quit": "q",
+    "run": "ctrl+r", "matrix": "ctrl+alt+m", "plan": "ctrl+o", "cancel": "ctrl+c",
+    "coordinates": "alt+2", "evidence": "alt+3", "failure": "", "activity": "alt+4",
+    "trace": "ctrl+l", "doctor": "ctrl+d", "results": "ctrl+v", "settings": "ctrl+s",
+    "export": "", "about": "", "help": "ctrl+f1", "quit": "ctrl+q",
 }
 
 
@@ -1028,10 +1029,10 @@ def test_registry_keys_are_dispatchable_and_pane_keys_agree():
             )
     # 1/2/3 mean the same three panes in the registry and in the bindings.
     actions = {str(binding.key): str(binding.action) for binding in MissionControlScreen.BINDINGS}
-    assert actions["1"].endswith("pipeline")
-    assert actions["2"].endswith("coordinates") and actions["3"].endswith("evidence")
+    assert actions["alt+1"].endswith("pipeline")
+    assert actions["alt+2"].endswith("coordinates") and actions["alt+3"].endswith("evidence")
     keys = {spec.name: spec.keys for spec in COMMANDS}
-    assert keys["coordinates"] == "2" and keys["evidence"] == "3"
+    assert keys["coordinates"] == "alt+2" and keys["evidence"] == "alt+3"
 
 
 def test_launcher_lists_registry_with_per_command_gating_while_active():
@@ -1249,14 +1250,6 @@ async def _launcher_roundtrip(opener: str):
         assert app.screen.focused is not None or app.focused is not None
 
 
-def test_launcher_summoned_by_slash_restores_focus():
-    asyncio.run(_launcher_roundtrip("/"))
-
-
-def test_launcher_summoned_by_colon_restores_focus():
-    asyncio.run(_launcher_roundtrip(":"))
-
-
 def test_launcher_summoned_by_ctrl_p_restores_focus():
     asyncio.run(_launcher_roundtrip("ctrl+p"))
 
@@ -1330,12 +1323,12 @@ def test_global_keys_open_drawers_and_quit_idle_only():
             assert app.screen.mode == "matrix"
             await pilot.press("escape")
             await pilot.pause()
-            await pilot.press("?")
+            await pilot.press("ctrl+f1")
             await pilot.pause()
             assert isinstance(app.screen, tui.HelpDrawer)
             await pilot.press("escape")
             await pilot.pause()
-            await pilot.press("q")
+            await pilot.press("ctrl+q")
             await pilot.pause()
             assert not app.is_running
 
@@ -1354,8 +1347,8 @@ def test_pane_keys_tab_and_enter():
 
             # Wide: 1/2/3 move focus between the three visible panes and never
             # replace them with a drawer.
-            for key, pane_id in (("1", "pipeline-pane"), ("2", "coordinate-pane"),
-                                 ("3", "evidence-body")):
+            for key, pane_id in (("alt+1", "pipeline-pane"), ("alt+2", "coordinate-pane"),
+                                 ("alt+3", "evidence-body")):
                 await pilot.press(key)
                 await pilot.pause()
                 assert type(app.screen) is MissionControlScreen, (
@@ -1378,7 +1371,7 @@ def test_pane_keys_tab_and_enter():
             # The notice pane is a scrollable surface, so it is a tab stop of
             # its own; it only exists in the wide layout, where the other
             # hidden panes are skipped.
-            await pilot.press("1")
+            await pilot.press("alt+1")
             await pilot.pause()
             for key, pane_id in (("tab", "coordinate-pane"), ("tab", "notice-body"),
                                  ("tab", "evidence-body"),
@@ -1400,7 +1393,7 @@ def test_pane_keys_open_drawers_when_panes_are_hidden():
         async with app.run_test(size=size) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, MissionControlScreen)
-            await pilot.press("2")
+            await pilot.press("alt+2")
             await pilot.pause()
             if expect_drawer:
                 assert isinstance(app.screen, tui.CoordinateDrawer), (
@@ -1410,7 +1403,7 @@ def test_pane_keys_open_drawers_when_panes_are_hidden():
                 await pilot.pause()
             else:
                 assert type(app.screen) is MissionControlScreen
-            await pilot.press("3")
+            await pilot.press("alt+3")
             await pilot.pause()
             if expect_drawer:
                 assert isinstance(app.screen, tui.EvidenceDrawer), (
@@ -1503,13 +1496,13 @@ def test_idle_readiness_stays_visible_at_standard_and_narrow():
             idle = str(triage.render()).lower()
             for field in ("target", "condition", "coordinates", "config valid", "containment"):
                 assert field in idle, f"{size} idle triage must report {field!r}"
-            for action in ("r run", "m matrix", "p plan", "d doctor"):
+            for action in ("ctrl+r run", "ctrl+p command"):
                 assert action in idle, f"{size} idle triage must offer {action!r}"
             assert triage.size.height >= 2, "idle readiness must use its compact block"
             # A running run keeps the triage line to a single summary row.
             screen._post_event(RunEvent("run.started", message="go"))
             await _drain(screen)
-            await pilot.pause()
+            await pilot.pause(0.05)
             assert triage.size.height == 1, "running triage must stay one line"
             assert "running" in str(triage.render()).lower()
 
@@ -1634,18 +1627,18 @@ def test_responsive_wide_medium_narrow_and_too_small():
             for hidden in ("run", "matrix", "plan", "doctor", "coordinates", "evidence"):
                 assert hidden not in footer, f"too-small footer must not offer {hidden!r}"
             assert not _displays(screen)["#pipeline-pane"]
-            for key in ("r", "m", "p", "d", "/", "1", "2", "3"):
+            for key in ("ctrl+r", "ctrl+alt+m", "ctrl+o", "ctrl+d", "ctrl+p", "alt+1", "alt+2", "alt+3"):
                 await pilot.press(key)
                 await pilot.pause()
                 assert type(app.screen) is MissionControlScreen, (
                     f"{key!r} must do nothing below the 60x18 floor"
                 )
-            await pilot.press("?")
+            await pilot.press("ctrl+f1")
             await pilot.pause()
             assert isinstance(app.screen, tui.HelpDrawer), "help must stay reachable"
             await pilot.press("escape")
             await pilot.pause()
-            await pilot.press("q")
+            await pilot.press("ctrl+q")
             await pilot.pause()
             assert not app.is_running, "quit must stay reachable"
 
@@ -1907,7 +1900,7 @@ def test_ctrl_c_cancels_and_second_ctrl_c_exits(tmp_path, monkeypatch):
             thread_ref["thread"].join(timeout=2)
 
 
-def test_q_refused_while_run_active(tmp_path, monkeypatch):
+def test_ctrl_q_refused_while_run_active(tmp_path, monkeypatch):
     from threading import Event
 
     MissionControlScreen = _require("MissionControlScreen")
@@ -1933,9 +1926,9 @@ def test_q_refused_while_run_active(tmp_path, monkeypatch):
                     break
                 await asyncio.sleep(0.01)
             assert started.is_set()
-            await pilot.press("q")
+            await pilot.press("ctrl+q")
             await pilot.pause()
-            assert app.is_running, "q must not quit while a run is active"
+            assert app.is_running, "Ctrl+Q must not quit while a run is active"
             await pilot.press("ctrl+c")
             await pilot.pause()
             await pilot.press("ctrl+c")

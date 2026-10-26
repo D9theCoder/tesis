@@ -31,24 +31,24 @@ class CommandSpec:
 # ``keys`` is the launcher's advertised shortcut for a command, and is only set
 # when MissionControlScreen really binds that key (see
 # test_registry_keys_are_dispatchable_and_pane_keys_agree). Commands without a
-# global key leave it empty and stay reachable through the launcher and `?`.
+# global key leave it empty and stay reachable through the launcher and help.
 COMMANDS: tuple[CommandSpec, ...] = (
-    CommandSpec("run", "Run single", "Guided single-coordinate launch", "r", "idle"),
-    CommandSpec("matrix", "Run matrix", "Guided experiment-matrix launch", "m", "idle"),
-    CommandSpec("plan", "Plan", "Preview resolved config and fingerprint", "p", "idle"),
+    CommandSpec("run", "Run single", "Guided single-coordinate launch", "ctrl+r", "idle"),
+    CommandSpec("matrix", "Run matrix", "Guided experiment-matrix launch", "ctrl+alt+m", "idle"),
+    CommandSpec("plan", "Plan", "Preview resolved config and fingerprint", "ctrl+o", "idle"),
     CommandSpec("cancel", "Cancel", "Request graceful cancellation", "ctrl+c", "active"),
-    CommandSpec("coordinates", "Coordinates", "Inspect live coordinate rows", "2", "always"),
-    CommandSpec("evidence", "Evidence", "Inspect verified findings and outcomes", "3", "always"),
+    CommandSpec("coordinates", "Coordinates", "Inspect live coordinate rows", "alt+2", "always"),
+    CommandSpec("evidence", "Evidence", "Inspect verified findings and outcomes", "alt+3", "always"),
     CommandSpec("failure", "Failure", "Inspect latest failure summary", "", "always"),
-    CommandSpec("activity", "Activity", "Focus run details and recent activity", "4", "always"),
-    CommandSpec("trace", "Trace", "Bounded redacted event stream", "l", "always"),
-    CommandSpec("doctor", "Doctor", "Configuration and target checks", "d", "always"),
-    CommandSpec("results", "Results", "Browse saved experiments and reviews", "v", "always"),
-    CommandSpec("settings", "Settings", "Configure target, models, runtime and output", "s", "idle"),
+    CommandSpec("activity", "Activity", "Focus run details and recent activity", "alt+4", "always"),
+    CommandSpec("trace", "Trace", "Bounded redacted event stream", "ctrl+l", "always"),
+    CommandSpec("doctor", "Doctor", "Configuration and target checks", "ctrl+d", "always"),
+    CommandSpec("results", "Results", "Browse saved experiments and reviews", "ctrl+v", "always"),
+    CommandSpec("settings", "Settings", "Configure target, models, runtime and output", "ctrl+s", "idle"),
     CommandSpec("export", "Export", "Export triage summary as JSON", "", "always"),
     CommandSpec("about", "About", "Harness and runtime summary", "", "always"),
-    CommandSpec("help", "Help", "Command registry and keys", "?", "always"),
-    CommandSpec("quit", "Quit", "Exit the TUI", "q", "idle"),
+    CommandSpec("help", "Help", "Command registry and keys", "ctrl+f1", "always"),
+    CommandSpec("quit", "Quit", "Exit the TUI", "ctrl+q", "idle"),
 )
 
 _COMMAND_INDEX = {spec.name: spec for spec in COMMANDS}
@@ -56,13 +56,13 @@ _COMMAND_INDEX = {spec.name: spec for spec in COMMANDS}
 # Keys the screen binds that are not registry commands. The footer hint and the
 # help drawer both render this one list, so pane navigation is described once.
 NAVIGATION_KEYS: tuple[tuple[str, str], ...] = (
-    ("1", "pipeline"),
-    ("2", "coordinates"),
-    ("3", "evidence"),
-    ("4", "activity"),
+    ("alt+1", "pipeline"),
+    ("alt+2", "coordinates"),
+    ("alt+3", "evidence"),
+    ("alt+4", "activity"),
     ("Tab/Shift+Tab", "focus"),
     ("Enter", "inspect"),
-    ("/", "command"),
+    ("ctrl+p", "command"),
     ("↑/↓", "select"),
     ("←/→", "tabs"),
     ("PgUp/PgDn", "scroll"),
@@ -116,12 +116,12 @@ def keyboard_context(screen: Screen) -> str:
     focused = screen.focused
     from tesis.tui_auth import ChatGPTAuth
     if any(auth.busy for auth in screen.query(ChatGPTAuth)):
-        return "Busy: Ctrl+C cancel sign-in · Esc back · Ctrl+Q force exit"
+        return "Busy: Ctrl+C cancel sign-in · Esc back · Ctrl+Alt+Q force exit"
     from tesis.tui_reasoning import ReasoningControl
     if any(control._checking for control in screen.query(ReasoningControl)):
-        return "Busy: Ctrl+C cancel support check · Esc back · Ctrl+Q force exit"
+        return "Busy: Ctrl+C cancel support check · Esc back · Ctrl+Alt+Q force exit"
     if getattr(screen, "_saving", False):
-        return "Busy: saving configuration · Ctrl+Q force exit"
+        return "Busy: saving configuration · Ctrl+Alt+Q force exit"
     if getattr(screen, "_review_busy", False):
         return "Busy: reviewing frozen evidence · wait to go Back"
     if any(button.disabled for button in screen.query("#provider-fetch, #settings-chatgpt-refresh")):
@@ -137,19 +137,19 @@ def keyboard_context(screen: Screen) -> str:
     if isinstance(focused, SettingValueRow):
         owner = type(screen).__name__
         if owner == "SettingsDrawer" and screen.app.size.width < 80:
-            return "Browse: ↑↓ · Enter edit · F6 · Ctrl+S save · Esc back"
+            return "↑↓ fields · ← categories · Enter edit · Ctrl+S save"
         if owner == "SettingsDrawer":
-            return "Browse: type searches settings · ↑/↓ rows · Enter edit · F6 categories · Ctrl+S save · Esc back"
+            return "Browse: ↑/↓ fields · ← categories / → content · Enter edit · Ctrl+S save · Esc back"
         if owner == "LaunchDrawer":
-            return "Browse: ↑/↓ rows · Enter edit · F7/F8 previous / next · Esc back"
+            return "Browse: ↑/↓ rows · Enter edit · Ctrl+F7/F8 previous / next · Esc back"
         if type(focused).__name__ == "GradeRow":
-            return "Grade: 0-4 stage grade · Tab reason / Save · Esc candidate list"
+            return "Grade: Alt+0-4 stage grade · Tab reason / Save · Esc candidate list"
         return "Browse: ↑/↓ rows · Enter edit · Tab actions · Esc back"
     if type(screen).__name__ == "LaunchDrawer":
-        return "Review: Tab to Start · F7 previous · Esc back" if screen._step == 3 else "Setup: F7/F8 previous / next · Enter edit · Esc back"
+        return "Review: Tab to Start · Ctrl+F7 previous · Esc back" if screen._step == 3 else "Setup: Ctrl+F7/F8 previous / next · Enter edit · Esc back"
     if type(screen).__name__ == "SettingsDrawer":
-        return "Browse: F6 categories · F4 YAML · Tab focus · Ctrl+S save · Esc back"
-    return "Browse: ↑/↓ select · Enter activate · Tab focus · Esc back · Ctrl+Q force exit"
+        return "Browse: ↑/↓ select · ← categories / → content · Ctrl+F4 YAML · Ctrl+S save · Esc back"
+    return "Browse: ↑/↓ select · Enter activate · Tab focus · Esc back · Ctrl+Alt+Q force exit"
 
 
 def interrupt_context(screen: Screen) -> None:
@@ -178,7 +178,22 @@ def interrupt_context(screen: Screen) -> None:
     if mission is not None and mission.run_active:
         mission.action_cancel_or_exit()
     else:
-        screen.notify("Idle. Use Back to close, /quit to exit, or Ctrl+Q to force exit.")
+        screen.notify("Idle. Esc goes back; Ctrl+Q quits; Ctrl+Alt+Q forces exit.")
+
+
+def request_quit(screen: Screen) -> None:
+    """Ordinary quit respects active experiments and every outgoing draft."""
+    from tesis.tui_mission import MissionControlScreen
+
+    stack = screen.app.screen_stack
+    if any(isinstance(item, MissionControlScreen) and item.run_active for item in stack):
+        screen.notify("Run active. Ctrl+C cancels; Ctrl+Alt+Q forces exit.")
+        return
+    for item in reversed(stack):
+        prepare = getattr(item, "prepare_navigation", None)
+        if prepare is not None and not prepare():
+            return
+    screen.app.exit()
 
 
 def open_workspace(app: Any, screen: Screen) -> None:
@@ -190,7 +205,10 @@ def open_workspace(app: Any, screen: Screen) -> None:
     if existing is None and type(screen).__name__ not in roots:
         app.push_screen(screen)
         return
-    while len(app.screen_stack) > 1 and app.screen is not existing:
+    from tesis.tui_mission import MissionControlScreen
+
+    mission = next((item for item in app.screen_stack if isinstance(item, MissionControlScreen)), None)
+    while len(app.screen_stack) > 1 and app.screen is not existing and app.screen is not mission:
         current = app.screen
         prepare = getattr(current, "prepare_navigation", None)
         if prepare is not None and not prepare():
@@ -212,11 +230,11 @@ class BaseDrawer(Screen):
 
     BINDINGS = [
         Binding("escape", "back", "Back", show=False),
-        Binding("/", "open_launcher", "Commands", show=False),
         Binding("ctrl+p", "open_launcher", "Commands", show=False),
-        Binding("question_mark", "open_help", "Help", show=False),
+        Binding("ctrl+f1", "open_help", "Help", show=False),
         Binding("ctrl+c", "cancel_or_exit", "Copy / cancel", show=False, priority=True),
-        Binding("ctrl+q", "force_exit", "Force exit", show=False, priority=True),
+        Binding("ctrl+q", "quit", "Quit", show=False, priority=True),
+        Binding("ctrl+alt+q", "force_exit", "Force exit", show=False, priority=True),
     ]
 
     #: Set on a drawer that is allowed to stay open below the 60x18 floor.
@@ -231,7 +249,7 @@ class BaseDrawer(Screen):
                     self.set_class(self.app.size.width < 80, "drawer-full")
                 except Exception:
                     pass
-                yield Static("Terminal too small. Minimum 60x18. Resize to resume.\n? Help · Esc Back · Ctrl+C copy / cancel · Ctrl+Q force exit",
+                yield Static("Terminal too small. Minimum 60x18. Resize to resume.\nCtrl+F1 Help · Esc Back · Ctrl+Q quit · Ctrl+Alt+Q force exit",
                              id="drawer-size-notice", markup=False)
                 with Vertical(classes="drawer"):
                     yield from _compose(self)
@@ -268,7 +286,7 @@ class BaseDrawer(Screen):
         cls.on_resize = resized  # type: ignore[method-assign]
 
     def check_action(self, action: str, parameters: tuple[Any, ...]) -> bool | None:
-        if self.has_class("too-small") and action not in {"back", "open_help", "cancel_or_exit", "force_exit", "app.quit"}:
+        if self.has_class("too-small") and action not in {"back", "open_help", "cancel_or_exit", "quit", "force_exit", "app.force_exit"}:
             return False
         return super().check_action(action, parameters)
 
@@ -277,7 +295,8 @@ class BaseDrawer(Screen):
             hint.update(keyboard_context(self))
 
     def action_back(self) -> None:
-        self.app.pop_screen()
+        if self.app.screen is self:
+            self.app.pop_screen()
 
     def action_open_launcher(self) -> None:
         self.app.push_screen(CommandLauncher())
@@ -294,17 +313,21 @@ class BaseDrawer(Screen):
     def action_force_exit(self) -> None:
         self.app.exit()
 
+    def action_quit(self) -> None:
+        request_quit(self)
+
 
 class CommandLauncher(Screen):
     """Bottom-anchored command list above a compact text composer.
 
-    ``/``, ``:``, and Ctrl+P all open this same registry-backed surface, so the
+    Ctrl+P opens this registry-backed surface, so the
     footer hint, the help drawer, and typed dispatch never disagree.
     """
 
     BINDINGS = [Binding("escape", "back", "Back", show=False),
                 Binding("ctrl+c", "cancel_or_exit", "Copy / cancel", show=False, priority=True),
-                Binding("ctrl+q", "app.quit", "Force exit", show=False, priority=True)]
+                Binding("ctrl+q", "quit", "Quit", show=False, priority=True),
+                Binding("ctrl+alt+q", "app.force_exit", "Force exit", show=False, priority=True)]
 
     def __init__(self, query: str = "") -> None:
         super().__init__()
@@ -374,6 +397,9 @@ class CommandLauncher(Screen):
 
     def action_cancel_or_exit(self) -> None:
         interrupt_context(self)
+
+    def action_quit(self) -> None:
+        request_quit(self)
 
     @on(OptionList.OptionSelected, "#launcher-list")
     def dispatch_selected(self, event: OptionList.OptionSelected) -> None:
@@ -448,13 +474,7 @@ class CommandLauncher(Screen):
 
             push(HelpDrawer())
         elif name == "quit":
-            try:
-                mission = self._mission()
-                prepare = getattr(app.screen, "prepare_navigation", None)
-                if (mission is None or not mission.run_active) and (prepare is None or prepare()):
-                    app.exit()
-            except Exception:
-                pass
+            request_quit(app.screen)
 
     def _return_to_mission(self) -> None:
         """Cancelling is observed on the mission surface, not inside a stale modal."""

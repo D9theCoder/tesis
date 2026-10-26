@@ -85,18 +85,23 @@ Experiment workspace
 ```
 
 Tab and Shift+Tab cycle interactive panels and controls. Arrow keys navigate
-lists, tabs, action rows, and viewports; Enter activates the selection. `/`
+lists, tabs, action rows, and viewports; Enter activates the selection. Ctrl+P
 opens the command list, whose selection also responds to arrows while its
-filter input retains typing focus. `?` opens a centered help popup. Escape
-closes the current overlay, `q` exits the idle workspace, and Ctrl+C requests
+filter input retains typing focus. Ctrl+F1 opens a centered help popup. Escape
+closes the current overlay, Ctrl+Q exits the idle workspace, and Ctrl+C requests
 cooperative runtime cancellation. Wide terminals show a narrow pipeline beside
 runs and detail panes; smaller terminals switch between single panes using
-tabs or keys 1-4. Settings fills the window; other inspections are centered
+tabs or Alt+1-4. Settings fills the window; other inspections are centered
 dialogs. Plan and Review display approved model/configuration fields and the
 effective API protocol rather than model-object representations. Live rendering
 is bounded; the complete execution log remains in the artifact. See the
 [design and keyboard contract](tui-design.md) for layout rules and the current
 validation scope.
+
+Workspace navigation preserves the mission screen beneath Settings, Run, and
+Results, so closing a workspace restores its visible parent. Settings arrows
+follow visible fields and actions, and category navigation remembers the last
+focused field. Text editing and list navigation retain their native behavior.
 
 ## Separation of concerns
 
@@ -265,7 +270,8 @@ TUI paths needs a designed config-path API, not an implicit alias.
 `CancellationToken` is cooperative and thread-safe. Ctrl+C first copies selected
 text or cancels a local operation. In an active experiment it sets the token;
 a second experiment cancellation closes the TUI immediately. Idle exit is
-explicit, and Ctrl+Q provides deliberate force exit. Long-running TUI tasks use daemon
+explicit: Ctrl+Q respects active work and unsaved drafts, while Ctrl+Alt+Q
+provides deliberate force exit. Long-running TUI tasks use daemon
 threads and stop posting UI messages during shutdown, so a blocked provider or
 HTTP operation cannot hold the terminal process open.
 The active LLM or HTTP request is not interrupted unsafely; when it returns,
