@@ -11,10 +11,10 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widgets import Input, Label, OptionList, Static
+from textual.widgets import Input, Label, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from tesis.tui_widgets import PaletteInput, key_hints
+from tesis.tui_widgets import PaletteInput, SettingValueRow, key_hints
 
 
 # ---------------------------------------------------------------- command registry
@@ -96,7 +96,13 @@ def _dismisses_below_floor(screen: Screen) -> bool:
     Idempotent: a mount and a resize can both arrive for the same screen, and a
     second pop would take the screen underneath with it.
     """
-    if getattr(screen, "ALLOW_BELOW_FLOOR", False) or not _below_floor(screen):
+    if getattr(screen, "ALLOW_BELOW_FLOOR", False):
+        return False
+    if isinstance(screen, BaseDrawer):
+        # Keep the workspace instance and draft through a temporary resize.
+        screen.set_class(_below_floor(screen), "too-small")
+        return False
+    if not _below_floor(screen):
         return False
     try:
         if screen.app.screen is screen:
@@ -104,6 +110,94 @@ def _dismisses_below_floor(screen: Screen) -> bool:
     except Exception:
         pass
     return True
+
+
+def keyboard_context(screen: Screen) -> str:
+    focused = screen.focused
+    from tesis.tui_auth import ChatGPTAuth
+    if any(auth.busy for auth in screen.query(ChatGPTAuth)):
+        return "Busy: Ctrl+C cancel sign-in · Esc back · Ctrl+Q force exit"
+    from tesis.tui_reasoning import ReasoningControl
+    if any(control._checking for control in screen.query(ReasoningControl)):
+        return "Busy: Ctrl+C cancel support check · Esc back · Ctrl+Q force exit"
+    if getattr(screen, "_saving", False):
+        return "Busy: saving configuration · Ctrl+Q force exit"
+    if getattr(screen, "_review_busy", False):
+        return "Busy: reviewing frozen evidence · wait to go Back"
+    if any(button.disabled for button in screen.query("#provider-fetch, #settings-chatgpt-refresh")):
+        return "Busy: loading model catalog · Ctrl+C cancel · Esc back"
+    if isinstance(focused, PaletteInput):
+        if getattr(screen, "multiple", False):
+            return "Multi-select: type filter · ↑↓ move · Space toggle · Enter details"
+        return "Search: type filters · ↑/↓ results · Enter choose · Esc cancel"
+    if isinstance(focused, (Input, TextArea)):
+        if type(screen).__name__ == "FieldEditor":
+            return "Edit: Enter stage · Esc cancel"
+        return "Edit: native caret keys · Ctrl+C copy selection · Tab next · Esc back"
+    if isinstance(focused, SettingValueRow):
+        owner = type(screen).__name__
+        if owner == "SettingsDrawer" and screen.app.size.width < 80:
+            return "Browse: ↑↓ · Enter edit · F6 · Ctrl+S save · Esc back"
+        if owner == "SettingsDrawer":
+            return "Browse: type searches settings · ↑/↓ rows · Enter edit · F6 categories · Ctrl+S save · Esc back"
+        if owner == "LaunchDrawer":
+            return "Browse: ↑/↓ rows · Enter edit · F7/F8 previous / next · Esc back"
+        if type(focused).__name__ == "GradeRow":
+            return "Grade: 0-4 stage grade · Tab reason / Save · Esc candidate list"
+        return "Browse: ↑/↓ rows · Enter edit · Tab actions · Esc back"
+    if type(screen).__name__ == "LaunchDrawer":
+        return "Review: Tab to Start · F7 previous · Esc back" if screen._step == 3 else "Setup: F7/F8 previous / next · Enter edit · Esc back"
+    if type(screen).__name__ == "SettingsDrawer":
+        return "Browse: F6 categories · F4 YAML · Tab focus · Ctrl+S save · Esc back"
+    return "Browse: ↑/↓ select · Enter activate · Tab focus · Esc back · Ctrl+Q force exit"
+
+
+def interrupt_context(screen: Screen) -> None:
+    """Copy, cancel the local operation, then cancel an experiment; never discard."""
+    focused = screen.app.focused
+    if isinstance(focused, (Input, TextArea)) and not focused.selection.is_empty:
+        focused.action_copy()
+        return
+    from tesis.tui_auth import ChatGPTAuth
+    for auth in screen.query(ChatGPTAuth):
+        if auth.busy:
+            if auth.signing_out:
+                screen.notify("Finishing sign-out before returning to account settings.")
+            else:
+                auth.cancel_login()
+            return
+    from tesis.tui_reasoning import ReasoningControl
+    for control in screen.query(ReasoningControl):
+        if control.cancel_support_check():
+            return
+    cancel = getattr(screen, "cancel_local_operation", None)
+    if cancel is not None and cancel():
+        return
+    from tesis.tui_mission import MissionControlScreen
+    mission = next((item for item in screen.app.screen_stack if isinstance(item, MissionControlScreen)), None)
+    if mission is not None and mission.run_active:
+        mission.action_cancel_or_exit()
+    else:
+        screen.notify("Idle. Use Back to close, /quit to exit, or Ctrl+Q to force exit.")
+
+
+def open_workspace(app: Any, screen: Screen) -> None:
+    """One instance of each root, with outgoing dirty children given first refusal."""
+    existing = next((item for item in app.screen_stack if type(item) is type(screen)), None)
+    if existing is app.screen:
+        return
+    roots = {"SettingsDrawer", "LaunchDrawer", "ResultsDrawer"}
+    if existing is None and type(screen).__name__ not in roots:
+        app.push_screen(screen)
+        return
+    while len(app.screen_stack) > 1 and app.screen is not existing:
+        current = app.screen
+        prepare = getattr(current, "prepare_navigation", None)
+        if prepare is not None and not prepare():
+            return
+        app.pop_screen()
+    if existing is None:
+        app.push_screen(screen)
 
 
 # ---------------------------------------------------------------- drawers
@@ -121,7 +215,8 @@ class BaseDrawer(Screen):
         Binding("/", "open_launcher", "Commands", show=False),
         Binding("ctrl+p", "open_launcher", "Commands", show=False),
         Binding("question_mark", "open_help", "Help", show=False),
-        Binding("ctrl+c", "cancel_or_exit", "Cancel", show=False, priority=True),
+        Binding("ctrl+c", "cancel_or_exit", "Copy / cancel", show=False, priority=True),
+        Binding("ctrl+q", "force_exit", "Force exit", show=False, priority=True),
     ]
 
     #: Set on a drawer that is allowed to stay open below the 60x18 floor.
@@ -136,6 +231,8 @@ class BaseDrawer(Screen):
                     self.set_class(self.app.size.width < 80, "drawer-full")
                 except Exception:
                     pass
+                yield Static("Terminal too small. Minimum 60x18. Resize to resume.\n? Help · Esc Back · Ctrl+C copy / cancel · Ctrl+Q force exit",
+                             id="drawer-size-notice", markup=False)
                 with Vertical(classes="drawer"):
                     yield from _compose(self)
 
@@ -170,6 +267,15 @@ class BaseDrawer(Screen):
         resized.__name__ = "on_resize"
         cls.on_resize = resized  # type: ignore[method-assign]
 
+    def check_action(self, action: str, parameters: tuple[Any, ...]) -> bool | None:
+        if self.has_class("too-small") and action not in {"back", "open_help", "cancel_or_exit", "force_exit", "app.quit"}:
+            return False
+        return super().check_action(action, parameters)
+
+    def on_descendant_focus(self) -> None:
+        for hint in self.query(".drawer-hint"):
+            hint.update(keyboard_context(self))
+
     def action_back(self) -> None:
         self.app.pop_screen()
 
@@ -183,13 +289,10 @@ class BaseDrawer(Screen):
             self.app.push_screen(HelpDrawer())
 
     def action_cancel_or_exit(self) -> None:
-        from tesis.tui_mission import MissionControlScreen
+        interrupt_context(self)
 
-        mission = next((s for s in self.app.screen_stack if isinstance(s, MissionControlScreen)), None)
-        if mission is not None:
-            mission.action_cancel_or_exit()
-        else:
-            self.app.exit()
+    def action_force_exit(self) -> None:
+        self.app.exit()
 
 
 class CommandLauncher(Screen):
@@ -200,7 +303,8 @@ class CommandLauncher(Screen):
     """
 
     BINDINGS = [Binding("escape", "back", "Back", show=False),
-                Binding("ctrl+c", "cancel_or_exit", "Cancel", show=False, priority=True)]
+                Binding("ctrl+c", "cancel_or_exit", "Copy / cancel", show=False, priority=True),
+                Binding("ctrl+q", "app.quit", "Force exit", show=False, priority=True)]
 
     def __init__(self, query: str = "") -> None:
         super().__init__()
@@ -269,11 +373,7 @@ class CommandLauncher(Screen):
             self._dispatch(str(options.get_option_at_index(options.highlighted).id))
 
     def action_cancel_or_exit(self) -> None:
-        mission = self._mission()
-        if mission is not None:
-            mission.action_cancel_or_exit()
-        else:
-            self.app.exit()
+        interrupt_context(self)
 
     @on(OptionList.OptionSelected, "#launcher-list")
     def dispatch_selected(self, event: OptionList.OptionSelected) -> None:
@@ -288,9 +388,9 @@ class CommandLauncher(Screen):
 
         def push(screen: Screen) -> None:
             try:
-                app.push_screen(screen)
-            except Exception:
-                pass
+                open_workspace(app, screen)
+            except Exception as exc:
+                app.notify(f"Navigation failed ({type(exc).__name__}).", severity="error")
 
         if name in ("run", "matrix"):
             from tesis.tui_forms import LaunchDrawer
@@ -350,7 +450,8 @@ class CommandLauncher(Screen):
         elif name == "quit":
             try:
                 mission = self._mission()
-                if mission is None or not mission.run_active:
+                prepare = getattr(app.screen, "prepare_navigation", None)
+                if (mission is None or not mission.run_active) and (prepare is None or prepare()):
                     app.exit()
             except Exception:
                 pass
@@ -360,9 +461,10 @@ class CommandLauncher(Screen):
         mission = self._mission()
         if mission is None:
             return
-        for _ in range(4):
-            stack = self.app.screen_stack
-            if not stack or stack[-1] is mission:
+        while self.app.screen is not mission:
+            current = self.app.screen
+            prepare = getattr(current, "prepare_navigation", None)
+            if prepare is not None and not prepare():
                 return
             self.app.pop_screen()
 

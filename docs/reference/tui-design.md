@@ -48,7 +48,10 @@ cell widths and an explicit ellipsis. Inspection views retain full identifiers.
 | `1` / `2` / `3` / `4` | Pipeline / runs / evidence / activity |
 | `r` / `m` / `p` / `d` | Run / Matrix / Plan / Doctor |
 | `v` / `s` / `l` | Results / Settings / activity log |
-| Ctrl+C | Request cooperative cancellation; a second request exits |
+| Ctrl+C | Copy selected text, cancel local work, or cancel an active experiment; a second experiment cancellation exits |
+| Ctrl+Q | Deliberate force exit |
+| F4 / F6 | Advanced YAML / Settings categories |
+| F7 / F8 | Previous / next launch step |
 
 Text inputs retain normal typing and caret navigation. The palette input is
 the exception: Up/Down, PageUp/PageDown, and Home/End move its command selection
@@ -59,12 +62,12 @@ list navigation. Tab can still move between the filter and command list.
 The pipeline initially selects its first stage so Enter works immediately;
 later updates preserve the operator's selection.
 
-In Settings, Up/Down selects categories vertically. Right enters the content
-pane; Left returns to the category rail. On wide evaluator pages, Right can
-continue into the context pane and Left returns to the form. These keys keep
-their normal caret behavior in text fields, their option behavior in an open
-selector, and their button behavior in action rows. They do not advance the
-settings category. Tab and Shift+Tab remain available between all controls.
+In Settings, arrows browse rows and Enter opens a typed child editor. F6 opens
+categories; Tab and Shift+Tab move between focus zones. F4 opens Advanced YAML,
+leaving Ctrl+E available for native text editing. Choice sheets keep a visible
+query, current selection, match count, arrow navigation, and explicit cancellation.
+Multiple selection uses Space to toggle and a labeled Apply action. A query
+with zero matches cannot confirm a value.
 
 Screen stacking keeps focus in the active overlay. Dismissing it restores the
 previous context. Live coordinate updates preserve the selected table row and
@@ -72,45 +75,52 @@ scroll position; changing the column set during resize retains the row.
 
 ## Menus
 
-Settings occupies the entire terminal. Its category rail selects Target &
-defaults, API providers, ChatGPT accounts, LLM runtime, AI evaluator, Policy &
-output, or Advanced YAML. The selected content scrolls independently while
-Save and Close remain available. Enter enters the selected section. Ctrl+S
-saves; Ctrl+E opens Advanced YAML. The YAML editor uses Tab for focus. Changes
-are staged explicitly, and the page marks an edited YAML draft as unsaved.
-Escape on an unsaved draft explains Save and discard, then a second Escape
-discards it. A malformed configuration is not rendered as unmasked raw YAML.
+Settings occupies the entire terminal. At 120 columns and above its category
+rail accompanies the selected page. At 80x24 and 60x18 it shows one page and a
+breadcrumb; F6 opens categories. Save and Back remain fixed outside the content
+scroller. Below 60x18 a size notice replaces the content while retaining its
+instance and draft. Resizing back restores the workspace. Help stays centered.
 
-Target & defaults uses a framed configuration section with individual label,
-value, and description rows, followed by an Actions section. Runtime, policy,
-and active-model summaries use the same rows. The evaluator separates Review
-model and Evaluator limits into aligned label/control/explanation forms. At
-160 columns and above, an independent context column previews the current
-evaluator choices and describes draft persistence. Below 115 columns the form
-fields and summary rows stack vertically.
+Rows show label/value pairs and the focused row's description. Enter opens the
+active value's typed editor, picker, or child page. Printable text on a setting
+row opens search across categories. Provider and account lists open their own
+pages; provider models have a detail page for selection and reasoning effort.
+Model IDs, profile IDs, explicit inherit values, unavailable saved IDs, and
+catalog ordering remain intact. Manual model IDs remain available.
 
-Inputs, selectors, checkboxes, and action buttons occupy one terminal row.
-Selectors open a plain list with the same row selection treatment as commands.
-Boolean and multiple-selection controls use `[*]` for selected and `[-]` for
-unselected, including the launch forms and provider model catalog. Native
-Checkbox and SelectionList values and change events remain in use. Checkbox
-labels are shown once alongside their marker.
+Confirmed fields stage into the round-trip configuration draft. Ctrl+S validates
+and saves once, including pending evaluator and ChatGPT form values. Invalid
+edits block Save and remain available for correction. Secret placeholders,
+comments, and unknown YAML fields round-trip. Provider edits use a private child
+draft with Apply/Cancel. Authentication changes credential storage immediately.
+Escape cancels pending sign-in first, then returns through child pages. At the
+Settings root, unsaved edits prompt for Save or a second Escape to discard.
+Changing workspaces refuses an outgoing dirty editor. Reopening a root reuses
+its instance and draft rather than creating another one.
 
-The Add/Edit API provider dialog groups Connection fields above Models, with
-Apply and Cancel aligned at the bottom. Its model list appears when models are
-available; empty catalogs and filters display a short message. The selector,
-filter, manual ID, and saved-key behavior retain their existing data contract.
+Reasoning support is an explicit Check action. Catalog-supported choices need
+no live probe. Unknown explicit efforts block confirmation with a reason until
+a successful check; ordinary navigation, Apply, Save, and Start never initiate
+that request. Accepted support does not establish internal reasoning.
 
-Help is a centered popup with Navigation and Commands tabs. Its body scrolls
-at small sizes. Plan, Run, Matrix, Doctor, results, review, failure, evidence,
-and provider editing use centered dialogs. Inspections fill the terminal
-below 80 columns; Help retains its bounded popup shape.
+Results has a searchable list, a short Filters page, Clear filters, and a detail
+page. Back restores query, filters, selected artifact identity, and scroll.
+Review binds each grade/reason draft to its candidate ID and displays the proof
+ceiling. Grade keys 0-4 apply only while the grade row owns focus. Save / Next
+pending is explicit; browsing never writes a research score.
 
-Run and Matrix use Scope, Coordinates, Runtime, and Review steps. Each step
-scrolls independently and moves focus to its first control. Common execution
-limits remain visible; extra runtime and role settings live under Advanced.
-Start appears only in Review. Labels distinguish a primary provider/model,
-matrix provider/model profiles, and the optional override for both model roles.
+Help is a centered popup whose initial text describes the originating context.
+Footers distinguish browse, search, edit, pick, multi-select, and local busy
+states. Ctrl+C copies a selection first, otherwise cancels local work before an
+active experiment. Idle exit is explicit; Ctrl+Q is the force-exit path.
+
+Run and Matrix retain Scope, Coordinates, Runtime, and Review with rows in each
+step. F7/F8 change steps, and each step remembers its last focused field and
+scroll. Escape returns from Advanced or to the previous step before closing.
+Advanced runtime and role fields occupy their own child page. Start appears
+only in Review and never receives focus merely because Review opened. Enter on
+a field edits that field. Labels distinguish the primary model, matrix profiles,
+and the optional override for both experiment roles.
 Start closes all dialogs above the mission screen before beginning execution,
 including Plan when it opened the launch setup.
 
@@ -170,8 +180,8 @@ setting are labeled as the SDK default rather than guessed.
 
 The composer hides below 22 rows. At 80x24 and in a 60-column split, secondary
 run columns move to inspection detail. Pipeline rows remain scrollable. Help
-shrinks to the available viewport. Settings retains its category rail and
-scrollable content while its action row stays fixed.
+shrinks to the available viewport. Settings uses a single page with a Categories
+action below 120 columns, and its save/back row stays fixed.
 
 ## Responsiveness
 

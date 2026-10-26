@@ -222,6 +222,17 @@ module has a focused responsibility:
 - `tesis.tui_config` owns screen-local configuration and draft projection
   caches. File metadata, environment, overrides, and referenced scoring JSON
   invalidate cached resolution. Execution requests use fresh canonical loading.
+- `tesis.tui_choices` owns visible-query single/multiple choice sheets.
+- `tesis.tui_rows` and `tesis.tui_editors` own browse rows and temporary typed
+  editors, retaining native field identities and messages for existing resolvers.
+- `tesis.tui_filters` owns short filter child pages shared by saved/live lists.
+
+Named root navigation reuses screen instances. Dirty outgoing editors can refuse
+navigation; Back restoration uses screen and row identities, without a fixed
+stack depth. Settings maintains one round-trip configuration draft plus bounded
+child drafts. Confirmed row edits stage values; Save includes unconfirmed form
+values or reports validation failure. Authentication remains immediate and
+credentials remain outside YAML. See [the keyboard contract](tui-design.md).
 
 Dashboard navigation reuses unchanged content. Live events update the UI state
 in order; display work and inspection observers are coalesced to at most 30 Hz.
@@ -251,8 +262,10 @@ TUI paths needs a designed config-path API, not an implicit alias.
 
 ## Cancellation
 
-`CancellationToken` is cooperative and thread-safe. Ctrl+C sets the token; a
-second Ctrl+C closes the TUI immediately. Long-running TUI tasks use daemon
+`CancellationToken` is cooperative and thread-safe. Ctrl+C first copies selected
+text or cancels a local operation. In an active experiment it sets the token;
+a second experiment cancellation closes the TUI immediately. Idle exit is
+explicit, and Ctrl+Q provides deliberate force exit. Long-running TUI tasks use daemon
 threads and stop posting UI messages during shutdown, so a blocked provider or
 HTTP operation cannot hold the terminal process open.
 The active LLM or HTTP request is not interrupted unsafely; when it returns,

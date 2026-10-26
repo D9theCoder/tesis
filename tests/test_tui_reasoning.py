@@ -42,8 +42,10 @@ def test_unknown_model_warns_and_requires_successful_probe_for_current_connectio
             if typed:
                 control.query_one(Input).value = "ultra"
             await pilot.pause()
-            with pytest.raises(ValueError, match="support check required"):
+            with pytest.raises(ValueError, match="Check reasoning support"):
                 control.ensure_ready()
+            assert not calls
+            control.check_support()
             for _ in range(50):
                 await pilot.pause(0.01)
                 if control._checked:
@@ -79,6 +81,7 @@ def test_known_catalog_uses_only_its_choices_and_rejected_custom_value_cannot_pr
             await pilot.pause()
             with pytest.raises(ValueError):
                 control.ensure_ready()
+            control.check_support()
             await pilot.pause(0.1)
             assert not control._checked
             assert "Could not confirm" in str(control.query_one(Static).content)

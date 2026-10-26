@@ -12,6 +12,8 @@ from textual.containers import Vertical
 from textual.message import Message
 from textual.widgets import Button, Input, Select, Static
 
+from tesis.tui_choices import ChoiceSelect
+from tesis.tui_rows import ControlRow
 from llm.reasoning import FALLBACK_EFFORTS, validate_reasoning_effort
 
 
@@ -39,7 +41,13 @@ class ReasoningControl(Vertical):
     """Unknown efforts require a successful probe for the current connection."""
 
     class Changed(Message):
-        pass
+        def __init__(self, control: ReasoningControl):
+            super().__init__()
+            self._control = control
+
+        @property
+        def control(self) -> ReasoningControl:
+            return self._control
 
     def __init__(self, *, id: str, modes: tuple[tuple[str, str], ...] = (("Provider default", "inherit"),)):
         super().__init__(id=id)
@@ -54,9 +62,9 @@ class ReasoningControl(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static("", markup=False, id=f"{self.id}-status")
-        yield Select([*self._modes, *[(x, x) for x in FALLBACK_EFFORTS], ("Type another effort", "custom")],
-                     value=self._modes[0][1], allow_blank=False, id=f"{self.id}-choice")
-        yield Input(placeholder="Exact reasoning effort", id=f"{self.id}-custom")
+        yield ControlRow('Reasoning effort', ChoiceSelect([*self._modes, *[(x, x) for x in FALLBACK_EFFORTS], ("Type another effort", "custom")],
+                     value=self._modes[0][1], allow_blank=False, id=f"{self.id}-choice"))
+        yield ControlRow('Custom effort', Input(placeholder="Exact reasoning effort", id=f"{self.id}-custom"))
         yield Button("Check reasoning support", id=f"{self.id}-check")
 
     def on_mount(self) -> None:
@@ -87,13 +95,14 @@ class ReasoningControl(Vertical):
         old_value = self.query_one(Input).value
         options = [*self._modes, *[(x, x) for x in (efforts if efforts is not None else FALLBACK_EFFORTS)],
                    ("Type another effort", "custom")]
-        picker.set_options(options)
-        if reset:
-            picker.value = value if value in {v for _, v in options} else "custom" if value else self._modes[0][1]
-            self.query_one(Input).value = value or ""
-        else:
-            picker.value = old_mode if old_mode in {v for _, v in options} else self._modes[0][1]
-            self.query_one(Input).value = old_value
+        with picker.prevent(Select.Changed), self.query_one(Input).prevent(Input.Changed):
+            picker.set_options(options)
+            if reset:
+                picker.value = value if value in {v for _, v in options} else "custom" if value else self._modes[0][1]
+                self.query_one(Input).value = value or ""
+            else:
+                picker.value = old_mode if old_mode in {v for _, v in options} else "custom"
+                self.query_one(Input).value = old_value if picker.value != "custom" or old_mode == "custom" else str(old_mode)
         self._invalidate()
 
     @on(Select.Changed)
@@ -101,7 +110,7 @@ class ReasoningControl(Vertical):
     def effort_changed(self, event: Message) -> None:
         event.stop()
         self._invalidate()
-        self.post_message(self.Changed())
+        self.post_message(self.Changed(self))
 
     def _invalidate(self) -> None:
         self._generation += 1
@@ -112,8 +121,23 @@ class ReasoningControl(Vertical):
                                       if self._efforts is None else "Model reasoning catalog loaded.")
 
     def _update_visibility(self) -> None:
-        self.query_one(Input).display = self.mode == "custom"
-        self.query_one(Button).disabled = self._checking or not self._profiles
+        self.query_one(Input).parent.parent.display = self.mode == "custom"
+        button = self.query_one(Button)
+        try:
+            value = self.value
+        except ValueError:
+            value = None
+        authoritative = self._efforts is not None and value in self._efforts
+        button.display = value is not None and not authoritative
+        button.disabled = self._checking or not self._profiles or self._checked
+
+    @property
+    def blocking_reason(self) -> str:
+        try:
+            self.ensure_ready()
+        except ValueError as exc:
+            return str(exc)
+        return ""
 
     def ensure_ready(self) -> bool:
         effort = self.value
@@ -121,9 +145,8 @@ class ReasoningControl(Vertical):
             raise ValueError("Enter a reasoning effort or choose provider default.")
         if effort is None or (self._efforts is not None and effort in self._efforts) or self._checked:
             return True
-        if not self._checking:
-            self.check_support()
-        raise ValueError("Reasoning support check required. Wait for the result, then apply again.")
+        raise ValueError("Checking reasoning support…" if self._checking else
+                         "Use Check reasoning support before confirming this effort.")
 
     @on(Button.Pressed)
     def check_support(self, event: Button.Pressed | None = None) -> None:
@@ -171,6 +194,17 @@ class ReasoningControl(Vertical):
         self._update_visibility()
         self.query_one(Static).set_class(bool(event.error), "unknown-model")
         self.query_one(Static).update(event.error or "Provider accepted the effort. Internal reasoning is unverified.")
+        self.post_message(self.Changed(self))
+
+    def cancel_support_check(self) -> bool:
+        if not self._checking:
+            return False
+        self._generation += 1
+        self._checking = self._checked = False
+        self._update_visibility()
+        self.query_one(Static).update("Support check canceled locally. Late responses will be ignored.")
+        self.post_message(self.Changed(self))
+        return True
 
     def on_unmount(self) -> None:
         self._probe_closed = True

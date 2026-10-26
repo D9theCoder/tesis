@@ -19,8 +19,28 @@ from textual.widgets import Button, Checkbox, DataTable, Input, Label, Selection
 from textual.widgets.option_list import OptionDoesNotExist
 
 
-class SettingValueRow(Vertical):
-    """A labeled setting value with its explanation on a separate line."""
+class SettingValueRow(Vertical, can_focus=True):
+    """A compact row. Enter opens a typed editor owned by the calling workspace."""
+
+    BINDINGS = [Binding("enter", "edit", "Edit"), Binding("space", "edit", "Edit"),
+                Binding("up", "row(-1)", show=False), Binding("down", "row(1)", show=False)]
+
+    class Activated(Message):
+        def __init__(self, row: SettingValueRow) -> None:
+            super().__init__()
+            self.row = row
+
+    def action_edit(self) -> None:
+        self.post_message(self.Activated(self))
+
+    def action_row(self, direction: int) -> None:
+        rows = [row for row in self.screen.query(SettingValueRow) if row in self.screen.focus_chain]
+        if self in rows:
+            rows[(rows.index(self) + direction) % len(rows)].focus()
+
+    def on_click(self) -> None:
+        self.focus()
+        self.action_edit()
 
     def __init__(self, label: str, description: str = "", *, id: str) -> None:
         super().__init__(id=id, classes="setting-summary-row")
@@ -46,10 +66,12 @@ class SettingField(Grid):
         self._field_description, self._label_id = description, label_id
 
     def compose(self) -> ComposeResult:
-        yield Label(self._field_label, id=self._label_id, classes="form-row-label")
-        yield self._field_control
+        from tesis.tui_rows import ControlRow
+        # Labels/descriptions keep their public identities for dynamic capability text.
+        yield Label(self._field_label, id=self._label_id, classes="form-row-label row-value-storage")
+        yield ControlRow(self._field_label, self._field_control, self._field_description)
         yield Static(self._field_description, id=f"{self._field_control.id}-description" if self._field_control.id else None,
-                     classes="form-row-description", markup=False)
+                     classes="form-row-description row-value-storage", markup=False)
 
 
 class TextCheckbox(Checkbox):
@@ -82,7 +104,19 @@ class TextSelectionList(SelectionList):
 class KeyboardActions(Horizontal):
     """Arrow navigation inside an action row; Tab keeps its normal focus order."""
 
-    BINDINGS = [Binding("left", "move(-1)", show=False), Binding("right", "move(1)", show=False)]
+    BINDINGS = [Binding("left", "horizontal(-1)", show=False), Binding("right", "horizontal(1)", show=False),
+                Binding("up", "vertical(-1)", show=False), Binding("down", "vertical(1)", show=False)]
+
+    def check_action(self, action: str, parameters: tuple[Any, ...]) -> bool | None:
+        if action in {"horizontal", "vertical"}:
+            return self.layout.name == action
+        return super().check_action(action, parameters)
+
+    def action_horizontal(self, direction: int) -> None:
+        self.action_move(direction)
+
+    def action_vertical(self, direction: int) -> None:
+        self.action_move(direction)
 
     def action_move(self, direction: int) -> None:
         buttons = [button for button in self.query(Button) if button in self.screen.focus_chain]
@@ -136,17 +170,35 @@ class KeyboardTable(DataTable):
 class PaletteInput(Input):
     """Keep typing focus while forwarding list navigation to the palette."""
 
-    BINDINGS = [
+    BINDINGS = [Binding("space", "palette_toggle", show=False, priority=True), *[
         Binding(key, f"palette_move('{action}')", show=False)
         for key, action in (
             ("up", "cursor_up"), ("down", "cursor_down"),
             ("pageup", "page_up"), ("pagedown", "page_down"),
             ("home", "first"), ("end", "last"),
         )
-    ]
+    ]]
+
+    def __init__(self, *args: Any, list_selector: str = "#launcher-list", **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.list_selector = list_selector
+
+    def check_action(self, action: str, parameters: tuple[Any, ...]) -> bool | None:
+        if action == "palette_toggle":
+            return bool(getattr(self.screen, "multiple", False))
+        return super().check_action(action, parameters)
+
+    def action_palette_toggle(self) -> None:
+        toggle = getattr(self.screen, "toggle", None)
+        if toggle is not None:
+            toggle()
+        else:
+            self.screen.query_one(self.list_selector).action_toggle_model()
 
     async def action_palette_move(self, action: str) -> None:
-        options = self.screen.query_one("#launcher-list")
+        options = self.screen.query_one(self.list_selector)
+        if isinstance(options, DataTable):
+            action = {"first": "first_row", "last": "last_row"}.get(action, action)
         await options.run_action(action)
 
 

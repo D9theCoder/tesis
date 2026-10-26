@@ -173,6 +173,7 @@ class MissionControlScreen(Screen):
         Binding("ctrl+c", "cancel_or_exit", "Cancel", show=True, priority=True,
                 key_display="Ctrl+C"),
         Binding("q", "quit_if_idle", "Quit", show=True),
+        Binding("ctrl+q", "app.quit", "Force exit", show=False, priority=True),
         Binding("r", "launch_single", "Run", show=False),
         Binding("m", "launch_matrix", "Matrix", show=False),
         Binding("p", "open_plan", "Plan", show=False),
@@ -907,8 +908,8 @@ class MissionControlScreen(Screen):
             return
         try:
             self.app.push_screen(CommandLauncher())
-        except Exception:
-            pass
+        except Exception as exc:
+            self.notify(f"Navigation failed ({type(exc).__name__}).", severity="error")
 
     def action_launch_single(self) -> None:
         from tesis.tui_forms import LaunchDrawer
@@ -916,9 +917,9 @@ class MissionControlScreen(Screen):
         if not self._floor_ok() or self._run_active:
             return
         try:
-            self.app.push_screen(LaunchDrawer(mode="single"))
-        except Exception:
-            pass
+            self._push_drawer(LaunchDrawer(mode="single"))
+        except Exception as exc:
+            self.notify(f"Navigation failed ({type(exc).__name__}).", severity="error")
 
     def action_launch_matrix(self) -> None:
         from tesis.tui_forms import LaunchDrawer
@@ -926,9 +927,9 @@ class MissionControlScreen(Screen):
         if not self._floor_ok() or self._run_active:
             return
         try:
-            self.app.push_screen(LaunchDrawer(mode="matrix"))
-        except Exception:
-            pass
+            self._push_drawer(LaunchDrawer(mode="matrix"))
+        except Exception as exc:
+            self.notify(f"Navigation failed ({type(exc).__name__}).", severity="error")
 
     def action_open_plan(self) -> None:
         from tesis.tui_drawers import PlanDrawer
@@ -1031,9 +1032,10 @@ class MissionControlScreen(Screen):
     def _push_drawer(self, drawer: Screen) -> None:
         """BaseDrawer decides its own panel width; the shell only pushes it."""
         try:
-            self.app.push_screen(drawer)
-        except Exception:
-            pass
+            from tesis.tui_commands import open_workspace
+            open_workspace(self.app, drawer)
+        except Exception as exc:
+            self.notify(f"Navigation failed ({type(exc).__name__}).", severity="error")
 
     def action_inspect(self) -> None:
         """Enter inspects the selected coordinate; nothing selected is a no-op."""
@@ -1077,7 +1079,13 @@ class MissionControlScreen(Screen):
             self.app.exit()
 
     def action_cancel_or_exit(self) -> None:
+        focused = self.app.focused
+        if isinstance(focused, Input) and not focused.selection.is_empty:
+            focused.action_copy()
+            return
         if self._run_active and not self._cancel_requested:
             self.request_cancel()
-        else:
+        elif self._run_active:
             self.app.exit()
+        else:
+            self.notify("Idle. Use q to quit or Ctrl+Q to force exit.")

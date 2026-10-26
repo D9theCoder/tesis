@@ -13,7 +13,7 @@ from textual import on
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.message import Message
-from textual.widgets import Button, DataTable, Input, Label, Select, Static
+from textual.widgets import Button, Checkbox, DataTable, Input, Label, Select, Static
 
 from llm.model_catalog import fetch_models
 from llm.reasoning import model_efforts
@@ -21,7 +21,9 @@ from tesis.provider_registry import API_PROTOCOLS, provider_key_variable, valida
 from tesis.provider_settings import resolved_provider_key
 from tesis.tui_commands import BaseDrawer
 from tesis.tui_security import _safe_url
-from tesis.tui_widgets import KeyboardActions, KeyboardTable, key_hints
+from tesis.tui_choices import ChoiceSelect
+from tesis.tui_rows import ControlRow
+from tesis.tui_widgets import KeyboardActions, KeyboardTable, PaletteInput, key_hints
 from tesis.tui_reasoning import ReasoningControl
 
 
@@ -39,11 +41,67 @@ class CatalogLoaded(Message):
 
 
 class ModelCatalogTable(KeyboardTable):
-    BINDINGS = [("space", "select_cursor", "Toggle model")]
+    class Toggled(Message):
+        def __init__(self, model: str):
+            super().__init__()
+            self.model = model
+
+    BINDINGS = [("space", "toggle_model", "Toggle model")]
+
+    def action_toggle_model(self) -> None:
+        if self.row_count:
+            self.post_message(self.Toggled(str(self.coordinate_to_cell_key(self.cursor_coordinate).row_key.value)))
+
+
+class ModelDetailPage(BaseDrawer):
+    def __init__(self, model: str, *, profiles: list, efforts: list | None, value: str | None, selected: bool):
+        super().__init__()
+        self.model, self.profiles, self.efforts, self.value, self.selected = model, profiles, efforts, value, selected
+
+    def compose(self) -> ComposeResult:
+        yield Label(f"Settings / API providers / Models / {self.model}", markup=False)
+        with VerticalScroll(classes="drawer-body"):
+            yield ControlRow("Keep this model", Checkbox(value=self.selected, id="model-keep"))
+            yield ReasoningControl(id="model-effort")
+            yield Static("", id="model-status", markup=False)
+        with KeyboardActions():
+            yield Button("Stage model", id="model-stage", variant="primary")
+            yield Button("Cancel", id="model-cancel")
+        yield Static("Browse: Enter edit · Tab Stage / Cancel · Esc back", classes="drawer-hint", markup=False)
+
+    def on_mount(self) -> None:
+        self.query_one(ReasoningControl).configure(self.profiles, self.efforts, value=self.value, reset=True)
+        self.query_one(ControlRow).focus()
+
+    @on(ReasoningControl.Changed)
+    def readiness_changed(self) -> None:
+        reason = self.query_one(ReasoningControl).blocking_reason
+        self.query_one("#model-stage", Button).disabled = bool(reason)
+        self.query_one("#model-status", Static).update(reason or "Ready to stage; provider Apply keeps these changes in Settings.")
+
+    @on(Button.Pressed, "#model-stage")
+    def stage_model(self) -> None:
+        control = self.query_one(ReasoningControl)
+        try:
+            control.ensure_ready()
+        except ValueError as exc:
+            self.query_one("#model-status", Static).update(str(exc))
+            return
+        self.dismiss((control.value, self.query_one(Checkbox).value, control._checked))
+
+    @on(Button.Pressed, "#model-cancel")
+    def action_back(self) -> None:
+        self.dismiss(None)
+
+    def prepare_navigation(self) -> bool:
+        self.query_one("#model-status", Static).update("Stage or Cancel this model before changing workspace.")
+        return False
 
 
 class ProviderDrawer(BaseDrawer):
     """A draft only. Settings Save commits the provider and its dotenv key."""
+
+    multiple = True
 
     def __init__(self, *, config_path: Path, entries: dict[str, Any], provider_id: str = "",
                  pending_keys: dict[str, str] | None = None, reasoning_catalog: dict | None = None):
@@ -55,6 +113,8 @@ class ProviderDrawer(BaseDrawer):
         self._pending_keys = dict(pending_keys or {})
         self._selected = set(self._entry.get("models") or [])
         self._models = {model: model for model in self._entry.get("models") or []}
+        self._highlighted_model: str | None = None
+        self._reasoning_models: tuple[str, ...] = ()
         self._generation = 0
         self._closed = False
         self._reasoning_catalog = reasoning_catalog or {}
@@ -62,55 +122,47 @@ class ProviderDrawer(BaseDrawer):
         self._url_seeds = {key: _safe_url(self._entry.get(key) or "") for key in ("base_url", "fetch_url")}
 
     def compose(self) -> ComposeResult:
-        yield Label("Edit API provider" if self._provider_id else "Add API provider", classes="drawer-title")
+        yield Label(f"Settings / API providers / {self._provider_id or 'New provider'}", classes="drawer-title", markup=False)
         with VerticalScroll(id="provider-fields", classes="drawer-body"):
             yield Static("Connection", classes="section-heading", markup=False)
-            yield Label("Provider ID")
-            yield Input(value=self._provider_id, placeholder="e.g. research-gateway", disabled=bool(self._provider_id), id="provider-id")
-            yield Label("Display name (optional)")
-            yield Input(value=str(self._entry.get("display_name") or ""), id="provider-name")
-            yield Label("Base URL")
-            yield Input(value=self._url_seeds["base_url"],
-                        placeholder="https://gateway.example/v1", id="provider-url")
-            yield Label("API protocol")
-            yield Select([(label, value) for value, label in API_PROTOCOLS.items()],
+            yield ControlRow('Provider ID', Input(value=self._provider_id, placeholder="e.g. research-gateway", disabled=bool(self._provider_id), id="provider-id"))
+            yield ControlRow('Display name', Input(value=str(self._entry.get("display_name") or ""), id="provider-name"))
+            yield ControlRow('Base URL', Input(value=self._url_seeds["base_url"],
+                        placeholder="https://gateway.example/v1", id="provider-url"))
+            yield ControlRow('API protocol', ChoiceSelect([(label, value) for value, label in API_PROTOCOLS.items()],
                          value=self._entry.get("protocol", "openai_compatible"),
-                         allow_blank=False, id="provider-protocol")
-            yield Label("API key")
-            yield Input(password=True, placeholder="Leave blank to keep saved key" if self._entry else "API key",
-                        id="provider-key")
-            yield Label("Model catalog URL (optional)")
-            yield Input(value=self._url_seeds["fetch_url"],
-                        placeholder="https://gateway.example/v1/models", id="provider-fetch-url")
+                         allow_blank=False, id="provider-protocol"))
+            yield ControlRow('API key', Input(password=True, placeholder="Leave blank to keep saved key" if self._entry else "API key",
+                        id="provider-key"))
+            yield ControlRow('Model catalog URL', Input(value=self._url_seeds["fetch_url"],
+                        placeholder="https://gateway.example/v1/models", id="provider-fetch-url"))
             yield Static("Models", classes="section-heading", markup=False)
             yield Button("Fetch available models", id="provider-fetch")
-            yield Static("Fetch a catalog or add model IDs manually. Space/Enter toggles a row.",
+            yield Static("Fetch a catalog or add model IDs manually. Space toggles; Enter opens model details.",
                          id="provider-status", markup=False)
-            yield Input(placeholder="Filter model IDs or names", id="provider-filter")
+            yield PaletteInput(placeholder="Filter model IDs or names", id="provider-filter", list_selector="#provider-models")
             yield ModelCatalogTable(id="provider-models", cursor_type="row", show_row_labels=False)
             yield Static("", id="provider-models-empty", markup=False)
             with KeyboardActions(classes="provider-actions", id="provider-model-actions"):
                 yield Button("Select shown", id="provider-select-shown")
                 yield Button("Ignore shown", id="provider-ignore-shown")
             yield Static("", id="provider-selection", markup=False)
-            yield Label("Manual model ID")
-            yield Input(placeholder="Exact model ID", id="provider-manual")
+            yield ControlRow('Manual model ID', Input(placeholder="Exact model ID", id="provider-manual"))
             yield Button("Add model", id="provider-add-model")
-            yield Label("Reasoning effort per model")
-            yield Select([], prompt="Model to configure", id="provider-reasoning-model")
+            yield ControlRow('Model reasoning settings', ChoiceSelect([], prompt="Model to configure", id="provider-reasoning-model"))
             yield ReasoningControl(id="provider-reasoning")
             yield Button("Apply effort to model", id="provider-reasoning-apply")
         with KeyboardActions(classes="provider-actions", id="provider-footer"):
             yield Button("Apply provider", id="provider-apply", variant="primary")
             yield Button("Cancel", id="provider-cancel")
-        yield Static(key_hints(("Tab", "focus"), ("↑/↓", "model"), ("Space/Enter", "toggle"), ("Esc", "cancel")), classes="drawer-hint")
+        yield Static(key_hints(("Tab", "focus"), ("↑/↓", "model"), ("Space", "toggle"), ("Enter", "model details"), ("Esc", "cancel")), classes="drawer-hint")
 
     def on_mount(self) -> None:
         table = self.query_one("#provider-models", DataTable)
         table.add_column("", width=3)
         table.add_column("Model")
         self._render_models()
-        self.query_one("#provider-url" if self._provider_id else "#provider-id", Input).focus()
+        self.query_one("#row-provider-url" if self._provider_id else "#row-provider-id").focus()
 
     def _status(self, text: str) -> None:
         self.query_one("#provider-status", Static).update(text)
@@ -123,11 +175,14 @@ class ProviderDrawer(BaseDrawer):
     def _render_models(self) -> None:
         table = self.query_one("#provider-models", DataTable)
         cursor = table.cursor_row
+        if table.row_count:
+            self._highlighted_model = str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
         table.clear()
         visible = self._visible_models()
         for model in visible:
             table.add_row("[*]" if model in self._selected else "[-]", Text(model), key=model)
-        table.move_cursor(row=min(cursor, max(0, table.row_count - 1)))
+        row = visible.index(self._highlighted_model) if self._highlighted_model in visible else min(cursor, max(0, len(visible) - 1))
+        table.move_cursor(row=row)
         table.display = bool(visible)
         self.query_one("#provider-filter").display = bool(self._models)
         self.query_one("#provider-model-actions").display = bool(self._models)
@@ -136,21 +191,25 @@ class ProviderDrawer(BaseDrawer):
         empty.update("No matching models." if self._models else "Fetch a catalog or add an exact model ID below.")
         self.query_one("#provider-selection", Static).update(
             f"{len(self._selected)} selected · {len(visible)} shown")
-        picker = self.query_one("#provider-reasoning-model", Select)
-        selected = picker.value
-        picker.set_options([(name, name) for name in self._models if name in self._selected])
-        picker.value = selected if selected in self._selected else next(
-            (name for name in self._models if name in self._selected), Select.NULL)
-        self._configure_reasoning()
+        models = tuple(name for name in self._models if name in self._selected)
+        if models != self._reasoning_models:
+            self._reasoning_models = models
+            picker = self.query_one("#provider-reasoning-model", Select)
+            selected = picker.value
+            picker.set_options([(name, name) for name in models])
+            picker.value = selected if selected in models else next(iter(models), Select.NULL)
+            self._configure_reasoning()
 
     @on(Select.Changed, "#provider-reasoning-model")
-    def reasoning_model_changed(self) -> None:
-        self._configure_reasoning(reset=True)
+    def reasoning_model_changed(self, event: Select.Changed) -> None:
+        if event.value == event.select.value:
+            self._configure_reasoning(reset=event.value != getattr(self, "_configured_reasoning_model", Select.NULL))
 
     def _configure_reasoning(self, *, reset: bool = False) -> None:
         from tesis.provider_registry import expanded_model_sections, model_profile_id
         model = self.query_one("#provider-reasoning-model", Select).value
         control = self.query_one("#provider-reasoning", ReasoningControl)
+        self._configured_reasoning_model = model
         if model is Select.NULL:
             control.configure([], None, reset=True)
             return
@@ -178,6 +237,14 @@ class ProviderDrawer(BaseDrawer):
             control.ensure_ready()
             self._model_options.setdefault(str(model), {})["reasoning_effort"] = control.value
 
+    @on(ReasoningControl.Changed)
+    def capability_changed(self) -> None:
+        reason = self.query_one("#provider-reasoning", ReasoningControl).blocking_reason
+        self.query_one("#provider-reasoning-apply", Button).disabled = bool(reason)
+        self.query_one("#provider-apply", Button).disabled = bool(reason)
+        if reason:
+            self._status(reason)
+
     @on(Button.Pressed, "#provider-reasoning-apply")
     def apply_model_reasoning(self) -> None:
         try:
@@ -190,9 +257,27 @@ class ProviderDrawer(BaseDrawer):
     def filter_models(self) -> None:
         self._render_models()
 
-    @on(DataTable.RowSelected, "#provider-models")
-    def toggle_model(self, event: DataTable.RowSelected) -> None:
-        model = str(event.row_key.value)
+    @on(Input.Submitted, "#provider-filter")
+    def toggle_searched_model(self) -> None:
+        table = self.query_one("#provider-models", DataTable)
+        if table.row_count:
+            table.action_select_cursor()
+
+    def cancel_local_operation(self) -> bool:
+        if self.query_one("#provider-fetch", Button).disabled:
+            self._generation += 1
+            self.query_one("#provider-fetch", Button).disabled = False
+            self._status("Catalog fetch canceled locally; late responses will be ignored.")
+            return True
+        return False
+
+    def prepare_navigation(self) -> bool:
+        self._status("Apply or Cancel this provider draft before changing workspace.")
+        return False
+
+    @on(ModelCatalogTable.Toggled)
+    def toggle_model(self, event: ModelCatalogTable.Toggled) -> None:
+        model = event.model
         if model in self._selected:
             self._selected.remove(model)
         else:
@@ -201,6 +286,30 @@ class ProviderDrawer(BaseDrawer):
         table.update_cell(model, table.ordered_columns[0].key, "[*]" if model in self._selected else "[-]")
         self.query_one("#provider-selection", Static).update(f"{len(self._selected)} selected.")
         self._render_models()
+
+    @on(DataTable.RowSelected, "#provider-models")
+    def open_model_detail(self, event: DataTable.RowSelected) -> None:
+        model = str(event.row_key.value)
+        picker = self.query_one("#provider-reasoning-model", Select)
+        models = list(dict.fromkeys([*(name for name in self._models if name in self._selected), model]))
+        picker.set_options([(name, name) for name in models])
+        picker.value = model
+        self._configure_reasoning(reset=True)
+        control = self.query_one("#provider-reasoning", ReasoningControl)
+        def staged(result: Any) -> None:
+            if result is not None:
+                effort, keep, checked = result
+                self._model_options.setdefault(model, {})["reasoning_effort"] = effort
+                self._selected.add(model) if keep else self._selected.discard(model)
+                self._render_models()
+                self._configure_reasoning(reset=True)
+                control._checked = checked
+                control._update_visibility()
+                self.capability_changed()
+            self.query_one("#provider-models").focus()
+        self.app.push_screen(ModelDetailPage(model, profiles=control._profiles, efforts=control._efforts,
+                                            value=self._model_options.get(model, {}).get("reasoning_effort"),
+                                            selected=model in self._selected), staged)
 
     @on(Button.Pressed, "#provider-select-shown")
     def select_shown(self) -> None:
@@ -306,6 +415,7 @@ class ProviderDrawer(BaseDrawer):
             if "reasoning_efforts" in model:
                 self._model_options.setdefault(model["id"], {})["reasoning_efforts"] = model["reasoning_efforts"]
         self._render_models()
+        self._configure_reasoning()
         self._status(f"{len(message.models)} models returned. Select models to keep; existing IDs are retained."
                      if message.models else "The endpoint returned no models. Add IDs manually.")
 

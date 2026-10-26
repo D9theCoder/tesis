@@ -236,3 +236,63 @@ ProviderDrawer .drawer { width: 100; max-width: 94%; border: solid $surface-ligh
 .form-grid { grid-size: 2; grid-columns: 1fr 2fr; grid-gutter: 0 1; height: auto; }
 .inline-form, .checks { height: auto; }
 .screen-title { height: 1; text-style: bold; }
+/* A choice has one visible query and a stable result viewport. */
+ChoicePicker { align: center middle; background: $background 65%; }
+#choice-sheet { width: 90%; max-width: 100; height: 85%; padding: 1; background: $background; border: round $primary; }
+#choice-title, #choice-count { height: auto; max-height: 2; }
+#choice-query { height: 3; }
+#choice-list { height: 1fr; }
+#choice-sheet KeyboardActions { height: 1; }
+SettingsDrawer.settings-single #settings-categories { width: 1fr; margin: 0; border: none; }
+SettingsDrawer.settings-single .settings-section { padding: 0; }
+.setting-summary-row { height: auto; min-height: 1; margin: 0; padding: 0; }
+.setting-summary-row:focus { background: $block-cursor-background; color: $block-cursor-foreground; text-style: bold; }
+.setting-summary-row .setting-description { display: none; }
+.setting-summary-row:focus .setting-description { display: block; }
+SettingsDrawer.settings-stacked .setting-value-line { layout: horizontal; }
+SettingsDrawer.settings-stacked .setting-key { width: 22; }
+SettingsDrawer.settings-stacked .setting-separator { display: block; }
+SettingsDrawer.settings-single .settings-card { margin: 0; padding: 0; border: none; }
+FieldEditor .drawer { width: 76; height: 16; }
+ProviderDrawer .drawer, ProviderDrawer.drawer-full .drawer { width: 100%; max-width: 100%; height: 100%; border: none; }
+.row-value-storage { display: none; }
+.settings-form-row { grid-size: 1; grid-columns: 1fr; margin-bottom: 0; }
+.settings-form-row ControlRow { width: 1fr; }
+.launch-step ControlRow { margin-bottom: 1; }
+.launch-advanced-page CollapsibleTitle { display: none; }
+#coordinates-filters, #results-filter-scroll { display: none; }
+#coordinates-query, #results-query { height: 3; margin: 0; }
+#coordinates-filter-actions, #results-filter-actions { height: 1; }
+#coordinates-active-filters, #results-active-filters { width: 1fr; height: 1; color: $text-muted; }
+FilterPage .drawer { height: 85%; width: 90%; }
+ResultsDrawer .drawer, ResultsDrawer.drawer-full .drawer,
+ReviewDrawer .drawer, ReviewDrawer.drawer-full .drawer { width: 100%; max-width: 100%; height: 100%; border: none; }
+#review-candidates { height: 1fr; min-height: 4; }
+#review-candidate-detail { height: auto; }
+#review-identity { height: auto; color: $primary; text-style: bold; }
+#review-evidence { height: auto; }
+/* Confirmed row edits stage into one draft; Save is the persistence boundary. */
+#settings-target-actions, #settings-model-body, #settings-api-edit,
+#settings-evaluator-apply, #settings-chatgpt-apply,
+#settings-edit-runtime, #settings-edit-policy { display: none; }
+#settings-provider-list { height: 1fr; min-height: 4; }
+#settings-provider-query { height: 3; }
+#settings-section-chatgpt > .field-label { display: none; }
+#row-provider-reasoning-model, #provider-reasoning, #provider-reasoning-apply { display: none; }
+ModelDetailPage .drawer, ModelDetailPage.drawer-full .drawer { width: 100%; max-width: 100%; height: 100%; border: none; }
+#drawer-size-notice { display: none; height: auto; padding: 1; }
+BaseDrawer.too-small .drawer { display: none; }
+BaseDrawer.too-small #drawer-size-notice { display: block; }
+#results-detail-scroll { max-height: 100%; }
+#settings-account-list { height: 1fr; min-height: 4; }
+#settings-account-query { height: 3; }
+#settings-chatgpt-detail { height: auto; }
+#row-settings-chatgpt-profile, #settings-chatgpt-detail > .field-label { display: none; }
+#coordinates-detail-scroll.coordinate-detail-page { height: 1fr; max-height: 100%; }
+#launch-advanced CollapsibleTitle { display: none; }
+#choice-size-notice { display: none; height: auto; padding: 1; }
+ChoicePicker.too-small #choice-sheet { display: none; }
+ChoicePicker.too-small #choice-size-notice { display: block; }
+SettingsDrawer.settings-single .settings-section > .section-heading { display: none; }
+#launch-codex-model-label { display: none; }
+#launch-advanced .field-label { display: none; }

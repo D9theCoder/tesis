@@ -14,7 +14,9 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.message import Message
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Button, ContentSwitcher, DataTable, Input, Label, Select, Static, Tab, Tabs
+from textual.widgets import Button, ContentSwitcher, DataTable, Input, Label, OptionList, Select, Static, Tab, Tabs
+from textual.widgets.option_list import Option
+from tesis.tui_rows import ControlRow
 
 from tesis.artifact_repository import ArtifactRepository, config_fingerprint
 from tesis.config_loader import load_and_resolve_config
@@ -23,7 +25,8 @@ from tesis.tui_commands import BaseDrawer
 import tesis.tui_commands as tui_commands
 import tesis.tui_security as tui_security
 import tesis.tui_state as tui_state
-from tesis.tui_widgets import KeyboardActions, KeyboardTable, KeyboardTabs, execution_summary, key_hints, summary_rows
+from tesis.tui_choices import ChoiceSelect
+from tesis.tui_widgets import KeyboardActions, KeyboardTable, KeyboardTabs, PaletteInput, execution_summary, key_hints, summary_rows
 
 
 DETAIL_LOG_MAX_LINES = 2_000
@@ -46,6 +49,9 @@ class CoordinateDrawer(BaseDrawer):
         self._tesis_closing = False
         self._coordinate_generation = 0
         self._rows: dict[int, Any] = {}
+        self._mission = None
+        self._live_signature = None
+        self._detail_page = False
         self._filters: dict[str, str] = {}
         self._populating = False
 
@@ -54,12 +60,47 @@ class CoordinateDrawer(BaseDrawer):
         with Horizontal(id="coordinates-filters", classes="filters"):
             yield Label("Filters", id="coordinates-filters-label")
             for select_id, attr in self.FILTER_FIELDS:
-                yield Select([], prompt=attr, id=select_id, allow_blank=True)
+                yield ChoiceSelect([], prompt=attr, id=select_id, allow_blank=True)
+        yield PaletteInput(placeholder="Search coordinates", id="coordinates-query", list_selector="#coordinates-table")
+        with KeyboardActions(id="coordinates-filter-actions"):
+            yield Button("Filters", id="coordinates-filter-open")
+            yield Button("Clear filters", id="coordinates-filter-clear")
+            yield Static("", id="coordinates-active-filters", markup=False)
         yield KeyboardTable(id="coordinates-table")
         with VerticalScroll(id="coordinates-detail-scroll"):
             yield Static("Select a row and press Enter to inspect the coordinate",
                          id="coordinates-detail", markup=False)
         yield Static("Enter inspect · Esc back", id="coordinates-hint", markup=False)
+
+    @on(Input.Changed, "#coordinates-query")
+    def search_rows(self) -> None:
+        self._render_table()
+
+    @on(Input.Submitted, "#coordinates-query")
+    def inspect_search_result(self) -> None:
+        table = self.query_one("#coordinates-table", DataTable)
+        if table.row_count:
+            table.action_select_cursor()
+
+    @on(Button.Pressed, "#coordinates-filter-open")
+    def open_filters(self) -> None:
+        from tesis.tui_filters import FilterPage
+        values = {attr: [value for _, value in self.query_one(f"#{identifier}", Select)._options if value is not Select.NULL]
+                  for identifier, attr in self.FILTER_FIELDS}
+        def applied(result: Any) -> None:
+            if result is not None:
+                self._filters = dict(result)
+                for identifier, attr in self.FILTER_FIELDS:
+                    self.query_one(f"#{identifier}", Select).value = result.get(attr, Select.NULL)
+                self._render_table()
+        self.app.push_screen(FilterPage(self.FILTER_FIELDS, values, self._filters), applied)
+
+    @on(Button.Pressed, "#coordinates-filter-clear")
+    def clear_filters(self) -> None:
+        self._filters.clear()
+        for identifier, _ in self.FILTER_FIELDS:
+            self.query_one(f"#{identifier}", Select).value = Select.NULL
+        self._render_table()
 
     def on_mount(self) -> None:
         from tesis.tui_mission import MissionControlScreen
@@ -77,21 +118,51 @@ class CoordinateDrawer(BaseDrawer):
         mission = next(
             (s for s in self.app.screen_stack if isinstance(s, MissionControlScreen)), None
         )
-        self._rows = dict(getattr(getattr(mission, "state", None), "coordinates", {}) or {})
+        self._mission = mission
+        saved = getattr(mission, "_coordinate_browse_state", {})
+        self._filters = dict(saved.get("filters", {}))
+        self.query_one("#coordinates-query", Input).value = saved.get("query", "")
+        self._rows = getattr(getattr(mission, "state", None), "coordinates", {}) or {}
         self._populate_filter_options()
         self._render_table()
         _stack_filter_row(self, "#coordinates-filters")
         table = self.query_one("#coordinates-table", DataTable)
         selected = getattr(getattr(mission, "state", None), "selected_coordinate", None)
-        if selected in self._rows:
-            table.move_cursor(row=sorted(self._rows).index(selected))
+        keys = [key.value for key in table.rows]
+        if str(selected) in keys:
+            table.move_cursor(row=keys.index(str(selected)))
             self._show_coordinate(int(selected))
+        table.scroll_to(y=saved.get("scroll", 0), animate=False)
+        self._browse_query = self.query_one("#coordinates-query", Input)
+        self._browse_table = table
         table.focus()
+        self.set_interval(0.1, self._sync_live_coordinates)
+
+    def _sync_live_coordinates(self) -> None:
+        if self._tesis_closing or self._mission is None:
+            return
+        rows = self._mission.state.coordinates
+        signature = tuple((index, row.status, row.execution_status, row.security_outcome, row.provider,
+                           row.surface, row.level, row.mode, row.selected_method, row.elapsed, row.finding_count)
+                          for index, row in sorted(rows.items()))
+        if signature != self._live_signature:
+            self._live_signature = signature
+            self._rows = rows
+            self._populate_filter_options()
+            self._render_table()
+            selected = self._mission.state.selected_coordinate
+            if self._detail_page and selected in rows:
+                self._show_coordinate(selected)
 
     def on_resize(self, event: Any) -> None:
         _stack_filter_row(self, "#coordinates-filters")
 
     def _matches(self, row: Any) -> bool:
+        query = self.query_one("#coordinates-query", Input).value.casefold().strip()
+        text = " ".join(str(getattr(row, attr, "") or "") for attr in
+                        ("index", "status", "provider", "surface", "level", "mode", "selected_method", "target_method"))
+        if query and query not in text.casefold():
+            return False
         for attr, expected in self._filters.items():
             if not expected:
                 continue
@@ -111,7 +182,11 @@ class CoordinateDrawer(BaseDrawer):
                 values = sorted({str(getattr(row, attr)) for row in self._rows.values()
                                  if getattr(row, attr) not in (None, "")})
                 try:
+                    saved = self._filters.get(attr)
+                    if saved and saved not in values:
+                        values.append(saved)
                     select.set_options([(value, value) for value in values])
+                    select.value = saved if saved else Select.NULL
                 except Exception:
                     pass
         finally:
@@ -119,7 +194,7 @@ class CoordinateDrawer(BaseDrawer):
 
     @on(Select.Changed)
     def filter_changed(self, event: Select.Changed) -> None:
-        if self._populating:
+        if self._populating or event.value != event.select.value:
             return
         attr = dict(self.FILTER_FIELDS).get(event.select.id or "")
         if attr is None:
@@ -132,6 +207,8 @@ class CoordinateDrawer(BaseDrawer):
 
         try:
             table = self.query_one("#coordinates-table", DataTable)
+            selected = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value if table.row_count else None
+            cursor, scroll = table.cursor_row, table.scroll_y
             table.clear()
             for index, row in sorted(self._rows.items()):
                 if not self._matches(row):
@@ -149,6 +226,11 @@ class CoordinateDrawer(BaseDrawer):
                     _cell(getattr(row, "elapsed", None)),
                     key=str(index),
                 )
+            keys = [key.value for key in table.rows]
+            table.move_cursor(row=keys.index(selected) if selected in keys else min(cursor, max(0, len(keys) - 1)))
+            table.scroll_to(y=scroll, animate=False)
+            self.query_one("#coordinates-active-filters", Static).update(
+                " · ".join(f"{key}={value}" for key, value in self._filters.items() if value) or "No filters")
         except Exception:
             pass
 
@@ -156,12 +238,18 @@ class CoordinateDrawer(BaseDrawer):
     def inspect_row(self, event: DataTable.RowSelected) -> None:
         key = str(event.row_key.value) if event.row_key is not None else ""
         if key.isdigit():
+            self._detail_page = True
+            for selector in ("#coordinates-table", "#coordinates-query", "#coordinates-filter-actions"):
+                self.query_one(selector).display = False
+            self.query_one("#coordinates-detail-scroll").add_class("coordinate-detail-page")
             self._show_coordinate(int(key))
 
     def _show_coordinate(self, index: int) -> None:
         row = self._rows.get(index)
         if row is None:
             return
+        if self._mission is not None:
+            self._mission.state.selected_coordinate = index
         reason = row.security_outcome_reason or {}
         detail = summary_rows([
             ("Coordinate", index), ("Execution", row.execution_status or row.status),
@@ -175,9 +263,26 @@ class CoordinateDrawer(BaseDrawer):
         ], label_width=18)
         self.query_one("#coordinates-detail", Static).update(str(redact_secrets(detail.plain))[:4000])
 
+    def action_back(self) -> None:
+        if self._detail_page:
+            self._detail_page = False
+            for selector in ("#coordinates-table", "#coordinates-query", "#coordinates-filter-actions"):
+                self.query_one(selector).display = True
+            self.query_one("#coordinates-detail-scroll").remove_class("coordinate-detail-page")
+            self.query_one("#coordinates-table", DataTable).focus()
+            return
+        super().action_back()
+
     def prepare_shutdown(self) -> None:
+        if self._mission is not None and hasattr(self, "_browse_query"):
+            self._mission._coordinate_browse_state = {
+                "query": self._browse_query.value,
+                "filters": dict(self._filters), "scroll": self._browse_table.scroll_y}
         self._tesis_closing = True
         self._coordinate_generation += 1
+
+    def on_unmount(self) -> None:
+        self.prepare_shutdown()
 
 
 class EvidenceDrawer(BaseDrawer):
@@ -565,6 +670,7 @@ class ResultsDrawer(BaseDrawer):
         self._selected_item = None
         self._selected_key: str | None = None
         self._details = False
+        self._detail_page = False
 
     def compose(self) -> ComposeResult:
         yield Label("Results (Esc to close)", id="results-title")
@@ -573,8 +679,13 @@ class ResultsDrawer(BaseDrawer):
             with Horizontal(id="results-filters", classes="filters"):
                 yield Label("Filters", id="results-filters-label")
                 for select_id, _ in self.FILTER_FIELDS:
-                    yield Select([], prompt=select_id.removeprefix("filter-"), id=select_id,
+                    yield ChoiceSelect([], prompt=select_id.removeprefix("filter-"), id=select_id,
                                  allow_blank=True)
+        yield PaletteInput(placeholder="Search saved runs", id="results-query", list_selector="#results-table")
+        with KeyboardActions(id="results-filter-actions"):
+            yield Button("Filters", id="results-filter-open")
+            yield Button("Clear filters", id="results-filter-clear")
+            yield Static("", id="results-active-filters", markup=False)
         yield KeyboardTable(id="results-table")
         with VerticalScroll(id="results-detail-scroll", classes="drawer-body"):
             yield Static("Select a row and press Enter for triage detail", id="results-detail", markup=False)
@@ -584,6 +695,36 @@ class ResultsDrawer(BaseDrawer):
             yield Button("Review payload evidence", id="results-review")
         yield Static("", id="results-status", markup=False)
         yield Static(key_hints(("Enter", "inspect"), ("d", "details"), ("Tab", "focus"), ("Esc", "close")), classes="drawer-hint")
+
+    @on(Input.Changed, "#results-query")
+    def search_rows(self) -> None:
+        self._render_table()
+
+    @on(Input.Submitted, "#results-query")
+    def inspect_search_result(self) -> None:
+        table = self.query_one("#results-table", DataTable)
+        if table.row_count:
+            table.action_select_cursor()
+
+    @on(Button.Pressed, "#results-filter-open")
+    def open_filters(self) -> None:
+        from tesis.tui_filters import FilterPage
+        values = {attr: [value for _, value in self.query_one(f"#{identifier}", Select)._options if value is not Select.NULL]
+                  for identifier, attr in self.FILTER_FIELDS}
+        def applied(result: Any) -> None:
+            if result is not None:
+                self._filters = dict(result)
+                for identifier, attr in self.FILTER_FIELDS:
+                    self.query_one(f"#{identifier}", Select).value = result.get(attr, Select.NULL)
+                self._render_table()
+        self.app.push_screen(FilterPage(self.FILTER_FIELDS, values, self._filters), applied)
+
+    @on(Button.Pressed, "#results-filter-clear")
+    def clear_filters(self) -> None:
+        self._filters.clear()
+        for identifier, _ in self.FILTER_FIELDS:
+            self.query_one(f"#{identifier}", Select).value = Select.NULL
+        self._render_table()
 
     def on_mount(self) -> None:
         try:
@@ -651,12 +792,15 @@ class ResultsDrawer(BaseDrawer):
 
     def _visible_items(self) -> list:
         active = {key: value for key, value in self._filters.items() if value}
+        query = self.query_one("#results-query", Input).value.casefold().strip()
+        items = [item for item in self._items if not query or query in " ".join(
+            str(getattr(item, attr, "") or "") for attr in ("run_id", "execution_id", "provider", "surface", "security_level", "status")).casefold()]
         if not active:
-            return list(self._items)
+            return items
         try:
-            return list(ArtifactRepository(self._output_dir()).filter(self._items, **active))
+            return list(ArtifactRepository(self._output_dir()).filter(items, **active))
         except Exception:
-            return list(self._items)
+            return items
 
     def _populate_filter_options(self) -> None:
         self._populating = True
@@ -669,7 +813,11 @@ class ResultsDrawer(BaseDrawer):
                 values = sorted({str(getattr(item, attr)) for item in self._items
                                  if getattr(item, attr) not in (None, "")})
                 try:
+                    saved = self._filters.get(attr)
+                    if saved and saved not in values:
+                        values.append(saved)
                     select.set_options([(value, value) for value in values])
+                    select.value = saved if saved else Select.NULL
                 except Exception:
                     pass
         finally:
@@ -677,7 +825,7 @@ class ResultsDrawer(BaseDrawer):
 
     @on(Select.Changed)
     def filter_changed(self, event: Select.Changed) -> None:
-        if self._populating:
+        if self._populating or event.value != event.select.value:
             return
         attr = dict(self.FILTER_FIELDS).get(event.select.id or "")
         if attr is None:
@@ -689,10 +837,13 @@ class ResultsDrawer(BaseDrawer):
         visible = self._visible_items()
         try:
             table = self.query_one("#results-table", DataTable)
+            selected = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value if table.row_count else None
+            cursor, scroll = table.cursor_row, table.scroll_y
             table.clear()
             self._row_items.clear()
             for index, item in enumerate(visible[:500]):
-                key = f"result-{index}"
+                key = str((str(getattr(item, "path", "")), getattr(item, "item_index", None),
+                           getattr(item, "execution_id", None), getattr(item, "run_id", None)))
                 self._row_items[key] = item
                 table.add_row(
                     self._cell(item, "run_id", "execution_id"),
@@ -702,6 +853,11 @@ class ResultsDrawer(BaseDrawer):
                     self._cell(item, "security_level"),
                     key=key,
                 )
+            keys = [key.value for key in table.rows]
+            table.move_cursor(row=keys.index(selected) if selected in keys else min(cursor, max(0, len(keys) - 1)))
+            table.scroll_to(y=scroll, animate=False)
+            self.query_one("#results-active-filters", Static).update(
+                " · ".join(f"{key}={value}" for key, value in self._filters.items() if value) or "No filters")
             summary = (
                 f"{len(visible)}/{len(self._items)} artifacts match filters — scores missing render as —"
                 if len(visible) != len(self._items)
@@ -815,6 +971,10 @@ class ResultsDrawer(BaseDrawer):
         item = self._find_item(key)
         if item is None:
             return
+        self._detail_page = True
+        for selector in ("#results-table", "#results-query", "#results-filter-actions", "#results-summary"):
+            self.query_one(selector).display = False
+        self.query_one("#results-detail-scroll").display = True
         self._selected_path = Path(str(getattr(item, "path", "")))
         self._selected_item = item
         self._selected_key = key
@@ -844,6 +1004,16 @@ class ResultsDrawer(BaseDrawer):
             self.query_one("#results-detail", Static).update(body[:20000])
         except Exception:
             pass
+
+    def action_back(self) -> None:
+        if self._detail_page:
+            self._detail_page = False
+            for selector in ("#results-table", "#results-query", "#results-filter-actions", "#results-summary"):
+                self.query_one(selector).display = True
+            self.query_one("#results-detail-scroll").display = False
+            self.query_one("#results-table", DataTable).focus()
+            return
+        super().action_back()
 
     @on(Button.Pressed, "#results-details")
     def action_details(self) -> None:
@@ -889,6 +1059,14 @@ class ResultsDrawer(BaseDrawer):
         self._scan_generation += 1
 
 
+class GradeRow(ControlRow):
+    BINDINGS = [Binding(str(grade), f"grade({grade})", str(grade), show=False) for grade in range(5)]
+
+    def action_grade(self, grade: int) -> None:
+        self.control_widget.value = grade
+        self.refresh_value()
+
+
 class ReviewDrawer(BaseDrawer):
     """One saved execution, independent review workflows; all disk/model work off-thread."""
 
@@ -912,17 +1090,24 @@ class ReviewDrawer(BaseDrawer):
         self.decisions = []
         self._tesis_closing = False
         self._review_busy = False
+        self._candidate_drafts: dict[str, tuple[Any, str, str]] = {}
+        self._active_candidate: str | None = None
+        self._candidate_detail = False
 
     def compose(self) -> ComposeResult:
         yield Label("Payload evidence review (Esc to close)")
         with VerticalScroll(classes="drawer-body"):
             yield Static("Loading frozen evidence…", id="review-status", markup=False)
-            yield Select([], prompt="Candidate", id="review-candidate")
-            yield Static("", id="review-evidence", markup=False)
-            yield Select([(str(i), i) for i in range(5)], prompt="Human grade 0–4", id="review-score")
-            yield Input(placeholder="Reviewer ID", id="review-reviewer")
-            yield Input(placeholder="Reason supported by the evidence", id="review-reason")
-            yield Button("Save human grade", id="review-save", disabled=True)
+            yield ChoiceSelect([], prompt="Candidate", id="review-candidate", classes="row-value-storage")
+            yield PaletteInput(placeholder="Search candidates", id="review-query", list_selector="#review-candidates")
+            yield OptionList(id="review-candidates")
+            with Vertical(id="review-candidate-detail"):
+                yield Static("", id="review-identity", markup=False)
+                yield Static("", id="review-evidence", markup=False)
+                yield GradeRow("Grade (0-4 only while this row is focused)", ChoiceSelect([(str(i), i) for i in range(5)], prompt="Human grade 0-4", id="review-score"))
+                yield Input(placeholder="Reviewer ID", id="review-reviewer")
+                yield Input(placeholder="Reason supported by the evidence", id="review-reason")
+                yield Button("Save / Next pending", id="review-save", disabled=True)
             yield Button("Run configured AI evaluator", id="review-ai", disabled=True)
 
     def on_mount(self) -> None:
@@ -963,8 +1148,20 @@ class ReviewDrawer(BaseDrawer):
         pending = [r for r in queue['candidates'] if r['status'] == 'pending_review']
         select = self.query_one("#review-candidate", Select)
         select.set_options([(f"{r['candidate_id']} · ceiling {r['proof_ceiling']}", r['candidate_id']) for r in pending])
-        if pending:
-            select.value = pending[0]['candidate_id']
+        current = self._active_candidate
+        candidate_ids = [row['candidate_id'] for row in pending]
+        mode = 'ai' if queue['selection'] == 'ai' else 'human'
+        grades = {grade['candidate_id']: grade.get('score') for grade in
+                  result['workflows'].get(mode, {}).get('candidate_grades', [])}
+        pending_ids = [cid for cid in candidate_ids if grades.get(cid) is None]
+        reviewed = {cid for cid, score in grades.items() if score is not None}
+        if current in reviewed:
+            self._active_candidate = None
+            self._candidate_drafts.pop(current, None)
+        select.value = current if current in pending_ids else pending_ids[0] if pending_ids else candidate_ids[0] if candidate_ids else Select.NULL
+        self._candidate_drafts = {cid: draft for cid, draft in self._candidate_drafts.items() if cid in candidate_ids}
+        self.filter_candidates()
+        self.query_one("#review-candidate-detail").display = self._candidate_detail and bool(pending)
         self.query_one("#review-save", Button).disabled = queue['selection'] == 'ai' or not pending
         self.query_one("#review-ai", Button).disabled = queue['selection'] == 'human' or not queue['evaluator'] or not pending
         self._status("\n".join([f"Selection: {queue['selection']} · {queue['rubric_version']} · source SHA256: {queue['source_sha256']}",
@@ -972,6 +1169,62 @@ class ReviewDrawer(BaseDrawer):
             *[f"{mode}: {info['status']} · Spayload={info['Spayload_final']} · Srun={info['Srun_final']} · {info['reason'] or ''}"
                 for mode, info in result['workflows'].items()]]))
         self.show_candidate()
+        if not pending_ids:
+            self._candidate_detail = False
+            self.query_one("#review-candidate-detail").display = False
+            self.query_one("#review-candidates").display = True
+            self.query_one("#review-query").display = True
+        elif self._candidate_detail:
+            self.query_one(GradeRow).focus()
+
+    @on(Input.Changed, "#review-query")
+    def filter_candidates(self) -> None:
+        options = self.query_one("#review-candidates", OptionList)
+        selected = options.get_option_at_index(options.highlighted).id if options.highlighted is not None else self._active_candidate
+        options.clear_options()
+        if not self.queue:
+            return
+        query = self.query_one("#review-query", Input).value.casefold().strip()
+        rows = [row for row in self.queue['candidates'] if row['status'] == 'pending_review'
+                and query in str(row['candidate_id']).casefold()]
+        for row in rows:
+            options.add_option(Option(f"{row['candidate_id']} · ceiling {row['proof_ceiling']}", id=row['candidate_id']))
+        ids = [row['candidate_id'] for row in rows]
+        options.highlighted = ids.index(selected) if selected in ids else 0 if ids else None
+
+    @on(Input.Submitted, "#review-query")
+    @on(OptionList.OptionSelected, "#review-candidates")
+    def open_candidate(self) -> None:
+        options = self.query_one("#review-candidates", OptionList)
+        if options.highlighted is None:
+            return
+        cid = options.get_option_at_index(options.highlighted).id
+        self.query_one("#review-candidate", Select).value = cid
+        self._candidate_detail = True
+        self.query_one("#review-candidate-detail").display = True
+        self.query_one("#review-candidates").display = False
+        self.query_one("#review-query").display = False
+        self.show_candidate()
+        self.query_one(GradeRow).focus()
+
+    def action_back(self) -> None:
+        if self._review_busy:
+            self._status("Review work is running. Wait for completion before leaving.")
+            return
+        if self._candidate_detail:
+            self._candidate_detail = False
+            self.query_one("#review-candidate-detail").display = False
+            self.query_one("#review-candidates").display = True
+            self.query_one("#review-query").display = True
+            self.query_one("#review-query", Input).focus()
+            return
+        super().action_back()
+
+    def prepare_navigation(self) -> bool:
+        if self._review_busy or self._candidate_drafts or self.query_one("#review-reason", Input).value or self.query_one("#review-score", Select).value is not Select.NULL:
+            self._status("Save the candidate decision or explicitly close Review before changing workspace.")
+            return False
+        return True
 
     @on(Select.Changed, "#review-candidate")
     def show_candidate(self) -> None:
@@ -980,6 +1233,18 @@ class ReviewDrawer(BaseDrawer):
         cid = self.query_one("#review-candidate", Select).value
         row = next((r for r in self.queue['candidates'] if r['candidate_id'] == cid), None)
         if row:
+            if cid != self._active_candidate:
+                if self._active_candidate:
+                    self._candidate_drafts[self._active_candidate] = (
+                        self.query_one("#review-score", Select).value,
+                        self.query_one("#review-reviewer", Input).value,
+                        self.query_one("#review-reason", Input).value)
+                self._active_candidate = str(cid)
+                grade, reviewer, reason = self._candidate_drafts.get(str(cid), (Select.NULL, "", ""))
+                self.query_one("#review-score", Select).value = grade
+                self.query_one("#review-reviewer", Input).value = reviewer
+                self.query_one("#review-reason", Input).value = reason
+            self.query_one("#review-identity", Static).update(f"Candidate {cid} · proof ceiling {row['proof_ceiling']}")
             evidence = {k: row[k] for k in ('candidate', 'proof_ceiling', 'evidence_refs', 'evidence')}
             self.query_one("#review-evidence", Static).update(json.dumps(redact_secrets(evidence), indent=2)[:20000])
 
@@ -1100,6 +1365,13 @@ class DoctorDrawer(BaseDrawer):
 
     def on_unmount(self) -> None:
         self.prepare_shutdown()
+
+    def cancel_local_operation(self) -> bool:
+        if self._doctor_process is None:
+            return False
+        self._stop_checks()
+        self.query_one("#doctor-summary", Static).update("Checks canceled.")
+        return True
 
     def _stop_checks(self) -> None:
         process = self._doctor_process
@@ -1282,7 +1554,7 @@ class PlanDrawer(BaseDrawer):
     def configure_run(self, event: Button.Pressed) -> None:
         from tesis.tui_forms import LaunchDrawer
 
-        self.app.push_screen(LaunchDrawer(mode="matrix" if event.button.id == "plan-matrix" else "single"))
+        tui_commands.open_workspace(self.app, LaunchDrawer(mode="matrix" if event.button.id == "plan-matrix" else "single"))
 
     def _set(self, text: str) -> None:
         try:
@@ -1311,7 +1583,11 @@ class HelpDrawer(BaseDrawer):
         yield Static(key_hints(("←/→", "tab"), ("Tab", "focus"), ("PgUp/PgDn", "scroll"), ("Esc", "close")), classes="drawer-hint")
 
     def on_mount(self) -> None:
+        origin = self.app.screen_stack[-2] if len(self.app.screen_stack) > 1 else self
+        context = tui_commands.keyboard_context(origin)
         self.query_one("#help-body", Static).update(summary_rows([
+            ("Current context", context),
+            ("Ctrl+Q", "Deliberate force exit"),
             ("Tab / Shift+Tab", "Next / previous interactive panel"),
             ("↑ / ↓", "Select an item in the focused list"),
             ("← / →", "Change tabs or move horizontal controls"),
@@ -1322,9 +1598,9 @@ class HelpDrawer(BaseDrawer):
             ("PgUp / PgDn", "Scroll the focused list or viewport"),
             ("Home / End", "First / last item or viewport boundary"),
             ("1 / 2 / 3 / 4", "Pipeline / runs / evidence / activity"),
-            ("Ctrl+C", "Cancel a run; press again to exit"),
+            ("Ctrl+C", "Copy selection, cancel local work, or cancel run"),
             ("Ctrl+S", "Save settings"),
-            ("Ctrl+E", "Open the settings YAML editor"),
+            ("F4 / F6", "Advanced YAML / Settings categories"),
             ("", "\nText fields keep normal typing and editing keys."),
         ], label_width=18))
         self.query_one("#help-command-body", Static).update(summary_rows([

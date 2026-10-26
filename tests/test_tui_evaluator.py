@@ -69,14 +69,15 @@ def test_evaluator_selection_is_staged_saved_and_keyboard_reachable(evaluator_co
             details = str(drawer.query_one("#settings-evaluator-details", Static).content)
             assert "OpenAI Responses" in details and "https://responses.invalid/v1" in details
             assert "offline-evaluator-secret" not in details
-            apply = drawer.query_one("#settings-evaluator-apply", Button)
-            apply.focus()
-            apply.scroll_visible(animate=False)
+            row = drawer.query_one("#row-settings-evaluator-timeout")
+            drawer.enter_section()
+            row.focus()
+            row.scroll_visible(animate=False)
             await pilot.pause()
-            assert apply.region.overlaps(app.screen.region)
+            assert row.region.overlaps(app.screen.region)
             EVIDENCE.mkdir(parents=True, exist_ok=True)
             (EVIDENCE / f"settings-{size[0]}x{size[1]}.svg").write_text(app.export_screenshot())
-            await pilot.press("enter")
+            drawer.apply_evaluator()
             await pilot.pause()
             staged = parse_yaml_config(drawer.query_one("#yaml-editor", TextArea).text)
             assert staged["provider"] == model_profile_id("gateway", "first")
@@ -117,9 +118,11 @@ def test_invalid_limits_and_removed_models_do_not_change_the_saved_evaluator(eva
             payload["api_providers"]["gateway"]["models"] = ["second"]
             drawer.query_one("#yaml-editor", TextArea).text = dump_yaml_config(payload)
             await pilot.pause(0.3)
-            assert drawer.query_one("#settings-evaluator-provider", Select).value is Select.NULL
+            # Unconfirmed invalid edits and saved identities survive an unrelated YAML refresh.
+            assert drawer.query_one("#settings-evaluator-provider", Select).value == model_profile_id("gateway", "first")
+            assert drawer.query_one("#settings-evaluator-tokens", Input).value == "0"
             drawer.apply_evaluator()
-            assert "Choose a saved provider" in str(drawer.query_one("#settings-evaluator-status", Static).content)
+            assert "unavailable" in str(drawer.query_one("#settings-evaluator-status", Static).content)
             await pilot.press("escape")
             assert evaluator_config.read_bytes() == original
     asyncio.run(scenario())

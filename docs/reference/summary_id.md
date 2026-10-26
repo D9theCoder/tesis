@@ -61,12 +61,17 @@ menampilkan objek model atau kredensial. Identitas profile, pewarisan reasoning
 per role, dan konfigurasi evaluator independen tetap dipertahankan. Lihat
 [desain TUI](tui-design.md) untuk aturan keyboard serta cakupan bukti validasi.
 
-Settings menyajikan konfigurasi dalam baris berlabel dan form evaluator yang
-ringkas. Up/Down memilih kategori, sedangkan Left/Right memindahkan fokus antara
-daftar kategori, isi, dan panel konteks evaluator yang tersedia pada layar lebar.
-Input teks tetap memakai tombol panah untuk memindahkan kursor. Selector memakai
-daftar opsi teks, sementara pilihan boolean dan pilihan jamak memakai penanda
-ASCII `[*]` dan `[-]` di seluruh TUI, termasuk pemilihan model provider.
+Settings memakai baris label/nilai yang dapat dipilih dan editor bertipe pada
+halaman anak. F6 membuka kategori, F4 membuka Advanced YAML, dan isian teks tetap
+memakai tombol penyuntingan bawaan. Pemilih dengan kueri terlihat memakai
+pencarian, panah, Enter, dan Escape yang sama. Pilihan jamak memakai Space dan
+Apply eksplisit. Edit yang dikonfirmasi masuk ke satu *draft* konfigurasi yang
+mempertahankan format YAML. Save menyertakan edit form yang masih tertunda atau
+menampilkan kegagalan validasi. Membuka kembali *workspace* mempertahankan
+*draft*. Pada 80x24 dan 60x18, Settings menampilkan satu halaman dengan aksi tetap.
+Di bawah batas itu, pemberitahuan ukuran menyimpan *workspace* sampai terminal
+diperbesar. Results memakai halaman daftar/detail yang dapat dicari, sedangkan
+keputusan review tetap terikat pada identitas kandidat.
 
 Redraw UI memakai kembali proyeksi konfigurasi dan draft sampai input sumbernya
 berubah. Preview peluncuran dan kontrol yang berasal dari YAML memakai debounce
@@ -202,8 +207,9 @@ di YAML dengan ID model yang persis sama. Setiap model dapat menyimpan effort
 sendiri melalui `model_options`. Model yang belum dikenal menampilkan peringatan
 merah, isian effort, dan pilihan *fallback* `off`, `minimal`, `low`, `medium`,
 `high`, `xhigh`, `max`. Effort yang belum diketahui harus melewati pemeriksaan
-dukungan provider dengan permintaan teks sederhana sebelum Apply/Start pada TUI.
-Penerimaan permintaan belum membuktikan penalaran internal. Effort evaluator dan
+dukungan provider melalui aksi Check support eksplisit. Apply/Start diblokir
+sampai dukungan tersedia dan tidak memulai permintaan tersebut. Penerimaan
+permintaan belum membuktikan penalaran internal. Effort evaluator dan
 pilihan model Codex tetap terpisah dari *role* eksperimen. Metadata katalog tidak
 dikirim dalam permintaan inferensi.
 

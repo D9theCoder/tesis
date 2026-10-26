@@ -46,6 +46,8 @@ def test_manual_effort_is_checked_before_provider_draft_can_be_applied(tmp_path,
             await pilot.pause()
             drawer.apply_provider()
             assert app.result is None
+            assert not calls
+            control.check_support()
             for _ in range(50):
                 await pilot.pause(0.01)
                 if control._checked:

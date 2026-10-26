@@ -1170,11 +1170,15 @@ def test_launch_drawer_has_four_steps_and_frozen_review_count(monkeypatch):
                 assert drawer.query_one("#launch-step-review").display
                 review = str(drawer.query_one("#launch-review").render()).lower()
                 assert "fingerprint" in review, f"{mode} review must show fingerprint"
-                assert "coordinates=" in review, f"{mode} review must show coordinate count"
+                if mode == "matrix":
+                    assert "coordinates" in review, "matrix Review must show coordinate count"
                 assert drawer.query_one("#launch-start").display, (
                     "Review is the only step that offers Start"
                 )
                 await pilot.press("escape")
+                await pilot.pause()
+                assert drawer._step == 2, "Escape returns to the prior setup step"
+                drawer.close_drawer()
                 await pilot.pause()
 
     asyncio.run(scenario())
@@ -1513,8 +1517,10 @@ def test_idle_readiness_stays_visible_at_standard_and_narrow():
     asyncio.run(scenario((60, 18)))
 
 
-def test_overlays_dismiss_below_the_floor_but_help_stays():
+def test_workspaces_preserve_instances_below_floor_and_help_stays(monkeypatch):
     _require("MissionControlScreen")
+    monkeypatch.setattr(tui.DoctorDrawer, "_start_checks", lambda *_, **__: None)
+    monkeypatch.setattr(tui.ResultsDrawer, "refresh_scan", lambda *_: None)
 
     async def opens_below_floor(drawer_factory) -> str:
         app = tui.TesisApp()
@@ -1528,19 +1534,20 @@ def test_overlays_dismiss_below_the_floor_but_help_stays():
                 await pilot.pause()
             return active
 
-    # Every captured overlay except Help must refuse to stay below 60x18.
+    # Workspaces retain their state behind a size notice; the transient launcher closes.
     for factory in (tui.LaunchDrawer, tui.CommandLauncher, tui.CoordinateDrawer,
                     tui.EvidenceDrawer, tui.ResultsDrawer, tui.DoctorDrawer,
                     tui.SettingsDrawer, tui.PlanDrawer, tui.FailureDrawer,
                     tui.TraceDrawer, tui.AboutDrawer):
         active = asyncio.run(opens_below_floor(factory))
-        assert active == "MissionControlScreen", f"{factory.__name__} must dismiss below the floor"
+        expected = "MissionControlScreen" if factory is tui.CommandLauncher else factory.__name__
+        assert active == expected, f"{factory.__name__} must preserve its workspace below the floor"
 
     # Help is the documented exception: it is one of the two actions left.
     assert asyncio.run(opens_below_floor(tui.HelpDrawer)) == "HelpDrawer"
 
 
-def test_open_overlay_dismisses_when_resized_below_the_floor():
+def test_open_workspace_recovers_when_resized_below_the_floor():
     _require("MissionControlScreen")
 
     async def scenario() -> None:
@@ -1553,8 +1560,8 @@ def test_open_overlay_dismisses_when_resized_below_the_floor():
             await pilot.resize_terminal(59, 17)
             await pilot.pause()
             await pilot.pause()
-            assert not isinstance(app.screen, tui.CoordinateDrawer), (
-                "a drawer must dismiss when the terminal drops below the floor"
+            assert isinstance(app.screen, tui.CoordinateDrawer), (
+                "the coordinate workspace must survive a temporary below-floor resize"
             )
             assert app.screen.has_class("too-small")
             assert "Terminal too small" in _svg_text(app)
@@ -2403,6 +2410,10 @@ def test_launch_inputs_resolve_into_the_review(monkeypatch):
         return cfg
 
     monkeypatch.setattr(tui_forms, "load_and_resolve_config", resolver)
+    monkeypatch.setattr(LaunchDrawer, "_raw_config", lambda self: {
+        "provider": "openai_compatible", "models": {
+            name: {"provider": name, "model_name": "test-model"}
+            for name in ("openai", "openai_compatible")}})
 
     async def scenario() -> None:
         from textual.widgets import Input, Select
@@ -2557,7 +2568,7 @@ def test_evidence_and_failure_drawers_expand_selected_records():
     asyncio.run(scenario())
 
 
-def test_results_drawer_stacks_filters_at_eighty_columns(tmp_path, monkeypatch):
+def test_results_filters_use_a_child_page_and_leave_table_space(tmp_path, monkeypatch):
     ResultsDrawer = _require("ResultsDrawer")
     artifact_dir = tmp_path / "results"
     artifact_dir.mkdir()
@@ -2572,31 +2583,24 @@ def test_results_drawer_stacks_filters_at_eighty_columns(tmp_path, monkeypatch):
     async def scenario() -> None:
         from textual.widgets import DataTable, Select
 
-        # A drawer is a 76-cell panel whatever the terminal width, so the
-        # filters stack in it at every size at or above the floor.
-        for width, height in ((80, 24), (120, 36)):
+        for width, height in ((60, 18), (80, 24), (120, 36)):
             app = tui.TesisApp()
             async with app.run_test(size=(width, height)) as pilot:
                 await pilot.pause()
                 await app.push_screen(ResultsDrawer())
                 await pilot.pause()
                 drawer = app.screen
-                assert drawer.query_one(".drawer").region.width == 76
-                row = drawer.query_one("#results-filters")
-                assert row.has_class("stacked"), (
-                    f"{width}x{height} must stack the filters for the 76-cell panel"
-                )
-                selects = list(row.query(Select))
-                assert len(selects) == 5, "all five filters stay available"
-                widths = [select.size.width for select in selects]
-                assert row.size.height >= 5, "stacked filters must occupy one row each"
-                assert min(widths) >= 40, f"{width}-column filters must not clip: {widths}"
                 table = drawer.query_one("#results-table", DataTable)
-                columns = [column.get_render_width(table) for column in table.ordered_columns]
-                assert sum(columns) <= table.size.width, (
-                    f"{width}x{height} result columns must fit the panel: "
-                    f"{sum(columns)} > {table.size.width}"
-                )
+                assert table.region.height > 0
+                assert drawer.query_one("#results-query").region.width > 0
+                drawer.open_filters()
+                await pilot.pause()
+                from tesis.tui_filters import FilterPage
+                assert isinstance(app.screen, FilterPage)
+                assert len(list(app.screen.query(Select))) == 5
+                await pilot.press("escape")
+                await pilot.pause()
+                assert app.screen is drawer
                 await pilot.press("escape")
                 await pilot.pause()
 
@@ -2937,7 +2941,7 @@ def test_launch_guardrail_controls_use_canonical_names_and_resolved_values(monke
     asyncio.run(scenario())
 
 
-def test_launch_off_registry_select_value_degrades_to_blank(monkeypatch):
+def test_launch_off_registry_select_value_retains_saved_identity(monkeypatch):
     LaunchDrawer = _require("LaunchDrawer")
 
     def resolver(**_kw):
@@ -2959,11 +2963,11 @@ def test_launch_off_registry_select_value_degrades_to_blank(monkeypatch):
             drawer = app.screen
             condition = drawer.query_one("#launch-field-experiment-condition", Select)
             surface = drawer.query_one("#launch-field-surface", Select)
-            assert condition.value is Select.NULL, "off-registry values must degrade to blank"
-            assert surface.value is Select.NULL
+            assert condition.value == "legacy_condition"
+            assert surface.value == "legacy_surface"
             submitted = drawer._cli_args()
-            assert "experiment_condition" not in submitted
-            assert "surface" not in submitted
+            assert submitted["experiment_condition"] == "legacy_condition"
+            assert submitted["surface"] == "legacy_surface"
             await pilot.press("escape")
             await pilot.pause()
 

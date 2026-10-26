@@ -59,11 +59,15 @@ retain profile identities, role-specific reasoning inheritance, and independent
 evaluator configuration. See the [TUI design](tui-design.md) for the keyboard
 contract and the distinction between implementation and validation evidence.
 
-Settings presents labeled configuration rows and compact evaluator forms.
-Up/Down selects categories; Left/Right moves between the category rail, content,
-and optional evaluator context while text inputs retain caret navigation.
-Selectors use plain option lists, and boolean/multiple selection uses ASCII
-`[*]` and `[-]` markers throughout the TUI, including provider model selection.
+Settings uses selectable label/value rows and typed child editors. F6 opens
+categories, F4 opens Advanced YAML, and text fields retain native editing keys.
+Visible-query choice sheets share search, arrow navigation, Enter, and Escape;
+multiple selection uses Space and explicit Apply. Confirmed edits stage into one
+round-trip draft, and Save includes pending form edits or reports validation
+failure. Reopening a workspace retains its draft. At 80x24 and 60x18 Settings
+shows one page with fixed actions; below that floor a size notice preserves the
+workspace for resize recovery. Results uses searchable list/detail pages and
+review decisions remain bound to candidate identity.
 
 UI redraws reuse configuration and draft projections until their source inputs
 change. Launch previews and YAML-derived controls debounce independently of
@@ -193,8 +197,9 @@ Reasoning choices use provider metadata or the exact-model `reasoning_catalog`
 in YAML. Each registered model can save its own effort under `model_options`.
 Unknown models show a red warning, editable effort, and fallback choices
 `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Explicit unknown efforts
-require a benign provider support check before TUI Apply/Start; acceptance does
-not establish internal reasoning. Evaluator effort and Codex model selection
+require an explicit Check support action before TUI confirmation. Apply/Start
+remain blocked while support is missing and never initiate that request;
+acceptance does not establish internal reasoning. Evaluator effort and Codex model selection
 remain independent of experiment roles. Catalog metadata never enters inference.
 
 The optional `openai_codex_auth` provider uses official Sign in with ChatGPT

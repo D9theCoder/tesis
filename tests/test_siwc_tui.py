@@ -64,11 +64,13 @@ def test_catalog_selection_updates_only_selected_profile_and_saves(settings_conf
             await _wait_catalog(pilot, drawer)
             picker = drawer.query_one("#settings-chatgpt-model", Select)
             assert not picker.disabled
-            apply_button = drawer.query_one("#settings-chatgpt-apply", Button)
-            apply_button.focus()
-            apply_button.scroll_visible(animate=False)
+            drawer.enter_section()
+            drawer.enter_account()
+            row = drawer.query_one("#row-settings-chatgpt-model")
+            row.focus()
+            row.scroll_visible(animate=False)
             await pilot.pause()
-            assert apply_button.region.overlaps(app.screen.region)
+            assert row.region.overlaps(app.screen.region)
             picker.value = "brand-new-model-a"
             await pilot.pause()
             drawer.apply_chatgpt_model()
