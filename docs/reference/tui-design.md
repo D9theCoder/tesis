@@ -139,8 +139,11 @@ and `1ce875a`:
   remain in the provider editor. Selected model profiles retain their stored
   IDs and coordinate identities.
 - ChatGPT sign-in has its own account/profile category and account-bound model
-  catalog. Selecting a catalog model stages that profile without silently
-  switching the experiment's primary provider. Unsupported output-token controls
+  catalog, with Sign in, Sign out, and Check status controls. Browser sign-in
+  offers a copyable one-time URL and Cancel sign-in; leaving Settings stops the
+  pending login. Account changes take effect immediately in private storage,
+  separately from Save. Selecting a catalog model stages that profile without
+  silently switching the experiment's primary provider. Unsupported output-token controls
   are disabled for a ChatGPT evaluator. Legacy model sections without an explicit
   provider infer the adapter from the profile key, matching the configuration
   loader for protocol labels and evaluator capabilities.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import sys
@@ -22,7 +23,8 @@ def _without_identity_hint(url: str) -> str:
 
 
 def browser_login(session: SIWCSession, account: str, *, port: int = 0,
-                  no_browser: bool = False, consent: bool = False) -> dict:
+                  no_browser: bool = False, consent: bool = False,
+                  on_authorize: Callable[[str], None] | None = None) -> dict:
     callbacks: list[str] = []
 
     class CallbackHandler(BaseHTTPRequestHandler):
@@ -56,14 +58,17 @@ def browser_login(session: SIWCSession, account: str, *, port: int = 0,
     with server:
         redirect = f"http://127.0.0.1:{server.server_port}/auth/callback"
         attempt, url = session.begin(account, redirect, consent=consent)
-        print("Continue with ChatGPT: approve TESIS and ChatGPT plan usage in your browser.", file=sys.stderr)
+        if on_authorize is not None:
+            on_authorize(_without_identity_hint(url))
+        else:
+            print("Continue with ChatGPT: approve TESIS and ChatGPT plan usage in your browser.", file=sys.stderr)
         opened = False
         if not no_browser:
             try:
                 opened = webbrowser.open(url)
             except webbrowser.Error:
                 pass
-        if not opened:
+        if not opened and on_authorize is None:
             print("Open this one-time URL in a browser on this host:", file=sys.stderr)
             print(_without_identity_hint(url), file=sys.stderr)
         server.timeout = 0.5
@@ -82,29 +87,44 @@ def main(argv: list[str] | None = None) -> int:
     login.add_argument("--port", type=int, default=0, help="Loopback port (default: an available port)")
     login.add_argument("--no-browser", action="store_true", help="Print a one-time URL for manual browser opening")
     login.add_argument("--enable-plan-usage", action="store_true", help="Explicitly request consent again for plan usage")
+    login.add_argument("--json-events", action="store_true", help="Emit JSON progress events for the TUI")
     status = commands.add_parser("status", help="Show saved account labels, connection status, and grant state")
     status.add_argument("--account", default=None)
     models = commands.add_parser("models", help="Fetch the selected account's current OpenAI model catalog")
     models.add_argument("--account", default="default")
     logout = commands.add_parser("logout", help="Revoke the renewable session and clear its local tokens")
     logout.add_argument("--account", default="default")
+    logout.add_argument("--json-events", action="store_true", help="Emit a JSON sign-out result for the TUI")
     args = parser.parse_args(argv)
+    json_events = getattr(args, "json_events", False)
+
+    def emit(event: str, **payload: object) -> None:
+        print(json.dumps({"event": event, **payload}), flush=True)
+
     try:
         session = SIWCSession()
         if args.command == "login":
             if not 0 <= args.port <= 65535:
                 parser.error("--port must be between 0 and 65535")
             result = browser_login(session, args.account, port=args.port,
-                                   no_browser=args.no_browser, consent=args.enable_plan_usage)
-            print(json.dumps(result, indent=2))
-            if not result[args.account]["plan_usage"]:
+                                   no_browser=args.no_browser, consent=args.enable_plan_usage,
+                                   on_authorize=(lambda url: emit("authorize", url=url)) if json_events else None)
+            if json_events:
+                emit("complete", accounts=result)
+            else:
+                print(json.dumps(result, indent=2))
+            if not json_events and not result[args.account]["plan_usage"]:
                 print("Identity connected. ChatGPT plan usage is disabled; inference is unavailable.", file=sys.stderr)
         elif args.command == "status":
             print(json.dumps(session.status(args.account), indent=2))
         elif args.command == "models":
             print(json.dumps(session.list_models(args.account), indent=2))
         elif args.command == "logout":
-            if session.logout(args.account):
+            revoked = session.logout(args.account)
+            if json_events:
+                emit("signed_out", remote_revoked=revoked)
+                return 0 if revoked else 1
+            if revoked:
                 print("Signed out. The saved client registration can be reused for later sign-in.")
             else:
                 print("Signed out locally. Remote revocation was not confirmed; disconnect TESIS in ChatGPT Settings.", file=sys.stderr)
@@ -113,6 +133,9 @@ def main(argv: list[str] | None = None) -> int:
         print("ChatGPT authorization cancelled.", file=sys.stderr)
         return 130
     except SIWCError as exc:
-        print(str(exc), file=sys.stderr)
+        if json_events:
+            emit("error", message=str(exc))
+        else:
+            print(str(exc), file=sys.stderr)
         return 1
     return 0

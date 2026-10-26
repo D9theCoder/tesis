@@ -214,6 +214,10 @@ Kredensial akun disimpan secara lokal dengan akses terbatas. Pilihan model
 pada Settings TUI diambil dari katalog terkini akun yang sudah masuk, atau ID
 model yang dimasukkan secara manual. Model tersimpan dapat digunakan tanpa
 mengambil ulang katalog.
+Settings > ChatGPT accounts juga menyediakan proses masuk melalui browser,
+pembatalan proses masuk, status lokal, dan keluar dari akun. Operasi akun
+langsung memperbarui penyimpanan kredensial privat, sedangkan perubahan profil
+model tetap memerlukan Save.
 *Preview* SIWC belum menerima parameter temperatur dan batas token keluaran,
 sehingga kontrol bersama tersebut tidak dikirim untuk provider ini dan
 keterbatasannya dicatat dalam telemetri pemanggilan. Batas token pada

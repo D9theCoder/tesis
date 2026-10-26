@@ -8,8 +8,20 @@ the public OpenAI Responses API.
 
 ## Connect an account
 
-Install the locked dependencies and start browser sign-in on the computer
-running TESIS:
+Open the TUI with `.venv/bin/python -m tesis run`, then go to **Settings >
+ChatGPT accounts**. Enter a local account label (for example, `default`) and
+choose **Sign in**. Complete ChatGPT approval in the browser on the computer
+running TESIS. If the browser does not open, use **Copy URL** or the displayed
+one-time URL. **Cancel sign-in** stops the pending authorization; closing
+Settings also stops it. **Check status** reads the selected account's saved
+sign-in and plan-usage grant without a network request.
+
+Account sign-in and sign-out take effect immediately in private credential
+storage; they do not require saving the configuration draft. The TUI explicitly
+requests plan-usage consent during sign-in, including reauthorization of an
+identity-only account. Browser approval is still required.
+
+The equivalent terminal commands remain available:
 
 ```bash
 uv sync
@@ -39,10 +51,10 @@ permission again explicitly:
 
 ## Choose a model and provider
 
-Open the TUI with `.venv/bin/python -m tesis run`, then `/settings` and expand
-**Model profile**. Choose the ChatGPT profile and saved account label. Press
-**Refresh OpenAI models**, select a model, press **Use selected model**, then
-**Save** in Advanced YAML. This creates the provider profile if needed.
+In **Settings > ChatGPT accounts**, choose the model profile and local account
+label. After signing in, press **Refresh models**, select a model, press **Use
+selected model**, then **Save** (or Ctrl+S). This creates the provider profile
+if needed.
 
 Choices come from the selected account's `GET /v1/models` response. The picker
 shows every entry with `visibility: list`, preserves server ordering, displays
@@ -95,6 +107,11 @@ errors clear unusable tokens; temporary infrastructure errors preserve them.
 ```bash
 .venv/bin/python -m tesis auth logout --account default
 ```
+
+You can also choose **Sign out** in **Settings > ChatGPT accounts** for the
+selected account label. The TUI keeps Settings open until sign-out finishes
+and shows whether remote revocation was confirmed. Authentication changes
+discard the old model catalog so a late response cannot restore stale choices.
 
 Sign-out attempts discovery-based refresh-token revocation with bounded retries,
 then clears local access, refresh, and ID tokens. It retains the registration

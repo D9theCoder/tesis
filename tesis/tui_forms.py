@@ -32,6 +32,7 @@ from tesis.config_loader import (
     load_yaml_config,
 )
 from tesis.tui_commands import BaseDrawer
+from tesis.tui_auth import ChatGPTAuth
 from tesis.tui_config import DraftConfigCache, TuiConfigCache
 from tesis.tui_reasoning import ReasoningControl
 from llm.reasoning import model_efforts
@@ -692,7 +693,7 @@ class SettingsDrawer(BaseDrawer):
                     yield Static("Choose a provider to inspect its API protocol and models.", id="settings-provider-details", markup=False)
                 with VerticalScroll(id="settings-section-chatgpt", classes="settings-section"):
                     yield Label("ChatGPT accounts", classes="section-heading")
-                    yield Static("Uses a saved ChatGPT sign-in. Select the saved profile in Run or Matrix to use it.", classes="section-note", markup=False)
+                    yield Static("Sign in with ChatGPT, then select the saved profile in Run or Matrix to use it.", classes="section-note", markup=False)
                     try:
                         raw = self._config_cache.raw(loader=load_yaml_config)
                     except Exception:
@@ -718,9 +719,10 @@ class SettingsDrawer(BaseDrawer):
                     yield Label("Model profile", classes="field-label")
                     yield Select([(name, name) for name in profiles], value=selected,
                                  allow_blank=False, id="settings-chatgpt-profile")
-                    yield Label("Saved account label", classes="field-label")
-                    yield Input(value=str(account), placeholder="Saved ChatGPT account label", id="settings-chatgpt-account")
-                    yield Static("Connect an account: python -m tesis auth login --account default", markup=False, id="settings-chatgpt-status")
+                    yield Label("Local account label", classes="field-label")
+                    yield Input(value=str(account), placeholder="Local ChatGPT account label", id="settings-chatgpt-account")
+                    yield ChatGPTAuth(str(account), id="settings-chatgpt-auth")
+                    yield Static("Sign in, then refresh OpenAI models or enter an exact model ID.", markup=False, id="settings-chatgpt-status")
                     yield Button("Refresh models", id="settings-chatgpt-refresh")
                     yield Select([], prompt="Available OpenAI models", disabled=True, id="settings-chatgpt-model")
                     yield Input(placeholder="Or enter an exact ChatGPT / Codex model ID", id="settings-chatgpt-manual")
@@ -901,6 +903,9 @@ class SettingsDrawer(BaseDrawer):
     def action_back(self) -> None:
         if self._saving:
             self._set_status("Saving settings…")
+            return
+        if self.query_one(ChatGPTAuth).signing_out:
+            self._set_status("Finishing sign-out. Local credentials are cleared after the revocation attempt.")
             return
         dirty = self.query_one("#yaml-editor", TextArea).text != self._saved_text
         if dirty and not self._discard_armed:
@@ -1271,6 +1276,7 @@ class SettingsDrawer(BaseDrawer):
         if account == self._chatgpt_account_value:
             return
         self._chatgpt_account_value = account
+        self.query_one(ChatGPTAuth).set_account(account)
         self._clear_model_catalog()
         self.query_one("#settings-chatgpt-manual", Input).value = ""
         self._configure_chatgpt_reasoning()
@@ -1306,6 +1312,7 @@ class SettingsDrawer(BaseDrawer):
             account = str(profile.get("account", (profile.get("extra") or {}).get("account", "default")))
             self._chatgpt_account_value = account
             self.query_one("#settings-chatgpt-account", Input).value = account
+            self.query_one(ChatGPTAuth).set_account(account)
             model = profile.get("model_name")
             picker = self.query_one("#settings-chatgpt-model", Select)
             picker.set_options([(model, model)] if model else [])
@@ -1317,6 +1324,21 @@ class SettingsDrawer(BaseDrawer):
             self._configure_chatgpt_reasoning(reset=True)
         except Exception:
             pass
+
+    @on(ChatGPTAuth.Changed)
+    def chatgpt_auth_changed(self, message: ChatGPTAuth.Changed) -> None:
+        message.stop()
+        self._clear_model_catalog()
+        self._sync_auth_controls()
+        self.query_one("#settings-chatgpt-status", Static).update(
+            "Account action in progress..." if self.query_one(ChatGPTAuth).busy else
+            "Refresh OpenAI models after signing in."
+        )
+
+    def _sync_auth_controls(self) -> None:
+        busy = self.query_one(ChatGPTAuth).busy
+        for selector in ("#settings-chatgpt-account", "#settings-chatgpt-profile", "#settings-chatgpt-refresh"):
+            self.query_one(selector).disabled = busy or self._saving
 
     @on(Select.Changed, "#settings-chatgpt-model")
     @on(Input.Changed, "#settings-chatgpt-manual")
@@ -1343,6 +1365,8 @@ class SettingsDrawer(BaseDrawer):
 
     @on(Button.Pressed, "#settings-chatgpt-refresh")
     def refresh_chatgpt_models(self) -> None:
+        if self.query_one(ChatGPTAuth).busy:
+            return
         self._clear_model_catalog()
         profile = str(self.query_one("#settings-chatgpt-profile", Select).value)
         account = self.query_one("#settings-chatgpt-account", Input).value.strip()
@@ -1500,6 +1524,8 @@ class SettingsDrawer(BaseDrawer):
                 not self.query_one("#settings-chatgpt-manual", Input).value.strip() and (
                     self._catalog_binding is None or self.query_one("#settings-chatgpt-model", Select).disabled)
             )
+        self.query_one(ChatGPTAuth).disabled = disabled
+        self._sync_auth_controls()
 
     @on(SettingsSaved)
     def settings_saved(self, message: SettingsSaved) -> None:
@@ -1534,6 +1560,8 @@ class SettingsDrawer(BaseDrawer):
         self._settings_generation += 1
         self._model_generation += 1
         self._pending_api_keys.clear()
+        for auth in self.query(ChatGPTAuth):
+            auth.prepare_shutdown()
 
     def on_unmount(self) -> None:
         self.prepare_shutdown()

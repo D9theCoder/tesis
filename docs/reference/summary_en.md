@@ -202,7 +202,10 @@ OAuth and subscription-backed public Responses streaming. It preserves the
 existing API-key providers and agent topology. Account credentials stay in
 protected local storage; model choices come from the signed-in account's live
 catalog through TUI Settings, or an exact model ID entered manually. Saved model
-IDs remain usable without a catalog refresh. The SIWC preview does not accept temperature or
+IDs remain usable without a catalog refresh. Settings > ChatGPT accounts also
+provides browser sign-in, canceling a pending sign-in, local status, and sign-out.
+Account operations update private credential storage immediately; model-profile
+edits still require Save. The SIWC preview does not accept temperature or
 output-token-limit fields, so those shared controls are omitted for this
 provider and the limitation is recorded in call telemetry. An equal configured
 token limit must not be reported as an equal enforced limit across providers.

@@ -266,6 +266,14 @@ reopening creates a new one and rereads `tui_state.CONFIG_PATH`. Already submitt
 remote requests may still finish at the service. Its result list scrolls inside
 the drawer, with controls kept visible and technical details hidden by default.
 
+Settings **ChatGPT accounts** uses a separate CLI subprocess for sign-in,
+sign-out, and local account-status reads. Sign-in streams JSON progress events
+with a one-time browser URL stripped of any retained identity token. Canceling
+or closing Settings stops the sign-in process and loopback listener; sign-out
+keeps Settings open until local clearing finishes. Account operations update
+private SIWC storage immediately, independently of the YAML Save action.
+Authentication changes invalidate in-flight model-catalog results.
+
 ## Configuration
 
 `tesis/config_fields.py` declares field types, categories, choices, aliases,
