@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
+from llm.prompts.context import context_json
 
 _EXECUTION_STAGES = {"exploit", "bypass"}
 
@@ -49,22 +49,21 @@ def build_payload_generation_prompt(
         }
         for seed in generation_seeds
     ]
-    capsule = {
+    stable = {
         "method": method,
         "security_level": security_level,
-        "observations": applicable_observations,
-        "static_seeds": compact_seeds,
         "allowed_mutation_types": payload_profile.get("allowed_mutation_types", []),
         "forbidden_mutation_types": payload_profile.get("forbidden_mutation_types", []),
         "expected_signals": payload_profile.get("expected_success_signals", []),
         "candidate_budget": candidate_budget,
+        "static_seeds": compact_seeds,
     }
     return (
-        f"Context: {json.dumps(capsule, sort_keys=True, separators=(',', ':'))}\n"
-        "Choose an exploit or bypass seed above and generate exactly one constrained "
+        "Choose an exploit or bypass seed from the context and generate exactly one constrained "
         "Stage 2 variant. Preserve the method, target parameter, and expected success "
         "signal; do not return a probe, baseline, false-only condition, or no-delay "
         "candidate. Return only "
         '{"variants":[{"source_seed_id":"seed-id","mutation_type":"allowed-type",'
-        '"payload_or_logic":"value"}]}.'
+        '"payload_or_logic":"value"}]}.\n'
+        f"Context: {context_json(stable, {'observations': applicable_observations})}"
     )

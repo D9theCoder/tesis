@@ -364,6 +364,11 @@ earlier refusal wording, and data from other coordinates are not replayed.
 Existing `messages` fields may remain for audit compatibility, but they are not
 an automatic model context.
 
+Both user prompts place fixed task instructions before the context. Reusable
+surface/method constraints and selected seeds precede changing observations and
+progress; nested maps remain deterministic. Prompt manifests version `2.0.0`
+record this layout. Provider prefix reuse does not share generated answers.
+
 Mutation generation is stage-aware. For `hybrid` and
 `llm_mutation_only`, the prompt exposes static seeds with an execution-ready
 stage (`exploit` or `bypass`), together with their stage, target parameter, and
@@ -411,10 +416,16 @@ connections can be reused without assuming that one provider client is safe
 to share concurrently. A coordinate-local context owns its cache and
 telemetry; it is never reused by another coordinate. Only successful,
 schema-valid responses are cached. Cache keys include role, model fingerprint,
-schema version, canonical system/user messages, token limit, and decoding
-settings, so a schema or prompt change invalidates old entries. Cache entries
+coordinate ID, actual schema, schema version, canonical system/user messages,
+token limit, and decoding settings, so a schema or prompt change invalidates old entries. Cache entries
 are limited to the current run and never transfer adaptive outcomes or payload
 history between coordinates.
+
+Same-key calls wait on a coordinate-owned lock before acquiring an LLM slot.
+Hits are copied and revalidated against the current caller's constraints.
+Client factories disable LangChain's global response cache so it cannot reuse
+answers across independent coordinates. Identical answers can still arise from
+independent inference; the runtime does not force answer diversity.
 
 Matrix workers may overlap only in the LLM portion up to
 `llm_max_concurrency`. Complete reconnaissance and method-agent nodes use one
@@ -442,9 +453,21 @@ A cache hit records null reasoning fields because it makes no new provider call;
 the original call's evidence remains available. Missing reasoning is never
 inferred from the answer or token count, and encrypted reasoning is excluded.
 Aggregate telemetry
-reports time by role, cache-hit rate, invalid-output rate, and peak
+reports time by role, provider input-token cache-hit rate, local saved-response
+reuse, invalid-output rate, and peak
 LLM/DVWA-node concurrency. Raw prompts and secrets are excluded from
 performance summaries.
+
+In new summaries, `cache_metrics_version: provider-input-tokens.v1` identifies
+`cache_hit_rate = sum(cached input reads) / sum(total input tokens)` across
+physical dispatch attempts. Output/reasoning-output tokens and local response
+hits are excluded. Matrix rates use combined token totals, never a mean of
+coordinate rates. `provider_usage_raw` preserves native counters alongside
+normalized `provider_usage`. Missing usage, hidden SDK retries, or no input
+leave the overall provider rate null; observed totals and usage coverage remain
+explicit. `response_cache_hit_rate` reports local hits / logical calls, and
+`cache_hits` remains the compatibility local-hit count. Older unversioned
+artifacts retain their original local-rate meaning. See [LLM caching](llm_caching.md).
 
 `calls` counts logical calls, while `attempt_records`, `attempts`, and
 `provider_dispatches` retain the individual provider dispatches, including a
@@ -522,8 +545,9 @@ pools. A pool is keyed by `(role, redacted model-configuration fingerprint)`:
 
 The cache is deliberately coordinate-local and run-local. A cache entry is
 created only after a response passes JSON parsing and schema validation. Its
-key includes the role, model fingerprint, schema version, canonical system and
-user messages, token limit, temperature, and structured-output setting. Thus a
+key includes coordinate ID, role, model fingerprint, actual schema, schema
+version, canonical system and user messages, token limit, temperature, and
+structured-output setting. Thus a
 prompt or schema change invalidates the old entry, and adaptive outcomes or
 payload history cannot leak from one matrix coordinate to another. Cache hits
 are visible in telemetry but do not perform a new provider request or a new
@@ -1213,7 +1237,8 @@ comparison requirement.
 | `attempts_to_success`            | Number of attempts until success                         |
 | `token_cost_per_success`         | Estimated token cost per successful exploit              |
 | `llm_role_time`                  | Total LLM wall time grouped by role                     |
-| `llm_cache_hit_rate`             | Ratio of coordinate-local cache hits                    |
+| `llm_performance_summary.cache_hit_rate` | Provider cache-read input tokens / total input tokens; null if unavailable |
+| `response_cache_hit_rate`        | Coordinate-local saved-response hits / logical calls |
 | `llm_invalid_output_rate`        | Ratio of invalid or incomplete structured responses     |
 | `peak_llm_concurrency`           | Maximum overlapping LLM operations                      |
 | `peak_dvwa_node_concurrency`     | Maximum overlapping recon/method HTTP nodes             |

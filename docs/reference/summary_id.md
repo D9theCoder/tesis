@@ -384,6 +384,12 @@ serta data dari koordinat lain tidak dikirim ulang. Field `messages` yang
 lama boleh dipertahankan untuk audit, tetapi tidak otomatis menjadi context
 model.
 
+Kedua prompt pengguna menempatkan instruksi tugas tetap sebelum context.
+Aturan surface/metode dan seed terpilih mendahului observations serta progres
+yang berubah; urutan mapping bersarang tetap deterministik. Manifest prompt
+versi `2.0.0` mencatat susunan ini. Penggunaan ulang prefix di provider tidak
+membagikan jawaban yang dihasilkan antar-koordinat.
+
 Mutation generation bersifat stage-aware. Untuk mode `hybrid` dan
 `llm_mutation_only`, prompt hanya menampilkan static seed dengan stage yang
 siap dieksekusi (`exploit` atau `bypass`), termasuk stage, target parameter, dan
@@ -431,11 +437,17 @@ melakukan lease client agar koneksi provider dapat digunakan kembali tanpa
 menganggap satu client provider aman dipakai bersamaan. Context lokal
 koordinat memiliki cache dan telemetry sendiri dan tidak pernah dipakai ulang
 oleh koordinat lain. Hanya response yang sukses dan valid terhadap schema yang
-di-cache. Cache key memuat role, model fingerprint, schema version, pesan
-system/user canonical, batas token, dan decoding settings sehingga perubahan
+di-cache. Cache key memuat ID koordinat, role, model fingerprint, schema aktual,
+schema version, pesan system/user canonical, batas token, dan decoding settings sehingga perubahan
 schema atau prompt membatalkan entry lama. Cache hanya berlaku dalam run yang
 sama dan tidak memindahkan outcome adaptif atau payload history antar
 koordinat.
+
+Panggilan dengan key yang sama menunggu lock milik koordinat sebelum mengambil
+slot LLM. Jawaban cache disalin dan divalidasi ulang sesuai batasan pemanggil.
+Factory client menonaktifkan cache respons global LangChain agar jawaban tidak
+dipakai ulang antar-koordinat independen. Inferensi independen tetap dapat
+menghasilkan teks yang sama; runtime tidak memaksakan variasi jawaban.
 
 Worker matrix hanya boleh overlap pada bagian LLM sampai `llm_max_concurrency`.
 Node reconnaissance dan method-agent lengkap memakai satu HTTP semaphore
@@ -464,8 +476,21 @@ field penalaran bernilai `null` karena tidak ada panggilan provider baru; bukti
 panggilan awal tetap tersedia. Penalaran tidak disimpulkan dari jawaban atau
 jumlah token, dan penalaran terenkripsi tidak disimpan sebagai trace.
 Telemetry agregat
-memuat waktu per role, cache-hit rate, invalid-output rate, dan peak concurrency
+memuat waktu per role, rasio cache token input provider, penggunaan ulang
+respons lokal, invalid-output rate, dan peak concurrency
 LLM/DVWA node. Raw prompt dan secret tidak disimpan dalam performance summary.
+
+Ringkasan baru memakai `cache_metrics_version: provider-input-tokens.v1` untuk
+menandai `cache_hit_rate = jumlah token input terbaca dari cache / jumlah seluruh
+token input` pada attempt dispatch fisik. Token output, termasuk reasoning, dan
+hit respons lokal tidak masuk perhitungan. Rasio matrix dihitung dari jumlah
+token gabungan, bukan rata-rata rasio koordinat. `provider_usage_raw` menyimpan
+counter asli di samping `provider_usage` yang dinormalisasi. Jika usage tidak
+lengkap, retry SDK menyembunyikan request, atau tidak ada input, rasio provider
+keseluruhan bernilai null; jumlah teramati dan cakupan usage tetap dicatat.
+`response_cache_hit_rate` menghitung hit lokal / call logis; `cache_hits` tetap
+menjadi nama kompatibilitas untuk jumlah hit lokal. Artefak lama tanpa penanda
+versi mempertahankan makna rasio lokal. Lihat [LLM caching](llm_caching.md).
 
 `calls` menghitung call logis, sedangkan `attempt_records`, `attempts`, dan
 `provider_dispatches` mencatat setiap dispatch provider, termasuk penolakan
@@ -544,8 +569,8 @@ fingerprint)`:
 
 Cache sengaja berscope coordinate dan run. Entry hanya dibuat setelah response
 lulus parsing JSON dan validasi schema. Cache key memuat role, model
-fingerprint, schema version, pesan system/user canonical, batas token,
-temperature, dan setting structured-output. Dengan demikian perubahan prompt
+fingerprint, ID koordinat, schema aktual, schema version, pesan system/user
+canonical, batas token, temperature, dan setting structured-output. Dengan demikian perubahan prompt
 atau schema membatalkan entry lama, sedangkan adaptive outcome dan payload
 history tidak dapat bocor antar-coordinate. Cache hit terlihat di telemetry,
 tetapi tidak mengirim request provider baru dan tidak menjalankan guardrail
@@ -1239,7 +1264,8 @@ syarat komparasi model komersial-plus-open.
 | `attempts_to_success` | Jumlah attempt sampai success |
 | `token_cost_per_success` | Estimasi biaya token per exploit berhasil |
 | `llm_role_time` | Total wall time LLM berdasarkan role |
-| `llm_cache_hit_rate` | Rasio cache hit lokal koordinat |
+| `llm_performance_summary.cache_hit_rate` | Token input terbaca dari cache provider / seluruh token input; null jika tidak tersedia |
+| `response_cache_hit_rate` | Hit respons tersimpan lokal koordinat / call logis |
 | `llm_invalid_output_rate` | Rasio response terstruktur yang invalid/incomplete |
 | `peak_llm_concurrency` | Maksimum operasi LLM yang overlap |
 | `peak_dvwa_node_concurrency` | Maksimum overlap node recon/method HTTP |

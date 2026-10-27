@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+from llm.prompts.context import context_json
 
 
 def build_orchestrator_prompt(
@@ -41,10 +41,13 @@ def build_orchestrator_prompt(
         max_iterations: Value used by this function."""
     remaining = max(max_iterations - iteration_count, 0)
 
-    capsule = {
+    stable = {
         "surface": current_surface,
         "security_level": security_level,
+        "payload_mode": payload_mode,
         "viable_methods": viable_methods,
+    }
+    changing = {
         "attempted_methods": attempted_agents,
         "blocked_methods": blocked_agents,
         "failed_methods": failure_agents,
@@ -53,11 +56,10 @@ def build_orchestrator_prompt(
         "method_scores": method_scores or {},
         "confirmed_findings": confirmed_vulns,
         "achieved_outcomes": achieved_outcomes,
-        "payload_mode": payload_mode,
         "remaining_iterations": remaining,
     }
     return (
-        f"Context: {json.dumps(capsule, sort_keys=True, separators=(',', ':'))}\n"
         "Select one next_agent from viable_methods, preferring an unattempted method. "
-        'Return only {"next_agent":"method-id","reason_code":"best_viable"}.'
+        'Return only {"next_agent":"method-id","reason_code":"best_viable"}.\n'
+        f"Context: {context_json(stable, changing)}"
     )

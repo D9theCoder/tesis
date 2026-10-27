@@ -335,6 +335,22 @@ requested config path before loading and includes evaluator reasoning in its
 offline forwarding check; service availability still requires explicit live
 probes.
 
+Provider prompt caching and saved-response caching have separate accounting.
+`llm_performance_summary.cache_hit_rate` is the token-weighted provider
+cache-read input / total input ratio, with null for incomplete usage or unknown
+SDK retries. `response_cache_hit_rate` reports coordinate-local saved-response
+reuse. Physical attempts are counted once, and matrix rates use combined token
+totals. `provider_usage_raw` preserves counters omitted by SDK normalization.
+The `cache_metrics_version` marker distinguishes this contract from older local
+hit-rate artifacts. See [LLM caching](llm_caching.md) for fields and migration.
+
+Saved answers and same-key request locks belong to one coordinate only.
+Client factories disable LangChain's global response cache. Keys include the
+actual output schema, and hits are copied and revalidated. Parallel coordinates
+still make independent calls; only provider input-prefix computation may be
+reused across them. Prompts put fixed instructions and reusable context before
+changing state, with the layout recorded by prompt manifests version `2.0.0`.
+
 ## Artifact service and identity
 
 `ArtifactRepository` recursively indexes readable JSON without binding widgets

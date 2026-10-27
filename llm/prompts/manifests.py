@@ -1,7 +1,7 @@
 """Versioned prompt manifests for orchestrator and payload generation.
 
 Each manifest records the current template (system message + fixed user
-instruction suffix), builder input schema, output schema hash, validator
+instruction prefix and context placement), builder input schema, output schema hash, validator
 version, and eval suite version. Importing this module never changes prompt
 text, output, or runtime behavior.
 """
@@ -13,7 +13,7 @@ import inspect
 import json
 from typing import Any, TypedDict
 
-MANIFEST_VERSION = "1.0.0"
+MANIFEST_VERSION = "2.0.0"
 VALIDATOR_VERSION = "validator.v1"
 EVAL_SUITE_VERSION = "prompt-eval.v1"
 
@@ -31,10 +31,12 @@ def _canonical_hash(payload: Any) -> str:
     return _sha256_text(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
 
-def _instruction_suffix(prompt: str) -> str:
-    """Split the fixed instruction suffix off a ``"Context: {...}\\n..."`` prompt."""
-    _, sep, suffix = prompt.partition("\n")
-    return suffix if sep else prompt
+def _instruction_prefix(prompt: str) -> str:
+    """Extract fixed instructions without including exemplar coordinate data."""
+    prefix, separator, _ = prompt.partition("\nContext: ")
+    if not separator:
+        raise ValueError("Prompt template must put instructions before Context")
+    return prefix
 
 
 def _input_schema(builder: Any) -> dict[str, Any]:
@@ -140,7 +142,8 @@ def _manifest(prompt_id: str, parts: dict[str, Any]) -> dict[str, Any]:
         "prompt_id": prompt_id,
         "version": MANIFEST_VERSION,
         "template_hash": _sha256_text(
-            parts["system_message"] + "\n\n" + parts["instruction_suffix"]
+            parts["system_message"] + "\n\n" + parts["instruction_prefix"]
+            + "\nContext: {coordinate_context}"
         ),
         "input_schema": input_schema,
         "input_schema_hash": _canonical_hash(input_schema),
@@ -179,7 +182,7 @@ def _orchestrator_parts() -> dict[str, Any]:
     return {
         "builder": build_orchestrator_prompt,
         "system_message": _ORCHESTRATOR_SYSTEM_MESSAGE,
-        "instruction_suffix": _instruction_suffix(exemplar),
+        "instruction_prefix": _instruction_prefix(exemplar),
         "output_schema": _ORCHESTRATOR_SCHEMA,
         "output_schema_version": ORCHESTRATOR_SCHEMA_VERSION,
         "validator_source": inspect.getsource(_validate_decision_payload),
@@ -216,7 +219,7 @@ def _payload_parts() -> dict[str, Any]:
     return {
         "builder": build_payload_generation_prompt,
         "system_message": _PAYLOAD_SYSTEM_MESSAGE,
-        "instruction_suffix": _instruction_suffix(exemplar),
+        "instruction_prefix": _instruction_prefix(exemplar),
         "output_schema": _PAYLOAD_SCHEMA,
         "output_schema_version": PAYLOAD_SCHEMA_VERSION,
         "validator_source": inspect.getsource(_validate_variants_payload),

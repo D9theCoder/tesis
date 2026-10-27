@@ -637,6 +637,8 @@ def run_single_engagement(
         raw_roles = llm_runtime_config.get("roles")
         if isinstance(raw_roles, dict):
             llm_role_configs = raw_roles
+    if llm_cache_scope is None and llm_cache is None and llm_runtime_config:
+        llm_cache_scope = llm_runtime_config.get("cache_scope")
     if llm_cache is not None:
         llm_cache_enabled = bool(llm_cache)
     if llm_cache_scope is not None:

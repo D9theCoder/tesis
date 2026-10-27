@@ -14,6 +14,7 @@ from typing import Any, Callable
 from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS
 from evaluation.metrics import aggregate_runs
 from evaluation.reporter import write_json_report
+from llm.cache_metrics import cache_performance_summary
 from llm.provider import SUPPORTED_PROVIDERS, provider_capabilities
 from llm.runtime import LLMRuntime, RoleSettings, provider_request_summary
 from tesis.artifact_repository import config_fingerprint, new_execution_id
@@ -52,8 +53,7 @@ def _llm_performance_summary_defaults() -> dict[str, Any]:
     return {
         "calls": 0,
         **provider_request_summary([]),
-        "cache_hits": 0,
-        "cache_hit_rate": 0.0,
+        **cache_performance_summary([]),
         "invalid_outputs": 0,
         "invalid_output_rate": 0.0,
         "peak_llm_concurrency": 0,
@@ -336,7 +336,6 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
         if isinstance(row, dict)
     ]
     performance_calls = len(performance_rows)
-    cache_hits = sum(bool(row.get("cache_hit")) for row in performance_rows)
     invalid_outputs = sum(
         str(row.get("parse_status")) in {"invalid", "incomplete"}
         for row in performance_rows
@@ -383,8 +382,7 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
         "llm_performance_summary": {
             "calls": performance_calls,
             **provider_request_summary(performance_rows),
-            "cache_hits": cache_hits,
-            "cache_hit_rate": round(cache_hits / performance_calls, 4) if performance_calls else 0.0,
+            **cache_performance_summary(performance_rows),
             "invalid_outputs": invalid_outputs,
             "invalid_output_rate": round(invalid_outputs / performance_calls, 4) if performance_calls else 0.0,
             "time_by_role_ms": time_by_role,
@@ -471,7 +469,7 @@ def run_provider_matrix(
             llm_role_configs = llm_runtime_config["roles"]
         if llm_runtime_config.get("max_concurrency") is not None and llm_max_concurrency == 1:
             llm_max_concurrency = int(llm_runtime_config["max_concurrency"])
-        if llm_cache_scope is None and llm_runtime_config.get("cache_scope") is not None:
+        if llm_cache_scope is None and llm_cache is None and llm_runtime_config.get("cache_scope") is not None:
             llm_cache_scope = str(llm_runtime_config["cache_scope"])
     if llm_cache is not None:
         llm_cache_enabled = bool(llm_cache)

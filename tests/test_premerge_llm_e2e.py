@@ -18,6 +18,87 @@ from tesis.tui_forms import LaunchDrawer
 
 
 @pytest.mark.parametrize("mode", ["single", "matrix"])
+def test_provider_cache_rates_and_coordinate_isolation_reach_saved_artifacts(tmp_path, monkeypatch, mode):
+    """Real headless runners and artifact writer, with zero external requests."""
+    import threading
+    import httpx
+    from tesis.headless import run_headless
+
+    for key in list(os.environ):
+        if key.startswith("TESIS_"):
+            monkeypatch.delenv(key)
+
+    def no_http(*_args, **_kwargs):
+        pytest.fail("Offline cache E2E must never contact a provider or DVWA")
+
+    monkeypatch.setattr(httpx.Client, "send", no_http)
+    path = tmp_path / "config.yaml"
+    save_yaml_config(path, {
+        "matrix": mode == "matrix", "target_url": "http://localhost/dvwa",
+        "provider": "openai_compatible", "providers": ["openai_compatible"],
+        "level": "low", "levels": ["low"], "surface": "sqli", "surfaces": ["sqli"],
+        "payload_mode": "hybrid", "payload_modes": ["hybrid"], "repeats": 2,
+        "target_method": "sqli_union", "output_dir": str(tmp_path / "artifacts"),
+        "models": {"openai_compatible": {"provider": "openai_compatible",
+            "model_name": "offline-cache-model", "api_key": "offline-private-key",
+            "base_url": "http://localhost:9999/v1"}},
+        "llm_runtime": {"max_concurrency": 2, "cache_scope": "run", "roles": {
+            "orchestrator": {"structured_output": "json_prompt"}}},
+    })
+    barrier = threading.Barrier(2) if mode == "matrix" else None
+    counter_lock = threading.Lock()
+    dispatched = []
+
+    class Client:
+        def invoke(self, messages):
+            context = current_call_context()
+            if barrier:
+                barrier.wait(timeout=5)
+            with counter_lock:
+                dispatched.append(context.coordinate_id)
+                tokens, cached = (1000, 800) if len(dispatched) == 1 else (9000, 0)
+            return SimpleNamespace(content=json.dumps({"value": context.coordinate_id}),
+                usage_metadata={"input_tokens": tokens}, response_metadata={"token_usage": {
+                    "prompt_tokens": tokens, "prompt_cache_hit_tokens": cached,
+                    "prompt_cache_miss_tokens": tokens - cached}})
+
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: Client())
+
+    class Graph:
+        def stream(self, state, **kwargs):
+            context = current_call_context()
+            options = dict(context=context, role="orchestrator", system_message="Identical instructions",
+                user_message="Identical context", schema={"type": "object"}, schema_version="offline.v1",
+                validator=lambda value: value, max_tokens=96)
+            first = context.runtime.invoke(**options)
+            second = context.runtime.invoke(**options)
+            assert first.parsed == second.parsed == {"value": context.coordinate_id}
+            assert not first.performance["cache_hit"] and second.performance["cache_hit"]
+            yield {**state, "task_result": "INCOMPLETE", "incomplete_reason": "MODEL_STOPPED_WITHOUT_FINDING"}
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: Graph())
+    exit_code, result, root = run_headless(config_path=str(path), cli_args={})
+    assert exit_code == 0
+    expected = 2 if mode == "matrix" else 1
+    assert len(dispatched) == len(set(dispatched)) == expected
+    summary = result["llm_performance_summary"]
+    assert summary["provider_requests"] == expected
+    assert summary["response_cache_hit_rate"] == 0.5
+    assert summary["cache_hit_rate"] == (0.08 if mode == "matrix" else 0.8)
+    assert summary["provider_cache_usage_coverage"] == 1.0
+    primaries = [json.loads(p.read_text()) for p in root.rglob("*.json")]
+    primaries = [p for p in primaries if p.get("schema_version") == "tui.v1"]
+    assert len(primaries) == expected
+    outputs = {p["llm_performance"][0]["output"]["value"] for p in primaries}
+    assert outputs == set(dispatched)
+    write_json_report(tmp_path / "acceptance.json", {
+        "status": "passed", "mode": mode, "provider_dispatches": len(dispatched),
+        "independent_coordinate_outputs": len(outputs), "cache_metrics": summary,
+        "transports": "local substitutes; zero provider/DVWA requests", "artifact_root": str(root),
+    })
+
+
+@pytest.mark.parametrize("mode", ["single", "matrix"])
 def test_configured_roles_and_credentials_reach_saved_execution(tmp_path, monkeypatch, mode):
     """Use real launchers/runners with local substitutes for graph and transports."""
     for key in list(os.environ):

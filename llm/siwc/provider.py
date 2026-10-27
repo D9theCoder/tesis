@@ -273,4 +273,4 @@ def build_model(**kwargs: Any) -> ChatGPTSubscriptionModel:
     if kwargs:
         raise ValueError("Unsupported openai_codex_auth configuration fields: " + ", ".join(sorted(kwargs)))
     return ChatGPTSubscriptionModel(model_name=model, account=account,
-                                  request_timeout=timeout, reasoning_effort=effort)
+                                  request_timeout=timeout, reasoning_effort=effort, cache=False)

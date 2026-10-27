@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -13,6 +14,7 @@ from typing import Any, Callable, Iterator, Mapping
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from llm.cache_metrics import cache_performance_summary
 from llm.diagnostics import (
     classify_failure,
     enrich_provider_exception,
@@ -52,6 +54,27 @@ def _canonical(value: Any) -> str:
 def _secret_key(name: str) -> bool:
     lowered = name.lower()
     return any(marker in lowered for marker in ("key", "secret", "token", "password"))
+
+
+def _response_cache_key(
+    *, coordinate_id: str, role: str, fingerprint: str, schema: Mapping[str, Any],
+    schema_version: str, system_message: str, user_message: str, max_tokens: int,
+    config: Mapping[str, Any], structured_output: str,
+) -> str:
+    """Identify a complete request inside one coordinate, including its schema."""
+    return "sha256:" + hashlib.sha256(_canonical({
+        "coordinate_id": coordinate_id,
+        "role": role,
+        "model": fingerprint,
+        "schema": dict(schema),
+        "schema_version": schema_version,
+        "system": system_message,
+        "user": user_message,
+        "max_tokens": max_tokens,
+        "temperature": config.get("temperature", 0),
+        "structured_output": structured_output,
+        "reasoning_effort": config.get("reasoning_effort"),
+    }).encode("utf-8")).hexdigest()
 
 
 def _tool_call_arguments(raw: Any) -> Mapping[str, Any] | None:
@@ -328,17 +351,12 @@ def build_model_call_spec(
     prompt_hash = "sha256:" + hashlib.sha256(
         _canonical({"system": system_message, "user": user_message}).encode("utf-8")
     ).hexdigest()
-    cache_key = "sha256:" + hashlib.sha256(_canonical({
-        "role": role,
-        "model": fingerprint,
-        "schema_version": schema_version,
-        "system": system_message,
-        "user": user_message,
-        "max_tokens": max_tokens,
-        "temperature": config.get("temperature", 0),
-        "structured_output": settings.structured_output,
-        "reasoning_effort": config.get("reasoning_effort"),
-    }).encode("utf-8")).hexdigest()
+    cache_key = _response_cache_key(
+        coordinate_id=context.coordinate_id, role=role, fingerprint=fingerprint,
+        schema=schema, schema_version=schema_version, system_message=system_message,
+        user_message=user_message, max_tokens=max_tokens, config=config,
+        structured_output=settings.structured_output,
+    )
     return ModelCallSpec(
         role=role,
         provider=provider,
@@ -515,6 +533,18 @@ class CoordinateCallContext:
     records: list[dict[str, Any]] = field(default_factory=list)
     _lock: Lock = field(default_factory=Lock, repr=False)
     _call_sequence: int = field(default=0, init=False, repr=False)
+    _cache_locks: dict[str, Lock] = field(default_factory=dict, init=False, repr=False)
+
+    @contextmanager
+    def response_cache_lease(self, cache_key: str) -> Iterator[None]:
+        """Coordinate identical requests only within this context, before LLM slots."""
+        if not self.cache_enabled:
+            yield
+            return
+        with self._lock:
+            lock = self._cache_locks.setdefault(cache_key, Lock())
+        with lock:
+            yield
 
     def role_config(self, role: str, *, max_tokens: int | None) -> tuple[str, dict[str, Any], RoleSettings]:
         settings = self.role_settings.get(role, RoleSettings())
@@ -589,6 +619,7 @@ class CoordinateCallContext:
         }
         if event_type == "llm.completed":
             data["provider_usage"] = dict(record.get("provider_usage") or {})
+            data["provider_usage_raw"] = dict(record.get("provider_usage_raw") or {})
             if record.get("reasoning_token_evidence") is not None:
                 data["reasoning_token_evidence"] = dict(record["reasoning_token_evidence"])
             if record.get("structured_output_fallback") is not None:
@@ -597,6 +628,8 @@ class CoordinateCallContext:
             data["error_type"] = record.get("error_type")
             if record.get("provider_usage"):
                 data["provider_usage"] = dict(record["provider_usage"])
+            if record.get("provider_usage_raw"):
+                data["provider_usage_raw"] = dict(record["provider_usage_raw"])
             if record.get("reasoning_token_evidence") is not None:
                 data["reasoning_token_evidence"] = dict(record["reasoning_token_evidence"])
             if record.get("structured_output_fallback") is not None:
@@ -625,7 +658,6 @@ class CoordinateCallContext:
         with self._lock:
             rows = [dict(row) for row in self.records]
         calls = len(rows)
-        hits = sum(bool(row.get("cache_hit")) for row in rows)
         invalid = sum(
             str(row.get("parse_status")) in {"invalid", "incomplete"}
             for row in rows
@@ -637,11 +669,12 @@ class CoordinateCallContext:
             payload["calls"] += 1
             payload["cache_hits"] += int(bool(row.get("cache_hit")))
             payload["duration_ms"] += int(row.get("call_duration_ms", 0) or 0)
+        for role, payload in by_role.items():
+            payload.update(cache_performance_summary([row for row in rows if row.get("role", "unknown") == role]))
         return {
             "calls": calls,
             **provider_request_summary(rows),
-            "cache_hits": hits,
-            "cache_hit_rate": round(hits / calls, 4) if calls else 0.0,
+            **cache_performance_summary(rows),
             "invalid_outputs": invalid,
             "invalid_output_rate": round(invalid / calls, 4) if calls else 0.0,
             "peak_llm_concurrency": self.runtime.peak_llm_concurrency,
@@ -762,6 +795,18 @@ class LLMRuntime:
         return pool, fingerprint
 
     @staticmethod
+    def _raw_usage(response: Any) -> dict[str, Any]:
+        """Retain native counters that normalized SDK usage can omit."""
+        metadata = getattr(response, "response_metadata", None)
+        if isinstance(metadata, Mapping):
+            usage = metadata.get("token_usage") or metadata.get("usage")
+            if isinstance(usage, Mapping):
+                return dict(usage)
+        if isinstance(response, Mapping) and isinstance(response.get("usage"), Mapping):
+            return dict(response["usage"])
+        return {}
+
+    @staticmethod
     def _usage(response: Any) -> dict[str, Any]:
         usage = getattr(response, "usage_metadata", None)
         if isinstance(usage, Mapping):
@@ -852,6 +897,35 @@ class LLMRuntime:
         max_tokens: int,
         evidence_context: dict[str, Any] | None = None,
     ) -> LLMCallResult:
+        """Deduplicate same-context requests without sharing answers across coordinates."""
+        provider, config, settings = context.role_config(role, max_tokens=max_tokens)
+        fingerprint = model_fingerprint({"provider": provider, **dict(config)})
+        cache_key = _response_cache_key(
+            coordinate_id=context.coordinate_id, role=role, fingerprint=fingerprint,
+            schema=schema, schema_version=schema_version, system_message=system_message,
+            user_message=user_message, max_tokens=max_tokens, config=config,
+            structured_output=settings.structured_output,
+        )
+        with context.response_cache_lease(cache_key):
+            return self._invoke(
+                context=context, role=role, system_message=system_message,
+                user_message=user_message, schema=schema, schema_version=schema_version,
+                validator=validator, max_tokens=max_tokens, evidence_context=evidence_context,
+            )
+
+    def _invoke(
+        self,
+        *,
+        context: CoordinateCallContext,
+        role: str,
+        system_message: str,
+        user_message: str,
+        schema: dict[str, Any],
+        schema_version: str,
+        validator: Callable[[dict[str, Any]], dict[str, Any]],
+        max_tokens: int,
+        evidence_context: dict[str, Any] | None = None,
+    ) -> LLMCallResult:
         from datetime import datetime, timezone
         from evaluation.scoring_evidence import evidence_hash
         from tesis.runtime_events import redact_secrets
@@ -871,17 +945,12 @@ class LLMRuntime:
         prompt_hash = "sha256:" + hashlib.sha256(
             _canonical({"system": system_message, "user": user_message}).encode("utf-8")
         ).hexdigest()
-        cache_key = "sha256:" + hashlib.sha256(_canonical({
-            "role": role,
-            "model": fingerprint,
-            "schema_version": schema_version,
-            "system": system_message,
-            "user": user_message,
-            "max_tokens": max_tokens,
-            "temperature": config.get("temperature", 0),
-            "structured_output": settings.structured_output,
-            "reasoning_effort": reasoning_effort,
-        }).encode("utf-8")).hexdigest()
+        cache_key = _response_cache_key(
+            coordinate_id=context.coordinate_id, role=role, fingerprint=fingerprint,
+            schema=schema, schema_version=schema_version, system_message=system_message,
+            user_message=user_message, max_tokens=max_tokens, config=config,
+            structured_output=settings.structured_output,
+        )
         base_record = {
             'method': evidence_context.get('method'), 'visit_id': evidence_context.get('visit_id'),
             'schema_version': schema_version, 'started_at': datetime.now(timezone.utc).isoformat(),
@@ -917,6 +986,7 @@ class LLMRuntime:
             "error_message": None,
             "remediation": None,
             "provider_usage": {},
+            "provider_usage_raw": {},
             "reasoning_effort_requested": reasoning_effort,
             "reasoning_token_evidence": None,
             **reasoning_evidence(None),
@@ -931,8 +1001,17 @@ class LLMRuntime:
             }
             if endpoint is None:
                 base_record["endpoint"] = capabilities.default_endpoint
-        if context.cache_enabled and cache_key in context.cache:
-            text, parsed = context.cache[cache_key]
+        cached = context.cache.get(cache_key) if context.cache_enabled else None
+        if cached is not None:
+            try:
+                parsed = validator(deepcopy(cached[1]))
+                if not isinstance(parsed, dict):
+                    raise ValueError("cached output must validate to an object")
+            except (KeyError, TypeError, ValueError):
+                del context.cache[cache_key]
+                cached = None
+        if cached is not None:
+            text = cached[0]
             safe_output = redact_secrets(parsed)
             record = {**base_record, "cache_hit": True, "parse_status": "ok", 'validation_status': 'valid',
                 'output': safe_output, 'output_sha256': evidence_hash(safe_output)}
@@ -943,7 +1022,7 @@ class LLMRuntime:
             context.emit_activity("llm.started", call_id=call_id, record=record)
             context.append_record(record)
             context.emit_activity("llm.completed", call_id=call_id, record=record)
-            return LLMCallResult(text=text, parsed=dict(parsed), performance=record)
+            return LLMCallResult(text=text, parsed=deepcopy(parsed), performance=record)
 
         queued_at = perf_counter()
         self._llm_slots.acquire()
@@ -979,6 +1058,7 @@ class LLMRuntime:
                 ])
                 raw = result.get("raw") if isinstance(result, Mapping) else result
                 attempt.update(status="responded", provider_usage=self._usage(raw),
+                               provider_usage_raw=redact_secrets(self._raw_usage(raw), known_secrets=config.get("api_key")),
                                **redact_secrets(reasoning_evidence(raw), known_secrets=config.get("api_key")))
                 return result
             except Exception as exc:
@@ -1168,6 +1248,7 @@ class LLMRuntime:
                 ),
                 "error_type": type(exc).__name__,
                 "provider_usage": failure_usage,
+                "provider_usage_raw": redact_secrets(self._raw_usage(failure_usage_source), known_secrets=config.get("api_key")),
                 "reasoning_token_evidence": _reasoning_token_evidence(failure_usage),
                 **redact_secrets(reasoning_evidence(failure_usage_source), known_secrets=config.get("api_key")),
             }
@@ -1248,6 +1329,7 @@ class LLMRuntime:
             "structured_output_mode": mode,
             "parse_status": "ok",
             "provider_usage": provider_usage,
+            "provider_usage_raw": redact_secrets(self._raw_usage(usage_source), known_secrets=config.get("api_key")),
             "reasoning_token_evidence": _reasoning_token_evidence(provider_usage),
             **redact_secrets(reasoning_evidence(usage_source), known_secrets=config.get("api_key")),
         }
@@ -1259,7 +1341,7 @@ class LLMRuntime:
             record["structured_output_fallback"] = structured_output_fallback
         context.append_record(record)
         if context.cache_enabled:
-            context.cache[cache_key] = (text, dict(parsed))
+            context.cache[cache_key] = (text, deepcopy(parsed))
         context.emit_activity("llm.completed", call_id=call_id, record=record)
         return LLMCallResult(text=text, parsed=parsed, performance=record)
 

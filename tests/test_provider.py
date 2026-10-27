@@ -15,6 +15,31 @@ from llm.provider import (
 from tesis.model_config import ModelConfig
 
 
+def test_global_langchain_cache_cannot_share_experiment_answers(monkeypatch):
+    from langchain_core.caches import InMemoryCache
+    from langchain_core.globals import get_llm_cache, set_llm_cache
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    previous = get_llm_cache()
+    set_llm_cache(InMemoryCache())
+    dispatched = []
+
+    def generate(_self, messages, **_kwargs):
+        from langchain_core.outputs import ChatGeneration, ChatResult
+        dispatched.append(messages)
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=str(len(dispatched))))])
+
+    from llm.openai_chat import ReasoningChatOpenAI
+    monkeypatch.setattr(ReasoningChatOpenAI, "_generate", generate)
+    try:
+        client = get_llm("openai", api_key="offline-test-key", cache=True)
+        messages = [HumanMessage(content="identical prompt")]
+        assert client.invoke(messages).content == "1"
+        assert client.invoke(messages).content == "2"
+    finally:
+        set_llm_cache(previous)
+
+
 @pytest.mark.parametrize("provider", ["gemini", "claude"])
 def test_non_openai_sdk_retries_are_disabled_unless_explicit(provider):
     client = get_llm(provider, api_key="offline-test-key")

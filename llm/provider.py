@@ -117,10 +117,14 @@ def get_llm(provider_name: str, **kwargs):
     Args:
         provider_name: Value used by this function."""
     normalized_provider = provider_name.strip().lower()
+    # Saved responses belong only to CoordinateCallContext. A global LangChain
+    # cache would otherwise reuse answers between independent experiment runs.
+    kwargs.pop("cache", None)
     if normalized_provider == "openai_codex_auth":
         from llm.siwc.provider import build_model
         kwargs["reasoning_effort"] = validate_reasoning_effort(kwargs.get("reasoning_effort"))
         return build_model(**kwargs)
+    kwargs["cache"] = False
     _reasoning_kwargs(normalized_provider, kwargs)
     capabilities = _PROVIDER_CAPABILITIES.get(normalized_provider)
     if capabilities is not None and kwargs.get("max_retries") is None:

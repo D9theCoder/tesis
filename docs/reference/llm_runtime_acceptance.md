@@ -1,5 +1,10 @@
 # LLM Runtime Acceleration Acceptance
 
+This is historical validation evidence. Its cache-hit counts refer to local
+saved-response reuse. New `cache_metrics_version: provider-input-tokens.v1`
+summaries use `cache_hit_rate` for provider cache-read input / total input and
+`response_cache_hit_rate` for local reuse. See [LLM caching](llm_caching.md).
+
 This record compares the authorized 18-coordinate `akg_guided_hybrid` matrix
 before and after the runtime acceleration changes. The coordinate axes were
 unchanged: provider `openai_compatible`, surfaces `sqli`, `access_control`,

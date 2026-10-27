@@ -31,6 +31,23 @@ def test_legacy_config_uses_serial_no_cache_runtime(tmp_path: Path) -> None:
     assert config.llm_runtime.cache_enabled is False
 
 
+@pytest.mark.parametrize(("override", "expected"), [(None, True), (False, False), (True, True)])
+def test_direct_single_nested_cache_scope_preserves_explicit_override(tmp_path, monkeypatch, override, expected):
+    from evaluation.runner import run_single_engagement
+    from llm.runtime import current_call_context
+
+    class Graph:
+        def stream(self, state, **_kwargs):
+            assert current_call_context().cache_enabled is expected
+            yield {**state, "task_result": "INCOMPLETE", "incomplete_reason": "MODEL_STOPPED_WITHOUT_FINDING"}
+
+    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: Graph())
+    artifact = run_single_engagement(target_url="http://localhost/dvwa", llm_provider="openai",
+        security_level="low", surface="sqli", target_method="sqli_union", payload_mode="static_only",
+        output_dir=str(tmp_path), llm_runtime_config={"cache_scope": "run"}, llm_cache=override)
+    assert artifact["config"]["llm_cache_scope"] == ("run" if expected else "none")
+
+
 def test_runtime_roles_preserve_unpinned_profile_and_default_payload_budget(tmp_path: Path) -> None:
     config = load_and_resolve_config(
         config_path=str(_config(

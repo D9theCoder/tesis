@@ -137,6 +137,85 @@ def test_cache_reuses_only_valid_output_within_one_coordinate(monkeypatch):
     assert context.records[1]["cache_hit"] is True
 
 
+def test_simultaneous_same_context_requests_reuse_one_valid_response(monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+
+    class Client(_FakeClient):
+        def invoke(self, messages):
+            entered.set()
+            assert release.wait(timeout=3)
+            return super().invoke(messages)
+
+    client = Client(contents=['{"value":"ok"}'])
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: client)
+    runtime = LLMRuntime(max_concurrency=2)
+    with runtime.coordinate(coordinate_id="one", default_provider="openai", cache_enabled=True,
+        role_settings={"orchestrator": RoleSettings(structured_output="json_prompt")}) as context:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(_invoke, runtime, context)
+            assert entered.wait(timeout=3)
+            second = executor.submit(_invoke, runtime, context)
+            release.set()
+            assert first.result().parsed == second.result().parsed == {"value": "ok"}
+        assert client.calls == 1
+        assert context.performance_summary()["response_cache_hits"] == 1
+
+
+def test_response_schema_changes_and_mutating_results_do_not_reuse_stale_answers(monkeypatch):
+    client = _FakeClient(contents=['{"items":["first"]}', '{"items":["second"]}'])
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: client)
+    runtime = LLMRuntime()
+    with runtime.coordinate(coordinate_id="one", default_provider="openai", cache_enabled=True,
+        role_settings={"orchestrator": RoleSettings(structured_output="json_prompt")}) as context:
+        options = dict(context=context, role="orchestrator", system_message="same", user_message="same",
+            schema={"type": "object"}, schema_version="same", validator=lambda value: value, max_tokens=32)
+        first = runtime.invoke(**options)
+        first.parsed["items"].append("must not enter cache")
+        assert runtime.invoke(**options).parsed == {"items": ["first"]}
+        options["schema"] = {"type": "object", "required": ["items"]}
+        assert runtime.invoke(**options).parsed == {"items": ["second"]}
+        assert client.calls == 2
+
+
+def test_cached_response_is_revalidated_for_current_constraints(monkeypatch):
+    client = _FakeClient(contents=['{"value":"old"}', '{"value":"new"}'])
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: client)
+    runtime = LLMRuntime()
+    with runtime.coordinate(coordinate_id="one", default_provider="openai", cache_enabled=True,
+        role_settings={"orchestrator": RoleSettings(structured_output="json_prompt")}) as context:
+        assert _invoke(runtime, context).parsed == {"value": "old"}
+
+        def current_validator(value):
+            if value["value"] != "new":
+                raise ValueError("old is no longer allowed")
+            return value
+
+        result = runtime.invoke(context=context, role="orchestrator", system_message="stable system",
+            user_message="compact capsule", schema=SCHEMA, schema_version="v1",
+            validator=current_validator, max_tokens=32)
+        assert result.parsed == {"value": "new"}
+        assert client.calls == 2
+
+
+def test_invalid_model_output_still_contributes_provider_cache_usage(monkeypatch):
+    class Client(_FakeClient):
+        def invoke(self, messages):
+            response = super().invoke(messages)
+            response.usage_metadata = {"input_tokens": 1000}
+            response.response_metadata = {"token_usage": {
+                "prompt_tokens": 1000, "prompt_cache_hit_tokens": 750, "prompt_cache_miss_tokens": 250}}
+            return response
+
+    monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: Client(contents=["not JSON"]))
+    runtime = LLMRuntime()
+    with runtime.coordinate(coordinate_id="invalid", default_provider="openai", cache_enabled=True,
+        role_settings={"orchestrator": RoleSettings(structured_output="json_prompt")}) as context:
+        with pytest.raises(LLMOutputError):
+            _invoke(runtime, context)
+        assert context.performance_summary()["cache_hit_rate"] == 0.75
+        assert context.performance_summary()["response_cache_hits"] == 0
+
+
 def test_activity_callback_is_hash_only_and_includes_cache_lifecycle(monkeypatch):
     client = _FakeClient(contents=['{"value":"ok"}'])
     monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: client)
