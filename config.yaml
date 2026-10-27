@@ -248,6 +248,7 @@ scoring_evaluator:
 reasoning_catalog:
   zai-org/GLM-5.3-Flash: [low, high, xhigh]
   deepseek-ai/DeepSeek-V4.1-Flash-1017: [off, low, high, xhigh]
+  gpt-6.1-terra: [none, low, medium, high, xhigh, max]
   gpt-6.1-sol: [low, medium, high, xhigh, max]
   gpt-6-astra: [low, medium, high, xhigh, max]
   gpt-6-luna: [none, low, medium, high, xhigh, max]

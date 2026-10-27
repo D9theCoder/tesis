@@ -246,7 +246,7 @@ def model_connection(profile_id: str, model: Any) -> dict[str, str]:
         protocol = {"claude": "Anthropic Messages", "gemini": "Google Generative AI"}.get(adapter, adapter)
     return {
         "adapter": adapter,
-        "provider": profile_id.split("__", 1)[0] if profile_id else adapter,
+        "provider": "codex" if adapter == "openai_codex_auth" else profile_id.split("__", 1)[0] if profile_id else adapter,
         "model": str(value("model_name") or value("model") or "—"),
         "protocol": protocol,
         "reasoning": str(value("reasoning_effort") or "default"),

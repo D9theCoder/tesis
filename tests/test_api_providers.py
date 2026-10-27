@@ -14,7 +14,7 @@ from llm.provider import get_llm, get_llm_from_model_config
 from llm.runtime import LLMRuntime
 from tesis.config_fields import configured_provider_choices
 from tesis.config_loader import ConfigError, load_and_resolve_config, load_yaml_config, save_yaml_config
-from tesis.provider_registry import expanded_model_sections, model_profile_id, provider_key_variable
+from tesis.provider_registry import expanded_model_sections, model_profile_id, model_profile_labels, provider_key_variable
 from tesis.provider_settings import save_provider_settings
 
 
@@ -27,6 +27,21 @@ def _config(entries):
     first = next(iter(entries))
     return {"target_url": "http://localhost/dvwa", "provider": model_profile_id(first, entries[first]["models"][0]),
             "api_providers": entries}
+
+
+def test_codex_display_labels_keep_profile_ids_and_api_provider_names():
+    payload = {"models": {
+        "openai_codex_auth": {"model_name": "one"},
+        "openai_codex_auth_2": {"provider": "openai_codex_auth", "model_name": "two"},
+        "custom_name_3": {"provider": "openai_codex_auth", "model_name": "three"},
+        "unselected": {"provider": "openai_codex_auth", "model_name": ""},
+        "legacy": {"provider": "openai", "model_name": "api-model"},
+    }, "api_providers": {"gateway": {**_entry(models=["model"]), "display_name": "Gateway 2"}}}
+    assert model_profile_labels(payload) == {
+        "openai_codex_auth": "codex / one", "openai_codex_auth_2": "codex / two",
+        "custom_name_3": "codex / three", "unselected": "codex", "legacy": "legacy",
+        model_profile_id("gateway", "model"): "Gateway 2 / model",
+    }
 
 
 def test_multiple_providers_and_models_resolve_without_overwriting_legacy_or_roles(tmp_path):

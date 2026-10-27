@@ -119,7 +119,13 @@ def expanded_model_sections(config: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def model_profile_labels(config: Mapping[str, Any]) -> dict[str, str]:
-    labels = {name: name for name in expanded_model_sections(config)}
+    labels = {}
+    for name, profile in expanded_model_sections(config).items():
+        if profile.get("provider", name) == "openai_codex_auth":
+            model = profile.get("model_name")
+            labels[name] = f"codex / {model}" if model else "codex"
+        else:
+            labels[name] = name
     for provider_id, entry in (config.get("api_providers") or {}).items():
         display = str(entry.get("display_name") or provider_id)
         for model_id in entry["models"]:

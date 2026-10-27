@@ -148,6 +148,19 @@ payload validation, containment, agents, and scoring remain unchanged.
 
 Only `response.completed` is successful. Incomplete output, interrupted streams,
 refusals, admission failures, and streamed usage-limit errors remain distinct.
+The parser accepts valid SSE even when the response omits its content-type
+header. If terminal `output` is empty, it uses `response.output_item.done` items
+in output-index order; deltas alone never supply a successful final answer.
+Nonempty terminal output takes precedence. Web chat shares this parser with
+the experiment adapter. Model pickers display `codex / model` for every Codex
+profile; numbered profile IDs remain stable in configuration and artifacts.
+Chat and experiments request `reasoning.summary: auto`. Summaries are retained
+from terminal reasoning items, completed reasoning items, or summary text/part
+events, including when the terminal response carries only the answer. Completed
+summary parts replace their deltas rather than duplicating them. Summary text
+is recorded separately from raw traces; encrypted reasoning and token counts
+never supply visible summary text. A provider may still return no summary.
+[Reasoning summaries](https://developers.openai.com/api/docs/guides/reasoning#reasoning-summaries).
 Errors retain sanitized status, code, parameter, body shape, and request ID.
 Eligibility failures stop; usage-limit failures point to ChatGPT Settings >
 Usage; transient failures preserve credentials for a later retry. No error

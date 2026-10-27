@@ -33,7 +33,7 @@ def signing_key():
 @pytest.fixture
 def oauth(tmp_path, monkeypatch, signing_key):
     monkeypatch.setenv("TESIS_SIWC_HOME", str(tmp_path / "siwc"))
-    state = SimpleNamespace(calls=[], tokens=None, refresh=None, inference=None, status=200,
+    state = SimpleNamespace(calls=[], tokens=None, refresh=None, inference=None, status=200, content_type="text/event-stream",
         model_data={"models": [
             {"slug": "future-model-b", "display_name": "Future B", "visibility": "list"},
             {"slug": "hidden", "display_name": "Hidden", "visibility": "hidden"},
@@ -64,7 +64,10 @@ def oauth(tmp_path, monkeypatch, signing_key):
             if state.status != 200:
                 return httpx.Response(state.status, json=state.inference, headers={"x-request-id": "req-test"})
             data = "".join("data: " + json.dumps(event) + "\n\n" for event in state.inference)
-            return httpx.Response(200, text=data, headers={"content-type": "text/event-stream", "x-request-id": "req-test"})
+            headers = {"x-request-id": "req-test"}
+            if state.content_type is not None:
+                headers["content-type"] = state.content_type
+            return httpx.Response(200, content=data.encode(), headers=headers)
         raise AssertionError(f"Unexpected network route: {request.method} {request.url.path}")
 
     state.transport = httpx.MockTransport(handler)
@@ -422,18 +425,22 @@ def test_inference_serializes_only_siwc_supported_fields_and_keeps_usage(oauth):
     result = _model(oauth).invoke([SystemMessage(content="Return JSON"), HumanMessage(content="Hi")])
     body = json.loads(oauth.calls[-1].content)
     assert body == {"model": "future-model-b", "input": [{"role": "developer", "content": "Return JSON"},
-        {"role": "user", "content": "Hi"}], "store": False, "stream": True, "reasoning": {"effort": "low"}}
+        {"role": "user", "content": "Hi"}], "store": False, "stream": True, "reasoning": {"effort": "low", "summary": "auto"}}
     assert oauth.calls[-1].headers["authorization"] == "Bearer access-initial"
     assert result.content == '{"answer":"ok"}'
     assert result.response_metadata["usage"]["output_tokens_details"]["reasoning_tokens"] == 3
     assert result.response_metadata["request_id"] == "req-test"
     assert "access-initial" not in json.dumps(result.model_dump())
+    assert not result.additional_kwargs.get("reasoning_summary")
+    assert not result.additional_kwargs.get("reasoning")
 
 
 def test_siwc_preserves_returned_summary_separately_from_encrypted_reasoning(oauth):
     from llm.reasoning_evidence import reasoning_evidence
     oauth.connect()
     oauth.inference = _completed()
+    oauth.inference.insert(0, {"type": "response.reasoning_summary_text.delta", "output_index": 0,
+        "summary_index": 0, "delta": "earlier summary"})
     oauth.inference[-1]["response"]["output"].insert(0, {"type": "reasoning", "encrypted_content": "opaque",
         "summary": [{"type": "summary_text", "text": "Provider summary"}]})
     message = _model(oauth).invoke("Return JSON")
@@ -442,6 +449,59 @@ def test_siwc_preserves_returned_summary_separately_from_encrypted_reasoning(oau
     assert fields["reasoning_trace"] is None
     assert fields["reasoning_summary"] == "Provider summary"
     assert "opaque" not in json.dumps(message.model_dump())
+
+
+@pytest.mark.parametrize("kind", ["response.reasoning_summary_text.delta", "response.reasoning_summary_text.done",
+                                  "response.reasoning_summary_part.done", "response.output_item.done"])
+@pytest.mark.parametrize("empty_terminal_summary", [False, True])
+def test_summary_events_survive_terminal_answer_without_reasoning(oauth, kind, empty_terminal_summary):
+    from llm.reasoning_evidence import reasoning_evidence
+    oauth.connect()
+    event = {"type": kind, "output_index": 0, "summary_index": 0}
+    if kind.endswith(".delta"):
+        event["delta"] = "Provider summary"
+    elif kind == "response.reasoning_summary_text.done":
+        event["text"] = "Provider summary"
+    elif kind == "response.reasoning_summary_part.done":
+        event["part"] = {"type": "summary_text", "text": "Provider summary"}
+    else:
+        event["item"] = {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Provider summary"}],
+                         "encrypted_content": "private"}
+    oauth.inference = [event, *_completed()]
+    if empty_terminal_summary:
+        oauth.inference[-1]["response"]["output"].insert(0, {"type": "reasoning",
+            "summary": [{"type": "summary_text", "text": ""}]})
+    message = _model(oauth).invoke("Return JSON")
+    assert message.content == '{"answer":"ok"}'
+    evidence = reasoning_evidence(message)
+    assert evidence["reasoning_summary"] == "Provider summary"
+    assert evidence["reasoning_summary_source"] == "additional_kwargs.reasoning_summary"
+    assert evidence["reasoning_trace"] is evidence["reasoning_trace_source"] is None
+    assert "private" not in json.dumps(message.model_dump())
+
+
+def test_summary_parts_are_ordered_and_completed_events_replace_deltas(oauth):
+    from llm.reasoning_evidence import reasoning_evidence
+    oauth.connect()
+    oauth.inference = [
+        {"type": "response.reasoning_summary_text.done", "output_index": 2, "summary_index": 0, "text": "last"},
+        {"type": "response.reasoning_summary_text.delta", "output_index": 0, "summary_index": 0, "delta": "tentative"},
+        {"type": "response.reasoning_summary_text.done", "output_index": 0, "summary_index": 0, "text": "first"},
+        {"type": "response.reasoning_summary_part.done", "output_index": 0, "summary_index": 0,
+         "part": {"type": "summary_text", "text": "first"}},
+        {"type": "response.reasoning_summary_text.delta", "output_index": 0, "summary_index": 1, "delta": "sec"},
+        {"type": "response.reasoning_summary_text.delta", "output_index": 0, "summary_index": 1, "delta": "ond"},
+        *_completed(),
+    ]
+    assert reasoning_evidence(_model(oauth).invoke("Hi"))["reasoning_summary"] == "first\nsecond\nlast"
+
+
+def test_completed_summary_without_terminal_is_still_interrupted(oauth):
+    oauth.connect()
+    oauth.inference = [{"type": "response.reasoning_summary_text.done", "output_index": 0, "summary_index": 0, "text": "summary"}]
+    with pytest.raises(SIWCRequestError) as error:
+        _model(oauth).invoke("Hi")
+    assert error.value.code == "interrupted_stream"
 
 
 def test_cached_model_resolves_refreshed_credentials_on_each_inference(oauth):
@@ -456,10 +516,18 @@ def test_cached_model_resolves_refreshed_credentials_on_each_inference(oauth):
     assert "access-renewed" not in repr(model)
 
 
-def test_native_runtime_validation_keeps_siwc_usage_and_request_constraints(oauth, monkeypatch):
+@pytest.mark.parametrize("compact_stream", [False, True])
+def test_native_runtime_validation_keeps_siwc_usage_and_request_constraints(oauth, monkeypatch, compact_stream):
     from llm.runtime import LLMRuntime
     oauth.connect()
     oauth.inference = _completed()
+    if compact_stream:
+        oauth.content_type = None
+        output = oauth.inference[-1]["response"]["output"]
+        oauth.inference.insert(1, {"type": "response.output_item.done", "output_index": 0, "item": output[0]})
+        oauth.inference[-1]["response"]["output"] = []
+    oauth.inference.insert(0, {"type": "response.reasoning_summary_text.done", "output_index": 0,
+        "summary_index": 0, "text": "Runtime summary"})
     monkeypatch.setattr("llm.runtime.get_llm", lambda *_args, **_kwargs: _model(oauth))
     runtime = LLMRuntime()
     schema = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"], "additionalProperties": False}
@@ -470,6 +538,8 @@ def test_native_runtime_validation_keeps_siwc_usage_and_request_constraints(oaut
         assert result.parsed == {"answer": "ok"}
         assert result.performance["structured_output_mode"] == "native_json_schema"
         assert result.performance["reasoning_token_evidence"]["tokens"] == 3
+        assert result.performance["reasoning_summary"] == "Runtime summary"
+        assert result.performance["reasoning_trace"] is None
         assert result.performance["provider_request_constraints"]["unsupported_fields"] == ["max_output_tokens", "temperature"]
         assert result.performance["endpoint"] == RESOURCE
         assert context.performance_summary()["provider_requests"] == 1
@@ -537,6 +607,70 @@ def test_missing_terminal_stream_never_succeeds(oauth):
     with pytest.raises(SIWCRequestError) as error:
         _model(oauth).invoke("Hi")
     assert error.value.code == "interrupted_stream"
+
+
+@pytest.mark.parametrize("content_type", [None, "text/plain", "text/event-stream; charset=utf-8"])
+def test_completed_items_supply_empty_terminal_output_in_index_order(oauth, content_type):
+    from llm.reasoning_evidence import reasoning_evidence
+    oauth.connect()
+    oauth.content_type = content_type
+    oauth.inference = [
+        {"type": "response.output_text.delta", "delta": "tentative text"},
+        {"type": "response.output_item.done", "output_index": 2,
+         "item": {"type": "message", "content": [{"type": "output_text", "text": "second"}]}},
+        {"type": "response.output_item.done", "output_index": 0,
+         "item": {"type": "reasoning", "encrypted_content": "private",
+                  "summary": [{"type": "summary_text", "text": "summary"}]}},
+        {"type": "response.output_item.done", "output_index": 1,
+         "item": {"type": "message", "content": [{"type": "output_text", "text": "first "}]}},
+        {"type": "response.completed", "response": {"status": "completed", "output": [],
+            "usage": {"output_tokens": 42}}},
+    ]
+    message = _model(oauth).invoke("Hi")
+    assert message.content == "first second"
+    assert reasoning_evidence(message)["reasoning_summary"] == "summary"
+    assert reasoning_evidence(message)["reasoning_trace"] is None
+    assert message.response_metadata["usage"] == {"output_tokens": 42}
+    assert "private" not in json.dumps(message.model_dump())
+
+
+def test_terminal_output_overrides_completed_items_and_deltas(oauth):
+    oauth.connect()
+    oauth.inference = _completed("terminal answer")
+    oauth.inference.insert(1, {"type": "response.output_item.done", "output_index": 0,
+        "item": {"type": "message", "content": [{"type": "output_text", "text": "earlier answer"}]}})
+    assert _model(oauth).invoke("Hi").content == "terminal answer"
+
+
+def test_completed_item_without_terminal_still_fails(oauth):
+    oauth.connect()
+    oauth.content_type = None
+    oauth.inference = [{"type": "response.output_item.done", "output_index": 0,
+        "item": {"type": "message", "content": [{"type": "output_text", "text": "finished item"}]}}]
+    with pytest.raises(SIWCRequestError) as error:
+        _model(oauth).invoke("Hi")
+    assert error.value.code == "interrupted_stream"
+
+
+@pytest.mark.parametrize("event,code", [
+    ({"type": "response.output_text.delta", "delta": 3}, "invalid_stream"),
+    ({"type": "response.reasoning_summary_text.done", "output_index": 0, "summary_index": 0, "text": None}, "invalid_stream"),
+    ({"type": "response.reasoning_summary_part.done", "output_index": 0, "summary_index": 0,
+      "part": {"type": "summary_text", "text": 3}}, "invalid_stream"),
+    ({"type": "response.output_item.done", "output_index": -1, "item": {}}, "invalid_stream"),
+    ({"type": "response.output_item.done", "output_index": 0, "item": {"type": "message", "content": None}}, "invalid_stream"),
+    ({"type": "response.completed", "response": {"status": "incomplete", "output": []}}, "invalid_terminal_event"),
+    ({"type": "response.completed", "response": {"status": "completed"}}, "invalid_terminal_event"),
+    ({"type": "response.completed", "response": {"status": "completed", "output": [
+        {"type": "message", "content": [{"type": "output_text", "text": 3}]}]}}, "invalid_terminal_event"),
+])
+def test_malformed_response_events_fail_with_safe_diagnostics(oauth, event, code):
+    oauth.connect()
+    oauth.inference = [event]
+    with pytest.raises(SIWCRequestError) as error:
+        _model(oauth).invoke("Hi")
+    assert error.value.code == code
+    assert error.value.request_id == "req-test"
 
 
 def test_incomplete_stream_preserves_incomplete_status(oauth):
