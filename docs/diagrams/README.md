@@ -45,7 +45,7 @@ is no verifier node in the LangGraph topology.
 - Figure 3.3 runtime/control flow: [chapter3-runtime-flow.mmd](./chapter3-runtime-flow.mmd)
 - Figure 3.4 conceptual AKG edges vs runtime adapters: [chapter3-figure-3-4.mmd](./chapter3-figure-3-4.mmd)
 
-These Mermaid sources accompany the [derived Chapter 3 revision](../active/CHAPTER_3_REVISED_2026-10-28.md).
+These Mermaid sources accompany the [derived Chapter 3 revision](../completed/CHAPTER_3_REVISED_2026-10-28.md).
 They distinguish the selection block (`target_method=None`) from forced-method
 coverage, keep preflight/freeze/execution/review/analysis as separate stages,
 and separate runtime exploit candidates from detection, candidate-verification,

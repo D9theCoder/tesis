@@ -1,13 +1,18 @@
 # Handoff: strict LLM mutation and template payload modes
 
-Status: **active; offline implementation checks pass under `payload-policy.v2`;
+Status: **completed implementation; archived by owner direction on 2026-10-29;
 research acceptance remains pending**. The owner approved the bounded
 detection/verification control policy on 2026-10-28.
 The companion [Chapter 3 experiment-flow handoff](HANDOFF_CHAPTER_3_EXPERIMENT_FLOW_DRIFT_2026-10-28.md)
 and the [derived Chapter 3 revision](CHAPTER_3_REVISED_2026-10-28.md) define the
-research protocol. This handoff must remain in `docs/active/` until the missing
-research prerequisites and acceptance evidence listed in the companion's
-implementation-verification section are supplied. Section 4 is approved policy.
+research protocol for the implemented work. The owner moved this handoff to
+`docs/completed/` after implementation. The missing research prerequisites and
+acceptance evidence listed in the companion's implementation-verification
+section remain open; this archival does not establish full research acceptance.
+The DOCX remains in `docs/active/` for the
+[planned document reconciliation](../active/HANDOFF_COMBINED_THESIS_DOCX_RECONCILIATION_2026-10-29.md),
+which records the owner's later choices for the consolidated thesis narrative.
+Section 4 is approved implementation policy.
 
 ## 1. Goal and scope
 

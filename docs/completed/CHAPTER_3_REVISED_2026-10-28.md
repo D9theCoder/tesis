@@ -8,6 +8,13 @@
 > Klaim pada dokumen ini adalah rancangan dan batas bukti, bukan klaim hasil
 > eksperimen live.
 
+> **Catatan arsip (2026-10-29).** Dokumen ini dipindahkan ke `docs/completed/`
+> atas arahan pemilik. Lokasi arsip tidak menyatakan bahwa prasyarat eksperimen
+> atau pemeriksaan visual DOCX telah selesai. Keputusan terbaru untuk dokumen
+> gabungan tercatat pada [handoff rekonsiliasi](../active/HANDOFF_COMBINED_THESIS_DOCX_RECONCILIATION_2026-10-29.md),
+> termasuk pemilihan metode oleh model pada eksperimen utama, target manual
+> untuk diagnostik, dan tidak memasukkan Template ke DOCX gabungan.
+
 ## 3.1 Kerangka Pikir Penelitian
 
 Penelitian ini menggunakan lingkungan eksperimen terkontrol (sandbox) untuk
@@ -372,7 +379,7 @@ Sumber Mermaid revisi: `docs/diagrams/chapter3-figure-3-1.mmd`,
 
 `docs/active/bab-3-v4-rubric-tables-2026-10-28.docx` adalah turunan terbatas
 yang hanya mengganti Tabel 3.5–3.11 dengan tabel v4 dan menambahkan catatan
-pembaruan. Auditnya: `docs/active/bab-3-v4-rubric-tables-2026-10-28.audit.json`
+pembaruan. Auditnya: `docs/completed/bab-3-v4-rubric-tables-2026-10-28.audit.json`
 (sumber SHA-256 `8cc45f07…`, output SHA-256 `3bcccf…`, 7 tabel, 35 contoh,
 matematika/objek dan part paket lain dipertahankan). Prosa lengkap yang direvisi
 adalah dokumen Markdown ini; DOCX turunan **bukan** klaim bahwa seluruh prosa di
@@ -382,7 +389,7 @@ Regenerasi turunan (tidak mengubah sumber):
 ```bash
 python -m evaluation.rubric_document "bab 3 only.docx" docs/reference/thesis_scoring.md \
   --output "docs/active/bab-3-v4-rubric-tables-2026-10-28.docx" \
-  --audit docs/active/bab-3-v4-rubric-tables-2026-10-28.audit.json
+  --audit docs/completed/bab-3-v4-rubric-tables-2026-10-28.audit.json
 ```
 
 ## 3.16 Perintah Studi dan Analisis

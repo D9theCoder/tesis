@@ -68,7 +68,7 @@ input for any continuation and is never applied automatically. The study driver 
 receipt analysis in `evaluation/research_analysis.py`; the same commands are
 available as `python -m tesis study …`. The richer methodology and v4 Tables
 3.5–3.11 are in
-[`docs/active/CHAPTER_3_REVISED_2026-10-28.md`](docs/active/CHAPTER_3_REVISED_2026-10-28.md).
+[`docs/completed/CHAPTER_3_REVISED_2026-10-28.md`](docs/completed/CHAPTER_3_REVISED_2026-10-28.md).
 `python -m tesis run --dry-run` is offline and does not prove DVWA readiness.
 Run artifacts include real `http_request_counters`; evidence-row counts are
 named separately and must not be presented as physical requests.

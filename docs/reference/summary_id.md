@@ -1807,7 +1807,7 @@ Cakupan projection membedakan rencana, artefak yang tersedia, completed, failed,
 
 ## Revisi alur eksperimen Bab III (2026-10-28)
 
-Metodologi yang direvisi adalah [dokumen Bab III turunan](../active/CHAPTER_3_REVISED_2026-10-28.md). Dokumen tersebut adalah revisi turunan; `bab 3 only.docx` dipertahankan tanpa perubahan. Tabel rubrik 3.5–3.11 mengikuti [`thesis_scoring.md`](thesis_scoring.md#report-rubric-and-illustrative-conditions), bukan redaksi DOCX lama.
+Metodologi yang direvisi adalah [dokumen Bab III turunan](../completed/CHAPTER_3_REVISED_2026-10-28.md). Dokumen tersebut adalah revisi turunan; `bab 3 only.docx` dipertahankan tanpa perubahan. Tabel rubrik 3.5–3.11 mengikuti [`thesis_scoring.md`](thesis_scoring.md#report-rubric-and-illustrative-conditions), bukan redaksi DOCX lama.
 
 Studi utama kini menyatakan dua blok. Blok **selection** memakai `target_method=None` dan mempertahankan `linear_hybrid` serta `akg_guided_hybrid` dengan `hybrid`; hanya keputusan `decision_origin=model` yang mendukung klaim pemilihan metode. Blok **forced** menetapkan setiap metode terdaftar dan mengukur cakupan agen/payload per metode; blok ini tidak membuktikan kemampuan memilih model. Setiap koordinat memerlukan minimal tiga repetisi, dan rencana membekukan config, profil ranking, oracle, jadwal harga token, versi policy/prompt/schema, hash sumber, fixture, dan protokol sebelum eksekusi. Perubahan apa pun memulai epoch baru; run historis dan `scoring_v4_matrix.py` 108-koordinat yang beku tidak pernah ditulis ulang.
 

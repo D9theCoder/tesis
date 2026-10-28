@@ -452,7 +452,7 @@ Pending discovery uses the latest eligible declared review epoch and validates i
 
 ## Chapter 3 experiment flow and final-receipt grouping (2026-10-28)
 
-The revised methodology is the [derived Chapter 3 document](../active/CHAPTER_3_REVISED_2026-10-28.md); the source DOCX is unchanged. Tables 3.5–3.11 above remain the normative v4 rubrics. Execution artifacts and runtime composites stay provisional (`runtime_provisional_scoring.v2`); only Human/AI final receipts may support thesis conclusions.
+The revised methodology is the [derived Chapter 3 document](../completed/CHAPTER_3_REVISED_2026-10-28.md); the source DOCX is unchanged. Tables 3.5–3.11 above remain the normative v4 rubrics. Execution artifacts and runtime composites stay provisional (`runtime_provisional_scoring.v2`); only Human/AI final receipts may support thesis conclusions.
 
 The study declares two blocks. `selection` (`target_method=None`) observes model method choice and adaptation; `forced` assigns every registered method for agent/payload coverage and cannot establish model-selection ability. Both keep the two primary hybrid conditions and at least three repeats. Arbitrary forced or route decisions are not model accuracy; only trusted `decision_origin=model` choices feed first-choice/adaptation metrics. `forced_selection_decisions`, `deterministic_selection_decisions`, and `route_selection_decisions` are reported separately.
 

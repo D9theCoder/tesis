@@ -1,14 +1,17 @@
 # Handoff: Chapter 3 experiment-flow drift and probe-control policy
 
-Status: **active; offline implementation checks pass under `chapter3-flow.v2`;
+Status: **completed implementation; archived by owner direction on 2026-10-29;
 research acceptance remains pending**. The owner approved the bounded-control
 policy on 2026-10-28. Runtime, configuration and payload-mode corrections were
 implemented in the same workstream as the
 [payload-modes handoff](HANDOFF_LLM_PAYLOAD_MODES_2026-10-28.md). The derived
 revision is [Chapter 3 revised](CHAPTER_3_REVISED_2026-10-28.md); the source
-`bab 3 only.docx` is preserved unchanged. This handoff remains in `docs/active/`:
-the implementation-verification section records passing checks and the missing
-scientific prerequisites. No live experiment result is claimed here.
+`bab 3 only.docx` is preserved unchanged. The owner moved this handoff to
+`docs/completed/` after implementation; section 8 retains the passing checks
+and outstanding scientific prerequisites. This lifecycle closure does not
+establish full research acceptance. The source DOCX remains in `docs/active/`
+for the [planned document reconciliation](../active/HANDOFF_COMBINED_THESIS_DOCX_RECONCILIATION_2026-10-29.md).
+No live experiment result is claimed here.
 
 The original sections below record the investigation and proposed remediation.
 Where they say "upcoming" or "recommendation", read them as pre-implementation
@@ -820,4 +823,6 @@ from successful connectivity or offline controls. Required final scores, cost
 and paired comparisons remain unavailable where their evidence is missing.
 No primary experiment or frozen 108-coordinate scoring matrix was rerun, and no
 historical score was rewritten. The derived DOCX's visual layout remains
-unverified. Both handoffs therefore remain active rather than completed.
+unverified. These limitations remain open after the owner-directed archival of
+both implementation handoffs on 2026-10-29; their completed-folder location is
+not evidence that the scientific prerequisites or visual acceptance have passed.

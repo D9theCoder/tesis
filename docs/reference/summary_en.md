@@ -1762,7 +1762,7 @@ Projection coverage separates planned, represented, completed, failed, interrupt
 
 ## 17. Chapter 3 experiment flow revision (2026-10-28)
 
-The revised methodology is [the derived Chapter 3 document](../active/CHAPTER_3_REVISED_2026-10-28.md). It is a derived revision; the source `bab 3 only.docx` is preserved unchanged. Rubric Tables 3.5–3.11 follow [`thesis_scoring.md`](thesis_scoring.md#report-rubric-and-illustrative-conditions), not the older DOCX wording.
+The revised methodology is [the derived Chapter 3 document](../completed/CHAPTER_3_REVISED_2026-10-28.md). It is a derived revision; the source `bab 3 only.docx` is preserved unchanged. Rubric Tables 3.5–3.11 follow [`thesis_scoring.md`](thesis_scoring.md#report-rubric-and-illustrative-conditions), not the older DOCX wording.
 
 The primary study now declares two blocks. The **selection** block uses `target_method=None` and keeps `linear_hybrid` and `akg_guided_hybrid` with `hybrid`; only `decision_origin=model` choices can support method-selection claims. The **forced** block assigns each registered method and measures per-method agent/payload coverage; it cannot establish model selection ability. Each coordinate requires at least three repeats, and the plan freezes config, ranking profile, oracles, token-price schedule, policy/prompt/schema versions, source hashes, fixture and protocol before execution. Any change starts a new epoch; historical runs and the frozen 108-coordinate `scoring_v4_matrix.py` are never rewritten.
 
