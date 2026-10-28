@@ -1454,9 +1454,16 @@ credential controls run in the serialized HTTP gate. Probe and containment
 telemetry are retained without counting a method visit or proving an exploit.
 Negative or unavailable evidence does not enable the chain, and inconclusive
 destination reconnaissance is not retried during the same run.
+For an authenticated-session source, an unavailable Access Control destination
+precondition can be measured using validated static probes in the recovered
+non-admin session. The router probes only a consumable route, respects route
+priority, records the source evidence IDs, and does not repeat an inconclusive
+probe for that source. It never promotes a probe to exploit or chain proof.
+For separate branches, `akg_path` remains a connected traversal; each branch
+is available through `current_chain` and `chain_history`.
 Saved-input replay preserves the active visit ID on revalidated receipts and
 retains earlier-visit receipt indices. A replayed subset narrows only its active
-queue. Both TUI artifact scanners and TESIS Web exclude completed-resume
+exploit queue while retaining already saved probe candidates. Both TUI artifact scanners and TESIS Web exclude completed-resume
 `.resume.json` receipts from experiment run discovery.
 
 Each fresh checkpointed execution has a new graph thread. Resume fingerprints
@@ -1578,9 +1585,16 @@ An executed candidate recorded in `tried_payloads` without a response remains
 unassessed and prevents `no_finding`; unexecuted candidates do not enter that
 assessment. Cancellation events carry the terminal outcome and reason into the
 TUI evidence region, while child events do not terminalize the matrix parent.
-The present permission/session oracle protocol
-attests confirmation; an absent attestation cannot establish a controlled
-negative for these methods. Candidate disposition rows retain their narrower
+The permission/session oracle protocols retain positive attestations and
+candidate-bound `negative_attestations` separately. A negative requires matched
+independent controls: an explicit permission denial with an allowed admin
+reference, or rejection of the executed credential with a verified valid-login
+reference. Session negatives also require an explicit credential rejection in
+the original response; token errors and unevaluated forms remain unassessed.
+SQLi dependency controls match the exact recovered pair consumed by the
+destination candidate, including when one response extracts multiple pairs.
+A replay that disagrees with the original outcome remains pending.
+An absent attestation cannot establish a controlled negative. Candidate disposition rows retain their narrower
 `execution_status=executed|not_executed` meaning; the run lifecycle above belongs
 to the run envelope and final state.
 

@@ -426,7 +426,13 @@ def payload_validator_node(state: dict[str, Any]) -> dict[str, Any]:
             if not parsed:
                 continue
             source = next((c for c in state.get("found_credentials", [])
-                if c.get("representation") == "plaintext" and c.get("source_evidence_id")
+                if c.get("representation") == "plaintext"
+                and c.get("source_evidence_id") in route.get("source_evidence_ids", [])
+                and c.get("source_candidate_id") and c.get("source_visit_id")
+                and any(row.get("evidence_id") == c["source_evidence_id"]
+                    and row.get("candidate_id") == c["source_candidate_id"]
+                    and row.get("visit_id") == c["source_visit_id"]
+                    for row in state.get("response_evidence", []))
                 and (c.get("username"), c.get("password")) == parsed.groups()), None)
             if source:
                 bindings.append({"candidate_id": candidate["candidate_id"],

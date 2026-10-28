@@ -165,6 +165,7 @@ def exploit_event(
         "endpoint": endpoint,
         "status_code": status_code,
         "success": success,
+        "signal_detected": success,
         "verified_grade": 0,
         "verification_reason": "no_verified_exploit_signal",
         **_response_receipt(response),

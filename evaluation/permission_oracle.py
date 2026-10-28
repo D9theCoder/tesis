@@ -10,10 +10,11 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
-from agents.state_utils import candidate_evidence_payloads
+from agents.state_utils import candidate_evidence_payloads, normalize_force_browse_path
 from evaluation.scoring_evidence import evidence_hash, validate_sources
 from foundation.session_manager import (
     DVWASession,
+    open_configured_principal_session,
     open_documented_nonadmin_session,
     open_verified_principal_session,
     session_fingerprint,
@@ -57,21 +58,29 @@ def _request_descriptor(target: str, row: dict, protocol: dict) -> tuple[str, di
     if method in _USER_METHODS:
         match = re.fullmatch(r"userId\s*=\s*(\d+)", str(row.get("payload") or ""), re.I)
         expected_path = "/vulnerabilities/authbypass/get_user_data.php"
-        protected_id = str(protocol.get("protected_user_id", "1"))
-        if relative_path != expected_path or parsed_endpoint.query or not match or match.group(1) != protected_id:
+        protected_ids = protocol.get("protected_user_ids", [str(protocol.get("protected_user_id", "1"))])
+        if (not isinstance(protected_ids, list) or not all(isinstance(value, str) and value.isdecimal() for value in protected_ids)
+                or relative_path != expected_path or parsed_endpoint.query or not match or match.group(1) not in protected_ids):
             return None
+        protected_id = match.group(1)
         object_id = f"dvwa-user:{protected_id}"
         if row.get("object_id") != object_id:
             return None
         return relative_path, {"userId": protected_id}, object_id, "read"
     if method == "ac_force_browse":
         protected_paths = protocol.get("protected_paths", [])
-        if relative_path not in protected_paths or parsed_endpoint.query:
+        canonical_path = normalize_force_browse_path(relative_path)
+        if canonical_path not in protected_paths or parsed_endpoint.query:
             return None
-        object_id = f"dvwa-path:{relative_path}"
-        if row.get("object_id") != object_id:
+        object_id = row.get("object_id")
+        if not isinstance(object_id, str) or not object_id.startswith("dvwa-path:/"):
             return None
-        return relative_path, {}, object_id, "read"
+        object_path = object_id[len("dvwa-path:"):]
+        payload_path = "/" + str(row.get("payload") or "").lstrip("/")
+        if (normalize_force_browse_path(object_path) != canonical_path
+                or normalize_force_browse_path(payload_path) != canonical_path):
+            return None
+        return canonical_path, {}, object_id, "read"
     return None
 
 
@@ -100,6 +109,19 @@ def _request(session, method: str, descriptor: tuple[str, dict, str, str], proto
     path, params, _, _ = descriptor
     response = session.get(path, params=params) if params else session.get(path)
     return response, _resource_visible(method, path, params, response, protocol)
+
+
+def _denial_observed(method: str, response) -> bool:
+    """Recognize the fixture's explicit read-API denial, never absent markers."""
+    if method == "ac_force_browse" and response.status_code == 403:
+        return str(response.text).strip().lower() in {"unauthorised", "unauthorized"}
+    if method not in _USER_METHODS or response.status_code != 200:
+        return False
+    try:
+        body = json.loads(response.text)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(body, dict) and body.get('result') == 'fail' and str(body.get('error', '')).lower() == 'access denied'
 
 
 def _candidate_session(target: str, level: str, row: dict, raw_state: dict):
@@ -166,7 +188,7 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
             or row.get("payload") not in candidate_evidence_payloads(method, candidate.get("payload_or_logic"))
             or not source_raw or any(source_raw.get(key) != row.get(key) for key in (
                 "agent_id", "candidate_id", "visit_id", "response_sha256", "object_id", "action"))
-            or row.get("status_code") != 200 or row.get("signal_detected") is not True
+            or row.get("status_code") not in (200, 403) or type(row.get("signal_detected")) is not bool
             or not row.get("principal_id") or not row.get("session_fingerprint")
             or not row.get("initial_session_fingerprint") or row.get("object_id") != object_id
             or row.get("action") != action):
@@ -187,8 +209,7 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
         "scope_outcome": "pending",
     }
     try:
-        admin, admin_principal, admin_initial = open_verified_principal_session(
-            target, "admin", "password", config.get("security_level"))
+        admin, admin_principal, admin_initial = open_configured_principal_session(target, config.get("security_level"))
         sessions.append(admin)
         policy_response = admin.get("/vulnerabilities/authbypass/")
         policy_text = BeautifulSoup(policy_response.text, "html.parser").get_text(" ", strip=True)
@@ -207,6 +228,7 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
             raise ValueError("Candidate source material is not bound to its source evidence")
         sessions.append(candidate_session)
         candidate_response, candidate_allowed = _request(candidate_session, method, descriptor, protocol)
+        candidate_denied = _denial_observed(method, candidate_response)
         replay = {
             "run_id": artifact["run_id"], "execution_id": artifact["execution_id"],
             "fixture_id": config["fixture_id"], "protocol_version": config["protocol_version"],
@@ -219,6 +241,7 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
             "status_code": int(candidate_response.status_code),
             "response_sha256": _body_hash(candidate_response),
             "expected_allowed": False, "observed_allowed": candidate_allowed,
+            "denial_observed": candidate_denied,
         }
         document["candidate_replay"] = replay
 
@@ -226,6 +249,7 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
         sessions.append(anonymous)
         anonymous.get("login.php")
         anonymous_initial = session_fingerprint(anonymous)
+        anonymous.set_security_level(config.get("security_level", "low"))
         denied_response, anonymous_allowed = _request(anonymous, method, descriptor, protocol)
         controls.append(_control_record("anonymous_denied", "anonymous", "anonymous", anonymous,
             anonymous_initial, object_id, action, False, anonymous_allowed, denied_response))
@@ -243,7 +267,11 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
         if not policy_ok:
             document["reason"] = "admin_only_policy_not_observed"
             return document
-        if not admin_allowed or not candidate_allowed or (
+        if candidate_allowed is not row.get("signal_detected"):
+            document["reason"] = "candidate_control_outcome_disagrees"
+            return document
+        negative = row.get("signal_detected") is False and candidate_denied
+        if not admin_allowed or (not candidate_allowed and not negative) or (
             anonymous_allowed and protocol.get("allow_broad_exposure") is not True
         ):
             document["reason"] = "matched_allowed_denied_or_candidate_control_failed"
@@ -259,12 +287,14 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
             "session_fingerprint": row["session_fingerprint"],
             "initial_session_fingerprint": row["initial_session_fingerprint"],
             "object_id": object_id, "action": action,
-            "expected_allowed": False, "observed_allowed": True,
+            "expected_allowed": False, "observed_allowed": not negative,
+            "outcome": "not_confirmed" if negative else "confirmed", "denial_observed": candidate_denied,
             "scope_outcome": scope_outcome,
         }
-        document["attestations"] = [attestation]
-        if fixture_attestation_valid(attestation, row, document, artifact):
-            document["status"] = "confirmed"
+        field = "negative_attestations" if negative else "attestations"
+        document[field] = [attestation]
+        if fixture_attestation_valid(attestation, row, document, artifact, outcome=attestation["outcome"]):
+            document["status"] = attestation["outcome"]
         else:
             document["reason"] = "attestation_binding_rejected"
         return document
@@ -287,7 +317,7 @@ def collect_permission_oracles(artifact: dict, raw_state: dict) -> dict:
     config = artifact["config"]
     protocol_document = protocol_source["document"]
     protocol = protocol_document["oracle_protocol"]
-    if any(config.get(key) != protocol_document.get(key) for key in ("fixture_id", "protocol_version")):
+    if any(not config.get(key) or config[key] != protocol_document.get(key) for key in ("fixture_id", "protocol_version")):
         raise ValueError("Permission protocol coordinate mismatch")
     if protocol_source["origin"] != "operator_fixture" and artifact.get("validation_scope") != "offline_synthetic_fixture":
         raise ValueError("Live permission collection requires an operator fixture protocol")

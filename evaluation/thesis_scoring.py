@@ -347,9 +347,10 @@ def review_queue(source: str | Path) -> dict:
             proof_refs = []
             for ref in refs:
                 evidence = _resolve(artifact, ref)
-                oracle_ref = evidence.get('oracle_ref') if isinstance(evidence, dict) else None
-                if oracle_ref and isinstance(_resolve(artifact, oracle_ref), dict):
-                    proof_refs.extend([oracle_ref, '/'.join(oracle_ref.split('/')[:4])])
+                for field in ('oracle_ref', 'negative_oracle_ref'):
+                    oracle_ref = evidence.get(field) if isinstance(evidence, dict) else None
+                    if oracle_ref and isinstance(_resolve(artifact, oracle_ref), dict):
+                        proof_refs.extend([oracle_ref, '/'.join(oracle_ref.split('/')[:4])])
             for dependency in verified_dependencies(artifact):
                 if dependency['source'].get('candidate_id') == cid and dependency['source'].get('agent_id') == method:
                     proof_refs.extend([dependency['consumption']['dependency_ref'],
@@ -847,7 +848,7 @@ def _comparison_fingerprint(record):
         config['scoring_oracles'] = [{
             'source_id': source['source_id'], 'origin': source['origin'],
             'document': {k: v for k, v in source['document'].items()
-                if k not in {'attestations', 'dependencies', 'controls', 'dependency_controls',
+                if k not in {'attestations', 'negative_attestations', 'dependencies', 'controls', 'dependency_controls',
                     'candidate_replay', 'requests', 'policy_evidence'}},
         } for source in config['scoring_oracles'] or []
             # Collectors append candidate/route-specific sources alongside the

@@ -1,6 +1,7 @@
 """Tests for 3-surface orchestrator."""
 
 from agents.orchestrator import orchestrator
+from core.knowledge_graph import AttackKnowledgeGraph
 
 def test_orchestrator_stops_when_budget_exhausted():
     """Verifies orchestrator stops when budget exhausted behavior."""
@@ -58,9 +59,9 @@ def test_orchestrator_critical_outcome_routes_to_scorer():
     }
     update = orchestrator(state)
     assert update["next_agent"] == "scorer"
-def test_orchestrator_labels_model_scorer_stop_after_method_exhaustion(monkeypatch):
-    """A scorer stop after an exhausted viable set must retain a terminal reason."""
-    class FakeKnowledgeGraph:
+def test_orchestrator_stops_without_model_call_after_method_exhaustion(monkeypatch):
+    """An exhausted viable set stops deterministically with a terminal reason."""
+    class FakeKnowledgeGraph(AttackKnowledgeGraph):
         def get_viable_methods(self, surface, observations):
             return ["ac_force_browse"]
 
@@ -70,7 +71,8 @@ def test_orchestrator_labels_model_scorer_stop_after_method_exhaustion(monkeypat
                 "content": '{"next_agent":"scorer","reason_code":"best_viable"}',
             })()
 
-    monkeypatch.setattr("agents.orchestrator.AttackKnowledgeGraph", FakeKnowledgeGraph)
+    monkeypatch.setattr("agents.orchestrator.get_attack_knowledge_graph", FakeKnowledgeGraph)
+    monkeypatch.setattr("core.workflow_policy.get_attack_knowledge_graph", FakeKnowledgeGraph)
     monkeypatch.setattr("agents.orchestrator.get_llm", lambda *args, **kwargs: FakeLLM())
     result = orchestrator({
         "target_url": "http://localhost/dvwa",
@@ -98,16 +100,16 @@ def test_orchestrator_labels_model_scorer_stop_after_method_exhaustion(monkeypat
 
     assert result["next_agent"] == "scorer"
     assert result["task_result"] == "INCOMPLETE"
-    assert result["incomplete_reason"] == "ALL_METHODS_FAILED"
+    assert result["incomplete_reason"] == "ALL_METHODS_EXHAUSTED"
     assert any(
         event["event"] == "orchestrator.stop"
-        and event["payload"] == {"reason": "ALL_METHODS_FAILED"}
+        and event["payload"] == {"reason": "ALL_METHODS_EXHAUSTED"}
         for event in result["telemetry_events"]
     )
 
 def test_orchestrator_distinguishes_model_scorer_stop_before_exhaustion(monkeypatch):
     """A semantic scorer stop before method exhaustion is not all-methods failure."""
-    class FakeKnowledgeGraph:
+    class FakeKnowledgeGraph(AttackKnowledgeGraph):
         def get_viable_methods(self, surface, observations):
             return ["ac_force_browse", "ac_idor"]
 
@@ -117,7 +119,8 @@ def test_orchestrator_distinguishes_model_scorer_stop_before_exhaustion(monkeypa
                 "content": '{"next_agent":"scorer","reason_code":"best_viable"}',
             })()
 
-    monkeypatch.setattr("agents.orchestrator.AttackKnowledgeGraph", FakeKnowledgeGraph)
+    monkeypatch.setattr("agents.orchestrator.get_attack_knowledge_graph", FakeKnowledgeGraph)
+    monkeypatch.setattr("core.workflow_policy.get_attack_knowledge_graph", FakeKnowledgeGraph)
     monkeypatch.setattr("agents.orchestrator.get_llm", lambda *args, **kwargs: FakeLLM())
     result = orchestrator({
         "target_url": "http://localhost/dvwa",
@@ -149,7 +152,7 @@ def test_orchestrator_distinguishes_model_scorer_stop_before_exhaustion(monkeypa
 
 def test_orchestrator_counts_execution_failure_as_attempted_for_terminal_reason(monkeypatch):
     """A recorded agent failure must not degrade an exhausted stop to unspecified."""
-    class FakeKnowledgeGraph:
+    class FakeKnowledgeGraph(AttackKnowledgeGraph):
         def get_viable_methods(self, surface, observations):
             return ["ac_force_browse"]
 
@@ -159,7 +162,8 @@ def test_orchestrator_counts_execution_failure_as_attempted_for_terminal_reason(
                 "content": '{"next_agent":"scorer","reason_code":"best_viable"}',
             })()
 
-    monkeypatch.setattr("agents.orchestrator.AttackKnowledgeGraph", FakeKnowledgeGraph)
+    monkeypatch.setattr("agents.orchestrator.get_attack_knowledge_graph", FakeKnowledgeGraph)
+    monkeypatch.setattr("core.workflow_policy.get_attack_knowledge_graph", FakeKnowledgeGraph)
     monkeypatch.setattr("agents.orchestrator.get_llm", lambda *args, **kwargs: FakeLLM())
     result = orchestrator({
         "target_url": "http://localhost/dvwa",
@@ -185,4 +189,4 @@ def test_orchestrator_counts_execution_failure_as_attempted_for_terminal_reason(
         "consecutive_clean_responses": 0,
     })
 
-    assert result["incomplete_reason"] == "ALL_METHODS_FAILED"
+    assert result["incomplete_reason"] == "ALL_METHODS_EXHAUSTED"

@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import re
 
 from core.knowledge_graph import AttackKnowledgeGraph, get_attack_knowledge_graph
 from core.state import METHODS_BY_SURFACE
@@ -94,9 +95,10 @@ def validate_evidence_config(version, profile, oracles):
     validate_profile(profile)
     validate_sources(oracles)
     for source in oracles:
-        attestations = source['document'].get('attestations', [])
-        if not isinstance(attestations, list) or any(not isinstance(att, dict) for att in attestations):
-            raise ValueError('Oracle attestations must be a list of records')
+        for field in ('attestations', 'negative_attestations'):
+            attestations = source['document'].get(field, [])
+            if not isinstance(attestations, list) or any(not isinstance(att, dict) for att in attestations):
+                raise ValueError('Oracle attestations must be a list of records')
 
 
 def selection_grade(artifact, method):
@@ -177,11 +179,29 @@ def edge_for(record):
         if e.get('is_chain') and e.get('target') == target and e.get('target_agent') == agent), None)
 
 
-def oracle_confirmed(artifact, row):
+def _collected_protocol_valid(artifact, source):
+    parent_hash = source['document'].get('protocol_source_sha256')
+    if parent_hash is None:
+        return True
+    parents = [parent for parent in artifact['config']['scoring_oracles']
+        if parent.get('sha256') == parent_hash and 'status' not in parent['document']
+        and parent.get('origin') == source['origin']
+        and parent['document'].get('oracle_protocol') == source['document'].get('oracle_protocol')
+        and (parent['document'].get('oracle_protocol') or {}).get('enabled') is True]
+    if len(parents) != 1:
+        return False
+    validate_sources(parents)
+    return True
+
+
+def _oracle_verdict(artifact, row, *, negative=False):
     from evaluation.thesis_scoring import _resolve
     from foundation.verifier import fixture_attestation_valid
-    ref = row.get('oracle_ref')
-    if not isinstance(ref, str) or not ref.startswith('#/config/scoring_oracles/'):
+    if row.get('oracle_conflict'):
+        return False
+    field = 'negative_attestations' if negative else 'attestations'
+    ref = row.get('negative_oracle_ref' if negative else 'oracle_ref')
+    if not isinstance(ref, str) or not re.fullmatch(r'#/config/scoring_oracles/[0-9]+/document/' + field + r'/[0-9]+', ref):
         return False
     try:
         index = int(ref.split('/')[3])
@@ -191,9 +211,19 @@ def oracle_confirmed(artifact, row):
     validate_sources([source])
     if source['origin'] != 'operator_fixture' and artifact.get('validation_scope') != 'offline_synthetic_fixture':
         return False
+    if not _collected_protocol_valid(artifact, source):
+        return False
     attestation = _resolve(artifact, ref)
-    return isinstance(attestation, dict) and attestation in source['document'].get('attestations', []) and fixture_attestation_valid(
-        attestation, row, source['document'], artifact)
+    return isinstance(attestation, dict) and attestation in source['document'].get(field, []) and fixture_attestation_valid(
+        attestation, row, source['document'], artifact, outcome='not_confirmed' if negative else 'confirmed')
+
+
+def oracle_confirmed(artifact, row):
+    return _oracle_verdict(artifact, row)
+
+
+def oracle_negative_confirmed(artifact, row):
+    return _oracle_verdict(artifact, row, negative=True)
 
 
 def candidate_base(artifact, cid, method, refs):
@@ -220,14 +250,18 @@ def candidate_base(artifact, cid, method, refs):
         verifier = next((d for d in artifact['final_state'].get('verifier_history', [])
             if d.get('visit_id') == row.get('visit_id') and d.get('agent_id') == method
             and d.get('source') == 'method_agent_evidence' and ref in valid_refs), None)
-        if not verifier or row.get('stage') not in {'exploit', 'bypass'} or row.get('status_code') not in (200, 404) or not row.get('response_sha256'):
+        negative_oracle = method.startswith(('ac_', 'bf_')) and oracle_negative_confirmed(artifact, row)
+        if not verifier or row.get('stage') not in {'exploit', 'bypass'} or (
+                row.get('status_code') not in (200, 404) and not negative_oracle) or not row.get('response_sha256'):
             continue
         visit_refs = [r for r in valid_refs if _resolve(artifact, r).get('visit_id') == row.get('visit_id')]
         tier = _candidate_proof(artifact, cid, method, visit_refs)
         oracle = False
         if method.startswith(('ac_', 'bf_')):
             oracle = oracle_confirmed(artifact, row)
-            if oracle:
+            if negative_oracle:
+                tier = 0
+            elif oracle:
                 tier = 3
             elif tier is not None or row.get('signal_detected') is True:
                 tier = min(2 if tier is None else tier, 2)  # Session/permission labels cannot replace an independent oracle.
@@ -310,6 +344,8 @@ def verified_dependencies(artifact):
             try:
                 bundle = artifact['config']['scoring_oracles'][int(dependency_ref.split('/')[3])]
                 validate_sources([bundle])
+                if not _collected_protocol_valid(artifact, bundle):
+                    continue
             except (KeyError, IndexError, ValueError, TypeError):
                 continue
             if bundle['origin'] != 'operator_fixture' and artifact.get('validation_scope') != 'offline_synthetic_fixture':
@@ -461,18 +497,28 @@ def attach_oracle_evidence(artifact):
     for row in artifact['final_state'].get('response_evidence', []):
         if not isinstance(row, dict) or not isinstance(row.get('agent_id'), str):
             continue
-        matches = []
-        for i, source in enumerate(sources):
-            if source['origin'] != 'operator_fixture' and artifact.get('validation_scope') != 'offline_synthetic_fixture':
-                continue
-            for j, att in enumerate(source['document'].get('attestations', [])):
-                if fixture_attestation_valid(att, row, source['document'], artifact):
-                    matches.append(f'#/config/scoring_oracles/{i}/document/attestations/{j}')
-        if len(matches) == 1:
-            row['oracle_ref'] = matches[0]
-        elif len(matches) > 1:
-            row['oracle_conflict'] = 'ambiguous_operator_attestations'
+        row.pop('oracle_conflict', None)
+        for negative in (False, True):
+            field = 'negative_attestations' if negative else 'attestations'
+            key = 'negative_oracle_ref' if negative else 'oracle_ref'
+            matches = []
+            for i, source in enumerate(sources):
+                if source['origin'] != 'operator_fixture' and artifact.get('validation_scope') != 'offline_synthetic_fixture':
+                    continue
+                for j, att in enumerate(source['document'].get(field, [])):
+                    if fixture_attestation_valid(att, row, source['document'], artifact,
+                            outcome='not_confirmed' if negative else 'confirmed'):
+                        matches.append(f'#/config/scoring_oracles/{i}/document/{field}/{j}')
+            row.pop(key, None)
+            if len(matches) == 1:
+                row[key] = matches[0]
+            elif len(matches) > 1:
+                row['oracle_conflict'] = 'ambiguous_operator_attestations'
+        if row.get('oracle_ref') and row.get('negative_oracle_ref'):
+            row['oracle_conflict'] = 'contradictory_operator_attestations'
+        if row.get('oracle_conflict'):
             row.pop('oracle_ref', None)
+            row.pop('negative_oracle_ref', None)
 
 
 def weak_opportunity_update(state):

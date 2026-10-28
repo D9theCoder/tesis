@@ -213,13 +213,14 @@ def test_result_table_renders_execution_and_outcome_as_separate_cells():
     from types import SimpleNamespace
     from tesis.tui_drawers import ResultsDrawer
     rows = []
-    table = SimpleNamespace(clear=lambda: None, add_row=lambda *cells, **kwargs: rows.append(cells))
+    table = SimpleNamespace(clear=lambda: None, add_row=lambda *cells, **kwargs: rows.append(cells),
+        row_count=0, cursor_row=0, scroll_y=0, rows=[], move_cursor=lambda **kw: None, scroll_to=lambda **kw: None)
     summary = SimpleNamespace(update=lambda text: None)
     item = SimpleNamespace(run_id='unit', execution_id='unit-execution', status='success',
         execution_status='completed', security_outcome='fixture_limited', provider='offline',
         security_level='low', path='unit.json')
     drawer = SimpleNamespace(_visible_items=lambda: [item], _cell=ResultsDrawer._cell, _items=[item], _row_items={},
-        query_one=lambda selector, kind: table if selector == '#results-table' else summary)
+        _filters={}, query_one=lambda selector, kind: table if selector == '#results-table' else summary)
     ResultsDrawer._render_table(drawer)
     assert rows == [('unit', 'completed', 'fixture_limited', 'offline', 'low')]
 

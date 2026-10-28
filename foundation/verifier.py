@@ -11,8 +11,23 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 
-def fixture_attestation_valid(attestation, row, document, artifact):
+def credential_rejection_observed(body: str) -> bool:
+    """Recognize an evaluated DVWA credential rejection, excluding form errors."""
+    text = BeautifulSoup(str(body), "html.parser").get_text(" ", strip=True).lower()
+    return ("username and/or password incorrect" in text
+        and "csrf token is incorrect" not in text and "captcha" not in text)
+
+
+def fixture_attestation_valid(attestation, row, document, artifact, *, outcome="confirmed"):
     """Check operator evidence offline; response text cannot create an oracle."""
+    if any(not isinstance(record, dict) for record in (attestation, row, document, artifact)):
+        return False
+    if outcome not in {"confirmed", "not_confirmed"} or not isinstance(row.get('agent_id'), str):
+        return False
+    negative = outcome == "not_confirmed"
+    if negative and (attestation.get('outcome') != outcome or row.get('signal_detected') is not False
+                     or row.get('status_code') not in (200, 403)):
+        return False
     from evaluation.scoring_evidence import timestamp
     config = artifact.get('config', {})
     for key in ('run_id', 'execution_id'):
@@ -81,8 +96,8 @@ def fixture_attestation_valid(attestation, row, document, artifact):
                 'endpoint': row.get('endpoint'),
             }.items()):
                 return False
-            if (replay.get('expected_allowed') is not False or replay.get('observed_allowed') is not True
-                    or replay.get('status_code') != 200 or not replay.get('response_sha256')
+            if (replay.get('expected_allowed') is not False or replay.get('observed_allowed') is not (not negative)
+                    or replay.get('status_code') not in ((200, 403) if negative else (200,)) or not replay.get('response_sha256')
                     or not replay.get('session_fingerprint') or not replay.get('initial_session_fingerprint')
                     or replay['session_fingerprint'] == replay['initial_session_fingerprint']
                     or replay.get('principal_id') == (document.get('admin_principal_id') or 'admin')):
@@ -110,16 +125,40 @@ def fixture_attestation_valid(attestation, row, document, artifact):
                     or denied_control.get('expected_allowed') is not False
                     or (denied_control.get('observed_allowed') is True) != broad_exposure
                     or attestation.get('expected_allowed') is not False
-                    or attestation.get('observed_allowed') is not True
+                    or attestation.get('observed_allowed') is not (not negative)
                     or attestation.get('scope_outcome') != document.get('scope_outcome')
                     or replay.get('scope_outcome') != document.get('scope_outcome')
                     or attestation.get('principal_id') == (document.get('admin_principal_id') or 'admin')):
                 return False
+            if negative:
+                return (covered and not broad_exposure and replay.get('denial_observed') is True
+                    and attestation.get('denial_observed') is True
+                    and attestation.get('principal_id') == attestation.get('expected_principal_id'))
+        elif negative:
+            return False
     else:
         covered = (any(c.get('new_session') is False for c in controls)
             and any(c.get('credentials_valid') is False for c in controls)
             and any(c.get('session_fingerprint') == c.get('initial_session_fingerprint') for c in controls)
             and any(c.get('principal_id') != c.get('expected_principal_id') for c in controls))
+        if (document.get('oracle_protocol') or {}).get('kind') == 'dvwa_candidate_session.v1':
+            replay = document.get('candidate_replay')
+            if not isinstance(replay, dict) or any(replay.get(key) != attestation.get(key) for key in (
+                    'run_id', 'execution_id', 'fixture_id', 'protocol_version', 'method',
+                    'visit_id', 'candidate_id', 'evidence_id', 'response_sha256',
+                    'initial_session_fingerprint')):
+                return False
+            if negative:
+                return (covered and credential_rejection_observed(row.get('response_excerpt', ''))
+                    and replay.get('credentials_valid') is False
+                    and replay.get('initial_authenticated') is False and not replay.get('principal_id')
+                    and replay.get('expected_principal_id') == attestation.get('principal_id')
+                    and any(c.get('control') == 'known_valid_identity' and confirmed(c) for c in controls))
+            if replay.get('principal_id') != attestation.get('principal_id'):
+                return False
+            return covered and confirmed(replay)
+        elif negative:
+            return False
     return covered and confirmed(attestation)
 
 

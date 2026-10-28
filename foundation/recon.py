@@ -229,6 +229,64 @@ def probe_brute_force_destination(state: dict) -> dict:
         "containment_events": containment_events}
 
 
+def probe_access_control_destination(state: dict, method: str, source_ids: list[str]) -> dict:
+    """Measure an AC prerequisite once per recovered source, in its own session."""
+    if method not in {"ac_idor", "ac_force_browse"} or not source_ids:
+        return {}
+    if any(event.get("event") == "recon.destination.completed"
+           and event.get("payload", {}).get("method") == method
+           and event.get("payload", {}).get("source_evidence_ids") == source_ids
+           for event in state.get("telemetry_events", [])):
+        return {}
+    from agents.access_control.session import open_access_control_session
+    from agents.access_control.ac_idor_agent import _probe_preconditions as probe_idor
+    from agents.access_control.ac_force_browse_agent import _probe_preconditions as probe_force_browse
+    from core.knowledge_graph import get_attack_knowledge_graph
+    from foundation.payload_library import PayloadLibrary
+    from foundation.payload_validator import validate_candidate
+
+    observations, events, containment_events = {}, [], []
+    session = None
+    reason = "probe_evidence_unavailable"
+    try:
+        level = state.get("security_level", "low")
+        controls = [candidate for candidate in PayloadLibrary().load_seed_candidates(method, level)
+                    if candidate.get("stage") == "probe"]
+        profile = get_attack_knowledge_graph().get_payload_profile(method)
+        if controls and all(validate_candidate(candidate, method, profile).get("valid") is True for candidate in controls):
+            probe_state = {**state, "active_chain_route": {"source": "authenticated_session",
+                "target_agent": method, "source_evidence_ids": source_ids}}
+            session, principal, initial, _ = open_access_control_session(probe_state, method, level)
+            session._principal_id, session._initial_session_fingerprint = principal, initial
+            probe = probe_idor if method == "ac_idor" else probe_force_browse
+            _, _, observations, measured = probe(session, [c["payload_or_logic"] for c in controls], set())
+            events = [{**event, "node": "chaining_router", "event": "recon.destination.probe",
+                "payload": {**event.get("payload", {}), "method": method, "source_evidence_ids": source_ids}}
+                for event in measured]
+            if any(event.get("payload", {}).get("status_code") in (200, 403) for event in measured):
+                reason = "preconditions_measured"
+            else:
+                observations = {}
+    except ContainmentError as exc:
+        _append_containment_event(containment_events, exc)
+        reason = "containment_violation"
+    except (TransportError, RequestTimeoutError, ValueError, RuntimeError, OSError) as exc:
+        logger.warning("destination recon failed: %s", type(exc).__name__)
+        reason = "destination_probe_failed"
+    finally:
+        if session is not None:
+            try:
+                session.close()
+            except (RuntimeError, OSError) as exc:
+                logger.warning("destination recon session close failed: %s", type(exc).__name__)
+            finally:
+                _collect_client_containment_events(session, containment_events)
+    events.append({"node": "chaining_router", "event": "recon.destination.completed",
+        "payload": {"method": method, "source_evidence_ids": source_ids,
+            "reason": reason, "observations": observations}})
+    return {"observations": observations, "telemetry_events": events, "containment_events": containment_events}
+
+
 def parse_forms(
     html: str,
     page_url: str,

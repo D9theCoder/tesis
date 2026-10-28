@@ -72,7 +72,8 @@ def _probe_preconditions(
                     records = decoded if isinstance(decoded, list) else [decoded] if isinstance(decoded, dict) else []
                 except (TypeError, ValueError):
                     records = []
-                if any(isinstance(record, dict) for record in records):
+                if any(isinstance(record, dict) and any(record.get(key) is not None
+                        for key in ("user_id", "userId", "id")) for record in records):
                     events[-1]["payload"].update(signal_detected=True, verified_grade=1, verification_reason="verified_probe_precondition")
                     observations[_PROBE_OBSERVATION_KEY] = True
                     return True, tried, observations, events

@@ -188,7 +188,7 @@ def test_configured_roles_and_credentials_reach_saved_execution(tmp_path, monkey
             await app.push_screen(LaunchDrawer(mode=mode))
             await pilot.pause()
             drawer = app.screen
-            reasoning_control = drawer.query_one("#launch-reasoning-effort", Select)
+            reasoning_control = drawer.query_one("#launch-reasoning-effort-choice", Select)
             assert reasoning_control.value == "preserve"
             reasoning_control.value = "inherit"
             assert all(role.reasoning_effort is None for role in drawer._resolved_config().role_configs.values())

@@ -268,13 +268,20 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
 
     stopping = stop_reason(state)
     if stopping:
+        budget_stop = stopping == "budget_exhausted"
+        terminal_fields = ({
+            "task_result": "SUCCESS" if confirmed_vulns else "INCOMPLETE",
+            "incomplete_reason": None if confirmed_vulns else "ITERATION_LIMIT",
+        } if budget_stop else {})
         return {
             "next_agent": "scorer", "workflow_stop_reason": stopping,
+            **terminal_fields,
             "viable_methods": list(state.get("viable_methods", [])),
             "iteration_count": iteration_count,
             "llm_skip_reason": "WORKFLOW_STOPPED_BEFORE_SELECTION",
             "telemetry_events": [{**telemetry_base, "event": "orchestrator.stop",
-                "status": "ok", "payload": {"reason": stopping}}],
+                "status": "incomplete" if budget_stop and not confirmed_vulns else "ok",
+                "payload": {"reason": "ITERATION_LIMIT" if budget_stop else stopping}}],
         }
 
     surface_methods = _canonical_surface_methods(current_surface)

@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from hashlib import sha256
 
+from agents.brute_force.bf_dictionary_agent import _parse_credential
 from evaluation.permission_oracle import _request, _request_descriptor
 from evaluation.scoring_evidence import (
     candidate_base,
@@ -37,21 +38,22 @@ def _validated(state: dict, method: str, candidate_id: str) -> bool:
 
 
 def _material(candidate: dict, raw_state: dict, source: dict) -> tuple[str, str] | None:
-    value = str(candidate.get("payload_or_logic") or "")
-    if ":" not in value:
+    pair = _parse_credential(candidate.get("payload_or_logic", ""))
+    if not all(pair):
         return None
-    username, password = value.split(":", 1)
     credential = next((item for item in raw_state.get("found_credentials", [])
         if isinstance(item, dict) and item.get("source_evidence_id") == source.get("evidence_id")
         and item.get("source_candidate_id") == source.get("candidate_id")
         and item.get("source_visit_id") == source.get("visit_id")
-        and item.get("username") == username and item.get("password") == password), None)
+        and item.get("representation", "plaintext") == "plaintext"
+        and item.get("username") and item.get("password")
+        and (item["username"], item["password"]) == pair), None)
     if not credential:
         return None
-    return username, password
+    return credential["username"], credential["password"]
 
 
-def _dependency_control(target: str, level: str, method: str, descriptor: tuple,
+def _dependency_control(target: str, level: str, method: str, descriptor: tuple | None,
                         username: str, password: str, expected_available: bool,
                         protocol: dict) -> dict:
     session = None
@@ -65,7 +67,13 @@ def _dependency_control(target: str, level: str, method: str, descriptor: tuple,
             initial = session_fingerprint(session)
             login_valid = session.login(username, "tesis-oracle-invalid-credential")
             principal = username if login_valid else "anonymous"
-        response, destination_confirmed = _request(session, method, descriptor, protocol)
+            session.set_security_level(level)
+        if method.startswith("bf_"):
+            from evaluation.session_oracle import _identity
+            response = session.get("index.php")
+            destination_confirmed = bool(login_valid and _identity(response) == username)
+        else:
+            response, destination_confirmed = _request(session, method, descriptor, protocol)
         source_available = bool(login_valid)
         return {
             "source_available": source_available,
@@ -89,22 +97,29 @@ def collect_dependency_oracles(artifact: dict, raw_state: dict) -> dict:
     validate_sources(sources)
     protocol_source = _enabled_source(sources, "dvwa_causal_dependency.v1")
     permission_source = _enabled_source(sources, "dvwa_candidate_permission.v1")
-    if protocol_source is None or permission_source is None:
+    if protocol_source is None:
         return artifact
     config = artifact["config"]
     document_source = protocol_source["document"]
     protocol = document_source["oracle_protocol"]
-    if any(config.get(key) != document_source.get(key) for key in ("fixture_id", "protocol_version")):
+    if any(not config.get(key) or config[key] != document_source.get(key) for key in ("fixture_id", "protocol_version")):
         raise ValueError("Dependency protocol coordinate mismatch")
     if protocol_source["origin"] != "operator_fixture" and artifact.get("validation_scope") != "offline_synthetic_fixture":
         raise ValueError("Live dependency collection requires an operator fixture protocol")
+    if permission_source is not None:
+        permission_document = permission_source["document"]
+        if any(config[key] != permission_document.get(key) for key in ("fixture_id", "protocol_version")):
+            raise ValueError("Dependency permission protocol coordinate mismatch")
+        if permission_source["origin"] != "operator_fixture" and artifact.get("validation_scope") != "offline_synthetic_fixture":
+            raise ValueError("Live dependency collection requires an operator permission protocol")
 
     from evaluation.thesis_scoring import _resolve
 
     result = deepcopy(artifact)
-    response_rows = result["final_state"].get("response_evidence", [])
     raw_method_state = raw_state
-    now = datetime.now(timezone.utc).isoformat()
+    pending_sources = []
+    existing_ids = {source["source_id"] for source in sources}
+    existing_indices = {source["source_id"]: i for i, source in enumerate(sources)}
     for route in result["final_state"].get("chain_history", []):
         if route.get("status") != "completed":
             continue
@@ -112,32 +127,60 @@ def collect_dependency_oracles(artifact: dict, raw_state: dict) -> dict:
         source_rows = [_resolve(result, ref) for ref in source_refs]
         destination_rows = [_resolve(result, ref) for ref in destination_refs]
         for consumption in route.get("consumption", []):
+            source_id = f"{protocol_source['source_id']}:{route['route_id']}:{consumption.get('source_evidence_id')}:{consumption.get('destination_evidence_id')}"
+            if source_id in existing_ids:
+                index = existing_indices.get(source_id)
+                if index is not None:
+                    saved = result["config"]["scoring_oracles"][index]["document"]
+                    if saved.get("status") == "confirmed" and len(saved.get("dependencies", [])) == 1:
+                        consumption["dependency_ref"] = f"#/config/scoring_oracles/{index}/document/dependencies/0"
+                continue
+            document = {
+                "fixture_id": config["fixture_id"], "protocol_version": config["protocol_version"],
+                "oracle_protocol": protocol, "protocol_source_sha256": protocol_source["sha256"],
+                "route_id": route["route_id"], "source_evidence_id": consumption.get("source_evidence_id"),
+                "destination_evidence_id": consumption.get("destination_evidence_id"),
+                "dependencies": [], "dependency_controls": [], "status": "pending",
+                "reason": "candidate_evidence_binding_incomplete",
+            }
+            pending_sources.append((source_id, document, consumption))
+            existing_ids.add(source_id)
             source = next((row for row in source_rows if isinstance(row, dict)
                 and row.get("evidence_id") == consumption.get("source_evidence_id")), None)
             destination = next((row for row in destination_rows if isinstance(row, dict)
                 and row.get("evidence_id") == consumption.get("destination_evidence_id")), None)
-            if not source or not destination or destination.get("agent_id") not in {
-                "ac_idor", "ac_vertical_escalation", "ac_force_browse",
-            }:
+            if not source or not destination:
                 continue
-            if (source.get("agent_id") not in {"bf_dictionary", "bf_spray"}
-                    or destination.get("consumed_source_evidence_id") != source.get("evidence_id")
+            session_route = (source.get("agent_id") in {"bf_dictionary", "bf_spray"}
+                and destination.get("agent_id") in {"ac_idor", "ac_force_browse"})
+            credential_route = (source.get("agent_id") == "sqli_union"
+                and destination.get("agent_id") == "bf_dictionary")
+            if not (session_route or credential_route):
+                document["reason"] = "source_consumption_adapter_unavailable"
+                continue
+            if session_route and permission_source is None:
+                document["reason"] = "permission_protocol_unavailable"
+                continue
+            if (destination.get("consumed_source_evidence_id") != source.get("evidence_id")
                     or not oracle_confirmed(result, destination)
                     or candidate_base(result, source.get("candidate_id"), source.get("agent_id"), source_refs) != 3
                     or candidate_base(result, destination.get("candidate_id"), destination.get("agent_id"), destination_refs) != 3):
+                document["reason"] = "independent_candidate_outcome_unavailable"
                 continue
             source_candidate = _candidate(raw_method_state, source["agent_id"], source["candidate_id"])
             destination_candidate = _candidate(raw_method_state, destination["agent_id"], destination["candidate_id"])
             if (not source_candidate or not destination_candidate or not _validated(raw_method_state, source["agent_id"], source["candidate_id"])
                     or not _validated(raw_method_state, destination["agent_id"], destination["candidate_id"])):
                 continue
-            material = _material(source_candidate, raw_method_state, source)
+            material = _material(destination_candidate if credential_route else source_candidate, raw_method_state, source)
             if not material:
+                document["reason"] = "plaintext_source_credentials_unavailable"
                 continue
             username, password = material
-            permission_protocol = permission_source["document"]["oracle_protocol"]
-            descriptor = _request_descriptor(config["target_url"], destination, permission_protocol)
-            if descriptor is None:
+            permission_protocol = permission_source["document"]["oracle_protocol"] if permission_source else {}
+            descriptor = _request_descriptor(config["target_url"], destination, permission_protocol) if session_route else None
+            if session_route and descriptor is None:
+                document["reason"] = "candidate_resource_outside_frozen_protocol"
                 continue
             if any(consumption.get(key) != value for key, value in {
                 "route_id": route.get("route_id"), "visit_id": destination.get("visit_id"),
@@ -157,10 +200,14 @@ def collect_dependency_oracles(artifact: dict, raw_state: dict) -> dict:
             except Exception as exc:
                 controls = [{"failure": type(exc).__name__, "source_available": False,
                     "destination_confirmed": False}]
+            document["dependency_controls"] = controls
             if not (len(controls) == 2 and controls[0].get("source_available") is True
                     and controls[0].get("destination_confirmed") is True
                     and controls[1].get("source_available") is False
                     and controls[1].get("destination_confirmed") is False):
+                document["reason"] = "dependency_controls_not_confirmed"
+                if len(controls) == 2 and controls[1].get("source_available") is False and controls[1].get("destination_confirmed") is True:
+                    document.update(status="not_dependent", reason="destination_available_without_source")
                 continue
             attestation = {
                 "run_id": result["run_id"], "execution_id": result["execution_id"],
@@ -172,7 +219,7 @@ def collect_dependency_oracles(artifact: dict, raw_state: dict) -> dict:
                 "source_response_sha256": source["response_sha256"],
                 "destination_response_sha256": destination["response_sha256"],
                 "source_at": source["timestamp"], "consumed_at": destination["timestamp"],
-                "verified_at": now,
+                "verified_at": datetime.now(timezone.utc).isoformat(),
                 "material_fingerprint": sha256(f"{username}\0{password}".encode()).hexdigest(),
                 "depends_on_source": True, "controls": [
                     {"source_available": item["source_available"],
@@ -180,23 +227,14 @@ def collect_dependency_oracles(artifact: dict, raw_state: dict) -> dict:
                      "response_sha256": item["response_sha256"], "status_code": item["status_code"]}
                     for item in controls],
             }
-            oracle_document = {
-                "fixture_id": config["fixture_id"], "protocol_version": config["protocol_version"],
-                "oracle_protocol": protocol, "protocol_source_sha256": protocol_source["sha256"],
-                "dependencies": [attestation], "dependency_controls": [
-                    {"source_available": item["source_available"],
-                     "destination_confirmed": item["destination_confirmed"],
-                     "response_sha256": item["response_sha256"], "status_code": item["status_code"]}
-                    for item in controls],
-                "status": "confirmed",
-            }
-            source_id = f"{protocol_source['source_id']}:{route['route_id']}:{source['evidence_id']}:{destination['evidence_id']}"
-            if any(existing.get("source_id") == source_id for existing in result["config"]["scoring_oracles"]):
-                continue
-            oracle_source = {"source_id": source_id, "origin": protocol_source["origin"],
-                "document": oracle_document, "sha256": evidence_hash(oracle_document)}
-            validate_sources([oracle_source])
-            index = len(result["config"]["scoring_oracles"])
-            result["config"]["scoring_oracles"].append(oracle_source)
+            document.update(dependencies=[attestation], status="confirmed")
+            document.pop("reason", None)
+    for source_id, document, consumption in pending_sources:
+        oracle_source = {"source_id": source_id, "origin": protocol_source["origin"],
+            "document": document, "sha256": evidence_hash(document)}
+        validate_sources([oracle_source])
+        index = len(result["config"]["scoring_oracles"])
+        result["config"]["scoring_oracles"].append(oracle_source)
+        if document["status"] == "confirmed":
             consumption["dependency_ref"] = f"#/config/scoring_oracles/{index}/document/dependencies/0"
     return result

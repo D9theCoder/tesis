@@ -213,17 +213,22 @@ def _chain_infeasibility(state: dict, edge: dict, *, check_destination: bool = T
     refs = {ref for decision in decisions for ref in decision.get("evidence_refs", [])}
     rows = state.get("response_evidence", [])
     source_ids = {row.get("evidence_id") for i, row in enumerate(rows)
-        if f"#/final_state/response_evidence/{i}" in refs and row.get("candidate_id")}
+        if f"#/final_state/response_evidence/{i}" in refs and row.get("candidate_id") and row.get("evidence_id")}
     if not source_ids:
         return "source_evidence_unavailable"
     credentials = [credential for credential in state.get("found_credentials", [])
         if credential.get("source_evidence_id") in source_ids and credential.get("source_candidate_id")
+        and any(row.get("evidence_id") == credential["source_evidence_id"]
+            and row.get("candidate_id") == credential["source_candidate_id"]
+            and row.get("visit_id") and row["visit_id"] == credential.get("source_visit_id") for row in rows)
         and credential.get("username") and credential.get("password")]
     if source == "credentials_extracted":
         if not any(c.get("representation") == "plaintext" for c in credentials):
             return "plaintext_source_credentials_unavailable"
     elif not credentials:
         return "route_bound_session_material_unavailable"
+    elif not any(c["username"].lower() != "admin" for c in credentials):
+        return "nonadmin_source_principal_unavailable"
     return None
 
 
@@ -244,10 +249,16 @@ def _complete_routed_visit(state: dict) -> dict:
         if c.get("route_id") == route["route_id"] and c.get("visit_id") == decision["visit_id"]]
     source_ids = set(route.get("source_evidence_ids", []))
     source_proved = bool(route.get("source_verifier_ids")) and route.get("prerequisites_proved") is True
-    destination_rows = [r for r in state.get("response_evidence", [])
-        if r.get("visit_id") == decision["visit_id"] and r.get("verified_grade") == 3]
+    destination_rows = [r for i, r in enumerate(state.get("response_evidence", []))
+        if r.get("visit_id") == decision["visit_id"] and r.get("verified_grade") == 3
+        and r.get("agent_id") == method
+        and f"#/final_state/response_evidence/{i}" in decision.get("evidence_refs", [])]
     destination_ids = {r["evidence_id"] for r in destination_rows}
-    dependency = any(c["source_evidence_id"] in source_ids and c["destination_evidence_id"] in destination_ids for c in consumption)
+    dependency = any(c.get("source_evidence_id") in source_ids and c.get("destination_evidence_id") in destination_ids
+        and any(r.get("evidence_id") == c.get("destination_evidence_id")
+            and r.get("candidate_id") == c.get("candidate_id")
+            and r.get("consumed_source_evidence_id") == c.get("source_evidence_id") for r in destination_rows)
+        for c in consumption)
     downstream = decision.get("decision") == "confirmed" and MODULE_TO_KG_NODE[method] in decision.get("confirmed_vulns", [])
     completed = source_proved and dependency and downstream
     if completed:
@@ -297,12 +308,30 @@ def chaining_router_node(state: dict) -> dict:
     Returns:
         Partial state update merged into the LangGraph state."""
     destination_update = {}
-    if not stop_reason(state) and "no_rate_limit" not in state.get("observations", {}):
+    if not stop_reason(state):
         for edge in _chain_candidates(state):
+            if _chain_infeasibility(state, edge) is None:
+                break
+            if _chain_infeasibility(state, edge, check_destination=False) is not None:
+                continue
+            measured = {}
             if (edge["source"] == "credentials_extracted" and edge["target_agent"] == "bf_dictionary"
-                    and _chain_infeasibility(state, edge, check_destination=False) is None):
+                    and "no_rate_limit" not in state.get("observations", {})):
                 from foundation.recon import probe_brute_force_destination
-                destination_update = probe_brute_force_destination(state)
+                measured = probe_brute_force_destination(state)
+            elif edge["source"] == "authenticated_session" and edge["target_agent"] in {"ac_idor", "ac_force_browse"}:
+                from foundation.recon import probe_access_control_destination
+                refs = {ref for decision in _source_decisions(state, edge["source"]) for ref in decision.get("evidence_refs", [])}
+                source_ids = [row["evidence_id"] for i, row in enumerate(state.get("response_evidence", []))
+                    if f"#/final_state/response_evidence/{i}" in refs and row.get("evidence_id")]
+                measured = probe_access_control_destination(state, edge["target_agent"], source_ids)
+            for key, value in measured.items():
+                if key == "observations":
+                    destination_update[key] = {**destination_update.get(key, {}), **value}
+                else:
+                    destination_update[key] = [*destination_update.get(key, []), *value]
+            measured_state = {**state, "observations": {**state.get("observations", {}), **destination_update.get("observations", {})}}
+            if _chain_infeasibility(measured_state, edge) is None:
                 break
     routing_state = {**state, "observations": {
         **state.get("observations", {}), **destination_update.get("observations", {}),
@@ -334,15 +363,25 @@ def chaining_router_node(state: dict) -> dict:
         source = str(event.get("source") or "")
         target = str(event.get("target") or next_agent)
         existing_path = list(state.get("akg_path", []))
-        additions = [item for item in (source, target) if item and item not in existing_path]
+        additions = []
+        connected = not existing_path or existing_path[-1] == source or _get_kg().graph.has_edge(existing_path[-1], source)
+        if connected:
+            for item in (source, target):
+                previous = (additions or existing_path or [None])[-1]
+                if item and item != previous:
+                    additions.append(item)
         if additions:
             updates["akg_path"] = additions
-        updates["current_chain"] = [*existing_path, *additions]
+        route_path = [*existing_path, *additions] if connected else [source, target]
+        updates["current_chain"] = route_path
         source_decisions = _source_decisions(state, source)
-        source_refs = list(dict.fromkeys(ref for d in source_decisions for ref in d.get("evidence_refs", [])))
-        source_rows = [state["response_evidence"][int(ref.rsplit('/', 1)[-1])] for ref in source_refs]
+        recorded_refs = {ref for d in source_decisions for ref in d.get("evidence_refs", [])}
+        source_refs = [f"#/final_state/response_evidence/{i}" for i, row in enumerate(state.get("response_evidence", []))
+            if f"#/final_state/response_evidence/{i}" in recorded_refs and row.get("candidate_id") and row.get("evidence_id")]
+        source_rows = [row for i, row in enumerate(state.get("response_evidence", []))
+            if f"#/final_state/response_evidence/{i}" in source_refs]
         route = {
-            "chain": [*existing_path, *additions],
+            "chain": route_path,
             "route_id": f"route:{len(state.get('chain_history', []))}",
             "source": source,
             "target": target,

@@ -88,10 +88,14 @@ def already_tried_payloads(state: dict[str, Any], module_name: str) -> set[str]:
 
 
 def normalize_force_browse_path(path: str) -> str:
-    """Keep legacy double-slash path candidates relative to DVWA."""
+    """Match the literal dot-segment normalization already applied by HTTPX."""
     value = str(path or "").strip()
     if value.startswith("//") and "://" not in value:
-        return value.lstrip("/")
+        value = value.lstrip("/")
+    if "://" not in value and ("/./" in value or value.endswith("/.")):
+        from httpx import URL
+        normalized = URL("http://dvwa.invalid/" + value.lstrip("/")).raw_path.decode("ascii")
+        return normalized if value.startswith("/") else normalized.lstrip("/")
     return value
 
 

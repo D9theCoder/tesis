@@ -21,7 +21,9 @@ def open_access_control_session(state: dict, method: str, security_level: str):
             and credential.get("source_evidence_id") in source_ids
             and credential.get("source_candidate_id")
             and source_rows.get(credential.get("source_evidence_id"), {}).get("candidate_id") == credential.get("source_candidate_id")
-            and credential.get("username") and credential.get("password")]
+            and credential.get("username") and credential["username"].lower() != "admin"
+            and credential.get("password")
+            and source_rows.get(credential.get("source_evidence_id"), {}).get("visit_id") == credential.get("source_visit_id")]
         if not bound:
             raise ValueError("No route-bound authenticated-session material is available")
         credential = bound[0]

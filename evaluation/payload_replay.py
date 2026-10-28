@@ -73,7 +73,7 @@ def replay_method_inputs(
         saved_ids = {c['candidate_id'] for c in queue}
         if not candidate_ids or not set(candidate_ids) <= saved_ids:
             raise ValueError('Replay selection must contain only saved candidate IDs')
-        queue = [c for c in queue if c['candidate_id'] in candidate_ids]
+        queue = [c for c in queue if c['candidate_id'] in candidate_ids or c.get('stage') == 'probe']
         state['payload_candidates'] = {method: queue}
     # Validate the exact queue again without implicitly adding new candidates.
     check = validate_payload_candidates(state)

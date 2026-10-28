@@ -370,6 +370,7 @@ class AttackKnowledgeGraph:
         """Validates AKG structural invariants after graph construction."""
         self._validate_chain_metadata()
         self._validate_preconditions_known()
+        self._validate_chain_agents()
         self._validate_high_impact_nodes_exist()
         self._validate_agent_kg_node_mappings()
         self._validate_payload_profiles()
@@ -415,6 +416,18 @@ class AttackKnowledgeGraph:
                         ),
                     )
 
+    def _validate_chain_agents(self) -> None:
+        for source, target, meta in self.graph.edges(data=True):
+            if not meta.get("is_chain"):
+                continue
+            agent = meta.get("target_agent")
+            if agent not in ALL_METHOD_AGENTS or (target in ALL_METHOD_AGENTS and target != agent):
+                raise AKGValidationError(
+                    f"Chain edge {source}->{target} has invalid target_agent: {agent!r}",
+                    invariant="chain_agent",
+                    repair="use the registered static method matching the destination node",
+                )
+
     def _validate_high_impact_nodes_exist(self) -> None:
         missing = [node for node in self.HIGH_IMPACT_OUTCOMES if node not in self.graph]
         if missing:
@@ -436,7 +449,11 @@ class AttackKnowledgeGraph:
         for agent in ALL_METHOD_AGENTS:
             kg_node = MODULE_TO_KG_NODE.get(agent)
             if kg_node is None:
-                continue  # unknown agents are not validated here
+                raise AKGValidationError(
+                    f"MODULE_TO_KG_NODE missing mapping for {agent!r}",
+                    invariant="agent_node_mapping",
+                    repair="map every registered method to its static confirmed node",
+                )
             if kg_node not in graph_nodes:
                 raise AKGValidationError(
                     f"MODULE_TO_KG_NODE[{agent!r}] maps to {kg_node!r} "
@@ -496,7 +513,7 @@ class AttackKnowledgeGraph:
         viable = []
         for method in methods:
             preconditions = self.METHOD_PRECONDITIONS.get(method, [])
-            if all(observations.get(p, False) for p in preconditions):
+            if all(observations.get(p) is True for p in preconditions):
                 viable.append(method)
         return viable
 

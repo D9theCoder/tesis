@@ -541,16 +541,12 @@ def test_replay_missing_stage_never_restores_unselected_seeds(monkeypatch):
     assert len(fixture.requests) == before
 
 
-def test_frozen_inputs_capture_each_revisited_method_after_validation(monkeypatch):
+def test_frozen_inputs_capture_each_eligible_method_after_validation(monkeypatch):
     artifact, _ = run_control(monkeypatch, 'sqli_union', 'low', 'repeat_method', automatic=True, payload_mode='hybrid')
     inputs = artifact['method_execution_inputs']
-    assert [f['method'] for f in inputs] == ['sqli_union', 'sqli_error', 'sqli_union']
-    first, last = inputs[0]['state'], inputs[-1]['state']
-    assert last['iteration_count'] > first['iteration_count']
-    assert last['tried_payloads']['sqli_union']
-    def generated_values(state):
-        return [c['payload_or_logic'] for c in state['payload_candidates']['sqli_union'] if c['source'] == 'llm_generated']
-    assert set(generated_values(last)) - set(generated_values(first))
+    assert [f['method'] for f in inputs[:2]] == ['sqli_union', 'sqli_error']
+    assert len({f['method'] for f in inputs}) == len(inputs)
+    assert all(f['state']['payload_validation_results'][f['method']] for f in inputs)
 
 
 def test_automatic_stop_retains_last_executed_method_scores(monkeypatch):

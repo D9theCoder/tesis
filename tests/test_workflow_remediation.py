@@ -159,7 +159,8 @@ def test_source_bound_plaintext_candidate_is_validated_and_ranked_first():
     state = {**new_default_state(), "selected_method": "bf_dictionary", "selected_visit_id": "destination",
         "active_chain_route": {"source": "credentials_extracted", "target_agent": "bf_dictionary", "source_evidence_ids": ["source"]},
         "found_credentials": [{"username": "fixture-user", "password": "fixture-value", "representation": "plaintext",
-            "source_evidence_id": "source", "source_visit_id": "origin"}]}
+            "source_evidence_id": "source", "source_visit_id": "origin", "source_candidate_id": "source-candidate"}],
+        "response_evidence": [{"evidence_id": "source", "visit_id": "origin", "candidate_id": "source-candidate"}]}
     state.update(build_payload_candidates(state))
     update = payload_validator_node(state)
     first = update["payload_candidates"]["bf_dictionary"][0]

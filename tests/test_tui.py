@@ -151,6 +151,11 @@ async def _drain(screen) -> None:
     drain = getattr(screen, "_drain_runtime_events", None)
     if callable(drain):
         drain()
+        # Flush the batched render deterministically before reading widgets.
+        timer = getattr(screen, "_render_timer", None)
+        if timer is not None:
+            timer.stop()
+        screen._flush_render()
         await asyncio.sleep(0)
 
 
@@ -163,10 +168,15 @@ async def _wait_for_thread(pilot, thread, timeout: float = 5.0) -> None:
 
 
 def _pane_text(screen, selector: str) -> str:
-    from textual.widgets import Static
+    from textual.widgets import Static, OptionList
 
     try:
-        return str(screen.query_one(selector, Static).render())
+        widget = screen.query_one(selector)
+        if isinstance(widget, OptionList):
+            return "\n".join(str(widget.get_option_at_index(i).prompt) for i in range(widget.option_count))
+        if isinstance(widget, Static):
+            return str(widget.render())
+        return "\n".join(str(child.render()) for child in widget.query(Static))
     except Exception:
         return ""
 
@@ -182,7 +192,7 @@ def _options(launcher) -> list:
 
 # ---------------------------------------------------------------- root
 
-def test_no_permanent_command_input_at_idle():
+def test_idle_command_composer_is_the_only_input():
     from textual.widgets import Input
 
     _require("MissionControlScreen")
@@ -191,7 +201,8 @@ def test_no_permanent_command_input_at_idle():
         app = tui.TesisApp()
         async with app.run_test(size=(120, 36)) as pilot:
             await pilot.pause()
-            assert len(app.screen.query(Input)) == 0, "idle must not mount a permanent Input"
+            assert [field.id for field in app.screen.query(Input)] == ["mission-command"]
+            assert app.screen.query_one("#mission-command", Input).placeholder.startswith("Type /command")
 
     asyncio.run(scenario())
 
@@ -240,7 +251,7 @@ def test_context_bar_redacts_target_credentials_and_query_tokens(monkeypatch):
             # Redaction keeps the URL readable: host survives, secrets do not.
             assert "localhost/dvwa" in bar
             assert "[REDACTED]" in bar, "redaction must be visible, not silent truncation"
-            assert "api_key=" in bar
+            assert "api_key=" in _pane_text(screen, "#notice-text")
 
     asyncio.run(scenario())
 
@@ -257,7 +268,7 @@ def test_chrome_shows_context_status_and_navigation_footer():
             screen = app.screen
             assert isinstance(screen, MissionControlScreen)
             assert "TESIS" in _pane_text(screen, "#context-bar")
-            assert "READY" in _pane_text(screen, "#status-label")
+            assert "Ready" in _pane_text(screen, "#header-status")
             footer = _pane_text(screen, "#context-footer")
             # Every footer segment must trace to the one navigation list or the
             # one command registry, so nothing unbindable is ever advertised.
@@ -421,8 +432,8 @@ def test_context_bar_shows_target_condition_and_provider_model(monkeypatch):
             screen = app.screen
             assert isinstance(screen, MissionControlScreen)
             bar = _pane_text(screen, "#context-bar")
-            assert "akg_guided_hybrid" in bar, f"condition must be in the context bar: {bar!r}"
-            assert "openai_compatible/test-model" in bar, f"provider/model must be shown: {bar!r}"
+            assert "akg_guided_hybrid" in _pane_text(screen, "#notice-text"), "readiness must expose the configured condition"
+            assert "openai_compatible / test-model" in bar, f"provider/model must be shown: {bar!r}"
             for absent in ("hunter2", "id=7"):
                 assert absent not in bar, f"context bar must not leak {absent!r}: {bar!r}"
 
@@ -442,7 +453,8 @@ def test_status_strip_reports_containment_method_elapsed_and_artifacts(monkeypat
             screen = app.screen
             assert isinstance(screen, MissionControlScreen)
             idle = _pane_text(screen, "#status-label")
-            assert "READY" in idle and "contained" in idle and "results/runs" in idle, idle
+            assert "Ready" in _pane_text(screen, "#header-status")
+            assert "contained" in idle and "results/runs" in idle, idle
             assert "—" in idle, f"unknown method/elapsed must stay unavailable: {idle!r}"
 
             screen._post_event(RunEvent("run.started", timestamp=1000.0, message="go"))
@@ -451,7 +463,9 @@ def test_status_strip_reports_containment_method_elapsed_and_artifacts(monkeypat
             await _drain(screen)
             await pilot.pause()
             running = _pane_text(screen, "#status-label")
-            for expected in ("RUNNING", "contained", "sqli_union", "12.5s", "results/runs"):
+            assert "Running" in _pane_text(screen, "#header-status")
+            assert "12.5s" in _pane_text(screen, "#header-status")
+            for expected in ("contained", "sqli_union", "results/runs"):
                 assert expected in running, f"status strip missing {expected!r}: {running!r}"
 
             screen._post_event(RunEvent("containment.violated", timestamp=1013.0, message="blocked"))
@@ -459,7 +473,7 @@ def test_status_strip_reports_containment_method_elapsed_and_artifacts(monkeypat
             await pilot.pause()
             degraded = _pane_text(screen, "#status-label")
             assert "containment 1" in degraded, f"a violation must be counted: {degraded!r}"
-            assert "DEGRADED" in degraded, degraded
+            assert "Degraded" in _pane_text(screen, "#header-status")
 
     asyncio.run(scenario())
 
@@ -498,8 +512,8 @@ def test_narrow_pipeline_uses_concise_stage_labels():
         async with app.run_test(size=(120, 36)) as pilot:
             await pilot.pause()
             text = _pane_text(app.screen, "#pipeline-pane")
-            assert "payload candidate builder" in text and "chaining router" in text, text
-            assert "candidates" not in text, f"wide layout keeps full labels: {text!r}"
+            assert "candidates" in text and "chain router" in text, text
+            assert "7 stages" in app.screen.query_one("#pipeline-panel").border_subtitle
 
     async def narrow() -> None:
         app = tui.TesisApp()
@@ -1358,16 +1372,17 @@ def test_pane_keys_tab_and_enter():
                     f"{key!r} must focus #{pane_id}; got {getattr(app.focused, 'id', None)!r}"
                 )
                 focused = app.screen.query_one(f"#{pane_id}")
+                panel = screen.query_one({"pipeline-pane": "#pipeline-panel", "coordinate-pane": "#coordinate-panel", "evidence-body": "#evidence-pane"}[pane_id])
+                assert panel.styles.border_title_style.bold, "the active panel title must indicate focus"
                 for other_id in ("pipeline-pane", "coordinate-pane", "evidence-body"):
                     if other_id == pane_id:
                         continue
                     other = app.screen.query_one(f"#{other_id}")
-                    assert (focused.styles.text_style != other.styles.text_style
-                            or focused.styles.background != other.styles.background), (
-                        f"#{pane_id} must be visually distinct while focused"
+                    assert focused.has_focus and not other.has_focus, (
+                        f"#{pane_id} must own focus"
                     )
 
-            # Tab/Shift+Tab walk the focusable panes in DOM order and wrap.
+            # Tab/Shift+Tab walk the panes and command composer in DOM order.
             # The notice pane is a scrollable surface, so it is a tab stop of
             # its own; it only exists in the wide layout, where the other
             # hidden panes are skipped.
@@ -1375,7 +1390,7 @@ def test_pane_keys_tab_and_enter():
             await pilot.pause()
             for key, pane_id in (("tab", "coordinate-pane"), ("tab", "notice-body"),
                                  ("tab", "evidence-body"),
-                                 ("tab", "pipeline-pane"), ("shift+tab", "evidence-body")):
+                                 ("tab", "mission-command"), ("shift+tab", "evidence-body")):
                 await pilot.press(key)
                 await pilot.pause()
                 assert getattr(app.focused, "id", None) == pane_id, (
@@ -1385,7 +1400,7 @@ def test_pane_keys_tab_and_enter():
     asyncio.run(scenario())
 
 
-def test_pane_keys_open_drawers_when_panes_are_hidden():
+def test_pane_keys_switch_workspaces_at_all_supported_sizes():
     MissionControlScreen = _require("MissionControlScreen")
 
     async def scenario(size, expect_drawer: bool) -> None:
@@ -1414,8 +1429,8 @@ def test_pane_keys_open_drawers_when_panes_are_hidden():
             else:
                 assert type(app.screen) is MissionControlScreen
 
-    asyncio.run(scenario((80, 24), expect_drawer=True))
-    asyncio.run(scenario((60, 18), expect_drawer=True))
+    asyncio.run(scenario((80, 24), expect_drawer=False))
+    asyncio.run(scenario((60, 18), expect_drawer=False))
 
 
 def test_live_evidence_keeps_default_surface_focus():
@@ -1573,8 +1588,7 @@ def test_coordinate_pane_declares_the_canonical_columns():
             await pilot.pause()
             table = app.screen.query_one("#coordinate-pane", DataTable)
             assert [str(column.label) for column in table.ordered_columns] == [
-                "#", "status", "provider", "surface", "level", "mode",
-                "method", "findings", "elapsed",
+                "#", "status", "surface", "method", "outcome", "elapsed",
             ], "the coordinate pane must expose the canonical triage columns"
 
     asyncio.run(scenario())
@@ -1600,7 +1614,8 @@ def test_responsive_wide_medium_narrow_and_too_small():
             screen = app.screen
             flags = _displays(screen)
             assert flags["#pipeline-pane"]
-            assert not flags["#coordinate-pane"] and not flags["#evidence-pane"]
+            assert not screen.query_one("#coordinate-panel").display
+            assert not screen.query_one("#detail-panels").display
             assert flags["#triage-line"]
             assert screen.has_class("standard"), "core: medium layout must set the standard class"
 
@@ -1626,7 +1641,7 @@ def test_responsive_wide_medium_narrow_and_too_small():
             assert "help" in footer and "quit" in footer
             for hidden in ("run", "matrix", "plan", "doctor", "coordinates", "evidence"):
                 assert hidden not in footer, f"too-small footer must not offer {hidden!r}"
-            assert not _displays(screen)["#pipeline-pane"]
+            assert not screen.query_one("#mission-body").display
             for key in ("ctrl+r", "ctrl+alt+m", "ctrl+o", "ctrl+d", "ctrl+p", "alt+1", "alt+2", "alt+3"):
                 await pilot.press(key)
                 await pilot.pause()
@@ -1648,7 +1663,7 @@ def test_responsive_wide_medium_narrow_and_too_small():
     asyncio.run(too_small())
 
 
-def test_drawers_take_the_screen_only_below_eighty_columns():
+def test_drawers_are_centered_and_fill_the_screen_below_eighty_columns():
     _require("MissionControlScreen")
 
     async def scenario(size, expect_full: bool) -> None:
@@ -1670,13 +1685,13 @@ def test_drawers_take_the_screen_only_below_eighty_columns():
                 )
             else:
                 assert not drawer.has_class("drawer-full")
-                assert panel.region.width == 76, (
-                    f"a drawer must be a 76-cell panel; got {panel.region.width}"
+                assert panel.region.width == min(112, int(size[0] * 0.96)), (
+                    f"a modal must fit its 112-cell width cap; got {panel.region.width}"
                 )
-                assert panel.region.x == size[0] - 76, (
-                    f"the drawer must dock right; got x={panel.region.x}"
+                assert panel.region.x == (size[0] - panel.region.width) // 2, (
+                    f"the modal must be centered; got x={panel.region.x}"
                 )
-                assert panel.styles.border_left[0] == "solid", "the docked panel needs one left border"
+                assert panel.styles.border_left[0] == "round", "the modal needs its panel border"
             await pilot.press("escape")
             await pilot.pause()
 
@@ -1686,7 +1701,7 @@ def test_drawers_take_the_screen_only_below_eighty_columns():
     asyncio.run(scenario((60, 18), expect_full=True))
 
 
-def test_docked_drawer_leaves_the_mission_surface_visible():
+def test_modal_drawer_preserves_the_mission_state():
     _require("MissionControlScreen")
 
     async def scenario() -> None:
@@ -1699,9 +1714,9 @@ def test_docked_drawer_leaves_the_mission_surface_visible():
             await app.push_screen(tui.CoordinateDrawer())
             await pilot.pause()
             svg = _svg_text(app)
-            assert "READY" in svg, "the mission status must stay visible beside the drawer"
-            assert "pipeline" in svg.lower(), "the mission panes must stay visible beside the drawer"
-            assert "Coordinates (Esc" in svg, "the drawer must render its own content"
+            assert "Ready" in _pane_text(mission, "#header-status")
+            assert "pipeline" in _pane_text(mission, "#pipeline-pane").lower() or mission.query_one("#pipeline-panel").border_title == "Pipeline"
+            assert "Coordinates" in svg, "the drawer must render its own content"
             await pilot.press("escape")
             await pilot.pause()
 
@@ -1833,12 +1848,12 @@ def test_settings_rejects_bad_yaml_and_bad_concurrency(tmp_path, monkeypatch):
             screen.query_one("#settings-save").press()
             await pilot.pause()
             assert config_path.read_text(encoding="utf-8") == original
-            assert "Not saved" in str(screen.query_one("#settings-status").render())
+            assert any(message in str(screen.query_one("#settings-status").render()) for message in ("Not saved", "Draft needs attention"))
             screen.query_one("#yaml-editor").text = original + "llm_max_concurrency: 99\n"
             screen.query_one("#settings-save").press()
             await pilot.pause()
             assert config_path.read_text(encoding="utf-8") == original
-            assert "Not saved" in str(screen.query_one("#settings-status").render())
+            assert any(message in str(screen.query_one("#settings-status").render()) for message in ("Not saved", "Draft needs attention"))
             await pilot.press("escape")
             await pilot.pause()
 
@@ -2206,6 +2221,8 @@ def test_results_detail_is_triage_only_truncated_and_redacted(tmp_path, monkeypa
                     pass
                 await asyncio.sleep(0.02)
             drawer._show_detail("run-1")
+            if not drawer._details:
+                drawer.action_details()
             await pilot.pause()
             detail = str(drawer.query_one("#results-detail").render())
             assert "run-1" in detail
@@ -2292,7 +2309,7 @@ def test_unmount_drops_pending_events_without_crash(tmp_path, monkeypatch):
             await pilot.pause()
             if thread is not None:
                 await _wait_for_thread(pilot, thread)
-            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+alt+q")
             await pilot.pause()
             assert not app.is_running
 
@@ -2320,7 +2337,7 @@ def test_failure_drawer_leads_with_remediation_and_request_id():
             await app.push_screen(FailureDrawer(failure))
             await pilot.pause()
             body = _pane_text(app.screen, "#failure-body")
-            assert body.startswith("Remediation:"), f"remediation must lead; got {body[:80]!r}"
+            assert body.startswith("Next step"), f"remediation must lead; got {body[:80]!r}"
             assert "req-abc-123" in body
             svg = _svg_text(app)
             assert "sk-live-secret" not in svg
@@ -2347,7 +2364,9 @@ def test_plan_preview_resolves_values_and_fingerprint():
             svg = _svg_text(app)
             assert "http://x/" in svg
             assert "openai" in svg
-            assert "fingerprint" in svg.lower()
+            await pilot.press("ctrl+d")
+            await pilot.pause()
+            assert "fingerprint" in str(app.screen.query_one("#plan-body").render()).lower()
             await pilot.press("escape")
             await pilot.pause()
 
@@ -2433,9 +2452,9 @@ def test_launch_inputs_resolve_into_the_review(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_settings_drawer_exposes_named_collapsible_sections(tmp_path, monkeypatch):
+def test_settings_drawer_exposes_named_category_sections(tmp_path, monkeypatch):
     SettingsDrawer = _require("SettingsDrawer")
-    from textual.widgets import Collapsible
+    from textual.widgets import OptionList
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -2452,13 +2471,14 @@ def test_settings_drawer_exposes_named_collapsible_sections(tmp_path, monkeypatc
             await app.push_screen(SettingsDrawer())
             await pilot.pause()
             drawer = app.screen
-            titles = [str(section.title) for section in drawer.query(Collapsible)]
-            for expected in ("Target & defaults", "Model profile", "LLM runtime",
+            categories = drawer.query_one("#settings-categories", OptionList)
+            titles = [str(categories.get_option_at_index(i).prompt) for i in range(categories.option_count)]
+            for expected in ("Target & defaults", "API providers", "LLM runtime",
                              "Policy & output", "Advanced YAML"):
                 assert expected in titles, f"missing settings section {expected}"
             for selector in ("#settings-target-body", "#settings-model-body",
                              "#settings-llm-body", "#settings-policy-body"):
-                text = str(drawer.query_one(selector).render())
+                text = _pane_text(drawer, selector)
                 assert text.strip(), f"{selector} must summarize the resolved config"
                 assert "sk-live-section-secret" not in text
             assert "sk-live-section-secret" not in _svg_text(app)
@@ -2549,10 +2569,12 @@ def test_evidence_and_failure_drawers_expand_selected_records():
             rows = faults.query_one("#failure-records", DataTable)
             assert rows.row_count >= 3
             rows.move_cursor(row=0)
+            rows.focus()
             await pilot.press("enter")
             await pilot.pause()
             detail = str(faults.query_one("#failure-detail").render())
-            assert "req-abc-123" in detail
+            assert "Check the credential." in detail
+            assert "req-abc-123" in _pane_text(faults, "#failure-body")
             assert "sk-live-secret" not in detail
             assert "sk-live-secret" not in _svg_text(app)
             await pilot.press("escape")
@@ -2625,7 +2647,7 @@ def test_failure_drawer_shows_production_failure_summary():
             drawer = app.screen
             assert isinstance(drawer, FailureDrawer)
             body = _pane_text(drawer, "#failure-body")
-            assert body.startswith("Remediation:")
+            assert body.startswith("Next step")
             assert "Check the credential." in body
             assert "http_rejected" in body
             assert "req-prod-1" in body
@@ -2861,7 +2883,9 @@ def test_launch_target_edit_keeps_visible_masked_and_overrides_with_raw(monkeypa
                 assert needle not in field.value
                 assert needle not in _svg_text(app)
             assert drawer._target_raw == typed, "the raw endpoint stays privately captured"
-            assert calls[-1]["target"] == typed
+            assert drawer._resolved_config().target_url == typed
+            drawer._goto_step(len(drawer.STEPS) - 1)
+            await pilot.pause()
             review = str(drawer.query_one("#launch-review").render())
             assert "EDITSECRET" not in review and "[REDACTED]" in review
 
@@ -3067,7 +3091,7 @@ def test_doctor_panel_is_compact_scrollable_and_has_details(monkeypatch, tmp_pat
                 evidence = Path('results/validation/doctor-ui')
                 evidence.mkdir(parents=True, exist_ok=True)
                 (evidence / f'doctor-{width}x{height}.svg').write_text(app.export_screenshot())
-                await pilot.press('d')
+                await pilot.press('ctrl+d')
                 await pilot.pause()
                 assert 'INTERNAL_DIAGNOSTIC' in str(drawer.query_one('#doctor-results', Static).content)
                 if width == 120:
@@ -3077,7 +3101,7 @@ def test_doctor_panel_is_compact_scrollable_and_has_details(monkeypatch, tmp_pat
                     assert panel.region.x == 0 and panel.region.width == 60
                     await pilot.resize_terminal(120, 36)
                     await pilot.pause()
-                    assert panel.region.width == 76
+                    assert panel.region.width == 112
                 await pilot.press('escape')
                 assert not isinstance(app.screen, tui.DoctorDrawer)
 
@@ -3111,6 +3135,7 @@ def test_doctor_escape_stops_process_and_reopening_reruns(monkeypatch, tmp_path)
             assert launched[1][1].pid != process.pid
             assert launched[1][2].exists()
             assert 'Fresh results' in _svg_text(app)
+            Path('results/validation/doctor-ui').mkdir(parents=True, exist_ok=True)
             Path('results/validation/doctor-ui/lifecycle.json').write_text(json.dumps({
                 'cancelled_pid': process.pid, 'cancelled_exit': process.returncode,
                 'fresh_pid': launched[1][1].pid, 'fresh_exit': launched[1][1].returncode,
@@ -3129,17 +3154,17 @@ def test_doctor_live_confirmation_and_rerun_stop_previous_process(monkeypatch, t
             await app.push_screen(tui.DoctorDrawer())
             drawer = app.screen
             await _doctor_finished(pilot, drawer)
-            await pilot.press('l')
+            await pilot.press('ctrl+l')
             assert len(launched) == 1
             assert 'credits' in _svg_text(app)
-            await pilot.press('l')
+            await pilot.press('ctrl+l')
             for _ in range(100):
                 if len(launched) == 2:
                     break
                 await pilot.pause(0.02)
             assert '--live' in launched[1][0]
             old_process = launched[1][1]
-            await pilot.press('r')
+            await pilot.press('ctrl+r')
             await asyncio.wait_for(old_process.wait(), timeout=2)
             assert old_process.returncode != 0
             await _doctor_finished(pilot, drawer)
@@ -3163,7 +3188,7 @@ def test_doctor_load_failure_is_visible_and_redacted(monkeypatch, tmp_path):
             assert 'needs attention' in svg
             assert 'doctor-private-key' not in svg
             assert 'duplicate-private-key' not in svg
-            await pilot.press('d')
+            await pilot.press('ctrl+d')
             assert 'Invalid YAML' in _svg_text(app)
             assert 'doctor-private-key' not in _svg_text(app)
 

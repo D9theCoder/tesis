@@ -118,6 +118,12 @@ def open_documented_nonadmin_session(
         password = None
 
 
+def open_configured_principal_session(base_url: str, security_level: str | None = None):
+    """Verify the configured fixture account without exporting its credentials."""
+    username, password = _DVWA_CREDENTIALS.get()
+    return open_verified_principal_session(base_url, username, password, security_level)
+
+
 class DVWASession:
     """Manages authentication, cookies, and security level for DVWA.
 

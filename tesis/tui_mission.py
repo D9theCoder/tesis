@@ -435,7 +435,7 @@ class MissionControlScreen(Screen):
         for index, row in enumerate(state.stages):
             label = row.label or row.stage_id.replace("_", " ")
             status = "pending" if row.status == "queued" else row.status
-            if available < 40:
+            if available < 40 or self._layout_mode == "narrow":
                 label = _NARROW_STAGE_LABELS.get(row.stage_id, label)
             text = Text(f" {index + 1}  ")
             text.append(_clip(label, max(10, available - 6 - len(status))), style="bold")
@@ -833,6 +833,9 @@ class MissionControlScreen(Screen):
         if not dirty:
             return
         self._pending_regions.update(dirty)
+        # Screen timers pause under a modal; history observers must still see
+        # incoming batches while their drawer is active.
+        self._notify_drawer_observers()
         if self._render_timer is None:
             self._render_timer = self.set_timer(1 / 30, self._flush_render)
 
@@ -841,7 +844,6 @@ class MissionControlScreen(Screen):
         if self._tesis_closing:
             return
         regions, self._pending_regions = self._pending_regions, set()
-        self._notify_drawer_observers()
         if regions:
             try:
                 self._render_regions(regions)

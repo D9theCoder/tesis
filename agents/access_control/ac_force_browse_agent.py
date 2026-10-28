@@ -71,6 +71,7 @@ def _probe_preconditions(
             continue
         sent_any = True
         tried.append(payload)
+        already_tried.add(path)
         try:
             resp = session.get(path)
             events.append(probe_event(AGENT_ID, path, resp.status_code, False,
@@ -117,6 +118,7 @@ def _attempt_exploit(
         if path in already_tried:
             continue
         tried.append(payload)
+        already_tried.add(path)
         try:
             resp = session.get(path)
             result = verifier.contains_any(resp.text, _signals_for_path(path)) if resp.status_code == 200 else None

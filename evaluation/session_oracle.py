@@ -10,9 +10,10 @@ import re
 
 from bs4 import BeautifulSoup
 
+from agents.brute_force.bf_dictionary_agent import _parse_credential
 from evaluation.scoring_evidence import evidence_hash, validate_sources
 from foundation.session_manager import DVWASession, session_fingerprint
-from foundation.verifier import fixture_attestation_valid
+from foundation.verifier import credential_rejection_observed, fixture_attestation_valid
 
 
 def _identity(response):
@@ -68,6 +69,10 @@ def _controls(target, username, password, initial_fingerprint):
             if not result['credentials_valid'] or result['principal_id'] != username:
                 return None, controls, requests
             policy_reader = positive
+        controls.append({'control': 'known_valid_identity', 'principal_id': _identity(policy_reader.get('index.php')),
+            'expected_principal_id': getattr(policy_reader, 'username', None) or getattr(policy_reader, '_username', None),
+            'session_fingerprint': session_fingerprint(policy_reader), 'initial_session_fingerprint': initial_fingerprint,
+            'credentials_valid': True, 'new_session': True, 'initial_authenticated': False, 'expected_confirmed': True})
         page = policy_reader.get('/vulnerabilities/authbypass/')
         policy = BeautifulSoup(page.text, 'html.parser').get_text(' ', strip=True)
         example = re.search(r'for example\s+(\w+)\s*/\s*([^\s<]+)', policy, re.I)
@@ -102,7 +107,7 @@ def collect_session_oracles(artifact, raw_state):
     sources = artifact['config'].get('scoring_oracles', [])
     validate_sources(sources)
     protocols = [s for s in sources if s['document'].get('oracle_protocol', {}).get('kind') == 'dvwa_candidate_session.v1'
-        and s['document']['oracle_protocol'].get('enabled') is True]
+        and s['document']['oracle_protocol'].get('enabled') is True and 'status' not in s['document']]
     if not protocols:
         return artifact
     if len(protocols) != 1:
@@ -114,44 +119,68 @@ def collect_session_oracles(artifact, raw_state):
     if protocol['origin'] != 'operator_fixture' and artifact.get('validation_scope') != 'offline_synthetic_fixture':
         raise ValueError('Live session collection requires an operator fixture protocol')
     result = deepcopy(artifact)
+    existing_ids = {source['source_id'] for source in sources}
     for row in result['final_state'].get('response_evidence', []):
+        if not isinstance(row, dict):
+            continue
         method, cid = row.get('agent_id', ''), row.get('candidate_id')
-        if not method.startswith('bf_') or row.get('stage') not in {'exploit', 'bypass'} or row.get('success') is not True:
+        if method not in {'bf_dictionary', 'bf_spray'} or row.get('stage') not in {'exploit', 'bypass'} or type(row.get('success')) is not bool:
             continue
         source_id = f"{protocol['source_id']}:{row['evidence_id']}"
-        if any(s['source_id'] == source_id for s in sources):
+        if source_id in existing_ids:
             continue
+        document = {'fixture_id': config['fixture_id'], 'protocol_version': config['protocol_version'],
+            'oracle_protocol': protocol['document']['oracle_protocol'], 'protocol_source_sha256': protocol['sha256'],
+            'attestations': [], 'controls': [], 'requests': [], 'status': 'pending',
+            'reason': 'candidate_evidence_binding_incomplete', 'candidate_id': cid,
+            'evidence_id': row.get('evidence_id'), 'visit_id': row.get('visit_id'), 'method': method}
         candidate = next((c for c in raw_state.get('payload_candidates', {}).get(method, []) if c.get('candidate_id') == cid), None)
         valid = any(v.get('candidate_id') == cid and v.get('valid') is True
             for v in raw_state.get('payload_validation_results', {}).get(method, []))
         original = next((r for r in raw_state.get('response_evidence', []) if r.get('evidence_id') == row.get('evidence_id')), {})
         initial = row.get('initial_session_fingerprint')
-        if not candidate or not valid or not initial or not row.get('response_sha256') or any(
-            original.get(k) != row.get(k) for k in ('agent_id', 'candidate_id', 'visit_id', 'response_sha256')):
-            continue
-        material = candidate.get('payload_or_logic', '')
-        if ':' not in material:
-            continue
-        username, password = material.split(':', 1)
-        if row.get('principal_id') and row['principal_id'] != username:
-            continue
-        document = {'fixture_id': config['fixture_id'], 'protocol_version': config['protocol_version'],
-            'oracle_protocol': protocol['document']['oracle_protocol'], 'protocol_source_sha256': protocol['sha256'],
-            'attestations': [], 'controls': [], 'requests': [], 'status': 'pending'}
+        username, password = _parse_credential(candidate.get('payload_or_logic', '')) if candidate else ('', '')
+        bound = (candidate and valid and candidate.get('stage') in {'exploit', 'bypass'}
+            and initial and row.get('session_fingerprint') and row.get('response_sha256')
+            and row.get('status_code') == 200 and username and password and row.get('principal_id') == username
+            and all(original.get(k) == row.get(k) for k in (
+                'agent_id', 'candidate_id', 'visit_id', 'response_sha256', 'principal_id',
+                'session_fingerprint', 'initial_session_fingerprint', 'status_code', 'success')))
+        if bound and row.get('success') is False:
+            # Token errors and unevaluated forms cannot establish a rejection.
+            if not credential_rejection_observed(original.get('response_excerpt', '')):
+                document['reason'] = 'execution_credential_rejection_unavailable'
+                bound = False
         try:
-            observed, controls, requests = _controls(config['target_url'], username, password, initial)
+            observed, controls, requests = _controls(config['target_url'], username, password, initial) if bound else (None, [], [])
             document.update(controls=[{**c, 'fixture_id': config['fixture_id'], 'protocol_version': config['protocol_version']}
                 for c in controls], requests=requests)
             if observed:
+                if observed.get('credentials_valid') is not row.get('success'):
+                    document['reason'] = 'candidate_control_outcome_disagrees'
+                    observed = None
+            if observed:
+                binding = {'kind': 'session', 'run_id': artifact['run_id'],
+                    'execution_id': artifact['execution_id'], 'method': method,
+                    'fixture_id': config['fixture_id'], 'protocol_version': config['protocol_version'],
+                    **{k: row[k] for k in ('visit_id', 'candidate_id', 'evidence_id', 'response_sha256')}}
+                document['candidate_replay'] = {**observed, **binding}
+                negative = row.get('success') is False and observed.get('credentials_valid') is False
                 attestation = {**observed, 'kind': 'session', 'run_id': artifact['run_id'],
                     'execution_id': artifact['execution_id'], 'method': method,
                     'fixture_id': config['fixture_id'], 'protocol_version': config['protocol_version'],
-                    **{k: row[k] for k in ('visit_id', 'candidate_id', 'evidence_id', 'response_sha256')},
-                    'timestamp': datetime.now(timezone.utc).isoformat()}
-                enriched = {**row, 'principal_id': observed['principal_id'], 'session_fingerprint': observed['session_fingerprint']}
-                if fixture_attestation_valid(attestation, enriched, document, artifact):
-                    document.update(attestations=[attestation], status='confirmed')
-                    row.update(principal_id=observed['principal_id'], session_fingerprint=observed['session_fingerprint'])
+                    **{k: row[k] for k in ('visit_id', 'candidate_id', 'evidence_id', 'response_sha256',
+                        'principal_id', 'session_fingerprint', 'initial_session_fingerprint')},
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'outcome': 'not_confirmed' if negative else 'confirmed'}
+                if fixture_attestation_valid(attestation, row, document, artifact, outcome=attestation['outcome']):
+                    document.update({('negative_attestations' if negative else 'attestations'): [attestation],
+                        'status': attestation['outcome']})
+                    document.pop('reason', None)
+                else:
+                    document['reason'] = 'attestation_binding_rejected'
+            elif bound and document['reason'] == 'candidate_evidence_binding_incomplete':
+                document['reason'] = 'session_controls_not_confirmed'
         except Exception as exc:
             # No exception text: transports can contain query/auth material.
             document['failure'] = type(exc).__name__
@@ -159,4 +188,5 @@ def collect_session_oracles(artifact, raw_state):
             'document': document, 'sha256': evidence_hash(document)}
         validate_sources([source])
         result['config']['scoring_oracles'].append(source)
+        existing_ids.add(source_id)
     return result

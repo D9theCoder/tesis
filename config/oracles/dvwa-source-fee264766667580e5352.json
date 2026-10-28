@@ -1,0 +1,82 @@
+[
+  {
+    "document": {
+      "fixture_id": "dvwa-source-fee264766667580e5352",
+      "frozen_at": "2026-10-10T21:18:21.888012+00:00",
+      "oracle_protocol": {
+        "controls": [
+          "unauthenticated",
+          "wrong_credential",
+          "reuse_authenticated_session",
+          "different_identity"
+        ],
+        "enabled": true,
+        "kind": "dvwa_candidate_session.v1",
+        "scope": "Configured DVWA; fresh sequential sessions; fixture-documented alternate account; no writes"
+      },
+      "protocol_version": "ranking-session-acceptance.v1"
+    },
+    "origin": "operator_fixture",
+    "sha256": "2213520e46f6cc52846d45e871cfd64faba63c725d3f7b486b7ea15e0ab6ab4c",
+    "source_id": "dvwa-session-protocol"
+  },
+  {
+    "document": {
+      "fixture_id": "dvwa-source-fee264766667580e5352",
+      "frozen_at": "2026-10-28T04:51:06.112523+00:00",
+      "oracle_protocol": {
+        "allow_broad_exposure": true,
+        "controls": [
+          "admin_allowed",
+          "anonymous_denied",
+          "candidate_replay"
+        ],
+        "enabled": true,
+        "kind": "dvwa_candidate_permission.v1",
+        "path_signals": {
+          "/vulnerabilities/authbypass/": [
+            "This page should only be accessible by the admin user"
+          ]
+        },
+        "policy": "The configured fixture user-manager page states that only admin may access it; its read API is included in this user-manager scope.",
+        "protected_paths": [
+          "/vulnerabilities/authbypass/"
+        ],
+        "protected_user_id": "1",
+        "protected_user_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+        ],
+        "resource": "DVWA admin-only user-manager page and exact admin-user read record",
+        "scope": "Configured DVWA only; fresh exact-resource read sessions; no writes or reset"
+      },
+      "protocol_version": "ranking-session-acceptance.v1"
+    },
+    "origin": "operator_fixture",
+    "sha256": "90c2fda4c7b48cba6fcb2f7b5de3ed308c9300fa51732d48b6ee4e67d855746c",
+    "source_id": "dvwa-candidate-permission-protocol-completion-all-frozen-objects"
+  },
+  {
+    "document": {
+      "fixture_id": "dvwa-source-fee264766667580e5352",
+      "frozen_at": "2026-10-10T23:52:30+00:00",
+      "oracle_protocol": {
+        "controls": [
+          "candidate_material_positive",
+          "wrong_credential_negative",
+          "destination_permission_oracle"
+        ],
+        "enabled": true,
+        "kind": "dvwa_causal_dependency.v1",
+        "scope": "Configured DVWA only; candidate-bound credential consumption and read-only destination permission control"
+      },
+      "protocol_version": "ranking-session-acceptance.v1"
+    },
+    "origin": "operator_fixture",
+    "sha256": "f86af589ec4fa58eb21998e068a4dc4d7100cb9b4a987c08746d61a28a03776c",
+    "source_id": "dvwa-causal-dependency-protocol-completion"
+  }
+]

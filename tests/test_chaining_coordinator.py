@@ -15,7 +15,7 @@ from core.state import new_default_state
 from foundation.http_client import ContainmentError
 
 def proved_chain_source(source):
-    return {"response_evidence": [{"evidence_id": "source-evidence", "candidate_id": "source-candidate"}],
+    return {"response_evidence": [{"evidence_id": "source-evidence", "candidate_id": "source-candidate", "visit_id": "source-visit"}],
         "verifier_history": [{"decision": "confirmed", "verifier_id": "source-verifier",
             "confirmed_vulns": ["bf_dictionary_confirmed"], "achieved_outcomes": [source],
             "evidence_refs": ["#/final_state/response_evidence/0"]}],

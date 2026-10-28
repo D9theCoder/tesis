@@ -466,6 +466,40 @@ object/action, with independently matching principal identities. Controls may
 use different principals with known permission decisions on that resource.
 Unrelated controls cannot establish permission proof.
 
+Oracle collection preserves the original principal and session fingerprints.
+Fresh session replay identities belong to `candidate_replay`; collectors do not
+overwrite execution receipts. Frozen protocols and collected sources are
+distinguished before scheduling controls, so repeating collection does not send
+more requests. Collected verdicts must resolve to their hash-validated frozen
+parent protocol. Conflicting attestations remain unassessed.
+
+Explicit permission denials and rejected credentials can carry independent
+`negative_attestations`, linked by `negative_oracle_ref`. Permission negatives
+require the exact candidate resource, explicit DVWA read-API or HTTP 403 denial, verified
+principal, allowed admin and denied anonymous controls. Session negatives
+require an explicit credential rejection in the original execution response,
+rejection in a fresh session and a separately verified valid identity. Token
+errors, CAPTCHA and unevaluated forms cannot establish credential rejection.
+Missing markers, failed transport and disagreement between execution and replay
+remain pending. Negative evidence never enables an AKG route. Dependency
+collectors retain failed controls, including destinations available without the
+source, without awarding causal credit. Extracted plaintext can be controlled
+at the dictionary-login destination. When extraction returns multiple pairs,
+controls and material fingerprints use the exact pair parsed from the consumed
+destination candidate; password hashes remain unconsumable.
+
+The permission collector recognizes explicitly frozen user IDs and literal
+dot-segment path aliases when they resolve to the same HTTPX request path. It
+keeps the original object identity in the receipt. Force-browse visits suppress
+repeated requests for those equivalent paths. A source-bound destination probe
+measures missing Access Control eligibility in a fresh non-admin session before
+selecting a chain; it is independently validated, bounded and logged, and does
+not earn exploit credit. The configured protocol in `config/oracles/` is pinned
+to the locally verified fixture and must be re-established for another fixture.
+When multiple routes branch from a source, `akg_path` retains its connected
+traversal; the separate branch is recorded in `current_chain` and the route's
+`chain_history` rather than introducing an edge that does not exist in the AKG.
+
 ## Scoring evidence and route completion
 
 Rubric `scoring.v2` uses the existing scorer and six-dimensional formula. Common

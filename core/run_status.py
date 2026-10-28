@@ -31,7 +31,7 @@ def lifecycle_alias(execution_status: str | None) -> str:
 
 def _security_evidence(source: Mapping) -> tuple[str, StatusReason | None]:
     """Use existing scoring.v4 proof ceilings, without changing verifier rules."""
-    from evaluation.scoring_evidence import candidate_base
+    from evaluation.scoring_evidence import candidate_base, oracle_negative_confirmed
     from evaluation.thesis_scoring import _resolve
 
     state = source.get("final_state", source)
@@ -69,14 +69,16 @@ def _security_evidence(source: Mapping) -> tuple[str, StatusReason | None]:
                 and any(_resolve(artifact, ref).get("visit_id") == d.get("visit_id") for ref in refs)]
             if base == 3 and any(d.get("decision") == "confirmed" for d in decisions):
                 return "confirmed", None
-            if str(selected).startswith(("ac_", "bf_")) and (base is not None or any(
+            controlled_negative = base == 0 and any(oracle_negative_confirmed(artifact, _resolve(artifact, ref))
+                for ref in refs if isinstance(_resolve(artifact, ref), dict))
+            if str(selected).startswith(("ac_", "bf_")) and not controlled_negative and (base is not None or any(
                     d.get("reason") == "missing_independent_authorization_control" for d in decisions)):
-                # Existing independent oracles attest confirmation only. Neither
-                # session labels nor an absent attestation prove a negative.
+                # Session labels and absent attestations cannot prove a negative.
                 missing_oracle.extend(refs)
                 assessed.append(None)
             elif base == 0 and decisions and all(d.get("decision") == "not_confirmed" for d in decisions):
-                usable = all(_resolve(artifact, ref).get("status_code") in (200, 404)
+                usable = all((_resolve(artifact, ref).get("status_code") in (200, 404)
+                    or oracle_negative_confirmed(artifact, _resolve(artifact, ref)))
                     and _resolve(artifact, ref).get("response_sha256") for ref in refs)
                 assessed.append(0 if usable else None)
                 if usable:

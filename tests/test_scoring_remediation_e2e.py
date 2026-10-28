@@ -101,7 +101,7 @@ class ScoringFixture(Fixture):
                 return ('No extraction evidence', 200, .01)
             if self.scoring_control == 'mixed_candidates' and value == self.failed_union:
                 return ('You have an error in your SQL syntax', 200, .01)
-            if self.scoring_control == 'plaintext_chain':
+            if self.scoring_control in {'plaintext_chain', 'failed_chain'}:
                 return ('First name: admin<br>Surname: password', 200, .01)
         return result
 
@@ -227,9 +227,12 @@ def test_scoring_candidate_evidence_and_revisit(monkeypatch):
     assert unused and all(cid not in state['payload_scores'] for cid in unused)
     fixture.control = 'negative'
     config = {'configurable': {'thread_id': next(iter(graph.checkpointer.storage))}}
-    graph.update_state(config, {'tried_payloads': Overwrite({})}, as_node='recon')
+    graph.update_state(config, {'tried_payloads': Overwrite({}), 'attempted_agents': Overwrite([])}, as_node='recon')
     final = graph.invoke(None, config=config)
     exported = save_graph('candidate-revisit', final, fixture)
+    visits = [decision['visit_id'] for decision in final['verifier_history'] if decision['agent_id'] == 'sqli_union']
+    assert len(set(visits)) == 2
+    assert final['iteration_count'] > artifact['final_state']['iteration_count']
     decisions = [d for d in final['scoring_decisions'] if d['dimension'] == 'Spayload' and d.get('candidate_id') == success['candidate_id']]
     assert [d['score'] for d in decisions] == [3, 0]
     assert final['payload_scores'][success['candidate_id']] == 3
@@ -252,6 +255,11 @@ def test_scoring_chain_dependency_and_routed_selection(monkeypatch, name, credit
         assert 'no_rate_limit' not in first_input['observations']
         assert any(event['event_type'] == 'recon.destination.completed'
                    for event in artifact['execution_log'])
+    if name == 'hash_chain':
+        assert not any(h.get('status') == 'completed' and h.get('target_agent') == 'bf_dictionary' for h in state['chain_history'])
+        assert state['chain_scores'].get('bf_dictionary', 0) == 0
+        assert not any(c.get('representation') == 'plaintext' for c in state.get('found_credentials', []))
+        return
     assert state['chain_scores']['bf_dictionary'] == credit
     routes = [h for h in state['chain_history'] if h.get('target_agent') == 'bf_dictionary']
     assert [h['status'] for h in routes] == ['ready', 'routed', 'executed', status]

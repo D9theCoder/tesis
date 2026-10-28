@@ -1485,9 +1485,18 @@ credential benign dijalankan melalui HTTP gate bersama. Telemetry probe dan
 containment tetap disimpan tanpa menghitung method visit atau membuktikan
 eksploitasi. Evidence negatif atau unavailable tidak membuka chain, dan recon
 tujuan yang belum menghasilkan bukti tidak diulang selama run yang sama.
+Untuk sumber authenticated session, prasyarat Access Control yang belum tersedia
+dapat diukur dengan probe statis yang tervalidasi dalam sesi non-admin hasil
+eksploitasi. Router hanya melakukan probe pada route yang material sumbernya
+dapat digunakan, mengikuti prioritas route, serta mencatat ID evidence sumber.
+Probe yang belum menghasilkan bukti tidak diulang untuk sumber yang sama, dan
+tidak dianggap sebagai bukti eksploitasi atau chain.
+Untuk cabang yang terpisah, `akg_path` tetap berupa lintasan yang terhubung;
+setiap cabang tersedia pada `current_chain` dan `chain_history`.
 Replay input tersimpan mempertahankan visit ID aktif pada receipt hasil
 validasi ulang serta indeks receipt dari visit sebelumnya. Pemilihan subset
-hanya mempersempit antrean aktif. Kedua scanner artefak TUI dan TESIS Web
+hanya mempersempit antrean exploit dan tetap menyertakan kandidat probe yang
+sudah tersimpan. Kedua scanner artefak TUI dan TESIS Web
 mengabaikan receipt `.resume.json` saat menemukan daftar run eksperimen.
 
 Eksekusi baru dengan checkpoint memakai graph thread baru. Fingerprint resume
@@ -1615,8 +1624,16 @@ dihubungkan melalui `source_candidate_id`, selain bukti langsung dengan
 tetapi belum mempunyai respons tetap belum dapat dinilai dan mencegah
 `no_finding`. Kandidat yang belum dijalankan tidak masuk penilaian tersebut.
 Event pembatalan meneruskan hasil terminal dan alasannya ke bagian bukti TUI;
-event anak tidak mengakhiri lifecycle induk matriks. Protokol oracle izin dan sesi saat ini
-memberikan attestation untuk konfirmasi. Attestation yang tidak tersedia tidak
+event anak tidak mengakhiri lifecycle induk matriks. Protokol oracle izin dan sesi
+menyimpan attestation positif serta `negative_attestations` yang terikat kandidat
+secara terpisah. Hasil negatif memerlukan kontrol independen yang sepadan:
+penolakan izin eksplisit dengan kontrol admin yang diizinkan, atau penolakan
+kredensial yang dieksekusi dengan kontrol login valid yang terverifikasi.
+Hasil negatif pada sesi juga memerlukan penolakan kredensial eksplisit pada
+respons eksekusi asli; kesalahan token dan formulir yang belum mengevaluasi
+kredensial tetap belum dapat dinilai. Kontrol dependensi SQLi memakai pasangan
+kredensial yang benar-benar dikonsumsi kandidat tujuan, termasuk ketika satu
+respons menghasilkan beberapa pasangan. Replay yang berbeda dari hasil asli tetap pending. Attestation yang tidak tersedia tidak
 membuktikan hasil negatif pada metode tersebut. Field `execution_status` pada
 baris candidate disposition tetap berarti `executed|not_executed`; status
 terminal di atas berlaku pada envelope run dan final state.
