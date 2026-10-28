@@ -199,6 +199,7 @@ _SIDECAR_SUFFIXES: Final[tuple[str, ...]] = (
     ".events.json",
     ".failure.json",
     ".rich.json",
+    ".resume.json",
     ".manifest.json",
     ".decisions.json",
     ".evaluator.json",

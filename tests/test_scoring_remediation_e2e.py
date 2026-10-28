@@ -247,6 +247,11 @@ def test_scoring_candidate_evidence_and_revisit(monkeypatch):
 def test_scoring_chain_dependency_and_routed_selection(monkeypatch, name, credit, status):
     artifact, _, graph = control(monkeypatch, name, automatic=True, condition='akg_guided_hybrid', ranked=True)
     state = artifact['final_state']
+    if name == 'plaintext_chain':
+        first_input = artifact['method_execution_inputs'][0]['state']
+        assert 'no_rate_limit' not in first_input['observations']
+        assert any(event['event_type'] == 'recon.destination.completed'
+                   for event in artifact['execution_log'])
     assert state['chain_scores']['bf_dictionary'] == credit
     routes = [h for h in state['chain_history'] if h.get('target_agent') == 'bf_dictionary']
     assert [h['status'] for h in routes] == ['ready', 'routed', 'executed', status]

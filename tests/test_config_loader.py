@@ -28,6 +28,12 @@ def test_default_model_name_openai_compatible():
     assert _default_model_name("openai_compatible") == ""
 
 
+def test_zero_coverage_target_is_preserved(tmp_path):
+    path = tmp_path / "config.yaml"
+    _write_yaml(path, "target_url: http://localhost/dvwa\nprovider: gemini\ncoverage_target: 0\n")
+    assert load_and_resolve_config(config_path=str(path), cli_args={}).coverage_target == 0.0
+
+
 def test_default_api_key_openai_compatible_fallback_empty(monkeypatch):
     """Verifies default api key openai compatible fallback empty behavior."""
     monkeypatch.delenv("OPENAI_COMPATIBLE_API_KEY", raising=False)

@@ -29,8 +29,8 @@ class CandidatePayload(str):
 def method_selection_update(state: dict, method: str, source: str, *, preconditions: list[str] | None = None,
                             viable_methods: list[str] | None = None, reason_refs=None, plan=None) -> dict:
     """Grade every selection at its boundary, before execution changes viability."""
-    from core.knowledge_graph import AttackKnowledgeGraph
-    kg = AttackKnowledgeGraph()
+    from core.knowledge_graph import get_attack_knowledge_graph
+    kg = get_attack_knowledge_graph()
     surface = next(s for s, methods in METHODS_BY_SURFACE.items() if method in methods)
     viable = kg.get_viable_methods(surface, state.get("observations", {})) if viable_methods is None else viable_methods
     viable = [m for m in viable if m in METHODS_BY_SURFACE[surface]]
@@ -45,6 +45,7 @@ def method_selection_update(state: dict, method: str, source: str, *, preconditi
     ordinal = 1 + sum(d.get("dimension") == "Smethod" for d in state.get("scoring_decisions", []))
     visit_id = f"{method}:visit:{ordinal}"
     return {"selected_method": method, "selected_visit_id": visit_id,
+        "iteration_count": state.get("iteration_count", 0) + 1,
         "viable_methods": viable, "method_scores": {method: grade},
         "scoring_decisions": [score_decision(state, "Smethod", method, grade,
             "viable_at_selection" if is_viable else "prerequisites_not_proved_at_selection",
@@ -111,6 +112,11 @@ def validated_candidate_ids(state: dict[str, Any], module_name: str) -> set[str]
     exist, only candidates with an explicit ``valid`` result may enter an agent
     queue; an empty set is meaningful and blocks execution of rejected rows.
     """
+    active = state.get("active_payload_candidates", {}).get(module_name)
+    if active is not None:
+        if active.get("status") != "validated" or active.get("visit_id") != state.get("selected_visit_id"):
+            return set()
+        return set(active.get("candidate_ids", []))
     results = state.get("payload_validation_results", {}).get(module_name)
     if not isinstance(results, list) or not results:
         return None
@@ -131,6 +137,13 @@ def validated_payload_candidates(state: dict[str, Any], module_name: str) -> lis
         return [candidate for candidate in candidates if isinstance(candidate, dict)]
     by_id = {str(candidate.get("candidate_id")): candidate
              for candidate in candidates if isinstance(candidate, dict)}
+    active = state.get("active_payload_candidates", {}).get(module_name)
+    if active is not None:
+        results = {str(row.get("candidate_id")): row
+            for row in state.get("payload_validation_results", {}).get(module_name, [])
+            if row.get("visit_id") == active.get("visit_id")}
+        return [by_id[cid] for cid in active.get("candidate_ids", [])
+            if cid in valid_ids and cid in by_id and results.get(cid, {}).get("valid") is True]
     # Candidate history is append-only; the validation rows carry the ranked
     # execution order. Do not revive the builder's older unranked ordering.
     return [by_id[candidate_id] for row in state["payload_validation_results"][module_name]
@@ -661,7 +674,9 @@ def make_update(
         "exploitation_scores": merge_score_map(state, "exploitation_scores", module_name, min(score, 3)),
         "chain_scores": {module_name: 0},
         "tried_payloads": merge_tried_payloads(state, module_name, tried_payloads),
-        "iteration_count": state.get("iteration_count", 0) + 1,
+        # Graph selections reserve a visit before preparation. Legacy direct
+        # method callers have no reservation and account for their own visit.
+        "iteration_count": state.get("iteration_count", 0) + (0 if state.get("selected_visit_id") else 1),
         "next_agent": next_agent,
     }
 

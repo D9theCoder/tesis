@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import json
 
-from core.knowledge_graph import AttackKnowledgeGraph
+from core.knowledge_graph import AttackKnowledgeGraph, get_attack_knowledge_graph
 from core.state import METHODS_BY_SURFACE
 
 RUBRIC_VERSION = 'scoring.v4'
@@ -173,7 +173,7 @@ def edge_for(record):
     source, target, agent = (record.get(k) for k in ('source', 'target', 'target_agent'))
     if not all(isinstance(k, str) and k for k in (source, target, agent)):
         return None
-    return next((e for e in AttackKnowledgeGraph().get_next_actions(source)
+    return next((e for e in get_attack_knowledge_graph().get_next_actions(source)
         if e.get('is_chain') and e.get('target') == target and e.get('target_agent') == agent), None)
 
 
@@ -480,7 +480,7 @@ def weak_opportunity_update(state):
     from evaluation.thesis_scoring import PROOF_TIERS
     result = []
     history = state.get('weak_chain_opportunities', [])
-    kg = AttackKnowledgeGraph()
+    kg = get_attack_knowledge_graph()
     for i, row in enumerate(state.get('response_evidence', [])):
         if row.get('stage') not in {'exploit', 'bypass'} or not row.get('candidate_id') or not row.get('response_sha256') or row.get('status_code') != 200:
             continue

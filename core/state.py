@@ -96,6 +96,20 @@ def _merge_nested_dicts(a: dict[str, dict], b: dict[str, dict]) -> dict[str, dic
     return merged
 
 
+def _merge_validation_maps(a: dict[str, list[dict]], b: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    """Keep visit-owned receipts append-only so old evidence indices stay valid."""
+    merged = {method: list(rows) for method, rows in a.items()}
+    for method, rows in b.items():
+        history = merged.setdefault(method, [])
+        seen = {(row.get("visit_id"), row.get("candidate_id")) for row in history}
+        for row in rows:
+            identity = (row.get("visit_id"), row.get("candidate_id"))
+            if identity not in seen:
+                history.append(dict(row))
+                seen.add(identity)
+    return merged
+
+
 ExecutionStatus = Literal["completed", "failed", "interrupted"]
 SecurityOutcome = Literal["confirmed", "no_finding", "unconfirmed", "fixture_limited"]
 StatusReasonCode = Literal[
@@ -130,6 +144,12 @@ class ExploitationState(TypedDict):
     payload_mode: str  # "static_only" | "hybrid" | "llm_mutation_only"
     experiment_condition: str  # "linear_hybrid" | "akg_guided_hybrid"
     target_method: str | None
+    repeat_index: int
+    stop_policy: str
+    coverage_target: float
+    workflow_protocol_version: str
+    workflow_stop_reason: str | None
+    llm_skip_reason: str | None
     run_id: str
     execution_id: str
     fixture_id: str | None
@@ -154,7 +174,9 @@ class ExploitationState(TypedDict):
     # Payload candidate tracking (accumulate)
     payload_candidates: Annotated[dict[str, list[dict]], _merge_payload_maps]
     generated_payloads: Annotated[dict[str, list[dict]], _merge_payload_maps]
-    payload_validation_results: Annotated[dict[str, list[dict]], _merge_payload_maps]
+    payload_validation_results: Annotated[dict[str, list[dict]], _merge_validation_maps]
+    active_payload_candidates: Annotated[dict[str, dict], _replace_score_entries]
+    preparation_failures: Annotated[list[dict], add]
     # Current visit's detection controls, separate from scored exploit candidates.
     probe_controls: NotRequired[Annotated[dict[str, dict], _replace_score_entries]]
     payload_scores: Annotated[dict[str, int], _merge_scores]
@@ -210,6 +232,7 @@ class ExploitationState(TypedDict):
 
     # Model configuration for provider instantiation
     model_config: NotRequired[dict[str, Any]]
+    llm_call_receipts: Annotated[list[dict], add]
 
     # Telemetry (accumulate)
     telemetry_events: NotRequired[Annotated[list[dict], add]]
@@ -233,6 +256,8 @@ class ExploitationState(TypedDict):
     execution_reason: NotRequired[StatusReason | None]
     security_outcome: NotRequired[SecurityOutcome | None]
     security_outcome_reason: NotRequired[StatusReason | None]
+    summary: NotRequired[dict[str, Any]]
+    surface_scores: NotRequired[dict[str, dict[str, Any]]]
 
 
 def _default_state_template() -> dict[str, Any]:
@@ -244,6 +269,12 @@ def _default_state_template() -> dict[str, Any]:
         "payload_mode": "static_only",
         "experiment_condition": "linear_hybrid",
         "target_method": None,
+        "repeat_index": 0,
+        "stop_policy": "impact",
+        "coverage_target": 0.70,
+        "workflow_protocol_version": "workflow.v2",
+        "workflow_stop_reason": None,
+        "llm_skip_reason": None,
         "run_id": "",
         "execution_id": "",
         "fixture_id": None,
@@ -261,6 +292,8 @@ def _default_state_template() -> dict[str, Any]:
         "payload_candidates": {},
         "generated_payloads": {},
         "payload_validation_results": {},
+        "active_payload_candidates": {},
+        "preparation_failures": [],
         "probe_controls": {},
         "payload_scores": {},
         "payload_provenance": {},
@@ -302,6 +335,7 @@ def _default_state_template() -> dict[str, Any]:
         "evasion_attempts": 0,
         "successful_evasions": 0,
         "model_config": {},
+        "llm_call_receipts": [],
         "telemetry_events": [],
         "attempted_agents": [],
         "blocked_agents": [],
@@ -333,15 +367,13 @@ def new_default_state() -> dict[str, Any]:
     return deepcopy(_default_state_template())
 
 
-STATE_SCHEMA_VERSION = "state.v2"
-CHECKPOINT_SCHEMA_VERSION = "checkpoint.v1"
+STATE_SCHEMA_VERSION = "state.v3"
+CHECKPOINT_SCHEMA_VERSION = "checkpoint.v2"
 
-# Persistent vs artifact-only inventory (handoff phase 1, design-only).
-# Runtime behavior is unchanged: nodes still read/write the full
-# ExploitationState. Future durable checkpoints MUST persist only
-# PERSISTENT_STATE_FIELDS and reload audit payloads from artifacts.
-# ARTIFACT_ONLY fields carry rendered prompts, full model responses, or
-# verbose per-node diagnostics; artifacts retain the redacted copies.
+# The metadata receipt retains PERSISTENT_STATE_FIELDS. Durable graph
+# checkpoints use AuditCheckpointSerializer to store large audit entries once
+# beside SQLite and restore them transparently, including pending writes.
+# Nodes continue reading the full state; evidence indices remain stable.
 ARTIFACT_ONLY_STATE_FIELDS = frozenset({
     "messages",
     "generation_prompts",
@@ -354,6 +386,8 @@ ARTIFACT_ONLY_STATE_FIELDS = frozenset({
 })
 
 PERSISTENT_STATE_FIELDS = frozenset({
+    "repeat_index", "workflow_protocol_version", "workflow_stop_reason", "llm_skip_reason",
+    "active_payload_candidates", "preparation_failures", "llm_call_receipts",
     "run_id", "execution_id", "fixture_id", "protocol_version", "scoring_rubric_version",
     "scoring_profile", "scoring_oracles", "weak_chain_opportunities",
     "target_url",

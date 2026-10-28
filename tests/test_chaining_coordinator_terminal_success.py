@@ -6,6 +6,7 @@ from core.chaining_coordinator import (
     evaluate_chain_route,
 )
 from core.scorer import scorer
+from tests.test_chaining_coordinator import proved_chain_source
 
 def _brute_force_chain_state(**overrides):
     state = {
@@ -18,7 +19,8 @@ def _brute_force_chain_state(**overrides):
         "attempted_agents": ["bf_dictionary", "bf_spray", "ac_force_browse", "ac_idor"],
         "blocked_agents": [],
         "failure_agents": [],
-        "observations": {"no_rate_limit": True},
+        "observations": {"no_rate_limit": True, "force_browse_endpoints_visible": True},
+        **proved_chain_source("authenticated_session"),
     }
     state.update(overrides)
     return state

@@ -186,6 +186,8 @@ def test_completed_receipt_replay_sets_both_resume_flags(tmp_path, monkeypatch):
     )
     assert first["status"] == "success"
 
+    original_path = tmp_path / f"{first['execution_id']}.json"
+    original_bytes = original_path.read_bytes()
     class MustNotRun:
         def stream(self, *a, **k):
             raise AssertionError("graph must not rerun on completed replay")
@@ -207,9 +209,16 @@ def test_completed_receipt_replay_sets_both_resume_flags(tmp_path, monkeypatch):
     assert replayed["status"] == "success"
     assert replayed["resumed_from_checkpoint"] is True
     assert replayed["resumed"] is True
+    assert original_path.read_bytes() == original_bytes
+    import json
+    assert len([p for p in tmp_path.glob('*.json') if json.loads(p.read_text()).get('schema_version') == 'tui.v1']) == 1
+    receipt = json.loads(next(tmp_path.glob('*.resume.json')).read_text())
+    assert receipt['source_execution_id'] == first['execution_id']
+    assert receipt['replayed_nodes'] == receipt['fresh_provider_calls'] == 0
 
 
-def test_legacy_completed_artifact_replay_normalizes_resumed_flag(tmp_path, monkeypatch):
+
+def test_incomplete_legacy_fingerprint_refuses_completed_replay(tmp_path, monkeypatch):
     import json
     import sqlite3
 
@@ -290,9 +299,10 @@ def test_legacy_completed_artifact_replay_normalizes_resumed_flag(tmp_path, monk
         experiment_id="legacy-exp",
         resume=True,
     )
-    assert replayed["status"] == "success"
-    assert replayed["resumed_from_checkpoint"] is True
-    assert replayed["resumed"] is True
+    assert replayed["status"] == "error"
+    assert replayed["resumed_from_checkpoint"] is False
+    assert replayed["resumed"] is False
+    assert "coordinate setup changed" in replayed["error"]
 
 def test_default_path_runs_without_sqlite_saver_subprocess(tmp_path):
     out_dir = tmp_path / "run"

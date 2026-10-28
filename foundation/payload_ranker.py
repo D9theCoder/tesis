@@ -10,7 +10,7 @@ def rank_candidates(candidates: list[dict], max_total: int) -> list[dict]:
     ordered = sorted(
         (dict(candidate) for candidate in candidates if isinstance(candidate, dict)),
         key=lambda candidate: (
-            0 if candidate.get("source") == "static_seed" else 1,
+            {"chain_derived": 0, "static_seed": 1}.get(candidate.get("source"), 2),
             str(candidate.get("candidate_id", "")),
         ),
     )

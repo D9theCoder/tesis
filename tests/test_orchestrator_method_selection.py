@@ -11,7 +11,7 @@ def test_experiment_condition_changes_deterministic_selection(monkeypatch):
         def get_viable_methods(self, surface, observations):
             return ["sqli_time_blind"]
 
-    monkeypatch.setattr("agents.orchestrator.AttackKnowledgeGraph", FakeKnowledgeGraph)
+    monkeypatch.setattr("core.knowledge_graph.AttackKnowledgeGraph.get_viable_methods", FakeKnowledgeGraph.get_viable_methods)
     base = {
         "current_surface": "sqli",
         "observations": {},
@@ -28,7 +28,7 @@ def test_akg_fallback_does_not_execute_unviable_method(monkeypatch):
         def get_viable_methods(self, surface, observations):
             return []
 
-    monkeypatch.setattr("agents.orchestrator.AttackKnowledgeGraph", FakeKnowledgeGraph)
+    monkeypatch.setattr("core.knowledge_graph.AttackKnowledgeGraph.get_viable_methods", FakeKnowledgeGraph.get_viable_methods)
     assert _fallback_next_agent({
         "current_surface": "sqli",
         "observations": {},
@@ -43,7 +43,7 @@ def test_akg_fallback_filters_cross_surface_methods(monkeypatch):
         def get_viable_methods(self, surface, observations):
             return ["ac_force_browse", "sqli_error"]
 
-    monkeypatch.setattr("agents.orchestrator.AttackKnowledgeGraph", FakeKnowledgeGraph)
+    monkeypatch.setattr("core.knowledge_graph.AttackKnowledgeGraph.get_viable_methods", FakeKnowledgeGraph.get_viable_methods)
     assert _fallback_next_agent({
         "current_surface": "sqli",
         "observations": {},
@@ -62,7 +62,7 @@ def test_akg_orchestrator_rejects_cross_surface_llm_choice(monkeypatch):
         def invoke(self, messages):
             return type("Response", (), {"content": '{"next_agent": "ac_idor"}'})()
 
-    monkeypatch.setattr("agents.orchestrator.AttackKnowledgeGraph", FakeKnowledgeGraph)
+    monkeypatch.setattr("core.knowledge_graph.AttackKnowledgeGraph.get_viable_methods", FakeKnowledgeGraph.get_viable_methods)
     monkeypatch.setattr("agents.orchestrator.get_llm", lambda *args, **kwargs: FakeLLM())
     result = orchestrator({
         "target_url": "http://localhost/dvwa",
@@ -95,7 +95,7 @@ def test_akg_orchestrator_does_not_route_cross_surface_choice_when_none_viable(m
         def get_viable_methods(self, surface, observations):
             return []
 
-    monkeypatch.setattr("agents.orchestrator.AttackKnowledgeGraph", FakeKnowledgeGraph)
+    monkeypatch.setattr("core.knowledge_graph.AttackKnowledgeGraph.get_viable_methods", FakeKnowledgeGraph.get_viable_methods)
     monkeypatch.setattr(
         "agents.orchestrator.get_llm",
         lambda *args, **kwargs: pytest.fail("orchestrator LLM must not be called"),
@@ -152,7 +152,7 @@ def test_akg_viable_methods_are_filtered_to_active_surface(monkeypatch):
         def invoke(self, messages):
             return type("Response", (), {"content": '{"next_agent": "sqli_error"}'})()
 
-    monkeypatch.setattr("agents.orchestrator.AttackKnowledgeGraph", FakeKnowledgeGraph)
+    monkeypatch.setattr("core.knowledge_graph.AttackKnowledgeGraph.get_viable_methods", FakeKnowledgeGraph.get_viable_methods)
     monkeypatch.setattr("agents.orchestrator.get_llm", lambda *args, **kwargs: FakeLLM())
     result = orchestrator({
         "target_url": "http://localhost/dvwa",
@@ -186,7 +186,7 @@ def test_target_method_explicit_selection_preserves_target_events(monkeypatch):
         def get_viable_methods(self, surface, observations):
             return []
 
-    monkeypatch.setattr("agents.orchestrator.AttackKnowledgeGraph", FakeKnowledgeGraph)
+    monkeypatch.setattr("core.knowledge_graph.AttackKnowledgeGraph.get_viable_methods", FakeKnowledgeGraph.get_viable_methods)
     result = orchestrator({
         "target_url": "http://localhost/dvwa",
         "security_level": "high",

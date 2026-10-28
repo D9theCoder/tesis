@@ -1462,6 +1462,44 @@ Chain historis tetap 0 sampai konsumsi sumber dan verifikasi tujuan terbukti.
 
 ### Verifikasi method dan diagnostic replay
 
+Kontrak kontrol alur saat ini memakai `workflow.v2`, `state.v3`, `checkpoint.v2`,
+dan `graph.v2`. Setiap pemilihan mencadangkan satu *method visit* sebelum
+persiapan candidate, termasuk route chain dan fallback langsung. Kegagalan
+persiapan memakai satu visit, tetapi tidak menambah cakupan method yang sudah
+dijalankan. Pemilihan otomatis tidak mengulang method yang sudah dicoba atau
+gagal. Kebijakan `coverage` menghitung method unik yang telah dimasuki terhadap
+seluruh method pada surface yang dikonfigurasi, atau satu target method eksplisit.
+Penyebut ini sama pada kedua kondisi. Kebijakan `impact` berhenti ketika outcome
+berdampak tinggi tercapai. Keduanya mengikuti batas visit.
+
+`active_payload_candidates` menyimpan urutan ID yang diterima pada visit saat ini.
+Receipt validasi tetap *append-only*, memiliki visit ID, dan mempertahankan
+referensi bukti. Chain memerlukan kelayakan method tujuan serta dukungan adapter
+untuk konsumsi sumber yang terikat bukti. Dependency yang tidak tersedia dicatat
+sebagai infeasible. Objek `workflow` opsional pada artefak dan event menyediakan
+kebijakan, cakupan method, anggaran visit, dan alasan berhenti bagi TESIS Web.
+Cakupan koordinat matrix dan interpretasi artefak lama tetap terpisah.
+Untuk sumber SQLi plaintext yang telah terbukti, prasyarat brute-force yang
+belum diketahui diukur sebelum kelayakan tujuan dievaluasi. Maksimal dua kontrol
+credential benign dijalankan melalui HTTP gate bersama. Telemetry probe dan
+containment tetap disimpan tanpa menghitung method visit atau membuktikan
+eksploitasi. Evidence negatif atau unavailable tidak membuka chain, dan recon
+tujuan yang belum menghasilkan bukti tidak diulang selama run yang sama.
+Replay input tersimpan mempertahankan visit ID aktif pada receipt hasil
+validasi ulang serta indeks receipt dari visit sebelumnya. Pemilihan subset
+hanya mempersempit antrean aktif. Kedua scanner artefak TUI dan TESIS Web
+mengabaikan receipt `.resume.json` saat menemukan daftar run eksperimen.
+
+Eksekusi baru dengan checkpoint memakai graph thread baru. Fingerprint resume
+mengikat konfigurasi efektif model/role, input scoring, fixture, dan protokol.
+Data audit disimpan berdasarkan hash konten dalam direktori `checkpoint-audit/`
+di sebelah SQLite, lalu diverifikasi dan dipulihkan termasuk *pending writes*.
+Direktori ini perlu disimpan bersama database. Receipt panggilan model sebelumnya
+mempertahankan identitas eksekusi dan dipulihkan tanpa panggilan provider baru.
+Kontrak checkpoint lama ditolak, sedangkan artefak historis tetap dapat dibaca.
+Perubahan ini membentuk protokol eksekusi baru yang tidak boleh digabungkan secara
+diam-diam dengan epoch eksperimen sebelumnya.
+
 Setiap pemanggilan method mencatat keputusan, termasuk gagal dan negatif.
 Konfirmasi sebelumnya tetap tersimpan dalam history graph-state dan reducer
 confirmed-node. Evidence force-browse memakai path request aktual. Konfirmasi

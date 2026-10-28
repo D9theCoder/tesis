@@ -93,6 +93,7 @@ def stable_thread_id(experiment_id: str, coordinate: Mapping[str, Any]) -> str:
 def coordinate_fingerprint(coordinate: Mapping[str, Any]) -> str:
     """Secret-free fingerprint of the effective coordinate setup."""
     canonical = {
+        "fingerprint_version": "coordinate.v2",
         "target_url": str(coordinate.get("target_url") or ""),
         "provider": str(coordinate.get("provider") or coordinate.get("llm_provider") or ""),
         "surface": str(coordinate.get("surface") or ""),
@@ -108,6 +109,17 @@ def coordinate_fingerprint(coordinate: Mapping[str, Any]) -> str:
         "model_name": coordinate.get("model_name"),
         "evasion_enabled": coordinate.get("evasion_enabled"),
         "evasion_mode": coordinate.get("evasion_mode"),
+        "evasion_max_retries": coordinate.get("evasion_max_retries"),
+        "evasion_cooldown_threshold": coordinate.get("evasion_cooldown_threshold"),
+        "effective_llm_runtime": coordinate.get("effective_llm_runtime"),
+        "scoring_rubric_version": coordinate.get("scoring_rubric_version"),
+        "scoring_profile": coordinate.get("scoring_profile"),
+        "scoring_oracles": coordinate.get("scoring_oracles"),
+        "scoring_mode": coordinate.get("scoring_mode"),
+        "scoring_evaluator": coordinate.get("scoring_evaluator"),
+        "fixture_id": coordinate.get("fixture_id"),
+        "protocol_version": coordinate.get("protocol_version"),
+        "workflow_protocol_version": coordinate.get("workflow_protocol_version"),
     }
     encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -152,12 +164,14 @@ class ExperimentCheckpointStore:
         final_state: Mapping[str, Any],
         artifact: Mapping[str, Any],
         coordinate: Mapping[str, Any],
+        graph_thread_id: str | None = None,
     ) -> None:
         """Persist a completed run. Only called for terminal successful runs."""
         row = {
             "thread_id": thread_id,
             "experiment_id": self.experiment_id,
-            "state_json": json.dumps(checkpoint_safe_state(dict(final_state)), sort_keys=True, default=str),
+            "state_json": json.dumps({**checkpoint_safe_state(dict(final_state)),
+                "graph_thread_id": graph_thread_id or thread_id}, sort_keys=True, default=str),
             "artifact_json": json.dumps(dict(artifact), sort_keys=True, default=str),
             "state_schema_version": STATE_SCHEMA_VERSION,
             "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
@@ -185,12 +199,16 @@ class ExperimentCheckpointStore:
         self,
         thread_id: str,
         coordinate: Mapping[str, Any],
+        graph_thread_id: str | None = None,
+        execution_id: str | None = None,
+        run_id: str | None = None,
     ) -> None:
         """Persist a start-of-run identity row (no receipt, no replayable state)."""
         row = {
             "thread_id": thread_id,
             "experiment_id": self.experiment_id,
-            "state_json": "{}",
+            "state_json": json.dumps({"graph_thread_id": graph_thread_id or thread_id,
+                "execution_id": execution_id, "run_id": run_id}),
             "artifact_json": "{}",
             "state_schema_version": STATE_SCHEMA_VERSION,
             "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,

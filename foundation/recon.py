@@ -175,6 +175,60 @@ def _collect_client_containment_events(session: DVWASession | None, events: list
                 _append_containment_event(events, event)
 
 
+def probe_brute_force_destination(state: dict) -> dict:
+    """Measure missing chain prerequisites once, using only benign controls.
+
+    The router calls this inside the serialized DVWA HTTP gate after proving
+    consumable source material. This is reconnaissance, not a method visit.
+    """
+    method = "bf_dictionary"
+    if any(event.get("event") == "recon.destination.completed"
+           and event.get("payload", {}).get("method") == method
+           for event in state.get("telemetry_events", [])):
+        return {}
+    observations: dict[str, bool] = {}
+    events: list[dict] = []
+    containment_events: list[dict] = []
+    session = None
+    reason = "missing_target_url"
+    try:
+        if state.get("target_url"):
+            session = DVWASession(state["target_url"])
+            reason = "session_login_failed"
+            if session.login():
+                from agents.brute_force.bf_dictionary_agent import _probe_preconditions
+                from foundation.payload_library import PayloadLibrary
+
+                level = state.get("security_level", "low")
+                session.set_security_level(level)
+                probes = PayloadLibrary().get(method, level).probe[:2]
+                _, _, observations, probe_events = _probe_preconditions(
+                    session, probes, set(), security_level=level,
+                )
+                events = [{**event, "node": "chaining_router", "event": "recon.destination.probe",
+                    "payload": {**event.get("payload", {}), "method": method}}
+                    for event in probe_events]
+                reason = ("preconditions_measured" if "no_rate_limit" in observations
+                          else "probe_evidence_unavailable")
+    except ContainmentError as exc:
+        _append_containment_event(containment_events, exc)
+        reason = "containment_violation"
+    except (TransportError, RequestTimeoutError, ValueError, RuntimeError, OSError) as exc:
+        logger.warning("destination recon failed: %s", exc)
+        reason = "destination_probe_failed"
+    finally:
+        if session is not None:
+            try:
+                session.close()
+            except (RuntimeError, OSError) as exc:
+                logger.warning("destination recon session close failed: %s", exc)
+            _collect_client_containment_events(session, containment_events)
+    events.append({"node": "chaining_router", "event": "recon.destination.completed",
+        "payload": {"method": method, "reason": reason, "observations": observations}})
+    return {"observations": observations, "telemetry_events": events,
+        "containment_events": containment_events}
+
+
 def parse_forms(
     html: str,
     page_url: str,

@@ -582,6 +582,23 @@ class CoordinateCallContext:
             self._call_sequence += 1
             return f"{self.coordinate_id}:{role}:{self._call_sequence}"
 
+    def restore_receipts(self, receipts: list[dict[str, Any]]) -> None:
+        """Restore completed provider work without dispatching or emitting calls."""
+        seen = set()
+        sequence = 0
+        for row in receipts:
+            call_id = row.get("call_id")
+            if (row.get("coordinate_id") != self.coordinate_id or not isinstance(call_id, str)
+                    or call_id in seen or not call_id.startswith(f"{self.coordinate_id}:")):
+                raise ValueError("Saved provider receipt has incompatible or duplicate identity")
+            seen.add(call_id)
+            sequence = max(sequence, int(call_id.rsplit(":", 1)[-1]))
+        with self._lock:
+            if self.records:
+                raise ValueError("Provider receipts must be restored before new calls")
+            self.records.extend(deepcopy(receipts))
+            self._call_sequence = sequence
+
     def emit_activity(
         self,
         event_type: str,

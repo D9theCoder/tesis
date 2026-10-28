@@ -21,6 +21,25 @@ from tesis.runtime_events import (
 )
 
 
+def test_artifact_repository_excludes_completed_resume_receipts(tmp_path: Path) -> None:
+    primary = tmp_path / "exec-original.json"
+    primary.write_text(json.dumps({
+        "execution_id": "exec-original", "run_id": "run-original", "status": "success",
+        "config": {"surface": "sqli", "security_level": "low"},
+    }))
+    receipt = tmp_path / "request-1.resume.json"
+    receipt.write_text(json.dumps({
+        "schema_version": "checkpoint-resume.v1", "status": "completed",
+        "source_execution_id": "exec-original", "replayed_nodes": 0,
+        "fresh_provider_calls": 0,
+    }))
+
+    items = ArtifactRepository(tmp_path).scan()
+
+    assert [(item.path, item.run_id) for item in items] == [(primary, "run-original")]
+    assert ArtifactRepository(receipt).scan() == []
+
+
 def test_event_sink_preserves_order_and_collects_concurrent_events() -> None:
     """Events stay in emission order and concurrent producers lose nothing."""
 

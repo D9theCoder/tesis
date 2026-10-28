@@ -11,7 +11,7 @@ from typing import Annotated, NotRequired, get_args, get_origin, get_type_hints
 
 from core.graph_builder import RUNTIME_AGENT_HANDLERS
 from core.scorer import scorer
-from core.state import ExploitationState, new_default_state
+from core.state import ExploitationState, _merge_validation_maps, new_default_state
 from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.reporter import link_exported_request_evidence, write_json_report
 from foundation.payload_validator import validate_payload_candidates, validate_probe_controls
@@ -83,6 +83,12 @@ def replay_method_inputs(
         key=lambda c: str(c.get('candidate_id')),
     )
     rejections = [r for r in check.get('payload_validation_results', {}).get(method, []) if r.get('valid') is not True]
+    active = state.get('active_payload_candidates', {}).get(method)
+    visit_id = state.get('selected_visit_id')
+    if active is not None and (
+        not visit_id or active.get('status') != 'validated' or active.get('visit_id') != visit_id
+    ):
+        rejections.append({'reason': 'frozen_active_visit_not_validated', 'valid': False})
     if not queue or signature(queue) != signature(executable):
         rejections.append({'reason': 'frozen_queue_changed_or_empty', 'valid': False})
     stages = {c.get('stage') for c in queue}
@@ -106,13 +112,24 @@ def replay_method_inputs(
             if not rejections:
                 # Fresh ranking can differ from append-only validation history.
                 # Revalidate membership, then execute in the saved queue order.
-                receipts = {r['candidate_id']: r for r in check['payload_validation_results'][method]}
+                receipts = {r['candidate_id']: dict(r, visit_id=visit_id)
+                    for r in check['payload_validation_results'][method]}
                 saved_results = state.get('payload_validation_results', {})
-                queued_ids = {c['candidate_id'] for c in queue}
-                history = [r for r in saved_results.get(method, []) if r.get('candidate_id') not in queued_ids]
-                state['payload_validation_results'] = {
-                    **saved_results, method: [*history, *[receipts[c['candidate_id']] for c in queue]],
-                }
+                ordered_receipts = [receipts[c['candidate_id']] for c in queue]
+                if active is not None:
+                    state['payload_validation_results'] = _merge_validation_maps(
+                        saved_results, {method: ordered_receipts})
+                    state['active_payload_candidates'] = {
+                        **state['active_payload_candidates'], method: {
+                            **active, 'candidate_ids': [c['candidate_id'] for c in queue],
+                        },
+                    }
+                else:
+                    queued_ids = {c['candidate_id'] for c in queue}
+                    history = [r for r in saved_results.get(method, []) if r.get('candidate_id') not in queued_ids]
+                    state['payload_validation_results'] = {
+                        **saved_results, method: [*history, *ordered_receipts],
+                    }
                 updates = _serialized_http_handler(RUNTIME_AGENT_HANDLERS[method])(state)
             if context.records:
                 raise RuntimeError('Method replay unexpectedly called a provider')

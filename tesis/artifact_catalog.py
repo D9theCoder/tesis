@@ -169,7 +169,7 @@ class ArtifactCatalog:
             ):
                 self.diagnostic("invalid_artifact_schema", path)
                 continue
-            if path.name.endswith((".rich.json", ".failure.json", ".review-history.json", ".evaluator.json")):
+            if path.name.endswith((".rich.json", ".failure.json", ".review-history.json", ".evaluator.json", ".resume.json")):
                 continue
             if family == "manifest":
                 manifests.append((path, record))

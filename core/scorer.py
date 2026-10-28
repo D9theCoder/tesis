@@ -197,6 +197,7 @@ def scorer(state: dict) -> dict:
 
     Returns:
         Partial state update containing final scoring output."""
+    from core.workflow_policy import workflow_progress
     report = build_score_report(state)
     normalized_scores = {
         agent_id: result.score
@@ -230,6 +231,7 @@ def scorer(state: dict) -> dict:
         }
 
     summary = {
+        "workflow": workflow_progress(state),
         **dataclasses.asdict(report.summary),
         "total_surfaces_tested": len(SURFACES),
         "akg_path": akg_path,

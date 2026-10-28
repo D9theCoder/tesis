@@ -407,6 +407,11 @@ def test_frozen_payload_replay_revalidates_and_preserves_ids(monkeypatch):
     assert {e['candidate_id'] for e in replay['response_evidence']} <= {c['candidate_id'] for c in artifact['payload_candidates']['sqli_union']}
     assert replay['manual_scoring_evidence']
     assert replay['validation_rejections'] == []
+    visit_id = artifact['method_execution_inputs'][0]['state']['selected_visit_id']
+    assert replay['response_evidence']
+    assert all(row['visit_id'] == visit_id for row in replay['response_evidence'])
+    assert all(row['validation']['visit_id'] == visit_id
+               for row in replay['response_evidence'] if row['stage'] == 'exploit')
 
 
 def test_replay_rejects_tampered_candidates_before_transport(monkeypatch):
@@ -776,12 +781,17 @@ def test_resume_only_freezes_new_validation_receipts(monkeypatch, tmp_path, boun
         'repeat_index': 0, 'stop_policy': 'impact', 'coverage_target': .70,
         'candidate_budget': 5, 'max_iterations': 10, 'model_name': None,
         'evasion_enabled': False, 'evasion_mode': 'reactive'}
+    coordinate.update(effective_llm_runtime=artifact['config']['llm_runtime'],
+        workflow_protocol_version='workflow.v2', scoring_rubric_version='scoring.v3',
+        scoring_profile={}, scoring_oracles=[], scoring_mode='human', scoring_evaluator={},
+        fixture_id=None, protocol_version=None, evasion_max_retries=3, evasion_cooldown_threshold=5)
     experiment = f'review-{boundary}'
     thread = stable_thread_id(experiment, coordinate)
     checkpoint_dir = tmp_path / 'checkpoint'
     store = ExperimentCheckpointStore(checkpoint_dir / 'checkpoints.sqlite3', experiment_id=experiment)
     try:
-        store.save_started(thread_id=thread, coordinate=coordinate)
+        store.save_started(thread_id=thread, coordinate=coordinate,
+            execution_id=artifact['execution_id'], run_id=artifact['run_id'])
     finally:
         store.close()
     config = {'configurable': {'thread_id': thread}}
@@ -800,7 +810,8 @@ def test_resume_only_freezes_new_validation_receipts(monkeypatch, tmp_path, boun
     resumed = run_single_engagement(target_url=coordinate['target_url'],
         security_level='low', llm_provider='openai_compatible', target_method='sqli_union',
         max_iterations=10, resume=True, checkpoint_dir=str(checkpoint_dir), experiment_id=experiment,
-        execution_id=f'{experiment}-{uuid4().hex}', output_dir=str(REVIEW_EVIDENCE / boundary))
+        execution_id=f'{experiment}-{uuid4().hex}', output_dir=str(REVIEW_EVIDENCE / boundary),
+        llm_role_configs={r: {'structured_output': 'off'} for r in ('orchestrator', 'payload_generator')})
     assert resumed['resumed'] is True, resumed.get('error')
     inputs = resumed['method_execution_inputs']
     if boundary == 'chaining_router':

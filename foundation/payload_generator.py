@@ -9,7 +9,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from core.knowledge_graph import AttackKnowledgeGraph
+from core.knowledge_graph import AttackKnowledgeGraph, get_attack_knowledge_graph
 from foundation.payload_library import PayloadLibrary
 from llm.guardrail_monitor import is_guardrail_refusal, make_guardrail_event
 from llm.prompts.payload_generation_prompt import build_payload_generation_prompt
@@ -324,7 +324,7 @@ def build_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
     if not method:
         return {"payload_candidates": {}}
 
-    kg = AttackKnowledgeGraph()
+    kg = get_attack_knowledge_graph()
     profile = kg.get_payload_profile(method)
     level = str(state.get("security_level", "low"))
     mode = str(state.get("payload_mode", "static_only")).strip().lower()
@@ -376,8 +376,24 @@ def build_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
         if mode == "llm_mutation_only"
         else [*seed_candidates, *generated]
     )
+    route = state.get("active_chain_route") or {}
+    if method == "bf_dictionary" and route.get("source") == "credentials_extracted" and route.get("target_agent") == method:
+        seed = next((row for row in seed_candidates if row.get("stage") in _EXECUTION_STAGES), None)
+        if seed:
+            for credential in state.get("found_credentials", []):
+                if (credential.get("representation") != "plaintext"
+                        or credential.get("source_evidence_id") not in route.get("source_evidence_ids", [])
+                        or not credential.get("username") or not credential.get("password")):
+                    continue
+                pair = f"{credential['username']}:{credential['password']}"
+                digest = hashlib.sha256((credential["source_evidence_id"] + pair).encode()).hexdigest()[:16]
+                candidates.append({**seed, "candidate_id": f"{method}_chain_{digest}",
+                    "source": "chain_derived", "mutation_type": "credential_ordering", "stage": "exploit",
+                    "payload_or_logic": pair, "rationale": "route-bound plaintext credential"})
     return {
         "payload_candidates": {method: candidates},
+        "active_payload_candidates": {method: {"visit_id": state.get("selected_visit_id"),
+            "candidate_ids": [row["candidate_id"] for row in candidates], "status": "pending"}},
         "generated_payloads": {method: generated},
         "generation_prompts": [prompt_event] if prompt_event else [],
         "payload_guardrail_activations": guardrails,

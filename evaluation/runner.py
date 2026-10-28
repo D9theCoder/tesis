@@ -27,9 +27,10 @@ from core.checkpoint_store import (
     validate_resume,
 )
 from core.graph_builder import GRAPH_BUILD_VERSION, build_framework
+from core.workflow_policy import WORKFLOW_PROTOCOL_VERSION, workflow_progress
 from agents.state_utils import validated_payload_candidates
 from foundation.session_manager import dvwa_credentials
-from core.knowledge_graph import AttackKnowledgeGraph
+from core.knowledge_graph import AttackKnowledgeGraph, get_attack_knowledge_graph
 from core.scorer import build_score_report
 from core.state import (
     CHECKPOINT_SCHEMA_VERSION,
@@ -196,7 +197,7 @@ def _now_iso() -> str:
 @lru_cache(maxsize=None)
 def _akg_generated_candidate_limit(method: str) -> int | None:
     try:
-        profile = AttackKnowledgeGraph().get_payload_profile(method) or {}
+        profile = get_attack_knowledge_graph().get_payload_profile(method) or {}
         return int(profile["max_generated_candidates"])
     except (KeyError, TypeError, ValueError):
         return None
@@ -206,7 +207,7 @@ def _candidate_event_data(state: dict[str, Any], configured_budget: int) -> dict
     """Build dashboard counters without changing graph state."""
     method = str(state.get("selected_method") or "")
     generated = (state.get("generated_payloads", {}).get(method, ()) or ()) if method else ()
-    accepted = (state.get("payload_candidates", {}).get(method, ()) or ()) if method else ()
+    accepted = validated_payload_candidates(state, method) if method else ()
     tried = (state.get("tried_payloads", {}).get(method, ()) or ()) if method else ()
     validation = (state.get("payload_validation_results", {}).get(method, ()) or ()) if method else ()
     reasons = Counter(
@@ -227,7 +228,7 @@ def _candidate_event_data(state: dict[str, Any], configured_budget: int) -> dict
     }
 
 
-def _llm_activity(events: list[dict[str, Any]]) -> dict[str, int]:
+def _llm_activity(events: list[dict[str, Any]], restored_receipts: list[dict] | None = None) -> dict[str, int]:
     """Summarize provider/runtime callback activity captured by the runner."""
     counts = Counter(str(event.get("event_type") or "") for event in events)
     runtime_events = [
@@ -258,6 +259,11 @@ def _llm_activity(events: list[dict[str, Any]]) -> dict[str, int]:
         started = counts["llm.started"]
         completed = counts["llm.completed"]
         failed = counts["llm.failed"]
+    observed_ids = {event.get("data", {}).get("call_id") for event in runtime_events}
+    restored = [row for row in restored_receipts or [] if row.get("call_id") not in observed_ids]
+    started += len(restored)
+    completed += sum(row.get("parse_status") in {"ok", "invalid", "incomplete"} for row in restored)
+    failed += sum(row.get("parse_status") not in {"ok", "invalid", "incomplete"} for row in restored)
     return {
         "started": started,
         "completed": completed,
@@ -460,8 +466,8 @@ def run_single_engagement(
         max_iterations: Maximum LangGraph method iterations.
         candidate_budget: Maximum generated-candidate budget per method.
         repeat_index: Matrix repeat index used in artifact IDs.
-        stop_policy: Evaluation stop policy recorded in artifacts.
-        coverage_target: Coverage threshold recorded for diagnostics.
+        stop_policy: Stop on high impact or fixed configured method coverage.
+        coverage_target: Fraction of configured methods entered before stopping.
         enriched_reporting: Whether to emit richer text reports.
         diagnose: Whether to add diagnostic quality analysis.
         output_dir: Optional directory for written run artifacts.
@@ -486,10 +492,33 @@ def run_single_engagement(
     execution_id = execution_id or new_execution_id()
     cancellation_token = cancellation_token or CancellationToken()
     runtime_events: list[dict[str, Any]] = []
+    restored_receipts: list[dict[str, Any]] = []
     method_execution_inputs: list[dict[str, Any]] = []
     candidate_disposition_inputs: list[dict[str, Any]] = []
     captured_inputs: set[tuple[str, str]] = set()
     captured_disposition_inputs: set[tuple[str, str]] = set()
+    if llm_role_configs is None:
+        llm_role_configs = role_configs
+    if llm_runtime_config and not llm_role_configs:
+        raw_roles = llm_runtime_config.get("roles")
+        if isinstance(raw_roles, dict):
+            llm_role_configs = raw_roles
+    if llm_cache_scope is None and llm_cache is None and llm_runtime_config:
+        llm_cache_scope = llm_runtime_config.get("cache_scope")
+    if llm_cache is not None:
+        llm_cache_enabled = bool(llm_cache)
+    if llm_cache_scope is not None:
+        llm_cache_enabled = str(llm_cache_scope).strip().lower() == "run"
+    identity_runtime = llm_runtime or LLMRuntime(max_concurrency=1)
+    try:
+        with identity_runtime.coordinate(coordinate_id=execution_id, default_provider=llm_provider,
+                default_model_config=model_config or {}, model_profiles=model_profiles or {llm_provider: model_config or {}},
+                role_settings=llm_role_configs or {}, cache_enabled=llm_cache_enabled) as identity_context:
+            effective_identity = _effective_llm_runtime_config(identity_context, candidate_budget=candidate_budget)
+    finally:
+        if llm_runtime is None:
+            identity_runtime.close()
+    resume_request_execution_id = execution_id if resume else None
     # Opt-in durable resume (handoff slice 2). Defaults are unchanged: without
     # resume/checkpoint flags the run uses a random execution_id thread on the
     # process-local MemorySaver and never touches SQLite.
@@ -514,12 +543,16 @@ def run_single_engagement(
         "model_name": (model_config or {}).get("model_name") if isinstance(model_config, Mapping) else None,
         "evasion_enabled": evasion_enabled,
         "evasion_mode": evasion_mode,
+        "evasion_max_retries": evasion_max_retries,
+        "evasion_cooldown_threshold": evasion_cooldown_threshold,
+        "effective_llm_runtime": effective_identity,
+        "workflow_protocol_version": WORKFLOW_PROTOCOL_VERSION,
     }
     checkpoint_experiment = str(experiment_id or "experiment")
     checkpoint_thread_id = stable_thread_id(checkpoint_experiment, coordinate)
     checkpoint_store_path = default_store_path(checkpoint_dir, output_dir) if (checkpoint_dir is not None or experiment_id is not None) else None
     graph_store_path = default_graph_store_path(checkpoint_dir, output_dir) if checkpoint_store_path is not None else None
-    graph_thread_id = checkpoint_thread_id if checkpoint_store_path is not None else execution_id
+    graph_thread_id = execution_id
     partial_graph_resume = False
 
     def _resume_error(reason: str) -> dict:
@@ -601,10 +634,22 @@ def run_single_engagement(
                 resumed["graph_checkpoint_store"] = str(graph_store_path)
             if output_dir:
                 try:
-                    write_json_report(Path(output_dir) / f"{execution_id}.json", resumed)
+                    # A replay request is a receipt, not another primary run
+                    # with the original execution ID and different source bytes.
+                    write_json_report(Path(output_dir) / f"{execution_id}.resume.json", {
+                        "schema_version": "checkpoint-resume.v1", "artifact_type": "checkpoint_resume_receipt",
+                        "request_execution_id": execution_id,
+                        "source_execution_id": resumed.get("execution_id"),
+                        "checkpoint_thread_id": checkpoint_thread_id,
+                        "graph_thread_id": stored["state"].get("graph_thread_id"),
+                        "replayed_nodes": 0, "fresh_provider_calls": 0,
+                    })
                 except Exception as exc:
                     resumed["artifact_write_warning"] = f"{type(exc).__name__}: {exc}"
             return resumed
+        graph_thread_id = stored["state"].get("graph_thread_id") or checkpoint_thread_id
+        execution_id = stored["state"].get("execution_id") or execution_id
+        run_id = stored["state"].get("run_id") or run_id
         partial_graph_resume = True
         if graph_store_path is None or not graph_store_path.exists():
             return _resume_error(
@@ -622,7 +667,8 @@ def run_single_engagement(
             )
             try:
                 _start_store.save_started(
-                    thread_id=checkpoint_thread_id, coordinate=coordinate
+                    thread_id=checkpoint_thread_id, coordinate=coordinate,
+                    graph_thread_id=graph_thread_id, execution_id=execution_id, run_id=run_id,
                 )
             finally:
                 _start_store.close()
@@ -631,18 +677,6 @@ def run_single_engagement(
                 f"cannot record checkpoint identity at {checkpoint_store_path} "
                 f"({type(exc).__name__}: {exc}); refusing run"
             )
-    if llm_role_configs is None:
-        llm_role_configs = role_configs
-    if llm_runtime_config and not llm_role_configs:
-        raw_roles = llm_runtime_config.get("roles")
-        if isinstance(raw_roles, dict):
-            llm_role_configs = raw_roles
-    if llm_cache_scope is None and llm_cache is None and llm_runtime_config:
-        llm_cache_scope = llm_runtime_config.get("cache_scope")
-    if llm_cache is not None:
-        llm_cache_enabled = bool(llm_cache)
-    if llm_cache_scope is not None:
-        llm_cache_enabled = str(llm_cache_scope).strip().lower() == "run"
     runtime_service = llm_runtime or LLMRuntime(max_concurrency=1)
     owns_runtime = llm_runtime is None
     runtime_event_emitter = None
@@ -777,9 +811,11 @@ def run_single_engagement(
         if checkpoint_store_path is not None:
             # Availability already probed before runtime setup; plain import here.
             from langgraph.checkpoint.sqlite import SqliteSaver
+            from core.checkpoint_audit import AuditCheckpointSerializer
             graph_store_path.parent.mkdir(parents=True, exist_ok=True)
             saver_conn = sqlite3.connect(str(graph_store_path), check_same_thread=False)
-            saver = SqliteSaver(saver_conn)
+            saver = SqliteSaver(saver_conn,
+                serde=AuditCheckpointSerializer(graph_store_path.parent / "checkpoint-audit"))
             try:
                 saver.setup()
             except Exception as exc:
@@ -813,7 +849,8 @@ def run_single_engagement(
             "evasion_cooldown_threshold": evasion_cooldown_threshold,
             "model_config": model_config or {},
             "experiment_condition": experiment_condition,
-            "target_method": target_method,
+            "target_method": target_method, "repeat_index": repeat_index,
+            "workflow_protocol_version": WORKFLOW_PROTOCOL_VERSION,
         }
 
         if event_sink is not None:
@@ -822,6 +859,7 @@ def run_single_engagement(
         seen_events = 0
         callback_handler = _RuntimeCallbackHandler(emit, provider=llm_provider)
         graph_config = {
+            "recursion_limit": max(32, 8 * max_iterations + 16),
             "callbacks": [callback_handler],
             "configurable": {
                 "thread_id": graph_thread_id,
@@ -837,6 +875,13 @@ def run_single_engagement(
             # The resumed initial snapshot includes receipts for completed work.
             # Only newly appended validation events can freeze a method input.
             seen_events = len(snapshot.values.get("telemetry_events", []))
+            restored_receipts = list(snapshot.values.get("llm_call_receipts", []))
+            try:
+                call_context.restore_receipts(restored_receipts)
+            except (TypeError, ValueError) as exc:
+                raise _ResumeFailed(str(exc)) from exc
+            emit("run.resumed", data={"restored_provider_calls": len(restored_receipts),
+                "resume_request_execution_id": resume_request_execution_id})
             pending = set(getattr(snapshot, "next", None) or ())
             unsafe = sorted(n for n in pending if n not in SAFE_RESUME_NODES)
             if unsafe:
@@ -930,8 +975,10 @@ def run_single_engagement(
                                 for event in new_events)):
                     # Save the validated queue before execution, without tokens
                     # or message objects, for diagnostic replay without a model.
-                    frozen = deepcopy({key: value for key, value in final_state.items()
-                                       if key not in {"messages", "model_config", "endpoints"}})
+                    # State snapshots are immutable partial-update inputs. Share
+                    # prior immutable audit rows until the artifact is serialized.
+                    frozen = {key: value for key, value in final_state.items()
+                              if key not in {"messages", "model_config", "endpoints"}}
                     frozen["payload_candidates"] = {str(method): deepcopy(queue)}
                     method_execution_inputs.append({"method": method, "state": redact_secrets(frozen, known_secrets)})
                     captured_inputs.add(identity)
@@ -947,7 +994,9 @@ def run_single_engagement(
                     if reporter:
                         reporter.update(event)
                 emit("graph.state", message="State updated", data={
+                    "workflow": workflow_progress(final_state),
                     "iteration_count": final_state.get("iteration_count", 0),
+                    "max_iterations": max_iterations,
                     "selected_method": final_state.get("selected_method"),
                     "confirmed_vulns": list(final_state.get("confirmed_vulns", [])),
                     "achieved_outcomes": list(final_state.get("achieved_outcomes", [])),
@@ -973,7 +1022,7 @@ def run_single_engagement(
                 "re-run without --resume; refusing resume"
             )
         telemetry.extend_from_state_events(list(final_state.get("telemetry_events", [])))
-        llm_activity = _llm_activity(runtime_events)
+        llm_activity = _llm_activity(runtime_events, restored_receipts)
         hidden_failure = _orchestrator_failure(runtime_events)
         terminal_incomplete_reason = _terminal_incomplete_reason(final_state)
         payload_generation_failure = _payload_generation_failure(final_state)
@@ -1141,7 +1190,9 @@ def run_single_engagement(
                 message=error,
                 data=failure_payload,
             )
-        elif llm_required and llm_activity["started"] == 0:
+        elif llm_required and llm_activity["started"] == 0 and final_state.get("llm_skip_reason") not in {
+            "NO_VIABLE_METHODS", "ALL_METHODS_EXHAUSTED", "TARGET_METHOD_INFEASIBLE", "WORKFLOW_STOPPED_BEFORE_SELECTION",
+        }:
             # Automatic selection and hybrid/mutation coordinates are
             # model-backed by contract. A graph that reaches a terminal state
             # without a callback is the original false-success failure mode.
@@ -1193,6 +1244,8 @@ def run_single_engagement(
                 final_state = {**final_state, "task_result": "INCOMPLETE",
                     "incomplete_reason": terminal_incomplete_reason}
         report = build_score_report(final_state).to_dict()
+        report["summary"].update(final_state.get("summary", {}))
+        report["surface_scores"] = final_state.get("surface_scores", {})
         if reporter:
             reporter.finalize(report)
     except CancellationRequested:
@@ -1276,7 +1329,7 @@ def run_single_engagement(
     method_score = method_scores.get(selected_method, 0)
     exploitation_score = exploitation_scores.get(selected_method, 0)
     chain_score = chain_scores.get(selected_method, 0)
-    llm_activity = _llm_activity(runtime_events)
+    llm_activity = _llm_activity(runtime_events, restored_receipts)
     llm_performance = [dict(row) for row in call_context.records]
     llm_performance_summary = call_context.performance_summary()
     effective_llm_runtime_config = _effective_llm_runtime_config(
@@ -1292,6 +1345,7 @@ def run_single_engagement(
 
     artifact = {
         "schema_version": "tui.v1",
+        "workflow": workflow_progress(final_state),
         "execution_id": execution_id,
         "run_id": run_id,
         "status": status,
@@ -1361,6 +1415,8 @@ def run_single_engagement(
                 for role, settings in effective_llm_runtime_config["roles"].items()
             },
             "max_iterations": max_iterations,
+            "iteration_unit": "method_visit", "workflow_protocol_version": WORKFLOW_PROTOCOL_VERSION,
+            "stop_policy": stop_policy, "coverage_target": coverage_target,
             "candidate_budget": candidate_budget,
             "repeat_index": repeat_index,
             "experiment_condition": experiment_condition,
@@ -1376,6 +1432,14 @@ def run_single_engagement(
             "duration_ms": duration_ms,
         },
         "final_state": {
+            "workflow_protocol_version": WORKFLOW_PROTOCOL_VERSION,
+            "workflow_stop_reason": final_state.get("workflow_stop_reason"),
+            "stop_policy": stop_policy, "coverage_target": coverage_target,
+            "max_iterations": max_iterations, "llm_skip_reason": final_state.get("llm_skip_reason"),
+            "active_payload_candidates": final_state.get("active_payload_candidates", {}),
+            "preparation_failures": final_state.get("preparation_failures", []),
+            "llm_call_receipts": redact_secrets(final_state.get("llm_call_receipts", [])),
+            "summary": final_state.get("summary", {}), "surface_scores": final_state.get("surface_scores", {}),
             "observations": dict(final_state.get("observations", {})),
             "iteration_count": final_state.get("iteration_count", 0),
             "task_result": final_state.get("task_result"),
@@ -1484,6 +1548,7 @@ def run_single_engagement(
         classify=True)
     artifact.update(status_fields)
     artifact["final_state"].update(status_fields)
+    artifact["final_state"].setdefault("summary", {}).update(status_fields)
     final_state = {**final_state, **status_fields}
     report = artifact.setdefault("report", {})
     report.setdefault("summary", {}).update(status_fields)
@@ -1498,6 +1563,8 @@ def run_single_engagement(
     artifact["graph_build_version"] = GRAPH_BUILD_VERSION
     artifact["config_fingerprint"] = config_fingerprint(artifact["config"])
     artifact["checkpoint_thread_id"] = checkpoint_thread_id
+    artifact["graph_thread_id"] = graph_thread_id
+    artifact["resume_request_execution_id"] = resume_request_execution_id
     artifact["checkpoint_store"] = str(checkpoint_store_path) if checkpoint_store_path else None
     artifact["graph_checkpoint_store"] = str(graph_store_path) if graph_store_path else None
     resumed_ok = bool(partial_graph_resume and resumed_from_graph_checkpoint and status != "error")
@@ -1514,7 +1581,7 @@ def run_single_engagement(
     emit(
         "run.finished",
         message=f"Experiment {status}",
-        data={"status": status, "duration_ms": duration_ms, **status_fields},
+        data={"status": status, "duration_ms": duration_ms, "workflow": workflow_progress(final_state), **status_fields},
     )
 
     base_dir = Path(output_dir) if output_dir else Path("results") / "runs"
@@ -1624,7 +1691,7 @@ def run_single_engagement(
                     thread_id=checkpoint_thread_id,
                     final_state=final_state,
                     artifact=artifact,
-                    coordinate=coordinate,
+                    coordinate=coordinate, graph_thread_id=graph_thread_id,
                 )
             finally:
                 store.close()

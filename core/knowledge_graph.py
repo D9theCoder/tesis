@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
+from functools import lru_cache
 from typing import TypedDict
 
 import networkx as nx
@@ -503,7 +505,7 @@ class AttackKnowledgeGraph:
         if method_node not in self.graph:
             return {}
         profile = self.graph.nodes[method_node].get("payload_profile", {})
-        return dict(profile) if isinstance(profile, dict) else {}
+        return deepcopy(profile) if isinstance(profile, dict) else {}
 
     def get_next_actions(self, node: str) -> list[dict]:
         """Returns AKG successor nodes for the provided graph node."""
@@ -519,7 +521,16 @@ class AttackKnowledgeGraph:
                     "is_chain": bool(meta.get("is_chain", False)),
                     "preconditions": list(meta.get("preconditions", [])),
                     "target_agent": meta.get("target_agent"),
+                    "priority": int(meta.get("priority", 100)),
                 },
             ))
         ordered = sorted(actions, key=lambda item: (item[0], item[1]["target"], item[1]["target_agent"] or ""))
         return [action for _, action in ordered]
+
+
+@lru_cache(maxsize=1)
+def get_attack_knowledge_graph() -> AttackKnowledgeGraph:
+    """Reuse the prevalidated static topology; callers receive copied profiles."""
+    kg = AttackKnowledgeGraph()
+    nx.freeze(kg.graph)
+    return kg

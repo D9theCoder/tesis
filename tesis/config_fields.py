@@ -521,7 +521,7 @@ CANDIDATE_BUDGET = _field(
 )
 ITERATIONS = _field(
     "iterations",
-    label="Iterations",
+    label="Method visits",
     category=FieldCategory.RUN.value,
     value_type=int,
     kind="integer",

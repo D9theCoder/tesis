@@ -385,6 +385,44 @@ START → recon → orchestrator → payload_candidate_builder → payload_valid
 
 ## Method verification and replay
 
+Workflow control uses `workflow.v2`, `state.v3`, `checkpoint.v2`, and `graph.v2`.
+An iteration reserves one method visit before payload preparation, including
+direct chain and fallback selections. Execution does not charge a second visit.
+Preparation failure consumes its reservation and is recorded in
+`preparation_failures`; it does not count as entered-method coverage. Automatic
+selection excludes attempted, blocked, failed, and preparation-failed methods.
+Chain routing also requires a supported source-consumption adapter, destination
+viability, and route-bound source evidence and credentials.
+When a proved plaintext SQLi source enables `bf_dictionary` but `no_rate_limit`
+is unknown, the router first measures it with at most two benign credential
+controls against the fixed DVWA brute-force module. This reconnaissance runs
+inside the shared HTTP gate, retains probe/containment telemetry, and does not
+reserve a method visit or establish an exploit. Negative or unavailable evidence
+cannot unlock the destination; an inconclusive probe is not repeated in the run.
+
+`impact` stops at a high-impact outcome; `coverage` continues until its threshold
+or another terminal condition. Method coverage uses unique entered methods over
+the configured surface's complete canonical method set, or the explicit target
+method alone. This denominator stays fixed across primary conditions. The
+optional artifact/event `workflow` object exposes the protocol, visit count and
+limit, policy, target, method coverage, and stop reason. TESIS Web displays these
+separately from matrix-coordinate coverage and retains legacy iteration labels.
+
+Candidate and validation histories remain append-only. Validation receipts own
+a visit ID; `active_payload_candidates[method]` holds the current visit's ordered
+accepted IDs. Execution and routing use that active set, while old evidence
+references keep their original validation indices. Static AKG consumers reuse
+one frozen, prevalidated topology and receive independent payload profiles.
+
+Fresh durable executions allocate a new graph thread. Coordinate metadata points
+to the actual thread used for explicit resume and binds the effective role/model
+settings, stop rules, scoring inputs, fixture and protocol. Older checkpoint
+contracts fail closed. Large audit entries are content-addressed once under
+`checkpoint-audit/` beside SQLite; the serializer verifies and restores them for
+snapshots, pending writes, and resume. Retain that directory with its database.
+Restored model receipts preserve execution/call identity and count as prior work;
+they do not emit new provider-call events or trigger new requests.
+
 Method agents retain their own verification boundary. The shared update records
 every decision; the runner preserves graph history and sanitized validated
 `method_execution_inputs`. Replay uses `evaluation.payload_replay` to revalidate
@@ -393,8 +431,12 @@ changed queues stop before HTTP and diagnostic artifacts link the source/code
 hashes. The candidate history remains append-only; executable queues follow the
 ordered validation receipts. Replay compares membership, values, provenance,
 and budget independently of fresh ranking, retains saved execution order, and
-applies the `ExploitationState` reducers to method and scorer updates. Checkpoint
-resume starts its event cursor after historical receipts, so only fresh
+applies the `ExploitationState` reducers to method and scorer updates.
+Revalidation restores receipt ownership for the saved active visit and
+narrows that visit's active IDs when replaying a subset. Earlier-visit receipts
+keep their original indices. Completed checkpoint resumes write `.resume.json`
+receipts, which both TUI artifact scanners and TESIS Web exclude from run lists.
+Checkpoint resume starts its event cursor after historical receipts, so only fresh
 validation can capture another pre-execution input.
 Replay manual sheets contain only candidates linked to fresh response evidence,
 with `manual_scoring_scope: fresh_replay_execution`. Historical scores and

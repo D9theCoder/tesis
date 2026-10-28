@@ -7,7 +7,7 @@ import re
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from core.knowledge_graph import AttackKnowledgeGraph
+from core.knowledge_graph import get_attack_knowledge_graph
 from foundation.payload_library import PayloadLibrary
 from foundation.payload_ranker import rank_candidates
 from evaluation.scoring_evidence import evidence_hash
@@ -41,9 +41,9 @@ _SLEEP_CALL = re.compile(r"\bsleep\s*\(\s*([^,)]*)", re.IGNORECASE)
 _MAX_SAFE_DELAY_SECONDS = 5.0
 
 
-def allowed_target_params(method: str) -> set[str]:
+def allowed_target_params(method: str, profile: dict | None = None) -> set[str]:
     """Returns target parameters allowed by the AKG payload profile for a method."""
-    profile = AttackKnowledgeGraph().get_payload_profile(method)
+    profile = profile if profile is not None else get_attack_knowledge_graph().get_payload_profile(method)
     target_params = profile.get("target_params", [])
     allowed = {str(item) for item in target_params if item}
     if method.startswith("bf_"):
@@ -133,7 +133,7 @@ def validate_candidate(candidate: dict[str, Any], method: str, profile: dict[str
         }
 
     target_param = str(candidate.get("target_param", ""))
-    if target_param not in allowed_target_params(method):
+    if target_param not in allowed_target_params(method, profile):
         return {
             "valid": False,
             "reason": "wrong_target_param",
@@ -218,9 +218,13 @@ def validate_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
     if not method:
         return {"payload_validation_results": {"unknown": [{"valid": False, "reason": "missing_method"}]}}
 
-    kg = AttackKnowledgeGraph()
+    kg = get_attack_knowledge_graph()
     profile = kg.get_payload_profile(method)
     raw_candidates = list(state.get("payload_candidates", {}).get(method, []))
+    active = state.get("active_payload_candidates", {}).get(method)
+    if active is not None:
+        pending_ids = set(active.get("candidate_ids", [])) if active.get("visit_id") == state.get("selected_visit_id") else set()
+        raw_candidates = [candidate for candidate in raw_candidates if candidate.get("candidate_id") in pending_ids]
     canonical_seed_candidates = PayloadLibrary().load_seed_candidates(
         method,
         str(state.get("security_level", "low")),
@@ -368,7 +372,7 @@ def validate_probe_controls(state: dict[str, Any], controls: dict) -> list[dict]
                  if c.get("stage") == "probe"]
     if rows != canonical:
         return [{"valid": False, "reason": "probe_control_catalog_mismatch"}]
-    profile = AttackKnowledgeGraph().get_payload_profile(method)
+    profile = get_attack_knowledge_graph().get_payload_profile(method)
     return [validate_candidate(c, method, profile) for c in rows]
 
 
@@ -395,6 +399,14 @@ def payload_validator_node(state: dict[str, Any]) -> dict[str, Any]:
     update = validate_payload_candidates(state)
     method = state.get("selected_method")
     queue = update.get("payload_candidates", {}).get(method, [])
+    visit_id = state.get("selected_visit_id")
+    update["payload_validation_results"] = {key: [dict(row, visit_id=visit_id) for row in rows]
+        for key, rows in update.get("payload_validation_results", {}).items()}
+    update["active_payload_candidates"] = {method: {"visit_id": visit_id,
+        "candidate_ids": [candidate["candidate_id"] for candidate in queue], "status": "validated"}}
+    if not queue:
+        update["preparation_failures"] = [{"method": method, "visit_id": visit_id,
+            "reason": "NO_VALID_PAYLOADS"}]
     # Freeze the probes that older agents loaded implicitly after validation.
     # A graph visit with no executable candidate never receives probe controls.
     controls = {"visit_id": state.get("selected_visit_id"), "candidates": []}

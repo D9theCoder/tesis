@@ -8,9 +8,10 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from core.knowledge_graph import AttackKnowledgeGraph
+from core.knowledge_graph import AttackKnowledgeGraph, get_attack_knowledge_graph
 from core.state import METHODS_BY_SURFACE
 from core.run_status import terminal_status
+from core.workflow_policy import eligible_methods, stop_reason
 from agents.state_utils import method_selection_update
 from llm.guardrail_monitor import is_guardrail_refusal, make_guardrail_event
 from llm.prompts.orchestrator_prompt import build_orchestrator_prompt
@@ -185,31 +186,8 @@ def _fallback_next_agent(
     state: dict[str, Any],
 ) -> str:
     """Choose a deterministic next method agent without relying on LLM."""
-    current_surface = state.get("current_surface", "sqli")
-    surface_methods = _canonical_surface_methods(current_surface)
-    attempted = set(state.get("attempted_agents", []))
-    blocked = set(state.get("blocked_agents", []))
-    failure_agents = set(state.get("failure_agents", []))
-    observations = state.get("observations", {})
-
-    condition = str(state.get("experiment_condition", "linear_hybrid"))
-    kg = AttackKnowledgeGraph()
-    viable = _filter_surface_methods(
-        current_surface,
-        kg.get_viable_methods(current_surface, observations)
-        if condition == "akg_guided_hybrid"
-        else [],
-    )
-
-    # In AKG-guided runs, only methods whose prerequisites were observed may
-    # execute. Linear runs intentionally retain the deterministic surface order.
-    candidates = viable if condition == "akg_guided_hybrid" else surface_methods
-    for method in candidates:
-        if method not in attempted and method not in blocked and method not in failure_agents:
-            return method
-
-    # All exhausted
-    return "scorer"
+    candidates = eligible_methods(state)
+    return candidates[0] if candidates else "scorer"
 
 
 def _run_evasion_pipeline(prompt: str, evasion_max_retries: int) -> tuple[str, bool]:
@@ -288,42 +266,25 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
     }
     telemetry_events: list[dict[str, Any]] = []
 
-    if iteration_count >= max_iterations and not confirmed_vulns and not achieved_outcomes:
+    stopping = stop_reason(state)
+    if stopping:
         return {
-            "next_agent": "scorer",
+            "next_agent": "scorer", "workflow_stop_reason": stopping,
             "viable_methods": list(state.get("viable_methods", [])),
-            "iteration_count": iteration_count + 1,
-            "task_result": "INCOMPLETE",
-            "incomplete_reason": "ITERATION_LIMIT",
-            **terminal_status({**state, "incomplete_reason": "ITERATION_LIMIT"}, classify=True),
-            "telemetry_events": [{
-                **telemetry_base,
-                "event": "orchestrator.stop",
-                "status": "incomplete",
-                "payload": {"reason": "ITERATION_LIMIT"},
-            }],
-        }
-
-    if (set(confirmed_vulns) | set(achieved_outcomes)) & CRITICAL_OUTCOMES:
-        return {
-            "next_agent": "scorer",
-            "viable_methods": list(state.get("viable_methods", [])),
-            "iteration_count": iteration_count + 1,
-            "telemetry_events": [{**telemetry_base, "event": "orchestrator.stop", "reason": "critical_outcome"}],
+            "iteration_count": iteration_count,
+            "llm_skip_reason": "WORKFLOW_STOPPED_BEFORE_SELECTION",
+            "telemetry_events": [{**telemetry_base, "event": "orchestrator.stop",
+                "status": "ok", "payload": {"reason": stopping}}],
         }
 
     surface_methods = _canonical_surface_methods(current_surface)
-    kg = AttackKnowledgeGraph()
+    kg = get_attack_knowledge_graph()
     viable_methods = _filter_surface_methods(
         current_surface,
         kg.get_viable_methods(current_surface, observations),
     )
     experiment_condition = str(state.get("experiment_condition", "linear_hybrid"))
-    selection_methods = (
-        viable_methods
-        if experiment_condition == "akg_guided_hybrid"
-        else surface_methods
-    )
+    selection_methods = eligible_methods(state)
 
     target_method = state.get("target_method")
     if target_method:
@@ -331,8 +292,10 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             return {
                 "next_agent": "scorer",
                 "selected_method": None,
+                "llm_skip_reason": "TARGET_METHOD_INFEASIBLE",
+                "workflow_stop_reason": "target_method_infeasible",
                 "viable_methods": viable_methods,
-                "iteration_count": iteration_count + 1,
+                "iteration_count": iteration_count,
                 "fallback_events": [{
                     "event": "target_method.infeasible",
                     "target_method": target_method,
@@ -350,7 +313,7 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "selected_method": target_method,
             "viable_methods": viable_methods,
             "method_scores": {target_method: 3 if target_method in viable_methods else 1},
-            "iteration_count": iteration_count + 1,
+            "iteration_count": iteration_count,
             "telemetry_events": [{
                 **telemetry_base,
                 "event": "orchestrator.target_method.selected",
@@ -359,31 +322,21 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             }],
         }
 
-    # An automatic AKG-guided run cannot select or execute a method when
-    # reconnaissance exposed no viable method.  Route directly to scoring so
-    # this deterministic condition is recorded explicitly and does not spend
-    # an LLM call producing an impossible method selection.
-    if experiment_condition == "akg_guided_hybrid" and not selection_methods:
+    # No model can select useful work once the deterministic eligible set is empty.
+    if not selection_methods:
+        reason = "NO_VIABLE_METHODS" if experiment_condition == "akg_guided_hybrid" and not viable_methods else "ALL_METHODS_EXHAUSTED"
         return {
-            "next_agent": "scorer",
-            "selected_method": None,
-            "viable_methods": [],
-            "iteration_count": iteration_count + 1,
-            "task_result": "INCOMPLETE",
-            "incomplete_reason": "NO_VIABLE_METHODS",
-            **terminal_status({**state, "incomplete_reason": "NO_VIABLE_METHODS"}, classify=True),
-            "fallback_events": [{
-                "event": "orchestrator.no_viable_methods",
-                "surface": current_surface,
-                "security_level": state.get("security_level"),
-            }],
-            "telemetry_events": [{
-                **telemetry_base,
-                "event": "orchestrator.no_viable_methods",
-                "status": "incomplete",
-                "payload": {"surface": current_surface},
-            }],
+            "next_agent": "scorer", "selected_method": None,
+            "viable_methods": viable_methods, "iteration_count": iteration_count,
+            "workflow_stop_reason": reason.lower(), "llm_skip_reason": reason,
+            "task_result": "SUCCESS" if confirmed_vulns else "INCOMPLETE",
+            "incomplete_reason": None if confirmed_vulns else reason,
             "messages": [],
+            "fallback_events": ([{"event": "orchestrator.no_viable_methods", "surface": current_surface,
+                "security_level": state.get("security_level")}] if reason == "NO_VIABLE_METHODS" else []),
+            "telemetry_events": [{**telemetry_base,
+                "event": "orchestrator.no_viable_methods" if reason == "NO_VIABLE_METHODS" else "orchestrator.stop",
+                "status": "incomplete", "payload": {"surface": current_surface} if reason == "NO_VIABLE_METHODS" else {"reason": reason}}],
         }
 
     fallback_agent = _fallback_next_agent(state)
@@ -549,7 +502,7 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                 "next_agent": "payload_candidate_builder" if fallback_agent != "scorer" else "scorer",
                 "selected_method": fallback_agent if fallback_agent != "scorer" else None,
                 "viable_methods": viable_methods,
-                "iteration_count": iteration_count + 1,
+                "iteration_count": iteration_count,
                 "guardrail_activations": [make_guardrail_event(
                     provider=state.get("llm_provider", "gemini"),
                     context="orchestrator",
@@ -619,7 +572,7 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "selected_method": selected_method,
             "viable_methods": viable_methods,
             "method_scores": {selected_method: method_score} if selected_method else {},
-            "iteration_count": iteration_count + 1,
+            "iteration_count": iteration_count,
             "telemetry_events": telemetry_events,
             "invalid_json_events": ([{
                 "event": "orchestrator.invalid_json",
@@ -664,7 +617,7 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "next_agent": "payload_candidate_builder" if fallback_agent != "scorer" else "scorer",
             "selected_method": fallback_agent if fallback_agent != "scorer" else None,
             "viable_methods": viable_methods,
-            "iteration_count": iteration_count + 1,
+            "iteration_count": iteration_count,
             "task_result": "INCOMPLETE",
             "incomplete_reason": "LLM_RUNTIME_FAILURE",
             **terminal_status({**state, "incomplete_reason": "LLM_RUNTIME_FAILURE"}, classify=True),

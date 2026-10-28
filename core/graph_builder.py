@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from functools import wraps
+from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
 
@@ -24,10 +25,11 @@ from foundation.payload_generator import payload_candidate_builder_node
 from foundation.payload_validator import payload_validator_node
 from foundation.recon import recon
 from foundation.http_client import capture_containment_events
-from llm.runtime import serialized_dvwa_node
+from llm.runtime import serialized_dvwa_node, current_call_context
+from tesis.runtime_events import redact_secrets
 
 
-GRAPH_BUILD_VERSION = "graph.v1"
+GRAPH_BUILD_VERSION = "graph.v2"
 
 RUNTIME_AGENT_NODE_NAMES: tuple[str, ...] = (
     "sqli_union",
@@ -55,7 +57,7 @@ RUNTIME_AGENT_HANDLERS = {
 
 
 def _serialized_http_handler(handler):
-    """Wrap a complete recon/method node in the matrix-wide DVWA gate."""
+    """Wrap a complete node that uses HTTP in the matrix-wide DVWA gate."""
     @wraps(handler)
     def wrapped(state):
         with serialized_dvwa_node(), capture_containment_events() as events:
@@ -72,7 +74,20 @@ def _serialized_http_handler(handler):
     return wrapped
 
 
-def route_from_orchestrator(state: ExploitationState) -> str:
+def _record_model_calls(handler):
+    """Persist completed node-owned call receipts for attributable continuation."""
+    @wraps(handler)
+    def wrapped(state):
+        context = current_call_context()
+        offset = len(context.records) if context else 0
+        update = handler(state)
+        if context and len(context.records) > offset:
+            update["llm_call_receipts"] = redact_secrets(context.records[offset:])
+        return update
+    return wrapped
+
+
+def route_from_orchestrator(state: ExploitationState) -> Literal["payload_candidate_builder", "scorer"]:
     """Routes from orchestrator output to payload preparation or graph termination.
 
     Args:
@@ -107,7 +122,7 @@ def route_from_payload_validator(state: ExploitationState) -> str:
     return "chaining_router"
 
 
-def route_from_chaining_router(state: ExploitationState) -> str:
+def route_from_chaining_router(state: ExploitationState) -> Literal["payload_candidate_builder", "orchestrator", "scorer"]:
     """Routes chaining-router decisions to orchestrator, candidate building, scorer, or end.
 
     Args:
@@ -145,10 +160,10 @@ def build_framework(llm_provider: str = "gemini", surface: str = "sqli", checkpo
     from core.scorer import scorer
     graph = StateGraph(ExploitationState)
     graph.add_node("recon", _serialized_http_handler(recon))
-    graph.add_node("orchestrator", orchestrator)
-    graph.add_node("payload_candidate_builder", payload_candidate_builder_node)
+    graph.add_node("orchestrator", _record_model_calls(orchestrator))
+    graph.add_node("payload_candidate_builder", _record_model_calls(payload_candidate_builder_node))
     graph.add_node("payload_validator", payload_validator_node)
-    graph.add_node("chaining_router", chaining_router_node)
+    graph.add_node("chaining_router", _serialized_http_handler(chaining_router_node))
     graph.add_node("scorer", scorer)
     for name in RUNTIME_AGENT_NODE_NAMES:
         graph.add_node(name, _serialized_http_handler(RUNTIME_AGENT_HANDLERS[name]))
@@ -157,7 +172,8 @@ def build_framework(llm_provider: str = "gemini", surface: str = "sqli", checkpo
     graph.add_edge("recon", "orchestrator")
     graph.add_conditional_edges("orchestrator", route_from_orchestrator)
     graph.add_edge("payload_candidate_builder", "payload_validator")
-    graph.add_conditional_edges("payload_validator", route_from_payload_validator)
+    graph.add_conditional_edges("payload_validator", route_from_payload_validator,
+        {node: node for node in (*RUNTIME_AGENT_NODE_NAMES, "scorer", "chaining_router")})
     graph.add_conditional_edges("chaining_router", route_from_chaining_router)
     graph.add_edge("scorer", END)
     from langgraph.checkpoint.memory import MemorySaver

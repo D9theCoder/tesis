@@ -32,7 +32,19 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _coordinate(**overrides):
+    from llm.runtime import LLMRuntime
+    from evaluation.runner import _effective_llm_runtime_config
+    runtime = LLMRuntime(max_concurrency=overrides.pop("_concurrency", 1))
+    try:
+        with runtime.coordinate(coordinate_id="identity", default_provider="gemini") as context:
+            identity = _effective_llm_runtime_config(context, candidate_budget=5)
+    finally:
+        runtime.close()
     base = {
+        "effective_llm_runtime": identity, "workflow_protocol_version": "workflow.v2",
+        "scoring_rubric_version": "scoring.v3", "scoring_profile": {}, "scoring_oracles": [],
+        "scoring_mode": "human", "scoring_evaluator": {}, "fixture_id": None, "protocol_version": None,
+        "evasion_max_retries": 3, "evasion_cooldown_threshold": 5,
         "target_url": "http://localhost/dvwa",
         "provider": "gemini",
         "surface": "sqli",
@@ -610,7 +622,7 @@ def test_recovery_shared_db_matrix_concurrency(tmp_path, monkeypatch):
     try:
         threads = set()
         for repeat_index in (0, 1):
-            coord = _coordinate(repeat_index=repeat_index)
+            coord = _coordinate(repeat_index=repeat_index, _concurrency=2)
             thread = stable_thread_id("exp-matrix", coord)
             threads.add(thread)
             stored = check.load(thread)

@@ -158,6 +158,7 @@ def build_projection(catalog: ArtifactCatalog, *, historical_analysis=()):
             "security": {"outcome": fields["security_outcome"], "reason": fields["security_outcome_reason"],
                          "historical_analysis": history.get((entry.record.get("execution_id"), entry.source["sha256"]))},
             "runtime_scores": _scores(entry), "thesis_review": workflows, "metrics": metrics,
+            "workflow": entry.record.get("workflow", summary.get("workflow")),
             "detail": _details(entry), "diagnostics": entry.diagnostics, "ambiguous": entry.ambiguous})
         if not entry.ambiguous:
             # Invalid lifecycle enums must not reach aggregate_runs through a

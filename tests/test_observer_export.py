@@ -48,6 +48,7 @@ def test_matrix_standalone_embedded_membership_and_unknown_ids(tmp_path):
         "runs": [child, {"status": "skipped", "config": {}}, run_record("embedded")],
         "cancellation": {"total_runs": 5, "completed_runs": 3, "not_started_runs": 2}})
     write(tmp_path / "child.rich.json", {"schema_version": "stage7.rich.v1", "execution_id": "child"})
+    write(tmp_path / "child.resume.json", run_record("child"))
     write(tmp_path / "review.json", {"artifact_type": "thesis_review_status", "execution_id": "review"})
     projection = build_projection(ArtifactCatalog({"research": tmp_path}, {}))
     assert len(projection["runs"]) == 3

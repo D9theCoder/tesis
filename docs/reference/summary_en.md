@@ -1433,6 +1433,41 @@ zeros remain until source consumption and downstream verification are proved.
 
 ### Method verification and diagnostic replay
 
+The current workflow control contract is `workflow.v2` with `state.v3`,
+`checkpoint.v2`, and `graph.v2`. Each selection reserves one method visit before
+candidate preparation, including direct chain/fallback routes. Preparation
+failures consume a visit but do not count as entered-method coverage. Automatic
+selection excludes exhausted or failed methods. The `coverage` stop policy uses
+unique entered methods divided by the complete configured surface method set,
+or one explicit target method; this denominator is identical across conditions.
+The `impact` policy stops at a high-impact outcome. Both respect the visit limit.
+
+`active_payload_candidates` identifies the current visit's accepted ordered IDs;
+append-only validation receipts retain visit IDs and stable evidence references.
+Chains require destination viability and supported, evidence-bound source
+consumption. Unavailable dependencies are recorded as infeasible. The optional
+`workflow` artifact/event object exposes policy, coverage, visit budget and stop
+reason to TESIS Web without replacing matrix coverage or legacy interpretation.
+For a proved plaintext SQLi source, missing brute-force prerequisite evidence is
+collected before destination eligibility is evaluated: at most two benign
+credential controls run in the serialized HTTP gate. Probe and containment
+telemetry are retained without counting a method visit or proving an exploit.
+Negative or unavailable evidence does not enable the chain, and inconclusive
+destination reconnaissance is not retried during the same run.
+Saved-input replay preserves the active visit ID on revalidated receipts and
+retains earlier-visit receipt indices. A replayed subset narrows only its active
+queue. Both TUI artifact scanners and TESIS Web exclude completed-resume
+`.resume.json` receipts from experiment run discovery.
+
+Each fresh checkpointed execution has a new graph thread. Resume fingerprints
+bind effective model/role settings, scoring inputs, fixture and protocol.
+Content-addressed audit entries in the adjacent `checkpoint-audit/` directory
+are verified and restored transparently, including pending writes. Keep this
+directory with SQLite. Prior model-call receipts retain their execution identity
+and are restored without new provider calls. Older checkpoint contracts are
+refused; historical artifacts remain readable. These changes define a new
+execution protocol and must not be mixed silently with older experiment epochs.
+
 Every method invocation records its decision, including failures and negatives;
 prior confirmations remain in graph-state history and confirmed-node reducers.
 Force-browse evidence uses the actual requested path. Brute-force confirmation
