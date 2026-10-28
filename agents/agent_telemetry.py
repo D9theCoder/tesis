@@ -117,6 +117,10 @@ def probe_event(
     delay_ms: float | None = None,
     response: Any = None,
     candidate_id: str | None = None,
+    control_id: str | None = None,
+    source_candidate_id: str | None = None,
+    validation_relation: str | None = None,
+    identity_kind: str | None = None,
 ) -> dict[str, Any]:
     """Return a telemetry event for a PROBE stage HTTP request."""
     event_payload: dict[str, Any] = {
@@ -130,8 +134,17 @@ def probe_event(
         **_response_receipt(response),
     }
     candidate_id = candidate_id or getattr(payload, "candidate_id", None)
+    control_id = control_id or getattr(payload, "control_id", None)
     if candidate_id:
         event_payload["candidate_id"] = str(candidate_id)
+    if control_id:
+        event_payload["control_id"] = str(control_id)
+    if source_candidate_id:
+        event_payload["source_candidate_id"] = str(source_candidate_id)
+    if validation_relation:
+        event_payload["validation_relation"] = str(validation_relation)
+    if identity_kind:
+        event_payload["identity_kind"] = str(identity_kind)
     if elapsed_ms is not None:
         event_payload["elapsed_ms"] = float(elapsed_ms)
     if baseline_elapsed_ms is not None:

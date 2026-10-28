@@ -14,6 +14,10 @@ from typing import Any, Callable, Iterator, Mapping
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from core.payload_policy import (
+    PAYLOAD_SCHEMA_VERSION,
+    PAYLOAD_TEMPLATE_SCHEMA_VERSION,
+)
 from llm.cache_metrics import cache_performance_summary
 from llm.diagnostics import (
     classify_failure,
@@ -27,7 +31,9 @@ from llm.reasoning_evidence import reasoning_evidence
 
 
 ORCHESTRATOR_SCHEMA_VERSION = "orchestrator.v2"
-PAYLOAD_SCHEMA_VERSION = "payload-variants.v2"
+# PAYLOAD_SCHEMA_VERSION and PAYLOAD_TEMPLATE_SCHEMA_VERSION are owned by
+# ``core.payload_policy`` and re-exported here for the prompt manifests and
+# generation call sites.
 
 
 def output_failure_kind(performance: dict, text: str = "") -> str:
@@ -1398,6 +1404,7 @@ __all__ = [
     "ModelCallSpec",
     "ORCHESTRATOR_SCHEMA_VERSION",
     "PAYLOAD_SCHEMA_VERSION",
+    "PAYLOAD_TEMPLATE_SCHEMA_VERSION",
     "RoleSettings",
     "current_call_context",
     "model_fingerprint",

@@ -178,7 +178,9 @@ class TestReconNodeIntegration:
 
             mock_session.login.return_value = True
             mock_session.is_logged_in = True
+            mock_session.observed_security_level.return_value = "low"
             mock_session.detect_security_level.return_value = "low"
+            mock_session._username = "admin"
             mock_session.http.base_url = "http://localhost/dvwa/"
 
             index_result = MagicMock()
@@ -208,79 +210,69 @@ class TestReconNodeIntegration:
             update = recon({
                 "target_url": "http://localhost/dvwa",
                 "security_level": "low",
+                "current_surface": "sqli",
+                "target_method": "sqli_union",
             })
 
             assert client_closed is True
-            assert update["observations"]["force_browse_endpoints_visible"] is True
+            # Endpoint discovery alone never becomes a proved precondition.
+            assert "union_select_possible" not in update["observations"]
+            assert "error_messages_enabled" not in update["observations"]
+            assert update["readiness"]["requested_level"] == "low"
             assert update["input_vectors"][0]["param_name"] == "id"
 
-    def test_force_browse_endpoints_visible_from_probe(self):
-        """When setup.php is accessible, the force-browse observation should be true."""
-        with patch("foundation.recon.DVWASession") as MockSession:
+    def _force_browse_update(self, status_code):
+        with patch("foundation.recon.DVWASession") as MockSession, \
+             patch("foundation.session_manager.open_documented_nonadmin_session") as open_nonadmin:
             mock_session = MagicMock()
             mock_session.login.return_value = True
-            mock_session.detect_security_level.return_value = "low"
+            mock_session.is_logged_in = True
+            mock_session.observed_security_level.return_value = "low"
             mock_session.close.return_value = None
+            mock_session._username = "admin"
 
             index_result = MagicMock()
-            index_result.text = '<a href="/dvwa/vulnerabilities/sqli/">SQLi</a>'
-            sqli_result = MagicMock()
-            sqli_result.text = '<form action="" method="get"><input name="id"></form>'
-            setup_result = MagicMock()
-            setup_result.status_code = 200
-            setup_result.text = "Database Setup"
+            index_result.text = '<a href="/dvwa/vulnerabilities/authbypass/">AC</a>'
+            page_result = MagicMock()
+            page_result.status_code = status_code
+            page_result.text = "This page should only be accessible by the admin user"
 
             def mock_http_get(path, *args, **kwargs):
-                """Supports regression tests for test recon."""
                 path_str = str(path)
                 if path_str.endswith("index.php"):
                     return index_result
-                if "setup.php" in path_str:
-                    return setup_result
-                return sqli_result
+                return page_result
 
             mock_session.http.get.side_effect = mock_http_get
             mock_session.http.base_url = "http://localhost/dvwa/"
+            mock_session.http.cookies = {"PHPSESSID": "test-admin-session"}
+            nonadmin_session = MagicMock()
+            nonadmin_session.get.side_effect = mock_http_get
+            nonadmin_session.http.cookies = {"PHPSESSID": "test-nonadmin-session"}
+            open_nonadmin.return_value = (nonadmin_session, "gordonb", "initial-session")
             MockSession.return_value = mock_session
 
-            state = {"target_url": "http://localhost/dvwa", "security_level": "low"}
-            update = recon(state)
+            return recon({
+                "target_url": "http://localhost/dvwa",
+                "security_level": "low",
+                "current_surface": "access_control",
+                "target_method": "ac_force_browse",
+            })
 
-            assert update["observations"].get("force_browse_endpoints_visible") is True
+    def test_force_browse_control_uses_policy_notice_not_restricted_page(self):
+        """The detection control observes the admin-only notice, never setup.php."""
+        update = self._force_browse_update(200)
+        assert update["observations"].get("force_browse_endpoints_visible") is True
+        snapshot = update["probe_controls"]["recon:method_probe:ac_force_browse"]
+        assert snapshot["policy_version"] == "detection-controls.v2"
+        assert all(row["payload_or_logic"] != "setup.php" for row in snapshot["candidates"])
+        assert snapshot["control_events"]
 
-    def test_force_browse_endpoints_visible_false_on_403(self):
-        """When setup.php is forbidden, the force-browse observation should be false."""
-        with patch("foundation.recon.DVWASession") as MockSession:
-            mock_session = MagicMock()
-            mock_session.login.return_value = True
-            mock_session.detect_security_level.return_value = "low"
-            mock_session.close.return_value = None
+    def test_force_browse_control_false_on_403(self):
+        """A measured forbidden response records false, not permission."""
+        update = self._force_browse_update(403)
+        assert update["observations"].get("force_browse_endpoints_visible") is False
 
-            index_result = MagicMock()
-            index_result.text = '<a href="/dvwa/vulnerabilities/sqli/">SQLi</a>'
-            sqli_result = MagicMock()
-            sqli_result.text = '<form action="" method="get"><input name="id"></form>'
-            setup_result = MagicMock()
-            setup_result.status_code = 403
-            setup_result.text = "Forbidden"
-
-            def mock_http_get(path, *args, **kwargs):
-                """Supports regression tests for test recon."""
-                path_str = str(path)
-                if path_str.endswith("index.php"):
-                    return index_result
-                if "setup.php" in path_str:
-                    return setup_result
-                return sqli_result
-
-            mock_session.http.get.side_effect = mock_http_get
-            mock_session.http.base_url = "http://localhost/dvwa/"
-            MockSession.return_value = mock_session
-
-            state = {"target_url": "http://localhost/dvwa", "security_level": "low"}
-            update = recon(state)
-
-            assert update["observations"].get("force_browse_endpoints_visible") is False
 
 class TestFormParsingNoDuplicates:
     """Validate that parse_forms does not produce duplicate vectors for textarea/select."""

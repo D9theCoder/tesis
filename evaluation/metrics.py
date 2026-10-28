@@ -10,6 +10,24 @@ import math
 from core.state import ALL_METHOD_AGENTS, SURFACES, METHODS_BY_SURFACE
 NOT_COMPUTED = "not_computed"
 UNAVAILABLE_METRICS = ("consistency_score", "token_cost", "token_cost_per_success")
+# Canonical availability-tracked metric names (see evaluation/research_metrics.py).
+# Legacy numeric helpers below remain provisional scoring.v2 utilities; they are
+# never used to fill a research metric or a final v4 component.
+from evaluation.research_metrics import RESEARCH_METRIC_NAMES  # noqa: E402
+
+
+def rate_metric(numerator, denominator, *, reason="no_denominator"):
+    """Return (value, available, reason) for one rate without inventing zero."""
+    if not isinstance(denominator, int) or isinstance(denominator, bool) or denominator <= 0:
+        return None, False, reason
+    if not isinstance(numerator, int) or isinstance(numerator, bool) or numerator < 0:
+        return None, False, "invalid_numerator"
+    return round(numerator / denominator, 6), True, None
+
+
+def aggregate_research_metrics(summaries: list[dict], names=RESEARCH_METRIC_NAMES) -> dict:
+    """Aggregate every research metric with availability and reasons preserved."""
+    return {name: aggregate_metric(summaries, name) for name in names}
 
 
 def metric_reading(summary: dict, name: str) -> tuple[float | None, bool, str | None]:

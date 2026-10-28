@@ -7,12 +7,13 @@ from unittest.mock import MagicMock
 
 vertical = importlib.import_module("agents.access_control.ac_vertical_escalation_agent")
 from agents.access_control.ac_vertical_escalation_agent import ac_vertical_escalation_agent
-from core.state import new_default_state
+from tests.support import ready_state
+from foundation.session_manager import session_fingerprint
 
 @pytest.fixture
 def base_state():
     """Supports regression tests for test ac vertical escalation agent."""
-    state = new_default_state()
+    state = ready_state("ac_vertical_escalation")
     state["target_url"] = "http://localhost/dvwa"
     state["security_level"] = "low"
     return state
@@ -34,7 +35,7 @@ def _make_response(status_code=200, text="No data"):
 def _use_documented_nonadmin_session(monkeypatch, session):
     session.http = SimpleNamespace(cookies={"PHPSESSID": "fixture-nonadmin"})
     monkeypatch.setattr(vertical, "open_access_control_session",
-        lambda *args: (session, "gordonb", "initial-session-fingerprint", None))
+        lambda *args: (session, "gordonb", session_fingerprint(session), None))
 
 def test_probe_no_admin_access(base_state, monkeypatch):
     """When admin access is not possible, score 0."""

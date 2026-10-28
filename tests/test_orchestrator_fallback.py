@@ -1,6 +1,7 @@
 """Tests for orchestrator fallback diversification (3-surface refactor)."""
 
 from __future__ import annotations
+from tests.support import READY_RECEIPT
 
 from agents.orchestrator import _fallback_next_agent
 

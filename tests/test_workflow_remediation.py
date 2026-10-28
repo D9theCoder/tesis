@@ -16,12 +16,15 @@ from core.graph_builder import build_framework
 from core.state import _merge_validation_maps, new_default_state
 from core.workflow_policy import eligible_methods, stop_reason, workflow_progress
 from evaluation.runner import run_single_engagement
+from foundation.payload_generator import build_payload_candidates
 from foundation.payload_library import PayloadLibrary
 from foundation.payload_validator import payload_validator_node
+from tests.support import READY_RECEIPT, ready_state
 
 
 def stub_graph(monkeypatch):
     monkeypatch.setattr("core.graph_builder.recon", lambda state: {
+        "readiness": deepcopy(READY_RECEIPT),
         "observations": {"union_select_possible": True, "error_messages_enabled": True},
         "next_agent": "orchestrator"})
     received = []
@@ -35,7 +38,7 @@ def stub_graph(monkeypatch):
 
 def test_fresh_checkpointed_coordinate_has_no_prior_findings_or_payloads(tmp_path, monkeypatch):
     received = stub_graph(monkeypatch)
-    options = dict(target_url="http://localhost/dvwa", security_level="low", llm_provider="gemini",
+    options = dict(target_url="http://localhost/dvwa", security_level="low", llm_provider="openai_compatible",
         target_method="sqli_union", checkpoint_dir=str(tmp_path), output_dir=str(tmp_path), experiment_id="isolation")
     first = run_single_engagement(**options)
     second = run_single_engagement(**options)
@@ -92,8 +95,10 @@ def test_replay_revalidation_preserves_visit_ownership_and_historical_receipts(t
     seeds = [row for row in PayloadLibrary().load_seed_candidates(method, "low") if row["stage"] == "exploit"][:2]
     state = {**new_default_state(), "target_url": "http://localhost/dvwa", "security_level": "low",
         "selected_method": method, "selected_visit_id": "visit-2", "payload_candidates": {method: seeds}}
+    state.update(build_payload_candidates(state))
     state.update(payload_validator_node(state))
-    historical = {"candidate_id": seeds[0]["candidate_id"], "visit_id": "visit-1", "valid": False,
+    saved_ids = [candidate["candidate_id"] for candidate in state["payload_candidates"][method]]
+    historical = {"candidate_id": saved_ids[0], "visit_id": "visit-1", "valid": False,
         "reason": "previous_visit_rejected"}
     state["payload_validation_results"][method].insert(0, historical)
     source = tmp_path / "execution.json"
@@ -110,10 +115,10 @@ def test_replay_revalidation_preserves_visit_ownership_and_historical_receipts(t
     monkeypatch.setitem(RUNTIME_AGENT_HANDLERS, method, method_handler)
 
     replay = replay_method_inputs(source, output_path=tmp_path / "replay.json",
-        candidate_ids=[seeds[0]["candidate_id"]])
+        candidate_ids=[saved_ids[0]])
 
     assert replay["validation_rejections"] == []
-    assert [candidate["candidate_id"] for candidate in received] == [seeds[0]["candidate_id"]]
+    assert [candidate["candidate_id"] for candidate in received] == [saved_ids[0]]
     assert replay["fresh_provider_calls"] == 0
     assert source.read_bytes() == original
 
@@ -146,7 +151,7 @@ def test_linear_failed_visit_falls_back_without_akg_viability():
 
 
 def test_unsupported_chain_consumption_is_recorded_without_dispatch():
-    state = {**new_default_state(), "current_surface": "access_control", "experiment_condition": "akg_guided_hybrid",
+    state = {**ready_state(), "current_surface": "access_control", "experiment_condition": "akg_guided_hybrid",
         "confirmed_vulns": ["ac_vertical_escalation_confirmed"], "attempted_agents": ["ac_vertical_escalation"],
         "observations": {"union_select_possible": True, "role_based_access_present": True}}
     update = chaining_router_node(state)
@@ -184,14 +189,15 @@ def test_planning_schema_rejects_a_repeated_method_and_uses_remaining_work(monke
         def invoke(self, _messages):
             return AIMessage(content='{"next_agent":"sqli_union"}')
     monkeypatch.setattr("agents.orchestrator.get_llm", lambda *args, **kwargs: Model())
-    update = orchestrator({**new_default_state(), "attempted_agents": ["sqli_union"]})
+    update = orchestrator({**ready_state(), "attempted_agents": ["sqli_union"]})
     assert update["selected_method"] == "sqli_error"
     assert update["fallback_events"][0]["reason"] == "disallowed_method"
 
 
 def test_infeasible_akg_stop_is_completed_without_model_calls(tmp_path, monkeypatch):
-    monkeypatch.setattr("core.graph_builder.recon", lambda state: {"observations": {}, "next_agent": "orchestrator"})
-    artifact = run_single_engagement(target_url="http://localhost/dvwa", security_level="low", llm_provider="gemini",
+    monkeypatch.setattr("core.graph_builder.recon", lambda state: {
+        "readiness": deepcopy(READY_RECEIPT), "observations": {}, "next_agent": "orchestrator"})
+    artifact = run_single_engagement(target_url="http://localhost/dvwa", security_level="low", llm_provider="openai_compatible",
         experiment_condition="akg_guided_hybrid", output_dir=str(tmp_path))
     assert artifact["execution_status"] == "completed"
     assert artifact["incomplete_reason"] == "NO_VIABLE_METHODS"
@@ -225,7 +231,7 @@ def test_model_backed_partial_resume_restores_receipts_without_calling_provider(
         def invoke(self, messages, **kwargs):
             return AIMessage(content='{"next_agent":"sqli_union","reason_code":"best_viable"}')
     monkeypatch.setattr("llm.runtime.get_llm", lambda *args, **kwargs: Model())
-    options = dict(target_url="http://localhost/dvwa", security_level="low", llm_provider="gemini",
+    options = dict(target_url="http://localhost/dvwa", security_level="low", llm_provider="openai_compatible",
         payload_mode="static_only", checkpoint_dir=str(tmp_path), output_dir=str(tmp_path), experiment_id="resume",
         max_iterations=1)
     first = run_single_engagement(**options)

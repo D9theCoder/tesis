@@ -59,7 +59,7 @@ def test_start_identity_failure_fails_closed_before_graph(tmp_path, monkeypatch)
     artifact = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         target_method="sqli_union",
         output_dir=str(tmp_path),
         checkpoint_dir=str(tmp_path),
@@ -82,7 +82,7 @@ def test_repeat_index_isolates_checkpoint_identity(tmp_path, monkeypatch):
     first = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         target_method="sqli_union",
         repeat_index=0,
         output_dir=str(tmp_path),
@@ -102,7 +102,7 @@ def test_repeat_index_isolates_checkpoint_identity(tmp_path, monkeypatch):
     bad = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         target_method="sqli_union",
         repeat_index=1,
         output_dir=str(tmp_path),

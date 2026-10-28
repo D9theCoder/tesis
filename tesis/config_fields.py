@@ -25,6 +25,7 @@ import logging
 import math
 import re
 from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, TypeAlias
@@ -39,7 +40,12 @@ from core.state import (
 )
 from llm.provider import SUPPORTED_PROVIDERS
 from llm.reasoning import REASONING_EFFORTS as REASONING_EFFORT_CHOICES
-from tesis.model_config import EVASION_MODES, PAYLOAD_MODES as MODEL_PAYLOAD_MODES
+from tesis.model_config import (
+    EVASION_MODES,
+    EXPERIMENT_BLOCKS,
+    PAYLOAD_MODE_LABELS,
+    PAYLOAD_MODES as MODEL_PAYLOAD_MODES,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +77,30 @@ PAYLOAD_MODE_CHOICES: tuple[str, ...] = _ordered_registry_values(
     _PAYLOAD_MODE_REGISTRY,
     STATE_PAYLOAD_MODES,
 )
+
+
+def payload_mode_label(value: Any) -> str:
+    """Return the operator-facing payload-mode label (Template, Hybrid, ...)."""
+
+    normalized = str(value or "").strip().lower()
+    return PAYLOAD_MODE_LABELS.get(normalized, str(value or "—"))
+
+
+def experiment_block_choices() -> tuple[str, ...]:
+    """Return the two declared Chapter 3 study blocks."""
+
+    return tuple(EXPERIMENT_BLOCKS)
+
+
+def field_choice_label(spec: "FieldSpec", value: Any) -> str:
+    """Return a display label for one choice value when the field declares it."""
+
+    labels = spec.metadata.get("choice_labels") if isinstance(spec.metadata, Mapping) else None
+    if isinstance(labels, Mapping):
+        label = labels.get(str(value))
+        if label is not None:
+            return str(label)
+    return str(value)
 
 # Experiment conditions were added after the original EngagementConfig.  A
 # later model_config can provide the registry; the fallback keeps this module
@@ -467,6 +497,11 @@ PAYLOAD_MODE = _field(
     required=True,
     forms=_SINGLE_FORMS,
     normalize="lower",
+    metadata={"choice_labels": PAYLOAD_MODE_LABELS},
+    description=(
+        "Static seeds, hybrid seeds + model variants, strict Mutation-only, or "
+        "seed-free Template generation."
+    ),
 )
 SCORING_MODE = _field(
     "scoring_mode", label="Payload review: human / AI / both",
@@ -612,6 +647,7 @@ PAYLOAD_MODES = _field(
     min_items=1,
     forms=_MATRIX_FORMS,
     normalize="lower",
+    metadata={"choice_labels": PAYLOAD_MODE_LABELS},
 )
 EXPERIMENT_CONDITIONS_FIELD = _field(
     "experiment_conditions",
@@ -1627,6 +1663,109 @@ SECRET_FIELD_PATHS: tuple[str, ...] = tuple(spec.path for spec in secret_fields(
 SECRET_API_KEY_FIELDS = tuple(spec for spec in MODEL_FIELDS if spec.path.endswith(".api_key"))
 
 
+FIXTURE_RESTORATION_POLICY_VERSION = "fixture-restoration.v1"
+# Study-plan provenance belongs to the envelope, never to the attested document
+# that the readiness validator accepts.
+FIXTURE_PLAN_METADATA_KEYS = frozenset({"identity_sha256", "source_path", "sha256"})
+_FIXTURE_ENVELOPE_KEYS = frozenset(
+    {"by_level", "levels", "missing_levels", "metadata", "provenance"}
+)
+
+
+def _fixture_document(value: Any, *, expected_level: str | None = None) -> dict[str, Any]:
+    """Return one raw operator attestation without plan-only metadata.
+
+    The document itself must match the closed ``fixture-restoration.v1`` schema;
+    identity hashes and file provenance belong to the surrounding envelope so a
+    recorded hash can never be mistaken for attested content.
+    """
+    if not isinstance(value, Mapping):
+        raise ValueError("fixture restoration evidence must be a JSON object")
+    metadata = sorted(FIXTURE_PLAN_METADATA_KEYS & set(value))
+    if metadata:
+        raise ValueError(
+            "fixture restoration plan metadata must stay outside the attestation document: "
+            + ", ".join(metadata)
+        )
+    document = {str(key): deepcopy(item) for key, item in value.items()}
+    level = str(document.get("security_level") or "")
+    if not level:
+        raise ValueError("fixture restoration evidence requires security_level")
+    if expected_level is not None and str(expected_level) != level:
+        raise ValueError(
+            f"fixture restoration envelope level {expected_level!r} does not match document "
+            f"level {level!r}"
+        )
+    return document
+
+
+def normalize_fixture_documents(value: Any) -> dict[str, dict[str, Any]]:
+    """Project any supported fixture-evidence input into ``level -> document``.
+
+    Accepted inputs are one raw ``fixture-restoration.v1`` document, a list of
+    documents, an explicit ``{"by_level": {level: document}}`` envelope, or a
+    level-keyed mapping. Duplicate or mismatched levels fail closed; nothing is
+    inferred for a level that is absent.
+    """
+    if value in (None, {}, ()):
+        return {}
+    documents: dict[str, dict[str, Any]] = {}
+    if isinstance(value, Mapping):
+        if str(value.get("policy_version") or "") == FIXTURE_RESTORATION_POLICY_VERSION:
+            document = _fixture_document(value)
+            documents[str(document["security_level"])] = document
+            return documents
+        if "by_level" in value:
+            unknown = sorted(set(value) - _FIXTURE_ENVELOPE_KEYS)
+            if unknown:
+                raise ValueError(f"unknown fixture evidence envelope keys: {unknown}")
+            rows = value.get("by_level")
+            if not isinstance(rows, Mapping):
+                raise ValueError("fixture evidence by_level must be a mapping")
+            for level, document in rows.items():
+                document = _fixture_document(document, expected_level=str(level))
+                documents[str(level)] = document
+            return documents
+        for level, document in value.items():
+            document = _fixture_document(document, expected_level=str(level))
+            documents[str(level)] = document
+        return documents
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for document in value:
+            document = _fixture_document(document)
+            level = str(document["security_level"])
+            if level in documents:
+                raise ValueError(f"duplicate fixture restoration evidence for level {level!r}")
+            documents[level] = document
+        return documents
+    raise ValueError(
+        "fixture restoration evidence must be a document, a list of documents, "
+        "or a by_level mapping"
+    )
+
+
+def fixture_document_for_level(value: Any, security_level: str) -> dict[str, Any]:
+    """Return the raw attestation for one configured level, or an empty mapping."""
+    documents = normalize_fixture_documents(value)
+    selected = documents.get(str(security_level))
+    return dict(selected) if isinstance(selected, Mapping) else {}
+
+
+def fixture_evidence_envelope(value: Any) -> dict[str, Any]:
+    """Return the canonical by-level envelope stored in config/artifacts."""
+    documents = normalize_fixture_documents(value)
+    if not documents:
+        return {}
+    return {
+        "by_level": documents,
+        "levels": sorted(documents),
+        "metadata": {
+            "policy_version": FIXTURE_RESTORATION_POLICY_VERSION,
+            "document_count": len(documents),
+        },
+    }
+
+
 __all__ = [
     "ALL_FIELDS",
     "ALL_FIELD_SPECS",
@@ -1645,6 +1784,8 @@ __all__ = [
     "EXPERIMENT_CONDITION",
     "EXPERIMENT_CONDITIONS",
     "EXPERIMENT_CONDITIONS_FIELD",
+    "FIXTURE_PLAN_METADATA_KEYS",
+    "FIXTURE_RESTORATION_POLICY_VERSION",
     "FIELD_ALIASES",
     "FIELD_CATEGORIES",
     "FIELD_SPECS",
@@ -1717,9 +1858,14 @@ __all__ = [
     "coerce_field_value",
     "coerce_value",
     "expand_config_path",
+    "experiment_block_choices",
+    "field_choice_label",
     "fields_for_category",
     "fields_for_form",
     "fields_for_provider",
+    "fixture_document_for_level",
+    "fixture_evidence_envelope",
+    "normalize_fixture_documents",
     "get_config_path",
     "get_config_value",
     "get_path",
@@ -1735,6 +1881,7 @@ __all__ = [
     "methods_for_surface",
     "model_field_specs",
     "payload_mode_choices",
+    "payload_mode_label",
     "provider_choices",
     "security_level_choices",
     "secret_fields",

@@ -88,7 +88,7 @@ def test_coverage_reports_all_fixed_axis_counts(valid_config: EngagementConfig) 
     assert "surfaces=3" in check["details"]
     assert "methods=9" in check["details"]
     assert "security_levels=3" in check["details"]
-    assert "payload_modes=3" in check["details"]
+    assert "payload_modes=4" in check["details"]
     assert "experiment_conditions=2" in check["details"]
 
 
@@ -118,21 +118,26 @@ def test_static_seed_rejection_is_reported(
     valid_config: EngagementConfig,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def reject(state: dict) -> dict:
-        method = state["selected_method"]
+    import tesis.offline_contracts as offline_contracts
+
+    def reject(methods, levels, modes, *, candidate_budget: int = 5) -> dict:
         return {
-            "payload_candidates": {method: []},
-            "payload_validation_results": {
-                method: [{"valid": False, "reason": "unit-test rejection"}]
-            },
+            "checked_coordinates": 4,
+            "issues": [{
+                "method": "sqli_error", "security_level": "low",
+                "payload_mode": "hybrid", "code": "exploit_seed_invalid",
+                "detail": "unit-test rejection",
+            }],
+            "limitations": [],
+            "manifest_problems": [],
         }
 
-    monkeypatch.setattr(doctor, "validate_payload_candidates", reject)
-    check = check_by_id(doctor.run_doctor(valid_config), "payload.static_seeds")
+    monkeypatch.setattr(offline_contracts, "check_payload_contracts", reject)
+    check = check_by_id(doctor.run_doctor(valid_config), "payload.contracts")
 
     assert check["status"] == "failed"
-    assert "81 coordinate" in check["summary"]
-    assert "validated_coordinates=81" in check["details"]
+    assert "Payload preflight failed in 1 check(s)" in check["summary"]
+    assert "validated_coordinates=4" in check["details"]
     assert "unit-test rejection" in check["details"]
 
 
@@ -663,7 +668,7 @@ def test_offline_explicitly_skips_service_verification(valid_config, monkeypatch
 
 @pytest.mark.parametrize('fault,check_id', [
     ('swapped_methods', 'coverage.scope'),
-    ('missing_seed_evidence', 'payload.static_seeds'),
+    ('missing_seed_evidence', 'payload.contracts'),
     ('blocks_target', 'containment.http'),
     ('invalid_port', 'config.endpoints'),
     ('whitespace_host', 'config.endpoints'),
@@ -679,8 +684,14 @@ def test_doctor_audit_local_faults(valid_config, monkeypatch, tmp_path, fault, c
         methods['sqli'][0], methods['brute_force'][0] = methods['brute_force'][0], methods['sqli'][0]
         monkeypatch.setattr(doctor, 'METHODS_BY_SURFACE', methods)
     elif fault == 'missing_seed_evidence':
-        monkeypatch.setattr(doctor, 'validate_payload_candidates', lambda state: {
-            'payload_candidates': state['payload_candidates'], 'payload_validation_results': {}})
+        import tesis.offline_contracts as offline_contracts
+        monkeypatch.setattr(offline_contracts, 'check_payload_contracts', lambda *args, **kwargs: {
+            'checked_coordinates': 4,
+            'issues': [{'method': 'sqli_error', 'security_level': 'low',
+                        'payload_mode': 'hybrid', 'code': 'exploit_seed_invalid',
+                        'detail': 'missing validation evidence'}],
+            'limitations': [], 'manifest_problems': [],
+        })
     elif fault == 'blocks_target':
         def reject_all(self, url, *, kind='request'):
             raise doctor.ContainmentError('all blocked', kind=kind)

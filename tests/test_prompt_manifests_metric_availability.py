@@ -126,7 +126,7 @@ def test_runner_artifact_propagates_null_and_maps(monkeypatch):
     artifact = runner_mod.run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         payload_mode="static_only",
     )
     assert artifact["consistency_score"] is None

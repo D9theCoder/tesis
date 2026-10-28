@@ -24,7 +24,12 @@ from core.state import ExploitationState
 from foundation.payload_generator import payload_candidate_builder_node
 from foundation.payload_validator import payload_validator_node
 from foundation.recon import recon
-from foundation.http_client import capture_containment_events
+from foundation.http_client import (
+    capture_containment_events,
+    http_request_counters,
+    request_scope,
+    snapshot_http_request_counters,
+)
 from llm.runtime import serialized_dvwa_node, current_call_context
 from tesis.runtime_events import redact_secrets
 
@@ -60,8 +65,15 @@ def _serialized_http_handler(handler):
     """Wrap a complete node that uses HTTP in the matrix-wide DVWA gate."""
     @wraps(handler)
     def wrapped(state):
-        with serialized_dvwa_node(), capture_containment_events() as events:
-            update = handler(state)
+        name = str(getattr(handler, "__name__", ""))
+        phase = "recon" if name == "recon" else (
+            "destination" if name == "chaining_router_node" else "method")
+        method = name if name in RUNTIME_AGENT_HANDLERS else state.get("selected_method")
+        with request_scope(phase=phase, method=method):
+            with serialized_dvwa_node(), capture_containment_events() as events:
+                update = handler(state)
+        update["http_request_counters"] = (
+            http_request_counters() or snapshot_http_request_counters())
         recorded = list(update.get("containment_events", []))
         for event in events:
             if event not in recorded:
@@ -88,7 +100,7 @@ def _record_model_calls(handler):
 
 
 def route_from_orchestrator(state: ExploitationState) -> Literal["payload_candidate_builder", "scorer"]:
-    """Routes from orchestrator output to payload preparation or graph termination.
+    """Routes from orchestrator output to payload preparation or termination.
 
     Args:
         state: Current shared LangGraph state after method selection.

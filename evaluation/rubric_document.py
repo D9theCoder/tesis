@@ -9,11 +9,23 @@ from xml.dom import minidom
 from zipfile import ZipFile
 
 
-def rubric_tables(handoff):
-    text = Path(handoff).read_text()
-    sections = re.findall(r'^### 5\.([1-7]) (.*?)\n(.*?)(?=^### |^## |\Z)', text, re.M | re.S)
+def rubric_tables(source):
+    """Parse the seven normative v4 rubric tables from Markdown.
+
+    Accepts either the historical ``### 5.N`` handoff layout or the current
+    ``docs/reference/thesis_scoring.md`` layout (``### Tabel 3.N:``). The
+    source Markdown is never modified.
+    """
+    text = Path(source).read_text()
+    sections = re.findall(
+        r'^### (?:5\.([1-7])|Tabel 3\.(1[01]|[5-9]))[:.]?\s*(.*?)\n(.*?)(?=^### |^## |\Z)',
+        text, re.M | re.S,
+    )
+    if len(sections) != 7:
+        raise ValueError('Expected seven v4 rubric tables')
     tables = []
-    for number, title, body in sections:
+    for legacy_number, table_number, title, body in sections:
+        number = table_number or str(int(legacy_number) + 4)
         rows = []
         for line in body.splitlines():
             if re.match(r'^\| [0-4] \|', line):
@@ -23,10 +35,10 @@ def rubric_tables(handoff):
                 rows.append(cells)
         if [r[0] for r in rows] != list('01234'):
             raise ValueError('Each rubric needs five ordered scores')
-        tables.append({'number': f'3.{int(number)+4}', 'title': title, 'rows': rows})
-    if len(tables) != 7:
-        raise ValueError('Expected seven rubric tables')
-    return tables
+        tables.append({'number': f'3.{number}', 'title': title.strip(), 'rows': rows})
+    if {table['number'] for table in tables} != {f'3.{n}' for n in range(5, 12)}:
+        raise ValueError('Rubric tables must cover 3.5 through 3.11')
+    return sorted(tables, key=lambda table: int(table['number'].split('.')[1]))
 
 
 def _text(element):
@@ -52,10 +64,24 @@ def update_document(source, handoff, output):
         document = minidom.parseString(archive.read('word/document.xml'))
         original_math = [n.toxml() for n in document.getElementsByTagName('m:oMath')]
         original_objects = [n.toxml() for n in document.getElementsByTagName('w:object')]
-        doc_tables = document.getElementsByTagName('w:tbl')
-        if len(doc_tables) != 9:
-            raise ValueError('Expected Tabel 3.3 through 3.11')
-        for spec, table in zip(tables, doc_tables[2:]):
+        body = document.getElementsByTagName('w:body')[0]
+        rubric_nodes = {}
+        pending_caption = None
+        for node in body.childNodes:
+            if node.nodeName == 'w:p':
+                match = re.match(r'^Tabel\s+3\.(1[01]|[5-9])(?:[.\s]|$)', _text(node))
+                if match:
+                    number = f"3.{match.group(1)}"
+                    if pending_caption or number in rubric_nodes:
+                        raise ValueError('Ambiguous rubric table captions')
+                    pending_caption = number
+            elif node.nodeName == 'w:tbl' and pending_caption:
+                rubric_nodes[pending_caption] = node
+                pending_caption = None
+        if pending_caption or set(rubric_nodes) != {spec['number'] for spec in tables}:
+            raise ValueError('Expected uniquely captioned rubric tables 3.5 through 3.11')
+        for spec in tables:
+            table = rubric_nodes[spec['number']]
             rows = [n for n in table.childNodes if n.nodeName == 'w:tr']
             if len(rows) != 6:
                 raise ValueError('Expected header and five rubric rows')
@@ -89,7 +115,6 @@ def update_document(source, handoff, output):
                     _replace_text(cell, value)
                     for tcw in cell.getElementsByTagName('w:tcW'):
                         tcw.setAttribute('w:w', str(w))
-        body = document.getElementsByTagName('w:body')[0]
         paragraphs = [n for n in body.childNodes if n.nodeName == 'w:p']
         for paragraph in paragraphs:
             if re.match(r'^Tabel 3\.(?:[5-9]|1[01])\.', _text(paragraph)):
@@ -99,7 +124,17 @@ def update_document(source, handoff, output):
                     paragraph.insertBefore(properties, paragraph.firstChild)
                 if not any(n.nodeName == 'w:keepNext' for n in properties.childNodes):
                     properties.appendChild(document.createElement('w:keepNext'))
-        old_heading = next(p for p in paragraphs if _text(p).startswith('Penerapan penilaian scoring.v3'))
+        old_heading = next(
+            (p for p in paragraphs if _text(p).startswith('Penerapan penilaian scoring.v3')),
+            None,
+        )
+        if old_heading is None:
+            old_heading = next(
+                (p for p in paragraphs if _text(p).startswith('Rubrik Penilaian Evaluasi Hasil')),
+                None,
+            )
+        if old_heading is None:
+            raise ValueError('DOCX has no rubric heading to derive from')
         companion = [
             'Smethod dinilai dari snapshot pemilihan terakhir menggunakan profil ranking yang dibekukan sebelum eksekusi. '
             'Profil mencakup seluruh metode pembanding yang layak, fit_level dan planned_request_count dari protokol referensi '
@@ -139,7 +174,7 @@ def update_document(source, handoff, output):
         template = next(p for p in reversed(paragraphs) if p.getElementsByTagName('w:t') and not p.getElementsByTagName('m:oMath'))
         section = next((n for n in body.childNodes if n.nodeName == 'w:sectPr'), None)
         heading = old_heading.cloneNode(True)
-        _replace_text(heading, 'Pembaruan rubrik scoring.v4 (2026-10-02)')
+        _replace_text(heading, 'Pembaruan rubrik scoring.v4 (revisi turunan 2026-10-28)')
         heading_properties = document.createElement('w:pPr')
         heading_spacing = document.createElement('w:spacing')
         heading_spacing.setAttribute('w:before', '240')
@@ -176,8 +211,9 @@ if __name__ == '__main__':
     import argparse
     from evaluation.reporter import write_json_report
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('source', type=Path)
-    parser.add_argument('handoff', type=Path)
+    parser.add_argument('source', type=Path, help='original DOCX; never modified')
+    parser.add_argument('handoff', type=Path,
+                        help='Markdown rubric source (v4 thesis_scoring.md or legacy handoff)')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--audit', type=Path, required=True)
     args = parser.parse_args()

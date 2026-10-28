@@ -11,6 +11,7 @@ from contextlib import ExitStack
 from copy import deepcopy
 from datetime import datetime, timezone
 from functools import lru_cache
+from hashlib import sha256
 from pathlib import Path
 from time import perf_counter
 from traceback import format_exc
@@ -27,9 +28,23 @@ from core.checkpoint_store import (
     validate_resume,
 )
 from core.graph_builder import GRAPH_BUILD_VERSION, build_framework
+from core.payload_policy import (
+    BUDGET_POLICY_VERSION,
+    CONTROL_POLICY_VERSION,
+    EVENT_PROVIDER_FAILURE,
+    EVENT_STATIC_FALLBACK,
+    EXPERIMENT_POLICY_VERSION,
+    PAYLOAD_POLICY_VERSION,
+    is_provider_failure_reason,
+    mode_display_label,
+    normalize_payload_mode,
+    is_supported_payload_mode,
+    requires_model_candidate,
+)
 from core.workflow_policy import WORKFLOW_PROTOCOL_VERSION, workflow_progress
-from agents.state_utils import validated_payload_candidates
+from agents.state_utils import candidate_budget_receipt, validated_payload_candidates
 from foundation.session_manager import dvwa_credentials
+from foundation.http_client import http_request_accounting, snapshot_http_request_counters
 from core.knowledge_graph import AttackKnowledgeGraph, get_attack_knowledge_graph
 from core.scorer import build_score_report
 from core.state import (
@@ -368,24 +383,242 @@ def _failure_for_run(
     return build_failure_envelope(synthetic, run_id=run_id)
 
 
+def _canonical_hash(value: Any) -> str:
+    return sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+@lru_cache(maxsize=1)
+def default_source_identity() -> dict[str, Any]:
+    """Return the shared chapter3 source identity for runner artifacts."""
+    from evaluation.research_plan import source_identity
+
+    root = Path(__file__).resolve().parents[1]
+    return dict(source_identity(
+        repository_root=root,
+        config_path=root / "config.yaml" if (root / "config.yaml").is_file() else None,
+    ))
+
+
+def default_source_hashes_sha256() -> str:
+    return str(default_source_identity()["source_hashes_sha256"])
+
+
+def fixture_documents(evidence: Any) -> dict[str, dict[str, Any]]:
+    """Project any supported fixture-evidence input into raw documents per level.
+
+    Accepts one raw ``fixture-restoration.v1`` document, a list of documents, or
+    a ``by_level`` envelope. Plan/identity metadata is rejected inside the
+    document; the shared projection keeps it in the caller's envelope.
+    """
+    from tesis.config_fields import normalize_fixture_documents
+
+    return normalize_fixture_documents(evidence)
+
+
+def fixture_evidence_for_level(evidence: Any, security_level: str) -> dict[str, Any]:
+    """Select the raw operator attestation for one matrix level.
+
+    Missing or mismatched levels stay empty (unknown); nothing is synthesized.
+    """
+    from tesis.config_fields import fixture_document_for_level
+
+    return fixture_document_for_level(evidence, security_level)
+
+
+def recorded_payload_policy_snapshot() -> dict[str, Any]:
+    """Return the immutable payload policy/template/prompt identity snapshot.
+
+    Delegates to A's producer; the snapshot is JSON-safe and hash-pinned so a
+    replay reader can validate a historical Template reference against the
+    registry/manifests that produced it rather than today's module state.
+    """
+    from foundation.payload_snapshot import payload_policy_snapshot
+
+    return payload_policy_snapshot()
+
+
+def resolve_recorded_payload_policy(snapshot: Any) -> dict[str, Any] | None:
+    """Validate a frozen snapshot, or capture the live run's own identity.
+
+    A supplied snapshot is verified for self-digest/completeness and persisted
+    unchanged; no live registry comparison happens here. Without a frozen input
+    the live process identity is the truthful recorded identity of this run.
+    """
+    if snapshot is None:
+        return recorded_payload_policy_snapshot()
+    from foundation.payload_snapshot import verify_payload_policy_snapshot
+
+    issues = [issue for issue in verify_payload_policy_snapshot(snapshot) if issue.get("valid") is not True]
+    if issues:
+        raise ValueError(
+            "payload_policy_snapshot invalid: "
+            + ", ".join(str(issue.get("reason")) for issue in issues)
+        )
+    return deepcopy(snapshot)
+
+
+def _unique_opportunities(
+    rows: Any, *, stage: str, role: str | None = None
+) -> list[dict[str, Any]]:
+    """Return one row per opportunity id for one role/receipt stage.
+
+    A generator and the validator can both record the same opportunity id;
+    only the generation-stage row belongs in the generation denominator, and
+    orchestrator selection rows never belong in the payload populations.
+    """
+    if not isinstance(rows, list):
+        return []
+    seen: set[str] = set()
+    selected: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        if role is not None and str(row.get("role") or "") != role:
+            continue
+        receipt_stage = str(row.get("receipt_stage") or "generation")
+        if receipt_stage != stage:
+            continue
+        identifier = str(row.get("opportunity_id") or "")
+        if identifier:
+            if identifier in seen:
+                continue
+            seen.add(identifier)
+        selected.append(dict(row))
+    return selected
+
+
+def generation_opportunity_coverage(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    """Describe whether the exported generation population is complete.
+
+    A validation-only population is coverage-unavailable, never a measured zero
+    generation count.
+    """
+    generation = artifact.get("payload_generation_opportunities")
+    validation = artifact.get("payload_validation_opportunities")
+    state = artifact.get("final_state")
+    if isinstance(state, Mapping):
+        if not isinstance(generation, list):
+            generation = state.get("payload_generation_opportunities")
+        if not isinstance(validation, list):
+            validation = state.get("payload_validation_opportunities")
+    generation_rows = generation if isinstance(generation, list) else []
+    validation_rows = validation if isinstance(validation, list) else []
+    mode = str((artifact.get("config") or {}).get("payload_mode") or "")
+    if generation_rows:
+        return {"status": "recorded", "generation_rows": len(generation_rows),
+                "validation_rows": len(validation_rows), "reason": None}
+    if validation_rows:
+        return {"status": "unavailable", "generation_rows": 0,
+                "validation_rows": len(validation_rows),
+                "reason": "generation_receipt_missing"}
+    if requires_model_candidate(mode) or mode in {"hybrid", "llm_mutation_only", "llm_template"}:
+        return {"status": "unavailable", "generation_rows": 0, "validation_rows": 0,
+                "reason": "no_payload_generation_opportunity_recorded"}
+    return {"status": "not_applicable", "generation_rows": 0, "validation_rows": 0,
+            "reason": "static_payload_mode"}
+
+
+def _candidate_budget_receipts(final_state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Derive one receipt per observed method visit from append-only facts."""
+    visits: list[tuple[str, str]] = []
+    for row in final_state.get("candidate_lifecycle", []) or []:
+        if not isinstance(row, Mapping):
+            continue
+        method = str(row.get("method") or "")
+        visit_id = str(row.get("visit_id") or "")
+        if method and visit_id and (method, visit_id) not in visits:
+            visits.append((method, visit_id))
+    receipts: list[dict[str, Any]] = []
+    for method, visit_id in visits:
+        try:
+            receipts.append(candidate_budget_receipt(final_state, method, visit_id))
+        except Exception:
+            continue
+    return receipts
+
+
 def _payload_generation_failure(final_state: dict[str, Any]) -> dict[str, Any] | None:
-    """Return a provider-error payload fallback recorded by the graph."""
+    """Return a provider-error payload failure recorded by the graph.
+
+    Dispatch uses the policy event identity and reason taxonomy. A strict-mode
+    no-candidate event, a model refusal, or a Template infeasibility is not a
+    provider/transport failure and must not be relabelled as one.
+    """
     for event in final_state.get("fallback_events", []) or []:
         if not isinstance(event, dict):
             continue
-        if (
-            event.get("event") == "payload_generation.static_seed_fallback"
-            and str(event.get("reason", "")).strip().lower() == "llm_error"
-        ):
+        event_name = str(event.get("event") or event.get("event_type") or "")
+        reason = event.get("reason")
+        if event_name == EVENT_PROVIDER_FAILURE:
+            return event
+        if event_name == EVENT_STATIC_FALLBACK and is_provider_failure_reason(reason):
             return event
     return None
+
+
+def _preserve_evidence_backed_fixture_limit(
+    status_fields: Mapping[str, Any], final_state: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Keep an evidence-backed environment limitation through finalization.
+
+    ``terminal_status(classify=True)`` reclassifies a readiness/quarantine stop
+    as ``unconfirmed``; that erases the actual operational cause. A confirmed
+    candidate outcome always wins, and an unexplained ``fixture_limited`` label
+    never overrides positive proof.
+    """
+    fields = dict(status_fields)
+    if fields.get("security_outcome") == "confirmed":
+        return fields
+    prior_reason = final_state.get("security_outcome_reason")
+    if final_state.get("security_outcome") != "fixture_limited":
+        return fields
+    if not (isinstance(prior_reason, Mapping) and str(prior_reason.get("code") or "").strip()):
+        return fields
+    fields["security_outcome"] = "fixture_limited"
+    fields["security_outcome_reason"] = dict(prior_reason)
+    return fields
+
+
+def _environment_no_call_outcome(final_state: Mapping[str, Any]) -> bool:
+    """Whether a zero-call terminal state is an environment/control outcome."""
+    return (
+        final_state.get("execution_status") == "failed"
+        or final_state.get("security_outcome") == "fixture_limited"
+        or final_state.get("llm_skip_reason") in {"READINESS_NOT_READY", "RUN_QUARANTINED"}
+    )
+
+
+def _final_candidate_request_rows(final_state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return only the final visit's own executed candidate requests."""
+    method = str(final_state.get("selected_method") or "")
+    visit_id = str(final_state.get("selected_visit_id") or "")
+    if not method or not visit_id:
+        return []
+    rows = []
+    for row in final_state.get("response_evidence", []) or []:
+        if not isinstance(row, Mapping):
+            continue
+        if str(row.get("method") or row.get("agent_id") or "") != method:
+            continue
+        if str(row.get("visit_id") or "") != visit_id:
+            continue
+        if str(row.get("identity_kind") or "") != "candidate":
+            continue
+        if str(row.get("stage") or "") not in {"exploit", "bypass"}:
+            continue
+        if row.get("control_id") or row.get("source_candidate_id"):
+            continue
+        rows.append(dict(row))
+    return rows
 
 
 def _terminal_incomplete_reason(final_state: dict[str, Any]) -> str | None:
     """Read terminal aliases; only known execution errors fail the run."""
     if final_state.get("execution_status") == "failed":
         return (final_state.get("execution_reason") or {}).get("code") or "RUNTIME_FAILURE"
-    if any(row.get("status_code") is None for row in final_state.get("response_evidence", [])):
+    if any(row.get("status_code") is None for row in _final_candidate_request_rows(final_state)):
         return "TARGET_REQUEST_FAILURE"
     result = str(final_state.get("task_result") or "").strip().upper()
     reason = str(final_state.get("incomplete_reason") or "").strip()
@@ -428,6 +661,7 @@ def run_single_engagement(
     execution_id: str | None = None,
     experiment_condition: str = "linear_hybrid",
     target_method: str | None = None,
+    experiment_block: str | None = None,
     llm_runtime: LLMRuntime | None = None,
     llm_role_configs: dict[str, RoleSettings | dict[str, Any]] | None = None,
     model_profiles: dict[str, dict[str, Any]] | None = None,
@@ -445,6 +679,11 @@ def run_single_engagement(
     scoring_rubric_version: str = "scoring.v3",
     scoring_profile: dict[str, Any] | None = None,
     scoring_oracles: list[dict[str, Any]] | None = None,
+    scoring_policy_epoch: dict[str, Any] | None = None,
+    token_price_schedule: dict[str, Any] | None = None,
+    fixture_restoration_evidence: dict[str, Any] | None = None,
+    payload_policy_snapshot: dict[str, Any] | None = None,
+    source_hashes_sha256: str | None = None,
     fixture_id: str | None = None,
     protocol_version: str | None = None,
     dvwa_username: str = "admin",
@@ -483,9 +722,63 @@ def run_single_engagement(
         failure details when execution fails.
     """
     run_id = f"{llm_provider}-{surface}-{security_level}-{payload_mode}-{repeat_index}"
+    from tesis.model_config import EXPERIMENT_BLOCKS
+
+    payload_mode = normalize_payload_mode(payload_mode)
+    if not is_supported_payload_mode(payload_mode):
+        raise ValueError(f"unsupported payload mode: {payload_mode!r}")
+    block = str(experiment_block or ("forced" if target_method else "selection")).strip().lower()
+    if block not in EXPERIMENT_BLOCKS:
+        raise ValueError(f"experiment_block must be one of {EXPERIMENT_BLOCKS}")
+    if block == "selection" and target_method:
+        raise ValueError("a selection-block run must not declare target_method")
+    if block == "forced" and not target_method:
+        raise ValueError("a forced-method run requires target_method")
+    scoring_policy_epoch = deepcopy(scoring_policy_epoch or {})
+    token_price_schedule = deepcopy(token_price_schedule or {})
+    fixture_restoration_evidence = fixture_evidence_for_level(
+        fixture_restoration_evidence, security_level,
+    )
+    if source_hashes_sha256 is None:
+        source_hashes_sha256 = default_source_hashes_sha256()
+    fixture_restoration_sha256 = None
+    if fixture_restoration_evidence:
+        from foundation.readiness import validate_fixture_restoration_evidence
+
+        validate_fixture_restoration_evidence(
+            fixture_restoration_evidence,
+            fixture_id=fixture_id,
+            protocol_version=protocol_version,
+            security_level=security_level,
+            epoch_id=scoring_policy_epoch.get("epoch_id"),
+            source_hashes_sha256=source_hashes_sha256,
+        )
+        fixture_restoration_sha256 = _canonical_hash(fixture_restoration_evidence)
+    recorded_payload_policy = resolve_recorded_payload_policy(payload_policy_snapshot)
+    policy_epoch = {
+        "epoch_id": scoring_policy_epoch.get("epoch_id"),
+        "policy_version": EXPERIMENT_POLICY_VERSION,
+        "payload_policy_version": PAYLOAD_POLICY_VERSION,
+        "control_policy_version": CONTROL_POLICY_VERSION,
+        "budget_policy_version": BUDGET_POLICY_VERSION,
+        "workflow_protocol_version": WORKFLOW_PROTOCOL_VERSION,
+        "graph_build_version": GRAPH_BUILD_VERSION,
+        "state_schema_version": STATE_SCHEMA_VERSION,
+        "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
+        "scoring_rubric_version": scoring_rubric_version,
+        "scoring_policy": scoring_policy_epoch,
+        "source_hashes_sha256": source_hashes_sha256,
+        "fixture_restoration_sha256": fixture_restoration_sha256,
+        "recorded_payload_policy_sha256": (
+            recorded_payload_policy.get("snapshot_sha256")
+            if isinstance(recorded_payload_policy, Mapping)
+            and isinstance(recorded_payload_policy.get("snapshot_sha256"), str)
+            and recorded_payload_policy.get("snapshot_sha256")
+            else _canonical_hash(recorded_payload_policy)
+        ),
+    }
     from evaluation.thesis_scoring import validate_scoring_config
     validate_scoring_config(scoring_mode, scoring_evaluator or {})
-    from copy import deepcopy
     from evaluation.scoring_evidence import validate_evidence_config
     scoring_profile, scoring_oracles = deepcopy(scoring_profile or {}), deepcopy(scoring_oracles or [])
     validate_evidence_config(scoring_rubric_version, scoring_profile, scoring_oracles)
@@ -525,6 +818,13 @@ def run_single_engagement(
     coordinate = {
         "scoring_rubric_version": scoring_rubric_version,
         "scoring_profile": scoring_profile, "scoring_oracles": scoring_oracles,
+        "scoring_policy_epoch": scoring_policy_epoch, "token_price_schedule": token_price_schedule,
+        "policy_epoch": policy_epoch,
+        "recorded_payload_policy": recorded_payload_policy,
+        "fixture_restoration_evidence": fixture_restoration_evidence,
+        "fixture_restoration_sha256": fixture_restoration_sha256,
+        "source_hashes_sha256": source_hashes_sha256,
+        "source_identity_version": default_source_identity().get("identity_version"),
         "fixture_id": fixture_id, "protocol_version": protocol_version,
         "scoring_mode": scoring_mode,
         "scoring_evaluator": redact_secrets(scoring_evaluator or {}),
@@ -534,6 +834,7 @@ def run_single_engagement(
         "security_level": security_level,
         "payload_mode": payload_mode,
         "experiment_condition": experiment_condition,
+        "experiment_block": block,
         "target_method": target_method,
         "repeat_index": repeat_index,
         "stop_policy": stop_policy,
@@ -686,6 +987,18 @@ def run_single_engagement(
             runtime_event_emitter(event_type, data)
 
     runtime_stack = ExitStack()
+    http_accounting_stack = ExitStack()
+    live_http_counter: dict[str, Any] | None = None
+    try:
+        live_http_counter = http_accounting_stack.enter_context(http_request_accounting())
+    except Exception as exc:  # noqa: BLE001 - accounting must not block execution
+        runtime_events.append({
+            "event_type": "runner.http_accounting.unavailable",
+            "timestamp": _now_iso(), "execution_id": execution_id, "run_id": run_id,
+            "node": "runner", "method": None, "candidate": None,
+            "message": "HTTP request accounting unavailable",
+            "data": {"error_type": type(exc).__name__},
+        })
     runtime_stack.enter_context(dvwa_credentials(dvwa_username, dvwa_password))
     call_context = runtime_stack.enter_context(runtime_service.coordinate(
         coordinate_id=execution_id,
@@ -696,13 +1009,10 @@ def run_single_engagement(
         cache_enabled=llm_cache_enabled,
         activity_callback=forward_runtime_activity,
     ))
-    # Automatic method selection is model-backed even for static payloads;
-    # explicit target_method + static_only is the only intentional zero-call
-    # ablation. Hybrid/mutation modes additionally require payload generation.
-    llm_required = (
-        target_method is None
-        or str(payload_mode).strip().lower() in {"hybrid", "llm_mutation_only"}
-    )
+    # Automatic method selection is model-backed for every payload mode; an
+    # explicit target plus static_only is the intentional zero-call ablation.
+    # Mutation and Template additionally require a model-generated candidate.
+    llm_required = block == "selection" or requires_model_candidate(payload_mode)
     configured_profiles: list[Mapping[str, Any]] = []
     if isinstance(model_config, Mapping):
         configured_profiles.append(model_config)
@@ -839,6 +1149,19 @@ def run_single_engagement(
             "llm_provider": llm_provider,
             "current_surface": surface,
             "payload_mode": payload_mode,
+            "payload_policy_version": PAYLOAD_POLICY_VERSION,
+            "control_policy_version": CONTROL_POLICY_VERSION,
+            "budget_policy_version": BUDGET_POLICY_VERSION,
+            "experiment_policy_version": EXPERIMENT_POLICY_VERSION,
+            "experiment_block": block,
+            "fixture_restoration_evidence": fixture_restoration_evidence,
+            "policy_epoch": policy_epoch,
+            "recorded_payload_policy": recorded_payload_policy,
+            "source_identity": {
+                key: default_source_identity().get(key)
+                for key in ("identity_version", "source_hashes_sha256", "config_sha256")
+            },
+            "source_hashes_sha256": source_hashes_sha256,
             "candidate_budget": candidate_budget,
             "max_iterations": max_iterations,
             "stop_policy": stop_policy,
@@ -980,6 +1303,7 @@ def run_single_engagement(
                     frozen = {key: value for key, value in final_state.items()
                               if key not in {"messages", "model_config", "endpoints"}}
                     frozen["payload_candidates"] = {str(method): deepcopy(queue)}
+                    frozen["recorded_payload_policy"] = deepcopy(recorded_payload_policy)
                     method_execution_inputs.append({"method": method, "state": redact_secrets(frozen, known_secrets)})
                     captured_inputs.add(identity)
                 for event in new_events:
@@ -1190,8 +1514,10 @@ def run_single_engagement(
                 message=error,
                 data=failure_payload,
             )
-        elif llm_required and llm_activity["started"] == 0 and final_state.get("llm_skip_reason") not in {
-            "NO_VIABLE_METHODS", "ALL_METHODS_EXHAUSTED", "TARGET_METHOD_INFEASIBLE", "WORKFLOW_STOPPED_BEFORE_SELECTION",
+        elif llm_required and llm_activity["started"] == 0 and not _environment_no_call_outcome(final_state) \
+                and final_state.get("llm_skip_reason") not in {
+            "NO_VIABLE_METHODS", "ALL_METHODS_EXHAUSTED", "TARGET_METHOD_INFEASIBLE",
+            "WORKFLOW_STOPPED_BEFORE_SELECTION",
         }:
             # Automatic selection and hybrid/mutation coordinates are
             # model-backed by contract. A graph that reaches a terminal state
@@ -1342,6 +1668,45 @@ def run_single_engagement(
         if str(settings.get("model_profile") or "").strip()
     }
     selected_model_profile = next(iter(effective_profiles)) if len(effective_profiles) == 1 else None
+    readiness = final_state.get("readiness")
+    candidate_lifecycle = list(final_state.get("candidate_lifecycle", []) or [])
+    budget_receipts = _candidate_budget_receipts(final_state)
+    model_call_requirements = list(final_state.get("model_call_requirements", []) or [])
+    generation_opportunities = _unique_opportunities(
+        final_state.get("payload_generation_opportunities")
+        if isinstance(final_state.get("payload_generation_opportunities"), list)
+        else model_call_requirements,
+        stage="generation",
+        role="payload_generator",
+    )
+    validation_opportunities = _unique_opportunities(
+        model_call_requirements, stage="validation", role="payload_generator"
+    )
+    state_receipts = {
+        "readiness": readiness,
+        "selection_rejections": list(final_state.get("selection_rejections", []) or []),
+        "observation_facts": list(final_state.get("observation_facts", []) or []),
+        "precondition_status": dict(final_state.get("precondition_status", {}) or {}),
+        "candidate_lifecycle": candidate_lifecycle,
+        "candidate_budget_receipts": budget_receipts,
+        "model_call_requirements": model_call_requirements,
+        "chain_assessment": final_state.get("chain_assessment"),
+        "control_events": list(final_state.get("control_events", []) or []),
+        "quarantined_visits": list(final_state.get("quarantined_visits", []) or []),
+        "payload_generation_opportunities": generation_opportunities,
+        "payload_validation_opportunities": validation_opportunities,
+        "payload_generation_opportunity_coverage": generation_opportunity_coverage({
+            "payload_generation_opportunities": generation_opportunities,
+            "payload_validation_opportunities": validation_opportunities,
+            "config": {"payload_mode": payload_mode},
+        }),
+        "recorded_payload_policy": recorded_payload_policy,
+    }
+    summed_call_duration_ms = sum(
+        int(row.get("call_duration_ms", 0) or 0)
+        for row in llm_performance
+        if isinstance(row, dict)
+    )
 
     artifact = {
         "schema_version": "tui.v1",
@@ -1352,7 +1717,23 @@ def run_single_engagement(
         "repeat_index": repeat_index,
         "failure": provider_failure,
         "experiment_condition": experiment_condition,
+        "experiment_block": block,
         "target_method": target_method,
+        "policy_epoch": policy_epoch,
+        "recorded_payload_policy": recorded_payload_policy,
+        "source_identity": {
+            key: default_source_identity().get(key)
+            for key in ("identity_version", "source_hashes", "source_hashes_sha256", "config_sha256")
+        },
+        "source_hashes_sha256": source_hashes_sha256,
+        "fixture_restoration_evidence": fixture_restoration_evidence,
+        "fixture_restoration_sha256": fixture_restoration_sha256,
+        "payload_policy_version": PAYLOAD_POLICY_VERSION,
+        "control_policy_version": CONTROL_POLICY_VERSION,
+        "budget_policy_version": BUDGET_POLICY_VERSION,
+        "experiment_policy_version": EXPERIMENT_POLICY_VERSION,
+        "payload_mode_label": mode_display_label(payload_mode),
+        **state_receipts,
         "provider": llm_provider,
         "model": (model_config or {}).get("model_name"),
         "model_profile": selected_model_profile,
@@ -1420,7 +1801,20 @@ def run_single_engagement(
             "candidate_budget": candidate_budget,
             "repeat_index": repeat_index,
             "experiment_condition": experiment_condition,
+            "experiment_block": block,
             "target_method": target_method,
+            "payload_mode_label": mode_display_label(payload_mode),
+            "payload_policy_version": PAYLOAD_POLICY_VERSION,
+            "control_policy_version": CONTROL_POLICY_VERSION,
+            "budget_policy_version": BUDGET_POLICY_VERSION,
+            "experiment_policy_version": EXPERIMENT_POLICY_VERSION,
+            "policy_epoch": policy_epoch,
+            "scoring_policy_epoch": scoring_policy_epoch,
+            "token_price_schedule": token_price_schedule,
+            "source_hashes_sha256": source_hashes_sha256,
+            "source_identity_version": default_source_identity().get("identity_version"),
+            "source_config_sha256": default_source_identity().get("config_sha256"),
+            "fixture_restoration_sha256": fixture_restoration_sha256,
             "evasion_enabled": evasion_enabled,
             "evasion_mode": evasion_mode,
             "evasion_max_retries": evasion_max_retries,
@@ -1430,8 +1824,14 @@ def run_single_engagement(
             "started_at": started_at,
             "ended_at": ended_at,
             "duration_ms": duration_ms,
+            "wall_time_ms": duration_ms,
+            "summed_role_call_duration_ms": summed_call_duration_ms,
+            "non_call_overhead_ms": max(0, duration_ms - summed_call_duration_ms),
         },
         "final_state": {
+            **state_receipts,
+            "fixture_restoration_evidence": fixture_restoration_evidence,
+            "source_hashes_sha256": source_hashes_sha256,
             "workflow_protocol_version": WORKFLOW_PROTOCOL_VERSION,
             "workflow_stop_reason": final_state.get("workflow_stop_reason"),
             "stop_policy": stop_policy, "coverage_target": coverage_target,
@@ -1481,6 +1881,7 @@ def run_single_engagement(
             "tried_payloads": dict(final_state.get("tried_payloads", {})),
             "current_surface": final_state.get("current_surface"),
             "experiment_condition": experiment_condition,
+            "experiment_block": block,
             "target_method": target_method,
             "payload_mode": payload_mode,
             "repeat_index": repeat_index,
@@ -1523,14 +1924,18 @@ def run_single_engagement(
     try:
         if scoring_rubric_version == 'scoring.v4' and scoring_oracles:
             from evaluation.session_oracle import collect_session_oracles
+            from evaluation.scoring_evidence import attach_oracle_evidence
+            from foundation.http_client import request_scope
             with dvwa_credentials(dvwa_username, dvwa_password):
-                artifact = collect_session_oracles(artifact, final_state)
+                with request_scope(phase="verification", role="candidate_verification"):
+                    artifact = collect_session_oracles(artifact, final_state)
                 from evaluation.permission_oracle import collect_permission_oracles
-                artifact = collect_permission_oracles(artifact, final_state)
-                from evaluation.scoring_evidence import attach_oracle_evidence
+                with request_scope(phase="verification", role="independent_control"):
+                    artifact = collect_permission_oracles(artifact, final_state)
                 attach_oracle_evidence(artifact)
                 from evaluation.dependency_oracle import collect_dependency_oracles
-                artifact = collect_dependency_oracles(artifact, final_state)
+                with request_scope(phase="verification", role="independent_control"):
+                    artifact = collect_dependency_oracles(artifact, final_state)
                 attach_oracle_evidence(artifact)
             artifact['response_evidence'] = artifact['final_state']['response_evidence']
     except Exception as exc:
@@ -1539,6 +1944,10 @@ def run_single_engagement(
         final_state = {**final_state, "incomplete_reason": "ARTIFACT_PROCESSING_FAILURE"}
         artifact.update(status=status, error=error)
         emit("run.failed", node="runner", message=error, data={"reason": "ARTIFACT_PROCESSING_FAILURE"})
+    http_counters = snapshot_http_request_counters(live_http_counter)
+    artifact["http_request_counters"] = http_counters
+    artifact["final_state"]["http_request_counters"] = http_counters
+    http_accounting_stack.close()
     status_fields = terminal_status(artifact,
         execution_status={"success": "completed", "error": "failed", "cancelled": "interrupted"}[status],
         execution_reason=((final_state.get("execution_reason")
@@ -1546,6 +1955,7 @@ def run_single_engagement(
             else status_reason(final_state.get("incomplete_reason") or "RUNTIME_FAILURE", error or ""))
             if status == "error" else status_reason("CANCELLED", cancellation_token.reason or "") if status == "cancelled" else None),
         classify=True)
+    status_fields = _preserve_evidence_backed_fixture_limit(status_fields, final_state)
     artifact.update(status_fields)
     artifact["final_state"].update(status_fields)
     artifact["final_state"].setdefault("summary", {}).update(status_fields)
@@ -1554,11 +1964,27 @@ def run_single_engagement(
     report.setdefault("summary", {}).update(status_fields)
     link_exported_request_evidence(artifact)
     build_candidate_dispositions(artifact)
+    artifact["payload_generation_opportunity_coverage"] = generation_opportunity_coverage(artifact)
     artifact["config"]["scoring_mode"] = scoring_mode
     artifact["config"]["scoring_evaluator"] = redact_secrets(scoring_evaluator or {})
     artifact["scoring_mode"] = scoring_mode
     artifact["thesis_scoring_status"] = "pending_review"
-    artifact["composite_score_status"] = "historical_provisional_scoring.v2"
+    artifact["composite_score_status"] = "runtime_provisional_scoring.v2"
+    from evaluation.research_metrics import scoring_policy as _scoring_policy
+
+    canonical_policy = _scoring_policy(artifact)
+    artifact["scoring_policy"] = canonical_policy
+    artifact["score_epoch"] = {
+        "runtime_provisional": "scoring.v2",
+        "thesis_final": scoring_rubric_version,
+        "final_status": "pending_review",
+        "scoring_policy_epoch": scoring_policy_epoch,
+        "scoring_policy_version": canonical_policy.get("policy_version"),
+        "metrics_epoch": canonical_policy.get("metrics_epoch"),
+        "scoring_rule_sha256": canonical_policy.get("scoring_rule_sha256"),
+    }
+    artifact["config"]["scoring_policy_version"] = canonical_policy.get("policy_version")
+    artifact["config"]["metrics_epoch"] = canonical_policy.get("metrics_epoch")
     artifact["checkpoint_schema_version"] = CHECKPOINT_SCHEMA_VERSION
     artifact["graph_build_version"] = GRAPH_BUILD_VERSION
     artifact["config_fingerprint"] = config_fingerprint(artifact["config"])

@@ -11,7 +11,12 @@ from typing import Any
 
 from evaluation.multi_llm_runner import run_provider_matrix
 from evaluation.reporter import write_json_report
-from evaluation.runner import run_single_engagement
+from evaluation.runner import (
+    default_source_hashes_sha256,
+    default_source_identity,
+    recorded_payload_policy_snapshot,
+    run_single_engagement,
+)
 from core.knowledge_graph import AttackKnowledgeGraph
 from tesis.artifact_layout import allocate_artifact_layout
 from tesis.artifact_repository import config_fingerprint, new_execution_id
@@ -80,7 +85,12 @@ def _common_kwargs(config: EngagementConfig, *, output_dir: Path) -> dict[str, A
         "cancellation_token": CancellationToken(),
         "experiment_condition": config.experiment_condition,
         "target_method": config.target_method,
-        **{k: getattr(config, k) for k in ("scoring_rubric_version", "scoring_profile", "scoring_oracles", "fixture_id", "protocol_version")},
+        **{k: getattr(config, k) for k in (
+            "scoring_rubric_version", "scoring_profile", "scoring_oracles",
+            "scoring_policy_epoch", "token_price_schedule",
+            "fixture_restoration_evidence",
+            "fixture_id", "protocol_version",
+        )},
         "scoring_mode": config.scoring_mode,
         "scoring_evaluator": config.scoring_evaluator,
         "dvwa_username": config.dvwa_username,
@@ -132,9 +142,15 @@ def _cancelled_result(
             "payload_modes": list(config.payload_modes),
             "repeats": config.repeats,
             "experiment_condition": config.experiment_condition,
+            "experiment_block": getattr(config, "experiment_block", "selection"),
             "target_method": config.target_method,
+            "fixture_restoration_evidence": getattr(config, "fixture_restoration_evidence", {}),
+            "source_hashes_sha256": default_source_hashes_sha256(),
+            "source_identity_version": default_source_identity().get("identity_version"),
+            "source_config_sha256": default_source_identity().get("config_sha256"),
             "llm_max_concurrency": config.llm_runtime.max_concurrency,
             "llm_cache_enabled": config.llm_runtime.cache_enabled,
+            "recorded_payload_policy": recorded_payload_policy_snapshot(),
         }
         return {
             "schema_version": "stage8.v1",
@@ -142,6 +158,7 @@ def _cancelled_result(
             "run_id": f"matrix-{execution_id[:12]}",
             "status": "cancelled",
             "config": matrix_config,
+            "recorded_payload_policy": matrix_config["recorded_payload_policy"],
             "matrix": {**matrix_config, "runs": 0},
             "totals": {
                 "total_runs": 0,
@@ -169,9 +186,15 @@ def _cancelled_result(
         "security_level": config.level,
         "payload_mode": config.payload_mode,
         "experiment_condition": config.experiment_condition,
+        "experiment_block": getattr(config, "experiment_block", "selection"),
         "target_method": config.target_method,
+        "fixture_restoration_evidence": getattr(config, "fixture_restoration_evidence", {}),
+        "source_hashes_sha256": default_source_hashes_sha256(),
+        "source_identity_version": default_source_identity().get("identity_version"),
+        "source_config_sha256": default_source_identity().get("config_sha256"),
         "llm_cache_enabled": config.llm_runtime.cache_enabled,
         "llm_max_concurrency": config.llm_runtime.max_concurrency,
+        "recorded_payload_policy": recorded_payload_policy_snapshot(),
     }
     return {
         "schema_version": "tui.v1",
@@ -179,6 +202,7 @@ def _cancelled_result(
         "run_id": run_id,
         "status": "cancelled",
         "config": artifact_config,
+        "recorded_payload_policy": artifact_config["recorded_payload_policy"],
         "final_state": {
             "task_result": None,
             "incomplete_reason": "CANCELLED",
@@ -209,6 +233,7 @@ def _descriptor_coordinates(config: EngagementConfig) -> dict[str, Any]:
         "security_level": config.level,
         "payload_mode": config.payload_mode,
         "experiment_condition": config.experiment_condition,
+        "experiment_block": getattr(config, "experiment_block", "selection"),
         "target_method": config.target_method,
         "target_url": safe_target_scope(config.target_url),
         "candidate_budget": config.candidate_budget,

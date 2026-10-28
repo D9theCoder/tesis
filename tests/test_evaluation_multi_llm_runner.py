@@ -159,14 +159,14 @@ def test_cancelled_artifacts_preserve_runtime_metadata_and_empty_contract(monkey
 
     artifacts, aggregate = run_provider_matrix(
         target_url="http://localhost/dvwa",
-        providers=["gemini"],
+        providers=["openai_compatible"],
         security_levels=["low"],
         surfaces=["sqli"],
         payload_modes=["hybrid"],
         repeats=1,
         llm_max_concurrency=2,
         llm_cache_scope="none",
-        llm_role_configs={"payload_generator": {"model_profile": "gemini"}},
+        llm_role_configs={"payload_generator": {"model_profile": "openai_compatible"}},
         include_aggregate=True,
     )
 
@@ -178,7 +178,7 @@ def test_cancelled_artifacts_preserve_runtime_metadata_and_empty_contract(monkey
     assert artifact["incomplete_reason"] == "CANCELLED"
     assert artifact["config"]["llm_max_concurrency"] == 2
     assert artifact["config"]["llm_cache_scope"] == "none"
-    assert artifact["config"]["llm_role_configs"]["payload_generator"]["model_profile"] == "gemini"
+    assert artifact["config"]["llm_role_configs"]["payload_generator"]["model_profile"] == "openai_compatible"
     assert artifact["llm_performance"] == []
     assert artifact["fallback_events"] == []
     assert artifact["final_state"]["invalid_json_events"] == []
@@ -188,7 +188,7 @@ def test_matrix_aggregate_counts_audit_events_from_every_status():
     artifacts = [
         {
             "status": "skipped",
-            "config": {"provider": "gemini", "surface": "sqli", "security_level": "low"},
+            "config": {"provider": "openai_compatible", "surface": "sqli", "security_level": "low"},
             "invalid_json_events": [{"event": "invalid"}],
             "guardrail_activations": [{"event": "guardrail"}],
             "containment_events": [],
@@ -196,7 +196,7 @@ def test_matrix_aggregate_counts_audit_events_from_every_status():
         },
         {
             "status": "cancelled",
-            "config": {"provider": "gemini", "surface": "sqli", "security_level": "low"},
+            "config": {"provider": "openai_compatible", "surface": "sqli", "security_level": "low"},
             "final_state": {
                 "invalid_json_events": [{"event": "invalid"}],
                 "guardrail_activations": [{"event": "guardrail"}],
@@ -206,12 +206,12 @@ def test_matrix_aggregate_counts_audit_events_from_every_status():
         },
         {
             "status": "error",
-            "config": {"provider": "gemini", "surface": "sqli", "security_level": "low"},
+            "config": {"provider": "openai_compatible", "surface": "sqli", "security_level": "low"},
             "report": {"summary": {"guardrail_activations": 2}},
         },
         {
             "status": "success",
-            "config": {"provider": "gemini", "surface": "sqli", "security_level": "low"},
+            "config": {"provider": "openai_compatible", "surface": "sqli", "security_level": "low"},
             "invalid_json_events": [{"event": "invalid"}],
             "guardrail_activations": [],
             "containment_events": [{"event": "containment"}],
@@ -230,20 +230,20 @@ def test_matrix_aggregate_counts_audit_events_from_every_status():
     }
     assert aggregate["audit_totals"] == expected
     assert all(aggregate["totals"][key] == value for key, value in expected.items())
-    level = aggregate["by_provider"]["gemini"]
+    level = aggregate["by_provider"]["openai_compatible"]
     assert level["guardrail_activations"] == 4
     assert level["containment_events"] == 2
 
 
-def test_run_provider_matrix_zero_success_avg_score_is_zero(monkeypatch):
-    """Verifies run provider matrix zero success avg score is zero behavior."""
+def test_run_provider_matrix_zero_success_avg_score_is_null(monkeypatch):
+    """Failed-only groups expose null provisional means, never a fake zero."""
     def failed_engagement(**kwargs):
         """Supports regression tests for test evaluation multi llm runner."""
         return {
             "schema_version": "stage8.v1",
-            "run_id": "gemini-sqli-low-0",
+            "run_id": "openai_compatible-sqli-low-0",
             "status": "error",
-            "config": {"provider": "gemini", "surface": "sqli", "security_level": "low"},
+            "config": {"provider": "openai_compatible", "surface": "sqli", "security_level": "low"},
             "timing": {},
             "final_state": {},
             "report": {
@@ -260,19 +260,23 @@ def test_run_provider_matrix_zero_success_avg_score_is_zero(monkeypatch):
         }
 
     monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", failed_engagement)
-    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["gemini"])
+    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["openai_compatible"])
 
     _, aggregate = run_provider_matrix(
         target_url="http://localhost/dvwa",
-        providers=["gemini"],
+        providers=["openai_compatible"],
         security_levels=["low"],
         surfaces=["sqli"],
         repeats=1,
         include_aggregate=True,
     )
 
-    assert aggregate["by_provider"]["gemini"]["avg_score"] == 0.0
-    assert aggregate["by_provider"]["gemini"]["guardrail_per_iteration"] == 0.0
+    group = next(iter(aggregate["by_provider_surface_level"]["openai_compatible"]["sqli"].values()))
+    assert group["provisional_avg_score"] is None
+    assert group["provisional_avg_iterations"] is None
+    assert group["avg_score_reason"] == "no_completed_runs"
+    assert "avg_score" not in aggregate["by_provider"]["openai_compatible"]
+    assert aggregate["by_provider"]["openai_compatible"]["score_aggregation"] == "not_computed_pooled_coordinates"
 
 
 def test_run_provider_matrix_aggregate_reports_error_for_any_failed_child(monkeypatch):
@@ -295,11 +299,11 @@ def test_run_provider_matrix_aggregate_reports_error_for_any_failed_child(monkey
         }
 
     monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", engagement_with_one_failure)
-    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["gemini"])
+    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["openai_compatible"])
 
     artifacts, aggregate = run_provider_matrix(
         target_url="http://localhost/dvwa",
-        providers=["gemini"],
+        providers=["openai_compatible"],
         security_levels=["low", "medium"],
         surfaces=["sqli"],
         payload_modes=["hybrid"],
@@ -336,11 +340,11 @@ def test_run_provider_matrix_aggregate_cancellation_takes_precedence_over_child_
         }
 
     monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", cancel_after_child_failure)
-    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["gemini"])
+    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["openai_compatible"])
 
     _, aggregate = run_provider_matrix(
         target_url="http://localhost/dvwa",
-        providers=["gemini"],
+        providers=["openai_compatible"],
         security_levels=["low", "medium"],
         surfaces=["sqli"],
         payload_modes=["hybrid"],
@@ -378,11 +382,11 @@ def test_run_provider_matrix_expands_conditions_methods_and_guardrails(monkeypat
         }
 
     monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", mock_engagement)
-    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["gemini"])
+    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["openai_compatible"])
 
     artifacts = run_provider_matrix(
         target_url="http://localhost/dvwa",
-        providers=["gemini"],
+        providers=["openai_compatible"],
         security_levels=["low"],
         surfaces=["sqli"],
         payload_modes=["static_only"],
@@ -412,7 +416,7 @@ def test_run_provider_matrix_rejects_cross_surface_target_method():
     with pytest.raises(ValueError, match="target_method"):
         run_provider_matrix(
             target_url="http://localhost/dvwa",
-            providers=["gemini"],
+            providers=["openai_compatible"],
             security_levels=["low"],
             surfaces=["access_control"],
             payload_modes=["static_only"],
@@ -444,12 +448,12 @@ def test_matrix_cancellation_stops_later_coordinates_and_persists_aggregate(monk
         }
 
     monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", cancel_first)
-    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["gemini"])
+    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["openai_compatible"])
     sink = CollectingEventSink()
 
     artifacts, aggregate = run_provider_matrix(
         target_url="http://localhost/dvwa",
-        providers=["gemini"],
+        providers=["openai_compatible"],
         security_levels=["low", "medium"],
         surfaces=["sqli"],
         payload_modes=["hybrid"],
@@ -496,12 +500,12 @@ def test_matrix_keyboard_interrupt_during_wait_drains_workers_and_persists_parti
         raise KeyboardInterrupt
 
     monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", cancellable_engagement)
-    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["gemini"])
+    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["openai_compatible"])
     monkeypatch.setattr("evaluation.multi_llm_runner.wait", interrupt_wait)
 
     artifacts, aggregate = run_provider_matrix(
         target_url="http://localhost/dvwa",
-        providers=["gemini"],
+        providers=["openai_compatible"],
         security_levels=["low", "medium"],
         surfaces=["sqli"],
         payload_modes=["hybrid"],
@@ -552,11 +556,11 @@ def test_matrix_workers_overlap_and_store_artifacts_in_coordinate_order(monkeypa
         }
 
     monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", delayed_engagement)
-    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["gemini"])
+    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["openai_compatible"])
 
     artifacts = run_provider_matrix(
         target_url="http://localhost/dvwa",
-        providers=["gemini"],
+        providers=["openai_compatible"],
         security_levels=["low", "high"],
         surfaces=["sqli"],
         payload_modes=["hybrid"],
@@ -597,12 +601,12 @@ def test_matrix_run_events_carry_canonical_coordinate_identity(monkeypatch):
         }
 
     monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", fake_run)
-    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["gemini"])
+    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["openai_compatible"])
     sink = CollectingEventSink()
 
     artifacts = run_provider_matrix(
         target_url="http://localhost/dvwa",
-        providers=["gemini"],
+        providers=["openai_compatible"],
         security_levels=["low", "high"],
         surfaces=["sqli"],
         payload_modes=["hybrid"],
@@ -666,12 +670,12 @@ def test_matrix_out_of_order_completion_correlates_identity_and_preserves_order(
         }
 
     monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", delayed_engagement)
-    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["gemini"])
+    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["openai_compatible"])
     sink = CollectingEventSink()
 
     artifacts = run_provider_matrix(
         target_url="http://localhost/dvwa",
-        providers=["gemini"],
+        providers=["openai_compatible"],
         security_levels=["low", "high"],
         surfaces=["sqli"],
         payload_modes=["hybrid"],

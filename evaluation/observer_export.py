@@ -9,7 +9,13 @@ import json
 from pathlib import Path
 
 from core.run_status import terminal_status, matrix_terminal_status
-from evaluation.metrics import UNAVAILABLE_METRICS, aggregate_runs, artifact_summary, metric_reading
+from evaluation.metrics import (
+    RESEARCH_METRIC_NAMES,
+    UNAVAILABLE_METRICS,
+    aggregate_runs,
+    artifact_summary,
+    metric_reading,
+)
 from evaluation.observer_reviews import discover_reviews
 from evaluation.reporter import write_json_report
 from tesis.artifact_catalog import ArtifactCatalog
@@ -22,6 +28,10 @@ IDENTITY_FIELDS = (
     "execution_id", "run_id", "experiment_condition", "target_method", "selected_method",
     "payload_mode", "repeat_index", "provider", "model", "model_profile", "surface",
     "security_level", "created_at", "started_at", "finished_at", "generated_at", "duration_seconds",
+)
+POLICY_FIELDS = (
+    "payload_policy_version", "control_policy_version", "budget_policy_version",
+    "experiment_policy_version", "scoring_policy_version",
 )
 
 
@@ -39,6 +49,10 @@ def _identity(entry):
             identity[key] = timing.get(key)
     identity["model"] = identity["model"] or config.get("model_name")
     identity["timing"] = dict(timing)
+    identity["policy_versions"] = {key: next((owner[key] for owner in (config, state, record)
+                                              if owner.get(key) is not None), None)
+                                   for key in POLICY_FIELDS}
+    identity["scoring_policy"] = record.get("scoring_policy")
     identity.update(matrix_execution_id=entry.parent_id, coordinate_index=entry.coordinate_index,
                     coordinate_index_base=0,
                     config_fingerprint=record.get("config_fingerprint") or (config_fingerprint(config) if config else None))
@@ -83,15 +97,21 @@ def _scores(entry):
             "stored_composite": record.get("composite_score"),
             "rubric_version": record.get("runtime_scoring_rubric_version", "scoring.v2"),
             "status": record.get("composite_score_status", "historical_provisional_scoring.v2"),
-            "thesis_scoring_status": record.get("thesis_scoring_status"), "source": entry.source}
+            "provisional_label": "provisional_scoring.v2",
+            "thesis_scoring_status": record.get("thesis_scoring_status"), "source": entry.source,
+            "metrics_epoch": (record.get("metrics") or {}).get("metrics_epoch"),
+            "research_metrics": record.get("metrics"),
+            "final_receipt_status": record.get("thesis_scoring_status")}
 
 
 def _details(entry):
     details = dict(entry.detail)
-    for key in ("execution_log", "candidate_dispositions", "verifier_history", "response_evidence", "timing_evidence"):
+    for key in ("execution_log", "candidate_dispositions", "verifier_history", "response_evidence", "timing_evidence",
+                "candidate_lifecycle", "chain_assessment", "probe_controls", "readiness",
+                "model_call_requirements", "observation_facts"):
         prefix = "" if key in entry.record else "/final_state"
         value = entry.record.get(key, (entry.record.get("final_state") or {}).get(key))
-        details[key] = {"available": isinstance(value, list) and bool(value),
+        details[key] = {"available": value is not None and bool(value),
                         "source": entry.source, "pointer": entry.source["pointer"] + prefix + "/" + key}
     details["child_artifact"] = entry.source
     details["alternate_locations"] = entry.locations[1:]
@@ -151,6 +171,27 @@ def build_projection(catalog: ArtifactCatalog, *, historical_analysis=()):
         for name in UNAVAILABLE_METRICS:
             value, available, reason = metric_reading(summary, name)
             metrics[name] = {"value": value, "available": available, "unavailable_reason": reason}
+        source_metrics = entry.record.get("metrics")
+        if not isinstance(source_metrics, dict):
+            source_metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+        research = {}
+        for name in RESEARCH_METRIC_NAMES:
+            if name not in (source_metrics.get("values") or {}):
+                continue
+            research[name] = {
+                "value": source_metrics["values"].get(name),
+                "available": (source_metrics.get("availability") or {}).get(name),
+                "unavailable_reason": (source_metrics.get("unavailable_reason") or {}).get(name),
+                "denominator": (source_metrics.get("denominators") or {}).get(name),
+            }
+        metrics["research"] = {
+            "schema_version": source_metrics.get("schema_version"),
+            "metrics_epoch": source_metrics.get("metrics_epoch"),
+            "rubric_version": source_metrics.get("rubric_version"),
+            "values": research,
+            "note": None if research else "no_research_metrics_recorded_for_this_epoch",
+        }
+        metrics["scoring_policy"] = entry.record.get("scoring_policy")
         workflows = discover_reviews(catalog, entry)
         runs.append({"identity": _identity(entry), "source": entry.source,
             "execution": {"status": fields["execution_status"], "reason": fields["execution_reason"],
@@ -195,7 +236,8 @@ def build_projection(catalog: ArtifactCatalog, *, historical_analysis=()):
             "groups": groups, "detail": parent.detail, "diagnostics": parent.diagnostics})
     records = [record for _, record in normalized]
     package_root = Path(__file__).resolve().parents[1]
-    code_paths = ("core/run_status.py", "evaluation/metrics.py", "evaluation/observer_export.py",
+    code_paths = ("core/run_status.py", "evaluation/metrics.py", "evaluation/research_metrics.py",
+                  "evaluation/observer_export.py",
                   "evaluation/observer_reviews.py", "tesis/artifact_catalog.py", "tesis/artifact_repository.py",
                   "evaluation/thesis_scoring.py", "evaluation/scoring_evidence.py", "foundation/verifier.py",
                   "evaluation/reporter.py", "evaluation/failure_logger.py", "tesis/artifact_layout.py",

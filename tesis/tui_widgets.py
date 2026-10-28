@@ -18,6 +18,8 @@ from textual.widget import Widget
 from textual.widgets import Button, Checkbox, DataTable, Input, Label, SelectionList, Static, Tab, Tabs
 from textual.widgets.option_list import OptionDoesNotExist
 
+from tesis.config_fields import payload_mode_label
+
 
 class SettingValueRow(Vertical, can_focus=True):
     """A compact row. Enter opens a typed editor owned by the calling workspace."""
@@ -268,7 +270,9 @@ def execution_summary(config: Any, *, mode: str = "single", details: bool = Fals
         ("Condition", getattr(config, "experiment_condition", "—")),
         ("Method", getattr(config, "target_method", None) or "orchestrator-selected"),
         ("Surface / level", f"{config.surface} / {config.level}"),
-        ("Payload mode", config.payload_mode),
+        ("Payload mode", payload_mode_label(config.payload_mode)),
+        ("Chapter 3 block", getattr(config, "experiment_block", "selection")),
+        ("Readiness / controls", "decided at execution · fail-closed · offline dry run only"),
     ]
     if mode == "matrix":
         profile_names = config.providers or [config.provider]

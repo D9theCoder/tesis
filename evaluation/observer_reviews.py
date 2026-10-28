@@ -44,6 +44,14 @@ def _binding_check(entry, document, queue, *, legacy=False):
     digest = document.get("scoring_rule_sha256")
     if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
         raise ValueError("missing_scoring_epoch")
+    policy = document.get("scoring_policy") or {}
+    queue_policy = queue.get("scoring_policy") or {}
+    if policy.get("policy_version") and queue_policy.get("policy_version") \
+            and policy["policy_version"] != queue_policy["policy_version"]:
+        raise ValueError("scoring_policy_epoch_mismatch")
+    if document.get("metrics_epoch") and (queue.get("metrics") or {}).get("metrics_epoch") \
+            and document["metrics_epoch"] != queue["metrics"]["metrics_epoch"]:
+        raise ValueError("metrics_epoch_mismatch")
 
 
 def _validated_receipt(catalog, entry, path, receipt, queue):
@@ -94,7 +102,8 @@ def _validated_receipt(catalog, entry, path, receipt, queue):
                 "Spayload_final", "Srun_final", "candidate_grades", "numerator", "denominator",
                 "generated_at", "rubric_version", "scoring_rule_sha256", "component_evidence_refs",
                 "selection", "scoring_mode", "aggregation", "rounding",
-                "selection_evidence", "output_reason",
+                "selection_evidence", "output_reason", "scoring_policy", "metrics_epoch",
+                "component_pending_reasons",
             )}, "receipt": catalog.binding(path)}
 
 

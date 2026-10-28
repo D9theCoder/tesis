@@ -10,7 +10,22 @@ from math import isfinite
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
-from agents.state_utils import already_tried_payloads, candidate_payloads_for_stage, chain_check as _chain_check, make_update, normalize_security_level
+from foundation.http_client import http_accounted, record_http_retry
+from agents.state_utils import (
+    agent_visit_gate,
+    candidate_payloads_for_stage,
+    chain_check as _chain_check,
+    graph_visit,
+    make_update,
+    merge_probe_observations,
+    normalize_security_level,
+    previously_executed_exploit_payloads,
+    probe_outcome_update,
+    probe_stage_blocked_update,
+    resolve_stage_control_payloads,
+    visit_block_update,
+)
+from foundation.control_catalog import quarantine_update
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.session_manager import DVWASession, session_fingerprint
 from foundation.verifier import Verifier, has_captcha_challenge
@@ -46,6 +61,7 @@ _SUCCESS_SIGNALS = [
 _CSRF_TOKEN_ERROR_MARKER = "csrf token is incorrect"
 
 
+@http_accounted(phase="token")
 def _module_user_token(session: DVWASession) -> str | None:
     """Fetch the brute-force form token without exposing its value."""
     try:
@@ -90,6 +106,8 @@ def _credential_requests(
     max_attempts = 2 if high_security else 1
 
     for attempt in range(max_attempts):
+        if attempt:
+            record_http_retry()
         request_token = _module_user_token(session) if high_security else user_token
         response = session.get(
             MODULE_PATH,
@@ -164,6 +182,7 @@ def _latency_indicates_rate_limit(elapsed_seconds: list[float]) -> bool:
     )
 
 
+@http_accounted(role="detection_control", method=AGENT_ID)
 def _probe_preconditions(
     session: DVWASession,
     payloads: list[str],
@@ -187,9 +206,9 @@ def _probe_preconditions(
     rate_limit_detected = False
     accepted_probes = 0
 
-    # Use the provided payloads when present so callers control the probe set.
-    # Fall back to dedicated rate-test credentials only when no payloads exist.
-    rate_test_credentials = list(payloads) or ["rate_test:test", "probe:probe"]
+    # The frozen catalog controls the probe set. An empty list means ZERO
+    # requests: never insert dedicated static credentials as a hidden fallback.
+    rate_test_credentials = list(payloads)
     for cred in rate_test_credentials:
         if cred in already_tried:
             continue
@@ -259,6 +278,7 @@ def _parse_credential(payload: str) -> tuple[str, str]:
     return (match.group(1), match.group(2)) if match else ("", "")
 
 
+@http_accounted(phase="method", role="candidate", method=AGENT_ID)
 def _attempt_exploit(
     session: DVWASession, payloads: list[str], already_tried: set[str],
     security_level: str, user_token: str | None = None,
@@ -362,6 +382,9 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
 
     if not target_url:
         return make_update(state=state, module_name=AGENT_ID, score=0, tried_payloads=[])
+    visit_gate = agent_visit_gate(state, AGENT_ID)
+    if not visit_gate["allow"]:
+        return visit_block_update(state, AGENT_ID, stop=visit_gate["stop"], gate=visit_gate["gate"])
 
     session = DVWASession(target_url)
     try:
@@ -374,7 +397,6 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
         session.set_security_level(security_level)
         user_token = None if security_level == "high" else _module_user_token(session)
 
-        already_tried = already_tried_payloads(state, AGENT_ID)
         confirmed_vulns: list[str] = []
         achieved_outcomes: list[str] = []
         found_credentials: list[dict[str, str]] = []
@@ -383,33 +405,55 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
         all_tried: list[str] = []
         observations: dict[str, bool] = {}
 
-        # Stage 1: PROBE
+        # Stage 1: PROBE (frozen benign rate controls; empty means zero requests)
         probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe")
-        cached_no_rate_limit = state.get("observations", {}).get(_PROBE_OBSERVATION_KEY)
+        principal_id = getattr(session, "_principal_id", None) or getattr(session, "_username", None)
+        probe_payloads = resolve_stage_control_payloads(state, AGENT_ID, probe_payloads, principal_id)
+        if graph_visit(state, AGENT_ID) and not probe_payloads:
+            return probe_stage_blocked_update(state, AGENT_ID)
         probe_ok, tried, probe_obs, probe_events = _probe_preconditions(
             session,
             probe_payloads,
-            already_tried,
-            cached_precondition=cached_no_rate_limit,
+            set(),
+            cached_precondition=None,
             user_token=user_token,
             security_level=security_level,
         )
         all_tried.extend(tried)
         telemetry_events.extend(probe_events)
         observations.update(probe_obs)
-
-        if not probe_ok:
+        probe_update, quarantine = probe_outcome_update(
+            state, AGENT_ID, observations, probe_events, principal_id=principal_id,
+            session_fingerprint=session_fingerprint(session))
+        if quarantine:
+            blocked = quarantine_update(
+                state, method=AGENT_ID, visit_id=state.get("selected_visit_id"),
+                control_id=f"{AGENT_ID}:probe:control", control_class="detection",
+                reason=quarantine, detail="rate control unexpectedly authenticated or changed state",
+                evidence_refs=[f"control:{AGENT_ID}"],
+                snapshot=probe_update.get("probe_controls", {}).get(AGENT_ID))
+            blocked.update(visit_block_update(
+                state, AGENT_ID, stop="quarantine",
+                gate={"reason": quarantine, "evidence_refs": []}))
+            blocked["telemetry_events"] = [*telemetry_events, *blocked.get("telemetry_events", [])]
+            return blocked
+        probe_status = (probe_update.get("precondition_status") or {}).get(_PROBE_OBSERVATION_KEY)
+        if probe_status != "true":
             update = make_update(
                 state=state, module_name=AGENT_ID, score=0,
                 tried_payloads=all_tried, telemetry_events=telemetry_events,
+                default_candidate_stop_reason=(
+                    "precondition_false" if probe_status == "false" else "precondition_unknown"),
             )
-            update["observations"] = observations
+            update.update(probe_update)
             return update
 
         score = max(score, 1)
 
-        # Stage 2: EXPLOIT
+        # Stage 2: EXPLOIT (own current-visit candidate requests only)
         all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit")
+        exploit_done = previously_executed_exploit_payloads(
+            state, AGENT_ID, state.get("selected_visit_id"))
         route = state.get("active_chain_route") or {}
         source_credentials = {}
         if route.get("source") == "credentials_extracted" and route.get("target_agent") == AGENT_ID:
@@ -428,7 +472,7 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
         exploit_score, tried, confirmed, exploit_events, creds, captcha_boundary = _attempt_exploit(
             session,
             all_exploit,
-            already_tried | set(all_tried),
+            exploit_done,
             security_level,
             user_token=user_token,
             source_credentials=source_credentials,
@@ -448,7 +492,7 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
                 task_result="INCOMPLETE",
                 incomplete_reason="SCOPE_BOUNDARY",
             )
-            update["observations"] = observations
+            merge_probe_observations(update, probe_update, state, observations)
             return update
         all_tried.extend(tried)
         telemetry_events.extend(exploit_events)
@@ -475,7 +519,7 @@ def bf_dictionary_agent(state: ExploitationState) -> dict[str, Any]:
             found_credentials=found_credentials or None,
             telemetry_events=telemetry_events,
         )
-        update["observations"] = observations
+        merge_probe_observations(update, probe_update, state, observations)
         return update
     except Exception as exc:
         logger.warning("[%s] Session or execution failed: %s", AGENT_ID, exc)

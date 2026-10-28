@@ -7,12 +7,13 @@ from unittest.mock import MagicMock
 
 force_browse = importlib.import_module("agents.access_control.ac_force_browse_agent")
 from agents.access_control.ac_force_browse_agent import ac_force_browse_agent
-from core.state import new_default_state
+from tests.support import ready_state
+from foundation.session_manager import session_fingerprint
 
 @pytest.fixture
 def base_state():
     """Supports regression tests for test ac force browse agent."""
-    state = new_default_state()
+    state = ready_state("ac_force_browse")
     state["target_url"] = "http://localhost/dvwa"
     state["security_level"] = "low"
     return state
@@ -34,7 +35,7 @@ def _make_response(status_code=200, text="Not found"):
 def _use_documented_nonadmin_session(monkeypatch, session):
     session.http = SimpleNamespace(cookies={"PHPSESSID": "fixture-nonadmin"})
     monkeypatch.setattr(force_browse, "open_access_control_session",
-        lambda *args: (session, "gordonb", "initial-session-fingerprint", None))
+        lambda *args: (session, "gordonb", session_fingerprint(session), None))
 
 def test_probe_no_accessible_pages(base_state, monkeypatch):
     """When all pages redirect or 403, score 0."""
@@ -49,9 +50,15 @@ def test_probe_no_accessible_pages(base_state, monkeypatch):
 def test_visible_content_without_permission_control_is_probe_only(base_state, monkeypatch):
     """Page visibility alone must not confirm unauthorized access."""
     mock_session = _make_mock_session()
+    authbypass_calls = 0
 
     def mock_get(path, **kwargs):
-        """Supports regression tests for test ac force browse agent."""
+        nonlocal authbypass_calls
+        if "authbypass" in path:
+            authbypass_calls += 1
+            if authbypass_calls == 1:
+                return _make_response(200, "This page should only be accessible by the admin user")
+            return _make_response(403, "Forbidden")
         if "setup" in path or "view_source" in path:
             return _make_response(200, "Database Setup<br>source code visible")
         return _make_response(200, "DVWA Security Level")

@@ -10,7 +10,8 @@ from agents.sqli.sqli_boolean_blind_agent import sqli_boolean_blind_agent
 from agents.sqli.sqli_error_agent import sqli_error_agent
 from agents.sqli.sqli_time_blind_agent import sqli_time_blind_agent
 from agents.sqli.sqli_union_agent import sqli_union_agent
-from core.state import new_default_state
+from core.payload_policy import PAYLOAD_POLICY_VERSION
+from tests.support import ready_state
 from foundation.payload_library import PayloadLibrary
 
 def _make_response(text: str, status_code: int = 200) -> MagicMock:
@@ -26,12 +27,34 @@ def _make_session() -> MagicMock:
     return session
 
 def _make_state(method: str, security_level: str, candidates: list[dict]) -> dict:
-    state = new_default_state()
+    """Supply a level-matched receipt, validated exploit rows and frozen controls."""
+    visit_id = f"{method}:visit:1"
+    prepared: list[dict] = []
+    validations: list[dict] = []
+    for candidate in candidates:
+        row = dict(candidate)
+        row.setdefault("origin_kind", "static_seed")
+        row["visit_id"] = visit_id
+        row["policy_version"] = PAYLOAD_POLICY_VERSION
+        prepared.append(row)
+        if str(row.get("stage")) in {"exploit", "bypass"} and row.get("candidate_id"):
+            validations.append({
+                "candidate_id": row["candidate_id"], "valid": True, "reason": "ok",
+                "method": method, "visit_id": visit_id,
+            })
+    state = ready_state(method, level=security_level)
     state.update({
         "target_url": "http://localhost/dvwa",
         "security_level": security_level,
-        "payload_candidates": {method: candidates},
+        "selected_visit_id": visit_id,
+        "payload_candidates": {method: [row for row in prepared if row.get("stage") in {"exploit", "bypass"}]},
     })
+    if validations:
+        state["payload_validation_results"] = {method: validations}
+        state["active_payload_candidates"] = {method: {
+            "visit_id": visit_id, "status": "validated",
+            "candidate_ids": [row["candidate_id"] for row in validations],
+        }}
     return state
 
 def test_union_medium_bypass_confirms_with_limit_variant():

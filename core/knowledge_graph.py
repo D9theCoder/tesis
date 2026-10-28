@@ -508,12 +508,18 @@ class AttackKnowledgeGraph:
                 )
 
     def get_viable_methods(self, surface: str, observations: dict) -> list[str]:
-        """Return method nodes for a surface whose preconditions are satisfied."""
+        """Return methods whose prerequisites are currently proved true.
+
+        Accepts the tri-state ``precondition_status`` view (``"true"``) and the
+        legacy boolean view. Unknown, false, and missing evidence are never
+        treated as satisfied.
+        """
         methods = METHODS_BY_SURFACE.get(surface, [])
         viable = []
         for method in methods:
             preconditions = self.METHOD_PRECONDITIONS.get(method, [])
-            if all(observations.get(p) is True for p in preconditions):
+            if all(observations.get(p) is True or observations.get(p) == "true"
+                   for p in preconditions):
                 viable.append(method)
         return viable
 

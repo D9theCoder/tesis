@@ -19,6 +19,7 @@ from foundation.session_manager import (
     open_verified_principal_session,
     session_fingerprint,
 )
+from foundation.http_client import http_accounted
 from foundation.verifier import fixture_attestation_valid
 
 
@@ -307,6 +308,7 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
             session.close()
 
 
+@http_accounted(phase="verification", role="independent_control")
 def collect_permission_oracles(artifact: dict, raw_state: dict) -> dict:
     """Add read-only, exact-resource authorization controls to a copied artifact."""
     existing_sources = artifact["config"].get("scoring_oracles", [])

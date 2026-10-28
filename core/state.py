@@ -41,6 +41,11 @@ def _replace_score_entries(a: dict, b: dict) -> dict:
     return {**a, **b}
 
 
+def _replace_value(a, b):
+    """Reducer for whole receipts/receipts derived from append-only evidence."""
+    return b
+
+
 SCORING_RUBRIC_VERSION = "scoring.v2"
 
 
@@ -70,21 +75,27 @@ def _merge_tried_payloads(a: dict[str, list[str]], b: dict[str, list[str]]) -> d
 def _merge_payload_maps(a: dict[str, list[dict]], b: dict[str, list[dict]]) -> dict[str, list[dict]]:
     merged = {k: list(v) for k, v in a.items()}
     for key, rows in b.items():
+        def identity(item: dict) -> tuple[str, str] | None:
+            candidate_id = item.get("candidate_id")
+            if candidate_id is None:
+                return None
+            return (str(item.get("visit_id") or ""), str(candidate_id))
+
         existing_ids = {
-            str(item.get("candidate_id"))
+            identity(item)
             for item in merged.get(key, [])
-            if isinstance(item, dict) and item.get("candidate_id") is not None
+            if isinstance(item, dict) and identity(item) is not None
         }
         merged.setdefault(key, [])
         for item in rows:
             if not isinstance(item, dict):
                 continue
-            candidate_id = item.get("candidate_id")
-            if candidate_id is not None and str(candidate_id) in existing_ids:
+            row_identity = identity(item)
+            if row_identity is not None and row_identity in existing_ids:
                 continue
             merged[key].append(dict(item))
-            if candidate_id is not None:
-                existing_ids.add(str(candidate_id))
+            if row_identity is not None:
+                existing_ids.add(row_identity)
     return merged
 
 
@@ -93,6 +104,22 @@ def _merge_nested_dicts(a: dict[str, dict], b: dict[str, dict]) -> dict[str, dic
     for key, value in b.items():
         if isinstance(value, dict):
             merged[key] = {**merged.get(key, {}), **value}
+    return merged
+
+
+def _merge_quarantined_visits(a: list[dict], b: list[dict]) -> list[dict]:
+    """Append quarantine rows but let an evidenced restoration replace a visit."""
+    merged = [dict(row) for row in a if isinstance(row, dict)]
+    index = {str(row.get("visit_id")): pos for pos, row in enumerate(merged)}
+    for row in b:
+        if not isinstance(row, dict):
+            continue
+        visit = str(row.get("visit_id"))
+        if visit in index:
+            merged[index[visit]] = dict(row)
+        else:
+            index[visit] = len(merged)
+            merged.append(dict(row))
     return merged
 
 
@@ -120,6 +147,9 @@ StatusReasonCode = Literal[
     "RESUME_REFUSED", "ARTIFACT_WRITE_FAILURE", "ARTIFACT_PROCESSING_FAILURE",
     "RUNTIME_FAILURE", "CANCELLED", "CHILD_EXECUTION_FAILED", "CHILD_EXECUTION_UNKNOWN", "CHILD_OUTCOMES",
     "SESSION_LOGIN_FAILED", "METHOD_EXECUTION_FAILURE",
+    "READINESS_FAILED", "READINESS_UNKNOWN", "PRECONDITION_UNMET",
+    "CONTROL_CONTAMINATION", "TARGET_METHOD_INFEASIBLE", "CHAIN_INFEASIBLE",
+    "SELECTION_REJECTED", "NO_SAFE_DETECTION_CONTROL",
 ]
 
 
@@ -142,6 +172,8 @@ class ExploitationState(TypedDict):
     llm_provider: str
     current_surface: str  # "sqli" | "access_control" | "brute_force"
     payload_mode: str  # "static_only" | "hybrid" | "llm_mutation_only"
+    payload_policy_basis: NotRequired[str]  # "live" | explicit historical reader
+    recorded_payload_policy: NotRequired[dict]  # frozen policy/template-registry snapshot
     experiment_condition: str  # "linear_hybrid" | "akg_guided_hybrid"
     target_method: str | None
     repeat_index: int
@@ -161,7 +193,26 @@ class ExploitationState(TypedDict):
     # Discovered attack surface
     endpoints: list[dict]
     input_vectors: Annotated[list[dict], add]
-    observations: Annotated[dict[str, bool], _merge_dicts]  # precondition signals
+    # Legacy supported view: positive facts only, never downgraded. The
+    # authoritative current status is ``precondition_status`` (true|false|unknown).
+    # Derived current view: a later measured negative replaces an older true.
+    # Immutable history lives in ``observation_facts`` only.
+    observations: Annotated[dict[str, bool], _replace_value]  # current precondition view
+    method_principals: Annotated[dict[str, str], _replace_score_entries]
+    method_session_fingerprints: Annotated[dict[str, str], _replace_score_entries]
+    fixture_restoration_evidence: NotRequired[dict | None]
+    policy_epoch: NotRequired[dict]
+    http_request_counters: NotRequired[dict | None]
+    observation_facts: Annotated[list[dict], add]
+    precondition_status: dict[str, str]
+    readiness: NotRequired[dict]
+    control_policy_version: NotRequired[str | None]
+    control_events: Annotated[list[dict], add]
+    quarantined_visits: Annotated[list[dict], _merge_quarantined_visits]
+    selection_rejections: Annotated[list[dict], add]
+    candidate_lifecycle: Annotated[list[dict], add]
+    model_call_requirements: Annotated[list[dict], add]
+    chain_assessment: NotRequired[dict | None]
 
     # Exploitation progress (accumulate)
     confirmed_vulns: Annotated[list[str], add]  # AKG node IDs confirmed
@@ -267,6 +318,8 @@ def _default_state_template() -> dict[str, Any]:
         "llm_provider": "gemini",
         "current_surface": "sqli",
         "payload_mode": "static_only",
+        "payload_policy_basis": "live",
+        "recorded_payload_policy": {},
         "experiment_condition": "linear_hybrid",
         "target_method": None,
         "repeat_index": 0,
@@ -285,6 +338,21 @@ def _default_state_template() -> dict[str, Any]:
         "endpoints": [],
         "input_vectors": [],
         "observations": {},
+        "method_principals": {},
+        "method_session_fingerprints": {},
+        "fixture_restoration_evidence": None,
+        "policy_epoch": {},
+        "http_request_counters": None,
+        "observation_facts": [],
+        "precondition_status": {},
+        "readiness": None,
+        "control_policy_version": None,
+        "control_events": [],
+        "quarantined_visits": [],
+        "selection_rejections": [],
+        "candidate_lifecycle": [],
+        "model_call_requirements": [],
+        "chain_assessment": None,
         "confirmed_vulns": [],
         "achieved_outcomes": [],
         "found_credentials": [],
@@ -395,11 +463,28 @@ PERSISTENT_STATE_FIELDS = frozenset({
     "llm_provider",
     "current_surface",
     "payload_mode",
+    "payload_policy_basis",
+    "recorded_payload_policy",
     "experiment_condition",
     "target_method",
     "endpoints",
     "input_vectors",
     "observations",
+    "method_principals",
+    "method_session_fingerprints",
+    "fixture_restoration_evidence",
+    "policy_epoch",
+    "http_request_counters",
+    "observation_facts",
+    "precondition_status",
+    "readiness",
+    "control_policy_version",
+    "control_events",
+    "quarantined_visits",
+    "selection_rejections",
+    "candidate_lifecycle",
+    "model_call_requirements",
+    "chain_assessment",
     "confirmed_vulns",
     "achieved_outcomes",
     "found_credentials",
@@ -513,8 +598,10 @@ SECURITY_LEVELS: list[str] = ["low", "medium", "high"]
 # LLM providers
 LLM_PROVIDERS: list[str] = ["gemini", "openai", "claude", "openai_compatible"]
 
-# Payload experiment modes
-PAYLOAD_MODES: list[str] = ["static_only", "hybrid", "llm_mutation_only"]
+# Payload experiment modes (single registry owned by core.payload_policy)
+from core.payload_policy import PAYLOAD_MODES as _POLICY_PAYLOAD_MODES  # noqa: E402
+
+PAYLOAD_MODES: list[str] = list(_POLICY_PAYLOAD_MODES)
 
 # Backward-compatible module names (deprecated; use ALL_METHOD_AGENTS for new code)
 MODULE_NAMES: list[str] = [

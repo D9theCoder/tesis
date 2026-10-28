@@ -21,10 +21,8 @@ from bs4 import BeautifulSoup
 
 from core.graph_builder import RUNTIME_AGENT_NODE_NAMES, build_framework
 from core.knowledge_graph import AKGValidationError, AttackKnowledgeGraph
-from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS, SURFACES, new_default_state
+from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS, SURFACES
 from foundation.http_client import ContainmentError, HTTPClient
-from foundation.payload_library import PayloadLibrary
-from foundation.payload_validator import validate_payload_candidates
 from llm.provider import SUPPORTED_PROVIDERS, supports_reasoning_effort
 from tesis.model_config import (
     EngagementConfig,
@@ -137,7 +135,7 @@ def _check_coverage() -> DoctorCheck:
         "bf_spray",
     }
     expected_levels = {"low", "medium", "high"}
-    expected_modes = {"static_only", "hybrid", "llm_mutation_only"}
+    expected_modes = set(PAYLOAD_MODES)
     expected_conditions = set(_EXPERIMENT_CONDITIONS)
     methods = {method for values in METHODS_BY_SURFACE.values() for method in values}
     actual = {
@@ -229,44 +227,103 @@ def _check_graph(config: EngagementConfig) -> DoctorCheck:
     )
 
 
-def _check_static_seeds() -> DoctorCheck:
-    library = PayloadLibrary()
-    checked = 0
-    candidates_checked = 0
-    failures: list[str] = []
-    methods = [method for surface in SURFACES for method in METHODS_BY_SURFACE[surface]]
-    for method in methods:
-        for level in SECURITY_LEVELS:
-            for payload_mode in sorted(PAYLOAD_MODES):
-                seeds = library.load_seed_candidates(method, level)
-                result = validate_payload_candidates({
-                    **new_default_state(),
-                    "selected_method": method,
-                    "security_level": level,
-                    "payload_mode": payload_mode,
-                    "payload_candidates": {method: seeds},
-                })
-                validation_rows = result.get("payload_validation_results", {}).get(method, [])
-                accepted = result.get("payload_candidates", {}).get(method, [])
-                rejected = [row for row in validation_rows if not row.get("valid", False)]
-                checked += 1
-                candidates_checked += len(validation_rows)
-                if not accepted or rejected or len(validation_rows) != len(seeds):
-                    reason = rejected or "missing accepted candidates or validation evidence"
-                    failures.append(f"{method}/{level}/{payload_mode}: {reason}")
-    details = f"validated_coordinates={checked}; validation_rows={candidates_checked}"
-    if failures:
+def _check_static_seeds(config: EngagementConfig) -> DoctorCheck:
+    """Check the payload contracts of the configured coordinates only."""
+    from tesis.offline_contracts import check_payload_contracts
+
+    surfaces = list(config.surfaces) if config.matrix else [config.surface]
+    levels = list(config.levels) if config.matrix else [config.level]
+    modes = list(config.payload_modes) if config.matrix else [config.payload_mode]
+    methods = [config.target_method] if config.target_method else [
+        method for surface in surfaces for method in METHODS_BY_SURFACE.get(surface, [])
+    ]
+    contracts = check_payload_contracts(
+        methods, levels, modes, candidate_budget=config.candidate_budget,
+    )
+    limitations = contracts["limitations"]
+    details = (
+        f"scope={'matrix' if config.matrix else 'single'}; "
+        f"surfaces={','.join(surfaces)}; levels={','.join(levels)}; modes={','.join(modes)}; "
+        f"validated_coordinates={contracts['checked_coordinates']}; "
+        f"issues={len(contracts['issues'])}; "
+        f"explicit_template_limitations={len(limitations)}"
+    )
+    if limitations:
+        samples = "; ".join(
+            f"{row['method']}/{row['security_level']}: {row['code']}"
+            for row in limitations[:6]
+        )
+        details += f"; limitations={samples}"
+    if contracts["issues"]:
+        failures = "; ".join(
+            f"{row['method'] or 'prompt'}/{row['security_level'] or '-'}/"
+            f"{row['payload_mode'] or '-'}: {row['code']}: {row['detail']}"
+            for row in contracts["issues"][:10]
+        )
         return _failed(
-            "payload.static_seeds",
+            "payload.contracts",
             "payloads",
-            f"Static seed validation failed in {len(failures)} coordinate(s)",
-            f"{details}; failures={' | '.join(failures)}",
-            "Repair the handwritten seed metadata or its AKG payload profile; do not bypass validation.",
+            f"Payload preflight failed in {len(contracts['issues'])} check(s)",
+            f"{details}; failures={failures}",
+            "Repair seed metadata, the template registry, or the payload prompt/schema manifest; "
+            "never bypass validation with a static fallback in a strict mode.",
         )
     return _passed(
-        "payload.static_seeds",
+        "payload.contracts",
         "payloads",
-        "Static seeds were accepted at every method/level/mode coordinate",
+        "Every payload mode satisfies its own offline contract",
+        details,
+    )
+
+
+def _check_template_registry(config: EngagementConfig) -> DoctorCheck:
+    """Report neutral-template coverage; gate it only when Template is selected."""
+    from foundation.payload_templates import template_coverage
+    from llm.prompts.manifests import TEMPLATE_PROMPT_ID, PROMPT_MANIFESTS
+
+    modes = list(config.payload_modes) if config.matrix else [config.payload_mode]
+    rows = template_coverage()
+    supported = sum(bool(row.get("supported")) for row in rows)
+    limited = sum(row.get("feasibility") == "limited" for row in rows)
+    unsupported = [row for row in rows if not row.get("supported")]
+    manifest = PROMPT_MANIFESTS.get(TEMPLATE_PROMPT_ID)
+    details = (
+        f"selected={'yes' if 'llm_template' in modes else 'no'}; "
+        f"coordinates={len(rows)}; supported={supported}; limited={limited}; "
+        f"explicitly_unsupported={len(unsupported)}; "
+        f"prompt_manifest={'registered' if isinstance(manifest, dict) else 'missing'}"
+    )
+    if "llm_template" not in modes:
+        return _passed(
+            "payload.templates",
+            "payloads",
+            "Template registry is not gated for this configuration",
+            details + "; selected modes do not include llm_template",
+        )
+    if unsupported:
+        details += "; unsupported=" + ", ".join(
+            f"{row['method']}/{row['security_level']}" for row in unsupported[:8]
+        )
+    if not isinstance(manifest, dict):
+        return _failed(
+            "payload.templates",
+            "payloads",
+            "Template prompt manifest is not registered",
+            details,
+            "Register the template prompt/schema in llm/prompts/manifests.py.",
+        )
+    if not supported:
+        return _failed(
+            "payload.templates",
+            "payloads",
+            "No neutral template is usable",
+            details,
+            "Register at least one supported neutral template before a Template run.",
+        )
+    return _passed(
+        "payload.templates",
+        "payloads",
+        "Neutral template coverage and prompt manifest are explicit",
         details,
     )
 
@@ -996,10 +1053,16 @@ def run_doctor(config: EngagementConfig, *, live: bool = False) -> dict[str, Any
             lambda: _check_graph(config),
         ),
         _safe_check(
-            "payload.static_seeds",
+            "payload.contracts",
             "payloads",
-            "Repair static seed metadata or AKG payload profiles.",
-            _check_static_seeds,
+            "Repair seed metadata, template coverage, or payload prompt/schema registration.",
+            lambda: _check_static_seeds(config),
+        ),
+        _safe_check(
+            "payload.templates",
+            "payloads",
+            "Register a supported neutral template family and its prompt/schema manifest.",
+            lambda: _check_template_registry(config),
         ),
         _safe_check(
             "containment.http",

@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 from agents.brute_force.bf_dictionary_agent import _parse_credential
 from evaluation.scoring_evidence import evidence_hash, validate_sources
 from foundation.session_manager import DVWASession, session_fingerprint
+from foundation.http_client import http_accounted
 from foundation.verifier import credential_rejection_observed, fixture_attestation_valid
 
 
@@ -98,6 +99,7 @@ def _controls(target, username, password, initial_fingerprint):
             session.close()
 
 
+@http_accounted(phase="verification", role="independent_control")
 def collect_session_oracles(artifact, raw_state):
     """Enrich a copy using only validated, executed, candidate-owned receipts.
 

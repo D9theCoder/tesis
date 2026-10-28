@@ -13,7 +13,9 @@ import inspect
 import json
 from typing import Any, TypedDict
 
-MANIFEST_VERSION = "2.0.0"
+from core.payload_policy import TEMPLATE_PROMPT_ID
+
+MANIFEST_VERSION = "2.1.0"
 VALIDATOR_VERSION = "validator.v1"
 EVAL_SUITE_VERSION = "prompt-eval.v1"
 
@@ -81,6 +83,19 @@ class PayloadPromptInput(TypedDict, total=False):
     candidate_budget: int
 
 
+class TemplatePromptInput(TypedDict, total=False):
+    """Typed builder input for neutral-template payload construction.
+
+    The closed allowlist is the builder signature itself: there is deliberately
+    no field for seeds, credentials, control results, profiles, history, or
+    prior successful payloads.
+    """
+
+    template: dict[str, Any]
+    observations: dict[str, Any]
+    candidate_budget: int
+
+
 def _require(mapping: Mapping_like, key: str) -> Any:
     try:
         return mapping[key]
@@ -132,6 +147,19 @@ def build_payload_generation_prompt_typed(inputs: PayloadPromptInput) -> str:
         observations=dict(inputs.get("observations", {})),
         static_seeds=list(_require(inputs, "static_seeds")),
         payload_profile=dict(_require(inputs, "payload_profile")),
+        candidate_budget=_bounded_int(inputs.get("candidate_budget", 1)),
+    )
+
+
+def build_template_generation_prompt_typed(inputs: TemplatePromptInput) -> str:
+    """Typed, bounded wrapper around :func:`build_template_generation_prompt`."""
+    from llm.prompts.payload_generation_prompt import (
+        build_template_generation_prompt,
+    )
+
+    return build_template_generation_prompt(
+        template=dict(_require(inputs, "template")),
+        observations=dict(inputs.get("observations", {})),
         candidate_budget=_bounded_int(inputs.get("candidate_budget", 1)),
     )
 
@@ -226,12 +254,41 @@ def _payload_parts() -> dict[str, Any]:
     }
 
 
+def _template_parts() -> dict[str, Any]:
+    from foundation.payload_generator import (
+        _TEMPLATE_SCHEMA,
+        _TEMPLATE_SYSTEM_MESSAGE,
+        _validate_template_payload,
+    )
+    from foundation.payload_templates import load_template
+    from llm.prompts.payload_generation_prompt import (
+        build_template_generation_prompt,
+    )
+    from llm.runtime import PAYLOAD_TEMPLATE_SCHEMA_VERSION
+
+    exemplar = build_template_generation_prompt(
+        template=load_template("sqli_union", "low"),
+        observations={"authenticated_crawl": True},
+        candidate_budget=1,
+    )
+    return {
+        "builder": build_template_generation_prompt,
+        "system_message": _TEMPLATE_SYSTEM_MESSAGE,
+        "instruction_prefix": _instruction_prefix(exemplar),
+        "output_schema": _TEMPLATE_SCHEMA,
+        "output_schema_version": PAYLOAD_TEMPLATE_SCHEMA_VERSION,
+        "validator_source": inspect.getsource(_validate_template_payload),
+    }
+
+
 ORCHESTRATOR_MANIFEST: dict[str, Any] = _manifest(ORCHESTRATOR_PROMPT_ID, _orchestrator_parts())
 PAYLOAD_MANIFEST: dict[str, Any] = _manifest(PAYLOAD_PROMPT_ID, _payload_parts())
+TEMPLATE_MANIFEST: dict[str, Any] = _manifest(TEMPLATE_PROMPT_ID, _template_parts())
 
 PROMPT_MANIFESTS: dict[str, dict[str, Any]] = {
     ORCHESTRATOR_PROMPT_ID: ORCHESTRATOR_MANIFEST,
     PAYLOAD_PROMPT_ID: PAYLOAD_MANIFEST,
+    TEMPLATE_PROMPT_ID: TEMPLATE_MANIFEST,
 }
 
 
@@ -243,9 +300,13 @@ __all__ = [
     "PAYLOAD_MANIFEST",
     "PAYLOAD_PROMPT_ID",
     "PROMPT_MANIFESTS",
+    "TEMPLATE_MANIFEST",
+    "TEMPLATE_PROMPT_ID",
     "VALIDATOR_VERSION",
     "OrchestratorPromptInput",
     "PayloadPromptInput",
+    "TemplatePromptInput",
     "build_orchestrator_prompt_typed",
     "build_payload_generation_prompt_typed",
+    "build_template_generation_prompt_typed",
 ]

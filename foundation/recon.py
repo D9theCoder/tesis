@@ -20,8 +20,8 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from core.state import ExploitationState, SECURITY_LEVELS
-from foundation.http_client import ContainmentError, TransportError, RequestTimeoutError
-from foundation.session_manager import DVWASession
+from foundation.http_client import ContainmentError, TransportError, RequestTimeoutError, request_scope
+from foundation.session_manager import DVWASession, session_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -186,8 +186,7 @@ def probe_brute_force_destination(state: dict) -> dict:
            and event.get("payload", {}).get("method") == method
            for event in state.get("telemetry_events", [])):
         return {}
-    observations: dict[str, bool] = {}
-    events: list[dict] = []
+    update: dict[str, Any] = {}
     containment_events: list[dict] = []
     session = None
     reason = "missing_target_url"
@@ -196,19 +195,23 @@ def probe_brute_force_destination(state: dict) -> dict:
             session = DVWASession(state["target_url"])
             reason = "session_login_failed"
             if session.login():
-                from agents.brute_force.bf_dictionary_agent import _probe_preconditions
-                from foundation.payload_library import PayloadLibrary
-
                 level = state.get("security_level", "low")
                 session.set_security_level(level)
-                probes = PayloadLibrary().get(method, level).probe[:2]
-                _, _, observations, probe_events = _probe_preconditions(
-                    session, probes, set(), security_level=level,
-                )
-                events = [{**event, "node": "chaining_router", "event": "recon.destination.probe",
-                    "payload": {**event.get("payload", {}), "method": method}}
-                    for event in probe_events]
-                reason = ("preconditions_measured" if "no_rate_limit" in observations
+                measured, quarantine = _probe_with_catalog_controls(
+                    state, method, session, level,
+                    principal_id=getattr(session, "_username", None),
+                    phase="destination_rate_probe",
+                    snapshot_key="destination_rate_probe:bf_dictionary")
+                _merge_control_update(update, measured)
+                if quarantine:
+                    from foundation.control_catalog import quarantine_update
+                    _merge_control_update(update, quarantine_update(
+                        state, method=method, visit_id=None,
+                        control_id="bf_dictionary:destination:control",
+                        control_class="detection", reason=quarantine,
+                        detail="destination rate control exceeded its evidence role"))
+                status = (update.get("precondition_status") or {}).get("no_rate_limit")
+                reason = ("preconditions_measured" if status in {"true", "false"}
                           else "probe_evidence_unavailable")
     except ContainmentError as exc:
         _append_containment_event(containment_events, exc)
@@ -223,10 +226,13 @@ def probe_brute_force_destination(state: dict) -> dict:
             except (RuntimeError, OSError) as exc:
                 logger.warning("destination recon session close failed: %s", exc)
             _collect_client_containment_events(session, containment_events)
-    events.append({"node": "chaining_router", "event": "recon.destination.completed",
-        "payload": {"method": method, "reason": reason, "observations": observations}})
-    return {"observations": observations, "telemetry_events": events,
-        "containment_events": containment_events}
+    completed = {"node": "chaining_router", "event": "recon.destination.completed",
+        "payload": {"method": method, "reason": reason,
+                    "observations": update.get("observations", {})}}
+    update["telemetry_events"] = [*update.get("telemetry_events", []), completed]
+    update["containment_events"] = [*update.get("containment_events", []), *containment_events]
+    update.setdefault("observations", {})
+    return update
 
 
 def probe_access_control_destination(state: dict, method: str, source_ids: list[str]) -> dict:
@@ -239,34 +245,30 @@ def probe_access_control_destination(state: dict, method: str, source_ids: list[
            for event in state.get("telemetry_events", [])):
         return {}
     from agents.access_control.session import open_access_control_session
-    from agents.access_control.ac_idor_agent import _probe_preconditions as probe_idor
-    from agents.access_control.ac_force_browse_agent import _probe_preconditions as probe_force_browse
-    from core.knowledge_graph import get_attack_knowledge_graph
-    from foundation.payload_library import PayloadLibrary
-    from foundation.payload_validator import validate_candidate
 
-    observations, events, containment_events = {}, [], []
+    update: dict[str, Any] = {}
+    containment_events: list[dict] = []
     session = None
     reason = "probe_evidence_unavailable"
     try:
         level = state.get("security_level", "low")
-        controls = [candidate for candidate in PayloadLibrary().load_seed_candidates(method, level)
-                    if candidate.get("stage") == "probe"]
-        profile = get_attack_knowledge_graph().get_payload_profile(method)
-        if controls and all(validate_candidate(candidate, method, profile).get("valid") is True for candidate in controls):
-            probe_state = {**state, "active_chain_route": {"source": "authenticated_session",
-                "target_agent": method, "source_evidence_ids": source_ids}}
-            session, principal, initial, _ = open_access_control_session(probe_state, method, level)
-            session._principal_id, session._initial_session_fingerprint = principal, initial
-            probe = probe_idor if method == "ac_idor" else probe_force_browse
-            _, _, observations, measured = probe(session, [c["payload_or_logic"] for c in controls], set())
-            events = [{**event, "node": "chaining_router", "event": "recon.destination.probe",
-                "payload": {**event.get("payload", {}), "method": method, "source_evidence_ids": source_ids}}
-                for event in measured]
-            if any(event.get("payload", {}).get("status_code") in (200, 403) for event in measured):
-                reason = "preconditions_measured"
-            else:
-                observations = {}
+        probe_state = {**state, "active_chain_route": {"source": "authenticated_session",
+            "target_agent": method, "source_evidence_ids": source_ids}}
+        session, principal, initial, _ = open_access_control_session(probe_state, method, level)
+        session._principal_id, session._initial_session_fingerprint = principal, initial
+        measured, quarantine = _probe_with_catalog_controls(
+            state, method, session, level, principal_id=principal,
+            phase="destination_probe", snapshot_key=f"destination_probe:{method}")
+        _merge_control_update(update, measured)
+        if quarantine:
+            from foundation.control_catalog import quarantine_update
+            _merge_control_update(update, quarantine_update(
+                state, method=method, visit_id=None,
+                control_id=f"{method}:destination:control", control_class="detection",
+                reason=quarantine, detail="destination control exceeded its evidence role",
+                snapshot=update.get("probe_controls", {}).get(f"destination_probe:{method}")))
+        if update.get("control_events"):
+            reason = "preconditions_measured"
     except ContainmentError as exc:
         _append_containment_event(containment_events, exc)
         reason = "containment_violation"
@@ -281,10 +283,181 @@ def probe_access_control_destination(state: dict, method: str, source_ids: list[
                 logger.warning("destination recon session close failed: %s", type(exc).__name__)
             finally:
                 _collect_client_containment_events(session, containment_events)
-    events.append({"node": "chaining_router", "event": "recon.destination.completed",
+    completed = {"node": "chaining_router", "event": "recon.destination.completed",
         "payload": {"method": method, "source_evidence_ids": source_ids,
-            "reason": reason, "observations": observations}})
-    return {"observations": observations, "telemetry_events": events, "containment_events": containment_events}
+            "reason": reason, "observations": update.get("observations", {})}}
+    update["telemetry_events"] = [*update.get("telemetry_events", []), completed]
+    update["containment_events"] = [*update.get("containment_events", []), *containment_events]
+    update.setdefault("observations", {})
+    return update
+
+
+def _merge_control_update(destination: dict, source: dict) -> None:
+    """Merge one control measurement update without losing append-only rows."""
+    for key, value in source.items():
+        if key in {"observation_facts", "control_events", "quarantined_visits", "telemetry_events",
+                   "containment_events"}:
+            destination.setdefault(key, []).extend(value or [])
+        elif key in {"probe_controls", "method_principals", "method_session_fingerprints"}:
+            destination.setdefault(key, {}).update(value or {})
+        elif key == "precondition_status":
+            destination[key] = {**destination.get(key, {}), **(value or {})}
+        elif key == "observations":
+            destination[key] = {**destination.get(key, {}), **(value or {})}
+        elif key not in destination:
+            destination[key] = value
+
+
+def _invoke_method_probe(method: str, session: Any, payloads: list[str], level: str
+                         ) -> tuple[dict[str, bool], list[dict]]:
+    """Run the canonical method probe helper with catalog-controlled payloads."""
+    import importlib
+
+    if method.startswith("sqli_"):
+        module = importlib.import_module(f"agents.sqli.{method}_agent")
+        result = module._probe_preconditions(session, payloads, set(), level)
+        return (result[2], result[3]) if len(result) == 4 else (result[2], result[3])
+    if method.startswith("bf_"):
+        module = importlib.import_module(f"agents.brute_force.{method}_agent")
+        token_fn = getattr(module, "_module_user_token", None)
+        token = token_fn(session) if level == "high" and callable(token_fn) else None
+        _, _, observations, events = module._probe_preconditions(
+            session, payloads, set(), cached_precondition=None,
+            user_token=token, security_level=level)
+        return observations, events
+    module = importlib.import_module(f"agents.access_control.{method}_agent")
+    _, _, observations, events = module._probe_preconditions(session, payloads, set())
+    return observations, events
+
+
+def _probe_with_catalog_controls(
+    state: dict,
+    method: str,
+    session: Any,
+    level: str,
+    *,
+    principal_id: str | None,
+    phase: str,
+    snapshot_key: str,
+) -> tuple[dict, str | None]:
+    """Freeze, validate, resolve, execute, and record one control measurement."""
+    from agents.state_utils import ControlPayload, probe_outcome_update
+    from foundation.control_catalog import (
+        freeze_detection_controls,
+        resolve_catalog_controls,
+        validate_detection_controls,
+    )
+
+    visit_id = f"{method}:{phase}:{state.get('execution_id') or state.get('run_id') or 'recon'}"
+    snapshot = freeze_detection_controls(state, method, visit_id, phase=phase)
+    if not snapshot.get("candidates"):
+        return {}, None
+    issues = validate_detection_controls(state, method, snapshot)
+    if issues and any(issue.get("valid") is not True for issue in issues):
+        return {}, None
+    resolved, _skipped = resolve_catalog_controls(snapshot, principal_id)
+    payloads: list[str] = [
+        ControlPayload(str(row["resolved_payload"]), str(row["control_id"]))
+        for row in resolved
+    ]
+    if not payloads:
+        return {}, None
+    endpoint_fragment = {"ac_idor": "/vulnerabilities/authbypass/get_user_data.php",
+                         "ac_vertical_escalation": "/vulnerabilities/authbypass/get_user_data.php",
+                         "ac_force_browse": "/vulnerabilities/authbypass/",
+                         "bf_dictionary": "/vulnerabilities/brute/",
+                         "bf_spray": "/vulnerabilities/brute/"}.get(method, "/vulnerabilities/sqli/")
+    if hasattr(session, "_principal_id") or str(phase).startswith(("method_probe", "destination", "recon")):
+        try:
+            session._principal_id = principal_id
+            session._initial_session_fingerprint = None
+            session._consumed_source_evidence_id = None
+        except (AttributeError, TypeError):
+            pass
+    with request_scope(role="detection_control", method=method):
+        observations, events = _invoke_method_probe(method, session, payloads, level)
+    from foundation.session_manager import session_fingerprint
+    update, quarantine = probe_outcome_update(
+        state, method, observations, events, principal_id=principal_id,
+        session_fingerprint=session_fingerprint(session),
+        snapshot=snapshot, snapshot_key=snapshot_key)
+    update["telemetry_events"] = [
+        {**event, "node": "recon", "event": "recon.control.probe",
+         "payload": {**event.get("payload", {}), "method": method, "phase": phase}}
+        for event in events if isinstance(event, dict)]
+    return update, quarantine
+
+
+def _measure_recon_surface_controls(
+    state: dict,
+    session: Any,
+    level: str,
+    surface: str,
+    principal_id: str | None,
+) -> dict:
+    """Measure every surface method's declared precondition with safe controls."""
+    from core.state import METHODS_BY_SURFACE
+
+    updates: dict[str, Any] = {}
+    ac_session = None
+    ac_principal = None
+    methods = [
+        method for method in METHODS_BY_SURFACE.get(surface, [])
+        if not state.get("target_method") or method == state["target_method"]
+    ]
+    try:
+        for method in methods:
+            active_session = session
+            active_principal = principal_id
+            if surface == "access_control":
+                if ac_session is None:
+                    from foundation.session_manager import open_documented_nonadmin_session
+                    try:
+                        ac_session, ac_principal, _initial = open_documented_nonadmin_session(
+                            str(state.get("target_url") or ""), level)
+                    except (ValueError, RuntimeError, TransportError, RequestTimeoutError):
+                        continue
+                active_session, active_principal = ac_session, ac_principal
+            update, quarantine = _probe_with_catalog_controls(
+                state, method, active_session, level, principal_id=active_principal,
+                phase="method_probe", snapshot_key=f"recon:method_probe:{method}")
+            if active_principal:
+                updates.setdefault("method_principals", {})[method] = str(active_principal)
+            _merge_control_update(updates, update)
+            if quarantine:
+                from foundation.control_catalog import quarantine_update
+                _merge_control_update(updates, quarantine_update(
+                    state, method=method, visit_id=None,
+                    control_id=f"{method}:recon:control", control_class="detection",
+                    reason=quarantine, detail="recon surface control exceeded its evidence role",
+                    snapshot=update.get("probe_controls", {}).get(f"recon:method_probe:{method}")))
+    finally:
+        if ac_session is not None:
+            try:
+                ac_session.close()
+            except (RuntimeError, OSError):
+                pass
+    return updates
+
+
+def _measure_recon_force_browse(
+    state: dict,
+    session: Any,
+    level: str,
+    principal_id: str | None,
+) -> dict:
+    """Forced-target runs only need the bounded force-browse surface control."""
+    update, quarantine = _probe_with_catalog_controls(
+        state, "ac_force_browse", session, level, principal_id=principal_id,
+        phase="method_probe", snapshot_key="recon:method_probe:ac_force_browse")
+    if quarantine:
+        from foundation.control_catalog import quarantine_update
+        _merge_control_update(update, quarantine_update(
+            state, method="ac_force_browse", visit_id=None,
+            control_id="ac_force_browse:recon:control", control_class="detection",
+            reason=quarantine, detail="recon surface control exceeded its evidence role",
+            snapshot=update.get("probe_controls", {}).get("recon:method_probe:ac_force_browse")))
+    return update
 
 
 def parse_forms(
@@ -592,11 +765,17 @@ def recon(state: ExploitationState) -> dict[str, Any]:
 
     if not target_url:
         logger.error("recon: target_url is empty — cannot proceed")
+        from foundation.readiness import build_readiness
         return {
             "endpoints": [],
             "input_vectors": [],
             "security_level": requested_level,
             "next_agent": "orchestrator",
+            "readiness": build_readiness(
+                state=state, login_ok=None, requested_level=requested_level,
+                observed_level=None, endpoints=[], requested_principal=None,
+                observed_principal=None, token_present=None,
+                setup_state="target_url_missing", crawl_ok=False),
         }
 
     all_endpoints: list[dict] = []
@@ -606,38 +785,44 @@ def recon(state: ExploitationState) -> dict[str, Any]:
 
     session: DVWASession | None = None
     login_success = False
-    force_browse_endpoints_visible = False
+    login_attempted = False
+    observed_level: str | None = None
+    observed_principal: str | None = None
+    observed_session_fingerprint: str | None = None
+    principal = ""
+    surface = str(state.get("current_surface") or "sqli")
+    crawl_ok = True
+    token_present: bool | None = None
     low_priv_session_available = False
     rate_probe_observations: dict[str, bool] = {}
     rate_probe_events: list[dict] = []
+    control_updates: dict[str, Any] = {}
+    surface_probe_observations: dict[str, bool] = {}
 
     try:
         # Step 1: Create session and login
         session = DVWASession(target_url)
+        login_attempted = True
         try:
-            login_success = session.login()
+            login_success = bool(session.login())
+            observed_session_fingerprint = session_fingerprint(session)
             if not login_success:
-                logger.warning("recon: login failed — proceeding with unauthenticated crawl")
+                logger.warning("recon: login failed — readiness will block selection")
         except ContainmentError as exc:
             _append_containment_event(containment_events, exc)
             logger.error("recon: login request violated containment: %s", exc)
         except (TransportError, RequestTimeoutError) as exc:
             logger.error("recon: login request failed: %s", exc)
 
-        # Step 2: Set/detect security level
+        # Step 2: Set and verify the requested security level server-side.
         try:
             session.set_security_level(requested_level)
         except ContainmentError as exc:
             _append_containment_event(containment_events, exc)
             logger.error("recon: security-level request violated containment: %s", exc)
         except ValueError:
-            logger.warning("recon: invalid security level %r — defaulting to 'low'", requested_level)
-            session.set_security_level("low")
-            requested_level = "low"
-
-        detected_level = session.detect_security_level()
-        if detected_level and detected_level in SECURITY_LEVELS:
-            requested_level = detected_level
+            logger.warning("recon: invalid requested security level %r", requested_level)
+        observed_level = session.observed_security_level()
 
         # Step 3: Crawl DVWA navigation to find module pages
         # Also fingerprint server from response headers (AGENTS.md step 1d)
@@ -648,6 +833,8 @@ def recon(state: ExploitationState) -> dict[str, Any]:
                 session.http.base_url,
                 containment_events=containment_events,
             )
+            from foundation.session_manager import _dvwa_identity
+            observed_principal = _dvwa_identity(index_result.text)
             # Step 1d: fingerprint server technology from headers
             server_fingerprint = fingerprint_server(dict(index_result.headers))
             if server_fingerprint:
@@ -656,9 +843,11 @@ def recon(state: ExploitationState) -> dict[str, Any]:
             _append_containment_event(containment_events, exc)
             logger.error("recon: index-page request violated containment: %s", exc)
             nav_links = []
+            crawl_ok = False
         except (TransportError, RequestTimeoutError) as exc:
             logger.error("recon: failed to fetch index page: %s", exc)
             nav_links = []
+            crawl_ok = False
 
         # Step 4: Fetch each module page and parse forms
         seen_urls: set[str] = set()
@@ -696,60 +885,43 @@ def recon(state: ExploitationState) -> dict[str, Any]:
             except ContainmentError as exc:
                 _append_containment_event(containment_events, exc)
                 logger.warning("recon: request for %s violated containment: %s", module_url, exc)
+                crawl_ok = False
             except (TransportError, RequestTimeoutError) as exc:
                 logger.warning("recon: failed to fetch %s: %s", module_url, exc)
+                crawl_ok = False
 
         # Step 5: Deduplicate and sort for deterministic output
         all_endpoints = _deduplicate_endpoints(all_endpoints)
         all_vectors = _deduplicate_vectors(all_vectors)
 
-        # Step 6: Capture session-backed observations before releasing the
-        # HTTP client. Probing after ``session.close()`` raises httpx's
-        # ``RuntimeError: Cannot send a request, as the client has been closed``.
+        # Step 6: Measure preconditions with bounded catalog controls before
+        # releasing the socket. Endpoint discovery alone never proves a signal.
         principal = getattr(session, "_username", "")
         low_priv_session_available = bool(
             getattr(session, "is_logged_in", False)
             and isinstance(principal, str) and principal and principal != "admin"
         )
-        if state.get("current_surface") == "brute_force" and any(
+        surface = str(state.get("current_surface") or "sqli")
+        if surface == "brute_force" and any(
             endpoint.get("module_name") == "brute" for endpoint in all_endpoints
         ):
-            # Discovery alone says nothing about throttling. Reuse the same
-            # bounded benign credential controls as the method agents.
-            from agents.brute_force.bf_dictionary_agent import _probe_preconditions
-            from foundation.payload_library import PayloadLibrary
-
-            probe_seeds = PayloadLibrary().get("bf_dictionary", requested_level).probe
-            _, _, rate_probe_observations, rate_probe_events = _probe_preconditions(
-                session, probe_seeds, set(), security_level=requested_level,
-            )
-        try:
-            probe_resp = session.http.get("setup.php")
-            accessible_signals = (
-                "database setup",
-                "create/reset database",
-                "phpinfo()",
-                "view source",
-                "source code",
-            )
-            force_browse_endpoints_visible = bool(
-                probe_resp.status_code == 200
-                and any(
-                    signal in str(getattr(probe_resp, "text", "")).lower()
-                    for signal in accessible_signals
-                )
-            )
-        except ContainmentError as exc:
-            _append_containment_event(containment_events, exc)
-            logger.warning("recon: force-browse probe violated containment: %s", exc)
-        except (TransportError, RequestTimeoutError, RuntimeError) as exc:
-            logger.warning("recon: force-browse probe failed: %s", exc)
+            try:
+                brute_page = session.get("/vulnerabilities/brute/")
+                extractor = getattr(session, "_extract_user_token", None)
+                token = extractor(brute_page.text) if callable(extractor) else None
+                token_present = bool(token)
+            except (ContainmentError, TransportError, RequestTimeoutError, RuntimeError):
+                token_present = None
+        control_updates = _measure_recon_surface_controls(
+            state, session, requested_level, surface, observed_principal or principal)
 
     except ContainmentError as exc:
         _append_containment_event(containment_events, exc)
         logger.error("recon: unexpected containment violation during crawl: %s", exc)
+        crawl_ok = False
     except (TransportError, RequestTimeoutError, ValueError, RuntimeError) as exc:
         logger.error("recon: unexpected error during crawl: %s", exc)
+        crawl_ok = False
 
     finally:
         # Ensure session is closed if it was created
@@ -767,39 +939,74 @@ def recon(state: ExploitationState) -> dict[str, Any]:
         requested_level,
     )
 
-    # Derive observations from discovered endpoints
-    observations: dict[str, bool] = {}
-    module_names = {ep.get("module_name", "unknown") for ep in all_endpoints}
+    from foundation.control_catalog import CONTROL_POLICY_VERSION
+    from foundation.preconditions import (
+        derive_precondition_status,
+        make_observation_fact,
+        observation_update,
+    )
+    from foundation.readiness import build_readiness
 
-    # SQLi observations
-    observations["error_messages_enabled"] = "sqli" in module_names
-    observations["union_select_possible"] = "sqli" in module_names
-    # Blind-method preconditions require discovery of DVWA's dedicated blind
-    # SQLi surface. A generic SQLi form does not establish response-difference
-    # or timing evidence for either blind method.
-    observations["response_diff_detectable"] = "sqli_blind" in module_names
-    observations["response_delay_measurable"] = "sqli_blind" in module_names
-
-    # Access control observations
-    observations["object_ids_enumerable"] = "idor" in module_names
-    # Check specifically for the authbypass endpoint URL pattern
-    has_authbypass = any("/vulnerabilities/authbypass/" in str(ep.get("url", "")).lower() for ep in all_endpoints)
-    observations["role_based_access_present"] = has_authbypass
-    observations["force_browse_endpoints_visible"] = force_browse_endpoints_visible
-
-    # Brute force observations
-    observations.update(rate_probe_observations)
-    observations["low_priv_session_available"] = low_priv_session_available
-    observations["authenticated_crawl"] = login_success
-
+    readiness = build_readiness(
+        state={**dict(state), "current_surface": surface},
+        login_ok=login_success if login_attempted else None,
+        requested_level=requested_level,
+        observed_level=observed_level,
+        endpoints=all_endpoints,
+        requested_principal=principal if isinstance(principal, str) and principal else None,
+        observed_principal=observed_principal,
+        token_present=token_present,
+        setup_state="authenticated_crawl" if login_success else "unauthenticated_crawl",
+        fixture_restoration_evidence=state.get("fixture_restoration_evidence"),
+        measured_session_fingerprint=observed_session_fingerprint,
+        crawl_ok=crawl_ok,
+    )
+    new_facts = [dict(fact) for fact in control_updates.get("observation_facts", [])
+                 if isinstance(fact, dict)]
+    for key, value in (("authenticated_crawl", login_success),
+                       ("low_priv_session_available", low_priv_session_available)):
+        new_facts.append(make_observation_fact(
+            key, bool(value), source="recon_session", phase="recon",
+            fixture_id=state.get("fixture_id"), protocol_version=state.get("protocol_version"),
+            security_level=requested_level, principal_id=observed_principal,
+            session_fingerprint=observed_session_fingerprint,
+            session_scope="session",
+            detail="observed during the authenticated reconnaissance crawl"))
+    fact_bearing_state = {
+        **dict(state),
+        "security_level": requested_level,
+        "readiness": readiness,
+        "method_principals": {
+            **dict(state.get("method_principals", {}) or {}),
+            **dict(control_updates.get("method_principals", {}) or {}),
+        },
+        "method_session_fingerprints": {
+            **dict(state.get("method_session_fingerprints", {}) or {}),
+            **dict(control_updates.get("method_session_fingerprints", {}) or {}),
+        },
+    }
+    facts_update = observation_update(fact_bearing_state, new_facts)
+    derived_status = derive_precondition_status(
+        {**fact_bearing_state, "observation_facts": [
+            *list(state.get("observation_facts", []) or []), *new_facts]})
+    telemetry_events = list(control_updates.get("telemetry_events", []))
     return {
         "endpoints": all_endpoints,
         "input_vectors": all_vectors,
         "security_level": requested_level,
         "next_agent": "orchestrator",
-        "observations": observations,
+        "observations": facts_update["observations"],
+        "observation_facts": new_facts,
+        "precondition_status": derived_status,
+        "readiness": readiness,
+        "method_principals": dict(control_updates.get("method_principals", {})),
+        "method_session_fingerprints": dict(control_updates.get("method_session_fingerprints", {})),
+        "control_policy_version": CONTROL_POLICY_VERSION,
+        "control_events": list(control_updates.get("control_events", [])),
+        "probe_controls": dict(control_updates.get("probe_controls", {})),
+        "quarantined_visits": list(control_updates.get("quarantined_visits", [])),
         "containment_events": containment_events,
-        "telemetry_events": rate_probe_events,
+        "telemetry_events": telemetry_events,
     }
 
 

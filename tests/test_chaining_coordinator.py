@@ -13,9 +13,11 @@ import pytest
 from core.chaining_coordinator import chaining_router_node, evaluate_chain_route, route_after_agent
 from core.state import new_default_state
 from foundation.http_client import ContainmentError
+from tests.support import READY_RECEIPT
 
 def proved_chain_source(source):
-    return {"response_evidence": [{"evidence_id": "source-evidence", "candidate_id": "source-candidate", "visit_id": "source-visit"}],
+    return {"readiness": deepcopy(READY_RECEIPT),
+        "response_evidence": [{"evidence_id": "source-evidence", "candidate_id": "source-candidate", "visit_id": "source-visit"}],
         "verifier_history": [{"decision": "confirmed", "verifier_id": "source-verifier",
             "confirmed_vulns": ["bf_dictionary_confirmed"], "achieved_outcomes": [source],
             "evidence_refs": ["#/final_state/response_evidence/0"]}],
@@ -40,6 +42,9 @@ def test_sqli_chain_measures_missing_destination_preconditions(monkeypatch, stat
     state = fresh_sqli_chain_state()
     before = deepcopy(state)
     session = MagicMock()
+    from types import SimpleNamespace
+    session.http = SimpleNamespace(cookies={"PHPSESSID": "destination-session"})
+    session._username = "admin"
     session.login.return_value = True
     response = MagicMock(status_code=status_code, text="Incorrect", headers={}, elapsed_ms=10.0)
     session.get.return_value = response

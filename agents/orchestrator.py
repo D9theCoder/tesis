@@ -10,9 +10,16 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from core.knowledge_graph import AttackKnowledgeGraph, get_attack_knowledge_graph
 from core.state import METHODS_BY_SURFACE
-from core.run_status import terminal_status
+from core.run_status import reason as status_reason, terminal_status
 from core.workflow_policy import eligible_methods, stop_reason
-from agents.state_utils import method_selection_update
+from agents.state_utils import (
+    method_selection_update,
+    rejected_selection_update,
+    selection_opportunity,
+)
+from foundation.control_catalog import precondition_gate, quarantine_gate
+from foundation.preconditions import statuses_snapshot
+from foundation.readiness import readiness_block_update, readiness_gate
 from llm.guardrail_monitor import is_guardrail_refusal, make_guardrail_event
 from llm.prompts.orchestrator_prompt import build_orchestrator_prompt
 from llm.provider import get_llm
@@ -251,7 +258,8 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
     blocked_agents = state.get("blocked_agents", [])
     failure_agents = state.get("failure_agents", [])
     current_surface = state.get("current_surface", "sqli")
-    observations = state.get("observations", {})
+    from foundation.preconditions import derived_selector_observations
+    observations = derived_selector_observations(state)
     scores = state.get("scores", {})
     consecutive_clean = state.get("consecutive_clean_responses", 0)
 
@@ -282,14 +290,56 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "telemetry_events": [{**telemetry_base, "event": "orchestrator.stop",
                 "status": "incomplete" if budget_stop and not confirmed_vulns else "ok",
                 "payload": {"reason": "ITERATION_LIMIT" if budget_stop else stopping}}],
+            "model_call_requirements": [selection_opportunity(
+                state, method=None, visit_id=None, required=False, status="not_run",
+                reason=str(stopping), decision_source=None, scope="run")],
+        }
+
+    readiness = readiness_gate(state)
+    if readiness["decision"] == "block":
+        update = readiness_block_update(readiness)
+        update.update({
+            "viable_methods": list(state.get("viable_methods", [])),
+            "iteration_count": iteration_count,
+            "llm_skip_reason": "READINESS_NOT_READY",
+            "telemetry_events": [{**telemetry_base, "event": "orchestrator.readiness.blocked",
+                "status": "incomplete", "payload": {"status": readiness.get("status"),
+                    "code": readiness.get("code")}}],
+            "model_call_requirements": [selection_opportunity(
+                state, method=None, visit_id=None, required=False, status="blocked",
+                reason=str(readiness.get("code") or "readiness_not_ready"),
+                decision_source=None, scope="run")],
+        })
+        return update
+
+    quarantine = quarantine_gate(state)
+    if quarantine["blocked"]:
+        code = "CONTROL_CONTAMINATION"
+        detail = str(quarantine.get("reason") or "control_quarantine")
+        return {
+            "next_agent": "scorer", "selected_method": None,
+            "viable_methods": list(state.get("viable_methods", [])),
+            "iteration_count": iteration_count,
+            "task_result": "INCOMPLETE", "incomplete_reason": code,
+            "workflow_stop_reason": "control_quarantine",
+            "llm_skip_reason": "RUN_QUARANTINED",
+            "execution_status": "failed",
+            "execution_reason": status_reason(code, detail, list(quarantine.get("evidence_refs") or [])),
+            "security_outcome": "fixture_limited",
+            "security_outcome_reason": status_reason(code, detail, list(quarantine.get("evidence_refs") or [])),
+            "telemetry_events": [{**telemetry_base, "event": "orchestrator.quarantine.blocked",
+                "status": "incomplete", "payload": dict(quarantine)}],
+            "model_call_requirements": [selection_opportunity(
+                state, method=None, visit_id=None, required=False, status="blocked",
+                reason=detail, decision_source=None, scope="run")],
         }
 
     surface_methods = _canonical_surface_methods(current_surface)
     kg = get_attack_knowledge_graph()
-    viable_methods = _filter_surface_methods(
-        current_surface,
-        kg.get_viable_methods(current_surface, observations),
-    )
+    viable_methods = [
+        method for method in surface_methods
+        if all(value == "true" for value in statuses_snapshot(state, method).values())
+    ]
     experiment_condition = str(state.get("experiment_condition", "linear_hybrid"))
     selection_methods = eligible_methods(state)
 
@@ -314,12 +364,50 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                     "status": "fallback",
                     "payload": {"target_method": target_method, "surface": current_surface},
                 }],
+                "model_call_requirements": [selection_opportunity(
+                    state, method=target_method, visit_id=None, required=False,
+                    status="not_required", reason="target_out_of_surface",
+                    decision_source="forced")],
             }
+        gate = precondition_gate(state, target_method)
+        if gate.get("decision") == "reject":
+            update = rejected_selection_update(
+                state, target_method, "forced", gate, decision_origin="forced",
+                candidate_set_source="forced", considered_methods=[target_method])
+            update.update({
+                "next_agent": "scorer",
+                "llm_skip_reason": "TARGET_METHOD_INFEASIBLE",
+                "workflow_stop_reason": f"target_method_{gate.get('reason')}",
+                "viable_methods": viable_methods,
+                "iteration_count": iteration_count + 1,
+                "task_result": "INCOMPLETE",
+                "incomplete_reason": "TARGET_METHOD_INFEASIBLE",
+                "execution_status": "completed",
+                "execution_reason": status_reason(
+                    "TARGET_METHOD_INFEASIBLE",
+                    f"{target_method}: {gate.get('reason')}",
+                    list(gate.get("evidence_refs") or [])),
+                "telemetry_events": [{**telemetry_base,
+                    "event": "orchestrator.target_method.rejected", "status": "incomplete",
+                    "payload": {"target_method": target_method, "reason": gate.get("reason"),
+                                "precondition_status": gate.get("status")}},
+                    *update.get("telemetry_events", [])],
+                "model_call_requirements": [selection_opportunity(
+                    state, method=target_method, visit_id=update.get("selected_visit_id"),
+                    required=False, status="not_required",
+                    reason=f"target_method_{gate.get('reason')}", decision_source="forced")],
+            })
+            return update
+        selection = method_selection_update(
+            state, target_method, "forced", viable_methods=viable_methods,
+            decision_origin="forced", candidate_set_source="forced",
+            considered_methods=[target_method])
+        visit_id = selection.get("selected_visit_id")
         return {
+            **selection,
             "next_agent": "payload_candidate_builder",
             "selected_method": target_method,
             "viable_methods": viable_methods,
-            "method_scores": {target_method: 3 if target_method in viable_methods else 1},
             "iteration_count": iteration_count,
             "telemetry_events": [{
                 **telemetry_base,
@@ -327,6 +415,10 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                 "status": "ok",
                 "payload": {"target_method": target_method, "viable": target_method in viable_methods},
             }],
+            "model_call_requirements": [selection_opportunity(
+                state, method=target_method, visit_id=visit_id,
+                required=False, status="not_required", reason="forced_target",
+                decision_source="forced")],
         }
 
     # No model can select useful work once the deterministic eligible set is empty.
@@ -344,6 +436,9 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "telemetry_events": [{**telemetry_base,
                 "event": "orchestrator.no_viable_methods" if reason == "NO_VIABLE_METHODS" else "orchestrator.stop",
                 "status": "incomplete", "payload": {"surface": current_surface} if reason == "NO_VIABLE_METHODS" else {"reason": reason}}],
+            "model_call_requirements": [selection_opportunity(
+                state, method=None, visit_id=None, required=False, status="not_run",
+                reason=str(reason), decision_source=None, scope="run")],
         }
 
     fallback_agent = _fallback_next_agent(state)
@@ -399,6 +494,7 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                     "payload": {"reason": "cooldown_active", "consecutive_clean": consecutive_clean},
                 })
 
+    performance: dict[str, Any] | None = None
     try:
         provider_name = state.get("llm_provider", "gemini")
         model_cfg = state.get("model_config", {})
@@ -520,6 +616,12 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                 "consecutive_clean_responses": 0,
                 "evasion_attempts": state.get("evasion_attempts", 0) + (1 if evasion_triggered else 0),
                 "successful_evasions": state.get("successful_evasions", 0),
+                "model_call_requirements": [selection_opportunity(
+                    state, method=fallback_agent if fallback_agent != "scorer" else None,
+                    visit_id=None, required=True, status="completed",
+                    reason="model_refusal",
+                    call_id=((performance or {}).get("call_id") if isinstance(performance, dict) else None),
+                    decision_source="deterministic_fallback")],
             }
 
         parsed = structured_decision if context is not None else _parse_decision_payload(text)
@@ -535,9 +637,53 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
         failure_kind = output_failure_kind(performance or {}, text) if not parse_ok else None
         selected_method = next_agent if next_agent in surface_methods else None
         method_score = 3 if selected_method in viable_methods else (1 if selected_method in surface_methods else 0)
+        call_id = None
+        if isinstance(performance, dict):
+            call_id = performance.get("call_id")
+        if not call_id and context is not None:
+            call_id = next((record.get("call_id") for record in reversed(context.records)
+                            if record.get("role") == "orchestrator" and record.get("call_id")), None)
+        new_clean_count = consecutive_clean + 1 if not evasion_triggered else 0
+        gate = precondition_gate(state, selected_method) if selected_method else None
+        if gate is not None and gate.get("decision") == "reject":
+            rejection = rejected_selection_update(
+                state, selected_method,
+                "deterministic_fallback" if used_fallback else "model_orchestrator",
+                gate,
+                decision_origin="deterministic_fallback" if used_fallback else "model",
+                candidate_set_source=("viable" if experiment_condition == "akg_guided_hybrid"
+                                      else "canonical"),
+                considered_methods=selection_methods)
+            rejection["selected_visit_id"] = None
+            rejection["next_agent"] = "scorer"
+            rejection["iteration_count"] = iteration_count + 1
+            rejection["viable_methods"] = viable_methods
+            rejection["telemetry_events"] = [*telemetry_events, *rejection.get("telemetry_events", [])]
+            rejection["model_call_requirements"] = [selection_opportunity(
+                state, method=selected_method, visit_id=None, required=True,
+                status="completed", reason=f"selection_rejected_{gate.get('reason')}",
+                call_id=call_id,
+                decision_source="deterministic_fallback" if used_fallback else "model_orchestrator")]
+            rejection["messages"] = [HumanMessage(content=prompt), AIMessage(content=text)]
+            rejection["consecutive_clean_responses"] = new_clean_count
+            rejection.update({
+                "task_result": "INCOMPLETE",
+                "incomplete_reason": "SELECTION_REJECTED",
+                "workflow_stop_reason": f"selection_rejected_{gate.get('reason')}",
+                "execution_status": "completed",
+                "execution_reason": status_reason(
+                    "SELECTION_REJECTED", f"{selected_method}: {gate.get('reason')}",
+                    list(gate.get("evidence_refs") or [])),
+            })
+            rejection["telemetry_events"].append({
+                **telemetry_base, "event": "orchestrator.stop", "status": "incomplete",
+                "payload": {"reason": "SELECTION_REJECTED"}})
+            return rejection
 
         # Update consecutive_clean_responses
         new_clean_count = consecutive_clean + 1 if not evasion_triggered else 0
+        opportunity_reason = ("model_selected" if not used_fallback
+                              else f"model_output_{failure_kind or 'rejected'}")
 
         terminal_fields: dict[str, str] = {}
         if next_agent == "scorer" and not confirmed_vulns and not achieved_outcomes:
@@ -598,6 +744,10 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
             "consecutive_clean_responses": new_clean_count,
             "evasion_attempts": state.get("evasion_attempts", 0) + (retries_used if evasion_triggered else 0),
             "successful_evasions": state.get("successful_evasions", 0) + (1 if evasion_success else 0),
+            "model_call_requirements": [selection_opportunity(
+                state, method=selected_method, visit_id=None, required=True,
+                status="completed", reason=opportunity_reason, call_id=call_id,
+                decision_source="deterministic_fallback" if used_fallback else "model_orchestrator")],
             **terminal_fields,
         }
     except Exception as exc:
@@ -633,6 +783,14 @@ def _orchestrator(state: dict[str, Any]) -> dict[str, Any]:
                 *telemetry_events,
                 {**telemetry_base, "event": "orchestrator.fallback.applied", "status": "fallback", "payload": fallback_payload},
             ],
+            "model_call_requirements": [selection_opportunity(
+                state, method=fallback_agent if fallback_agent != "scorer" else None,
+                visit_id=None, required=True, status="failed",
+                reason=str((provider_failure or {}).get("failure_class")
+                           or (provider_failure or {}).get("code")
+                           or "provider_error") if isinstance(provider_failure, dict) else "llm_error",
+                call_id=(performance.get("call_id") if isinstance(performance, dict) else None),
+                decision_source="deterministic_fallback")],
             "messages": [HumanMessage(content=prompt), AIMessage(content=f"orchestrator_fallback:{type(exc).__name__}")],
             "evasion_attempts": state.get("evasion_attempts", 0) + (retries_used if evasion_triggered else 0),
             "successful_evasions": state.get("successful_evasions", 0) + (1 if evasion_success else 0),
@@ -645,24 +803,58 @@ def orchestrator(state: dict[str, Any]) -> dict[str, Any]:
     first_record = len(context.records) if context else 0
     update = _orchestrator(state)
     method = update.get("selected_method")
+    rejection = next((row for row in update.get("selection_rejections", [])
+                      if isinstance(row, dict)), None)
     if method:
         source = "forced" if state.get("target_method") else (
             "deterministic_fallback" if update.get("fallback_events") or update.get("guardrail_activations") else "model_orchestrator")
         record = next((r for r in reversed(context.records) if r.get('role') == 'orchestrator' and r.get('method') == method), {}) if context else {}
         output = record.get('output') or {}
-        update.update(method_selection_update(state, method, source, viable_methods=update.get("viable_methods", []),
+        considered = list(update.get("considered_methods") or (
+            [state.get("target_method")] if state.get("target_method")
+            else eligible_methods(state)))
+        update.update(method_selection_update(
+            state, method, source, viable_methods=update.get("viable_methods", []),
+            considered_methods=considered,
+            candidate_set_source=("forced" if state.get("target_method")
+                                  else "viable" if state.get("experiment_condition") == "akg_guided_hybrid"
+                                  else "canonical"),
+            decision_origin=("forced" if state.get("target_method")
+                             else "deterministic_fallback" if source == "deterministic_fallback"
+                             else "model"),
             reason_refs=output.get('reason_refs'), plan=output.get('plan')))
     if context:
+        # A model-origin decision can be rejected after selection. Its call
+        # still belongs to that decided method/visit, not to the prior run scope.
+        bound_method = (method or (rejection or {}).get("method")
+                        or state.get("selected_method")
+                        or (state.get("verifier_decision") or {}).get("agent_id"))
+        bound_visit = (update.get("selected_visit_id") if method else None) or (
+            (rejection or {}).get("visit_id")) or state.get("selected_visit_id")
         for record in context.records[first_record:]:
-            if record.get('role') == 'orchestrator' and not record.get('method'):
-                record['method'] = method or (state.get('verifier_decision') or {}).get('agent_id')
-                record['visit_id'] = update.get('selected_visit_id') or state.get('selected_visit_id')
+            if record.get('role') == 'orchestrator':
+                record['method'] = bound_method
+                record['visit_id'] = bound_visit
                 if not record['method']:
                     record['scope'] = 'run'
-    context_method = method or (state.get("verifier_decision") or {}).get("agent_id")
+                else:
+                    record.pop('scope', None)
+    context_method = (method or (rejection or {}).get("method")
+                      or state.get("selected_method")
+                      or (state.get("verifier_decision") or {}).get("agent_id"))
+    context_visit = ((update.get("selected_visit_id") if method else None)
+                     or (rejection or {}).get("visit_id")
+                     or state.get("selected_visit_id"))
+    update["model_call_requirements"] = [
+        {**row, "method": context_method, "visit_id": context_visit,
+         "scope": "method" if context_method else "run"}
+        if row.get("role") == "orchestrator" and row.get("required") is True
+        else row
+        for row in update.get("model_call_requirements", [])
+    ]
     for field in ("invalid_json_events", "output_failure_events", "guardrail_activations", "fallback_events"):
         update[field] = [{**event, "method": context_method,
-            "visit_id": update.get("selected_visit_id") or state.get("selected_visit_id"),
+            "visit_id": context_visit,
             "origin": "orchestrator", "scope": "method" if context_method else "run"}
             for event in update.get(field, [])]
     return update

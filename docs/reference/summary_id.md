@@ -880,16 +880,18 @@ jalur fallback static/AKG pada section 3.6.
 
 ### 5.3 Payload Candidate Builder
 
-Builder memuat seluruh catalog static seed dari `payload_library`, lalu membuat
-variasi LLM jika mode `hybrid` atau `llm_mutation_only` aktif. Prompt mutation
-hanya menampilkan seed `exploit`/`bypass` yang siap dieksekusi dan memberi label
-stage, target parameter, serta expected signal. Seed `probe` tetap tersedia
-untuk precondition Stage 1 pada method agent, tetapi bukan sumber mutasi Stage
-2. LLM hanya menerima selected method, security level, observations yang
-berlaku, seed siap eksekusi, batas mutasi, expected signals, dan candidate
-budget.
+Builder memuat katalog static seed dan membuat variasi terikat seed pada mode
+`hybrid` dan `llm_mutation_only`. Prompt mutation hanya menampilkan seed
+`exploit`/`bypass` yang siap dieksekusi beserta stage, target parameter, dan
+expected signal. Deteksi memakai katalog kontrol terpisah, terversi, dan
+berbatas, yang berasal dari seed yang disetujui atau kontrol sintetis; kontrol
+bukan sumber mutasi atau kandidat exploit yang dinilai. Kegagalan transport
+kontrol tetap unknown, bukan false. `llm_template` memakai template netral
+tanpa memperlihatkan seed yang dapat dieksekusi atau hasil kontrol kepada model.
+Kedua mode ketat memerlukan kandidat dari model yang tervalidasi dan tidak
+menggantinya dengan kandidat statis.
 
-Output kandidat dari LLM dibatasi menjadi:
+Output kandidat mutation dari LLM dibatasi menjadi:
 
 ```json
 {
@@ -1788,3 +1790,21 @@ File `thesis_review_status` baru memuat identitas eksekusi dan run, path serta h
 Manifest tetap memakai v1 dengan tambahan model/profile, repeat, identitas induk, waktu eksekusi yang tersimpan, dan referensi detail relatif. Indeks manifest dimulai dari satu; indeks koordinat projection dan event dimulai dari nol. Root sumber dapat berupa direktori datar atau satu file tertentu. Anak matriks yang tertanam memakai identitas dan buktinya sendiri. Salinan ambigu serta file sumber/detail yang hilang dilaporkan sebagai diagnosis. JSON utama, manifest, matriks, dan review diterbitkan secara atomik melalui file sementara unik di direktori yang sama. Perilaku append jurnal tetap berlaku.
 
 Cakupan projection membedakan rencana, artefak yang tersedia, completed, failed, interrupted, atribusi tidak diketahui, skipped/belum dimulai, dan temuan terkonfirmasi. Total legacy dan label analisis historis yang terikat hash tetap terpisah dari hasil keamanan kanonis. Skor runtime mempertahankan asal provisional; dimensi yang tidak tersedia tetap null. Skor payload final menggunakan rata-rata kandidat berbeda yang memenuhi syarat serta mempertahankan komponen pecahan. Metrik memerlukan nilai finite dan availability eksplisit; placeholder numerik legacy tetap tidak tersedia. Integrasi API dan UI web mempunyai pemeriksaan penerimaan tersendiri.
+
+## Revisi alur eksperimen Bab III (2026-10-28)
+
+Metodologi yang direvisi adalah [dokumen Bab III turunan](../active/CHAPTER_3_REVISED_2026-10-28.md). Dokumen tersebut adalah revisi turunan; `bab 3 only.docx` dipertahankan tanpa perubahan. Tabel rubrik 3.5–3.11 mengikuti [`thesis_scoring.md`](thesis_scoring.md#report-rubric-and-illustrative-conditions), bukan redaksi DOCX lama.
+
+Studi utama kini menyatakan dua blok. Blok **selection** memakai `target_method=None` dan mempertahankan `linear_hybrid` serta `akg_guided_hybrid` dengan `hybrid`; hanya keputusan `decision_origin=model` yang mendukung klaim pemilihan metode. Blok **forced** menetapkan setiap metode terdaftar dan mengukur cakupan agen/payload per metode; blok ini tidak membuktikan kemampuan memilih model. Setiap koordinat memerlukan minimal tiga repetisi, dan rencana membekukan config, profil ranking, oracle, jadwal harga token, versi policy/prompt/schema, hash sumber, fixture, dan protokol sebelum eksekusi. Perubahan apa pun memulai epoch baru; run historis dan `scoring_v4_matrix.py` 108-koordinat yang beku tidak pernah ditulis ulang.
+
+Mode payload adalah `static_only`, `hybrid`, `llm_mutation_only` ketat, dan `llm_template` (label TUI **Template**). Mode ketat tidak pernah menghidupkan kandidat statis atau chain-derived setelah penolakan, output tidak valid, kegagalan provider, kandidat ditolak, anggaran habis, revisit, atau antrean basi. Template memakai registry netral dan prompt/schema allowlist tertutup; tidak menerima seed kerja, kredensial terpecahkan, hasil kontrol mentah, atau keberhasilan sebelumnya. Kontrol deteksi tetap terpisah, berversi, dibatasi, dan di luar antrean exploit serta denominator keberhasilan model. Eksekusi kandidat memerlukan request exploit/bypass milik kunjungan itu sendiri; string probe yang sama bukan bukti eksekusi.
+
+Readiness bersifat gagal-tertutup dan mencatat level diminta versus teramati, autentikasi, endpoint/token, fixture/protokol, sesi, alasan, dan bukti restorasi. Penemuan endpoint bukan bukti prasyarat; observasi disimpan sebagai fakta append-only dengan status turunan `true`/`false`/`unknown`. `--dry-run` offline hanya memvalidasi config, graph, dan kontrak payload per mode; ia tidak membuktikan kesiapan DVWA atau provider. Komposit runtime tetap provisional `scoring.v2`; receipt final `scoring.v4` merupakan review Human/AI terpisah. Ringkasan riset hanya menggabungkan receipt final yang kompatibel dan melaporkan jumlah planned, failed, pending, unassessable, fallback, dan unmatched tanpa mengisi nol. Pasangan Linear/AKG yang matched memerlukan bukti kesetaraan fixture; Wilcoxon signed-rank, effect size rank-biserial, ketidakpastian bootstrap, dan koreksi Holm dideklarasikan lebih dahulu, sedangkan Mann–Whitney tetap eksploratif.
+
+### Catatan koreksi (2026-10-28): status, counter, identitas, agregasi
+
+Hasil readiness/quarantine adalah hasil lingkungan/kontrol, bukan kegagalan model: `READINESS_NOT_READY` dan `RUN_QUARANTINED` mempertahankan `execution_status=failed` dan `security_outcome=fixture_limited`, dan tidak pernah ditulis ulang menjadi `LLM_NOT_CALLED`. Kegagalan kontrol lain atau kunjungan sebelumnya tidak otomatis menggagalkan kunjungan final yang selesai; hanya bukti eksekusi kandidat milik kunjungan final yang dapat menghasilkan kegagalan request target yang terbatas. Kegagalan provider pada mode hybrid tetap merupakan kegagalan operasional komponen model, sedangkan hasil keamanan independen dicatat terpisah.
+
+Artefak memuat identitas sumber nyata dari helper bersama `chapter3-source-identity.v1` (`source_identity`, `source_hashes_sha256`, hash config); identitas yang hilang dilabeli provisional/unmatched, bukan bucket `unset` bersama. `http_request_counters` mencatat request fisik, retry, redirect hop, kegagalan, dan total per fase/peran/metode dari contained client; jumlah baris evidence dinamai terpisah dan tidak pernah disebut request. `payload_generation_opportunities` hanya berisi tahap generation, difilter berdasarkan role dan receipt stage, serta dideduplikasi berdasarkan `opportunity_id`; receipt validasi terpisah, dan `payload_generation_opportunity_coverage` melaporkan `generation_receipt_missing` alih-alih nol terukur bila hanya ada baris validasi. Request oracle/verifikasi ditandai `phase="verification"` dengan peran `candidate_verification`/`independent_control` dalam counter run yang sama. Restorasi/kesetaraan fixture adalah attestation operator terotorisasi (`fixture-restoration.v1`) yang diteruskan dari config/runner melalui recon/readiness; satu dokumen mentah, daftar, atau envelope `by_level` diterima, provenance plan berada di luar dokumen, dan evidence yang tidak ada/tidak cocok tetap `unknown` dan pasangan tetap unmatched. Tidak ada endpoint reset yang dipanggil otomatis.
+
+Agregat runtime dikelompokkan berdasarkan provider, model, surface, level, mode, kondisi, blok, target, kebijakan guardrail, fixture, protokol, versi policy, hash sumber, dan hash jadwal harga beku. Grup kosong menampilkan mean provisional null beserta alasan; rollup provider-only dan total agregat hanyalah hitungan operasional tanpa mean metrik gabungan. Artefak menyimpan `recorded_payload_policy` ber-hash (versi policy payload plus snapshot registry template dan manifest prompt) untuk replay historis; snapshot yang hilang berarti unavailable dan tidak pernah divalidasi ulang terhadap registry mutable saat ini. Kunjungan yang dikarantina bersifat terminal untuk run berjalan; bukti restorasi terotorisasi diperlukan untuk kelanjutan dan tidak pernah diterapkan otomatis. Skor riset final tetap hanya berasal dari receipt v4 final yang kompatibel. DOCX turunan hanya mengganti Tabel 3.5–3.11; Markdown revisi adalah metodologi lengkap dan tata letak visual DOCX belum diverifikasi.

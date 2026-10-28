@@ -44,6 +44,9 @@ def test_candidate_dispositions_bind_validation_selection_execution_and_terminal
             "visit_id": visit_id,
             "candidate_id": "executed",
             "identity_kind": "candidate",
+            "stage": "exploit",
+            "response_sha256": "d" * 64,
+            "eligible_for_exploit_denominator": True,
             "request_ref": "#/execution_log/3/data/request_structure",
         }],
     }
@@ -105,7 +108,7 @@ def test_static_auto_selection_without_provider_callback_is_not_reported_as_succ
     artifact = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         payload_mode="static_only",
     )
 
@@ -374,7 +377,7 @@ def test_normal_terminal_stops_have_an_evidence_reason(monkeypatch, legacy_reaso
 def test_failure_sidecar_is_written_without_rich_reporting(monkeypatch, tmp_path):
     monkeypatch.setattr("evaluation.runner.build_framework", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("unit failure")))
     artifact = run_single_engagement(target_url="http://localhost/dvwa", security_level="low",
-        llm_provider="gemini", output_dir=str(tmp_path), enriched_reporting=False)
+        llm_provider="openai_compatible", output_dir=str(tmp_path), enriched_reporting=False)
     failure = json.loads((tmp_path / f"{artifact['execution_id']}.failure.json").read_text())
     assert artifact["execution_status"] == failure["execution_status"] == "failed"
     assert failure["final_state"]["execution_reason"]["code"] == "RUNNER_EXCEPTION"
@@ -398,7 +401,7 @@ def test_true_target_transport_failure_remains_failed(monkeypatch, error_type):
     from foundation import http_client
     error = getattr(http_client, error_type)("unit target unavailable")
     monkeypatch.setattr("evaluation.runner.build_framework", lambda **kwargs: (_ for _ in ()).throw(error))
-    artifact = run_single_engagement(target_url="http://localhost/dvwa", security_level="low", llm_provider="gemini")
+    artifact = run_single_engagement(target_url="http://localhost/dvwa", security_level="low", llm_provider="openai_compatible")
     assert artifact["execution_status"] == "failed"
     assert artifact["execution_reason"]["code"] == "TARGET_TRANSPORT_FAILURE"
     assert artifact["security_outcome"] == "unconfirmed"
@@ -415,7 +418,7 @@ def test_unknown_terminal_state_is_not_reported_as_success(monkeypatch):
     artifact = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
     )
 
     assert artifact["status"] == "error"
@@ -434,7 +437,7 @@ def test_cancelled_before_execution_persists_cancelled_artifact(monkeypatch, tmp
     artifact = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         cancellation_token=token,
         output_dir=str(tmp_path),
     )
@@ -468,7 +471,7 @@ def test_runtime_sink_receives_ordered_lifecycle_and_state_events(monkeypatch):
     artifact = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         event_sink=sink,
     )
 
@@ -497,7 +500,7 @@ def test_cancellation_between_graph_states_keeps_latest_snapshot(monkeypatch):
     artifact = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         event_sink=sink,
         cancellation_token=token,
     )
@@ -509,6 +512,9 @@ def test_cancellation_between_graph_states_keeps_latest_snapshot(monkeypatch):
 def test_runtime_calls_feed_runner_activity_and_effective_runtime_metadata(monkeypatch):
     """Direct runtime calls remain visible to runner audit telemetry."""
     from agents.orchestrator import orchestrator
+    from tests.support import ready_state
+
+    ready = ready_state("sqli_union")
 
     class Response:
         content = '{"next_agent":"sqli_union","reason_code":"best_viable"}'
@@ -529,9 +535,15 @@ def test_runtime_calls_feed_runner_activity_and_effective_runtime_metadata(monke
     class FakeApp:
         def stream(self, state, stream_mode=None, config=None):
             del stream_mode, config
-            yield {
+            prepared = {
                 **state,
-                **orchestrator(state),
+                **{key: ready[key] for key in (
+                    "readiness", "observation_facts", "observations", "precondition_status"
+                )},
+            }
+            yield {
+                **prepared,
+                **orchestrator(prepared),
                 "iteration_count": 1,
                 "task_result": "SUCCESS",
             }
@@ -606,7 +618,7 @@ def test_primary_artifact_write_failure_is_a_failed_execution(monkeypatch, tmp_p
     monkeypatch.setattr('evaluation.runner.write_json_report', lambda *args: (_ for _ in ()).throw(OSError('unit write failure')))
     sink = CollectingEventSink()
     artifact = run_single_engagement(target_url='http://localhost/dvwa', security_level='low',
-        llm_provider='gemini', target_method='sqli_union', output_dir=str(tmp_path), event_sink=sink)
+        llm_provider='openai_compatible', target_method='sqli_union', output_dir=str(tmp_path), event_sink=sink)
     assert artifact['execution_status'] == 'failed'
     assert artifact['execution_reason']['code'] == 'ARTIFACT_WRITE_FAILURE'
     assert artifact['status'] == 'error'

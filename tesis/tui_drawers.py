@@ -19,6 +19,7 @@ from textual.widgets.option_list import Option
 from tesis.tui_rows import ControlRow
 
 from tesis.artifact_repository import ArtifactRepository, config_fingerprint
+from tesis.config_fields import payload_mode_label
 from tesis.config_loader import load_and_resolve_config
 from tesis.runtime_events import redact_secrets
 from tesis.tui_commands import BaseDrawer
@@ -610,6 +611,28 @@ def _payload_text(raw: dict) -> str:
     return ", ".join(f"{key}={value}" for key, value in list(scores.items())[:6])[:200]
 
 
+def _readiness_text(raw: dict) -> str:
+    """Summarize the fail-closed readiness receipt without inventing state."""
+    readiness = raw.get("readiness")
+    if not isinstance(readiness, dict):
+        state = raw.get("final_state")
+        readiness = state.get("readiness") if isinstance(state, dict) else None
+    if not isinstance(readiness, dict):
+        return "— (no readiness receipt)"
+    status = str(readiness.get("status") or "unknown")
+    requested = readiness.get("requested_level") or "—"
+    observed = readiness.get("observed_level") or "—"
+    reasons = readiness.get("reasons") or []
+    codes = ", ".join(str(item.get("code")) for item in reasons[:3] if isinstance(item, dict))
+    receipts = raw.get("candidate_budget_receipts")
+    counts = (
+        f"budget receipts {len(receipts)}"
+        if isinstance(receipts, (list, dict, tuple)) and receipts
+        else "budget —"
+    )
+    return f"{status} · requested {requested} / observed {observed}{' · ' + codes if codes else ''} · {counts}"[:300]
+
+
 _STACKED_FILTER_WIDTH = 90
 
 
@@ -816,7 +839,8 @@ class ResultsDrawer(BaseDrawer):
                     saved = self._filters.get(attr)
                     if saved and saved not in values:
                         values.append(saved)
-                    select.set_options([(value, value) for value in values])
+                    label_for = payload_mode_label if attr == "payload_mode" else str
+                    select.set_options([(label_for(value), value) for value in values])
                     select.value = saved if saved else Select.NULL
                 except Exception:
                     pass
@@ -940,10 +964,15 @@ class ResultsDrawer(BaseDrawer):
             ("provider / model", f"{safe(first('provider'))} / {safe(first('model'))}"),
             ("surface / level / mode",
              f"{safe(first('surface'))} / {safe(first('security_level', 'level'))} / "
-             f"{safe(first('payload_mode'))}"),
+             f"{safe(payload_mode_label(first('payload_mode')))}"),
             ("condition / target method / repeat",
              f"{safe(first('experiment_condition'))} / {safe(first('target_method'))} / "
              f"{safe(first('repeat_index'))}"),
+            ("block / policy epoch",
+             f"{safe(first('experiment_block'))} / "
+             f"{safe((raw.get('policy_epoch') or {}).get('epoch_id') if isinstance(raw.get('policy_epoch'), dict) else None)}"),
+            ("readiness",
+             _readiness_text(raw)),
             ("selected / viable method",
              f"{safe(first('selected_method'))} / {_joined(raw.get('viable_methods'))}"),
             ("method score", _score_text(raw, "method_score")),
@@ -1321,7 +1350,8 @@ class DoctorDrawer(BaseDrawer):
         "coverage.scope": ("Supported tests", "Check the supported test methods."),
         "akg.integrity": ("Attack map", "Check the attack map definitions."),
         "graph.compilation": ("Test workflow", "Check how the test steps connect."),
-        "payload.static_seeds": ("Built-in test inputs", "Check the saved test inputs."),
+        "payload.contracts": ("Payload mode contracts", "Check seeds, templates, and payload schemas."),
+        "payload.templates": ("Template coverage", "Check neutral templates and their limits."),
         "containment.http": ("Target safety", "Check the allowed target address."),
         "config.profiles_roles": ("AI settings", "Review your models in Settings."),
         "config.credentials": ("API keys", "Add the missing API key in Settings."),

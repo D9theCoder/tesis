@@ -78,21 +78,24 @@ def link_exported_request_evidence(artifact: dict[str, Any]) -> None:
         if len(matches) != 1:
             return None, "ambiguous"
         input_index, state = matches[0]
-        candidate_id = row.get("candidate_id") or row.get("source_candidate_id")
-        if candidate_id is None:
-            return None, "unresolved"
         if row.get("identity_kind") == "independent_control":
+            identity = row.get("control_id")
+            identity_field = "control_id"
             controls = state.get("probe_controls", {}).get(method)
             if not isinstance(controls, dict) or controls.get("visit_id") != visit_id:
                 return None, "unresolved"
             validation_rows = controls.get("validation_results", [])
             prefix = f"#/method_execution_inputs/{input_index}/state/probe_controls/{method}/validation_results"
         else:
+            identity = row.get("candidate_id") or row.get("source_candidate_id")
+            identity_field = "candidate_id"
             validation_rows = state.get("payload_validation_results", {}).get(method, [])
             prefix = f"#/method_execution_inputs/{input_index}/state/payload_validation_results/{method}"
+        if identity is None:
+            return None, "unresolved"
         found = [index for index, validation in enumerate(validation_rows)
                  if isinstance(validation, dict)
-                 and str(validation.get("candidate_id")) == str(candidate_id)
+                 and str(validation.get(identity_field)) == str(identity)
                  and validation.get("valid") is True]
         if len(found) != 1:
             return None, "ambiguous" if found else "unresolved"
@@ -222,11 +225,21 @@ def build_candidate_dispositions(artifact: dict[str, Any]) -> None:
                 if isinstance(response, dict)
                 and str(response.get("method") or response.get("agent_id") or "") == method
                 and str(response.get("visit_id") or "") == visit_id
-                and candidate_id in {
-                    str(response.get("candidate_id")) if response.get("candidate_id") is not None else "",
-                    str(response.get("source_candidate_id")) if response.get("source_candidate_id") is not None else "",
-                }
-                and response.get("identity_kind") != "independent_control"
+                and str(response.get("candidate_id") or "") == candidate_id
+                and not response.get("control_id")
+                and not response.get("source_candidate_id")
+                and response.get("identity_kind") not in {"probe_candidate", "derived_control", "independent_control", "unresolved"}
+                and response.get("stage") in {"exploit", "bypass"}
+                and response.get("eligible_for_exploit_denominator") is not False
+                and bool(response.get("response_sha256"))
+            ]
+            control_refs = [
+                f"#/response_evidence/{index}" for index, response in enumerate(responses)
+                if isinstance(response, dict)
+                and str(response.get("method") or response.get("agent_id") or "") == method
+                and str(response.get("visit_id") or "") == visit_id
+                and str(response.get("source_candidate_id") or "") == candidate_id
+                and response.get("identity_kind") in {"derived_control", "independent_control"}
             ]
             executed = bool(candidate_response_indices)
 
@@ -289,11 +302,20 @@ def build_candidate_dispositions(artifact: dict[str, Any]) -> None:
                         key: candidate[key]
                         for key in (
                             "method", "stage", "source", "source_seed_id",
+                            "origin_kind", "origin_ref", "visit_id", "model_call_id",
+                            "prompt_id", "schema_version", "policy_version",
+                            "copy_of_supplied_seed", "equals_canonical_seed_id", "feasibility",
                             "mutation_type", "target_param", "expected_signal",
                         )
                         if key in candidate
                     },
                 },
+                "candidate_boundary": {
+                    "executed_by_own_request": executed,
+                    "identity": "candidate" if executed else "unexecuted_or_control",
+                    "visit_binding": "same_visit" if executed else None,
+                },
+                "control_refs": control_refs,
                 "response_refs": [f"#/response_evidence/{index}" for index in candidate_response_indices],
                 "request_refs": [
                     responses[index].get("request_ref")
@@ -301,6 +323,12 @@ def build_candidate_dispositions(artifact: dict[str, Any]) -> None:
                     if responses[index].get("request_ref")
                 ],
             }
+            lifecycle = (artifact.get("final_state") or {}).get("candidate_lifecycle") or []
+            row["candidate_lifecycle"] = [dict(item) for item in lifecycle
+                if isinstance(item, dict)
+                and str(item.get("candidate_id")) == candidate_id
+                and str(item.get("method")) == method
+                and str(item.get("visit_id")) == visit_id]
             dispositions.append(row)
 
     artifact["candidate_dispositions"] = dispositions

@@ -17,6 +17,8 @@ FAILURE_REASONS = frozenset({
     "RUNNER_EXCEPTION", "RESUME_REFUSED", "TARGET_TRANSPORT_FAILURE", "TARGET_REQUEST_FAILURE",
     "ARTIFACT_WRITE_FAILURE", "ARTIFACT_PROCESSING_FAILURE", "RUNTIME_FAILURE",
     "SESSION_LOGIN_FAILED", "METHOD_EXECUTION_FAILURE",
+    "READINESS_FAILED", "READINESS_UNKNOWN", "CONTROL_CONTAMINATION",
+    "TARGET_METHOD_INFEASIBLE",
 })
 
 
@@ -142,7 +144,27 @@ def terminal_status(source: Mapping, *, execution_status: ExecutionStatus | None
         raise ValueError(f"Invalid security_outcome: {outcome}")
     outcome_reason = value("security_outcome_reason")
     if classify or outcome is None:
-        outcome, outcome_reason = _security_evidence(source)
+        evidence_outcome, evidence_reason = _security_evidence(source)
+        failure_code = str((failure or {}).get("code") or "")
+        environment_failure = (
+            lifecycle == "failed"
+            and failure_code in {
+                "READINESS_FAILED", "READINESS_UNKNOWN", "CONTROL_CONTAMINATION",
+            }
+        )
+        if evidence_outcome == "confirmed":
+            # Positive candidate proof always wins over a stale limitation label.
+            outcome, outcome_reason = evidence_outcome, evidence_reason
+        elif outcome == "fixture_limited" and environment_failure:
+            # Readiness/quarantine blocks are fixture limitations, not absence of
+            # a finding; preserve the specific recorded reason.
+            outcome_reason = outcome_reason or reason(
+                failure_code or "READINESS_FAILED",
+                str((failure or {}).get("detail") or "Run limited by fixture state."),
+                list((failure or {}).get("evidence_refs") or []),
+            )
+        else:
+            outcome, outcome_reason = evidence_outcome, evidence_reason
     if outcome == "confirmed":
         outcome_reason = None
     elif outcome_reason is None:

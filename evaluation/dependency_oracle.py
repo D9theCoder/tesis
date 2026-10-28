@@ -14,6 +14,7 @@ from evaluation.scoring_evidence import (
     validate_sources,
 )
 from foundation.session_manager import DVWASession, open_verified_principal_session, session_fingerprint
+from foundation.http_client import http_accounted
 
 
 def _enabled_source(sources: list[dict], kind: str) -> dict | None:
@@ -91,6 +92,7 @@ def _dependency_control(target: str, level: str, method: str, descriptor: tuple 
             session.close()
 
 
+@http_accounted(phase="verification", role="independent_control")
 def collect_dependency_oracles(artifact: dict, raw_state: dict) -> dict:
     """Attach a dependency attestation only when the exact source material works downstream."""
     sources = artifact["config"].get("scoring_oracles", [])

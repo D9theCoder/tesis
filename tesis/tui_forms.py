@@ -25,7 +25,14 @@ from textual.widgets import (
     TextArea,
 )
 
-from tesis.config_fields import ALL_FIELD_SPECS, FieldSpec, get_config_value, set_config_value
+from tesis.config_fields import (
+    ALL_FIELD_SPECS,
+    FieldSpec,
+    field_choice_label,
+    get_config_value,
+    payload_mode_label,
+    set_config_value,
+)
 from tesis.config_loader import (
     dump_yaml_config,
     load_and_resolve_config,
@@ -213,12 +220,14 @@ class LaunchDrawer(BaseDrawer):
             unavailable = current is not None and current not in choices
             if unavailable:
                 choices.append(current)
-            return ChoiceSelect([(f"{choice} (saved; unavailable)" if unavailable and choice == current else profile_labels.get(choice, choice), choice) for choice in choices],
+            labels = profile_labels if path in {"provider", "providers", "model_profile"} else {}
+            return ChoiceSelect([(f"{choice} (saved; unavailable)" if unavailable and choice == current else labels.get(choice) or field_choice_label(spec, choice), choice) for choice in choices],
                           value=current if current is not None else Select.NULL,
                           allow_blank=True, prompt=label, id=field_id)
         if spec.multiple or spec.kind == "multi_select":
             selected = {str(item) for item in (value or [])}
-            return TextSelectionList(*[(profile_labels.get(choice, choice), choice, choice in selected) for choice in choices],
+            labels = profile_labels if path in {"provider", "providers", "model_profile"} else {}
+            return TextSelectionList(*[(labels.get(choice) or field_choice_label(spec, choice), choice, choice in selected) for choice in choices],
                                  id=field_id)
         if spec.value_type is bool or spec.kind == "boolean":
             return TextCheckbox(label, value=bool(value), id=field_id)
@@ -1620,7 +1629,10 @@ class SettingsDrawer(BaseDrawer):
 
     def _set_setting_value(self, key: str, value: Any) -> None:
         self._settings_values[key] = value
-        text = "—" if value in (None, "") else str(value)
+        if key == "payload-mode" and value not in (None, ""):
+            text = payload_mode_label(value)
+        else:
+            text = "—" if value in (None, "") else str(value)
         self.query_one(f"#setting-{key}-value", Static).update(str(tui_security.redact_secrets(text)))
 
     def _render_sections(self) -> None:

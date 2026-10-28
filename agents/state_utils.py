@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 from copy import deepcopy
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
+from core.payload_policy import (
+    BUDGET_POLICY_VERSION,
+    CONTROL_POLICY_VERSION,
+    EXPERIMENT_POLICY_VERSION,
+    PAYLOAD_POLICY_VERSION,
+    STRICT_PAYLOAD_MODES,
+    lifecycle_fact,
+    origin_kind_permitted,
+    require_payload_mode,
+)
 from foundation.http_client import RequestTimeoutError, TransportError
 from foundation.payload_library import PayloadLibrary
 from core.state import METHODS_BY_SURFACE, score_decision
@@ -26,36 +37,694 @@ class CandidatePayload(str):
         return str(self), self.candidate_id
 
 
+class ControlPayload(str):
+    """Detection-control string that retains its frozen control identity."""
+
+    def __new__(cls, value: str, control_id: str):
+        instance = super().__new__(cls, value)
+        instance.control_id = control_id
+        return instance
+
+    def __getnewargs__(self) -> tuple[str, str]:
+        """Keep identity when runtime state copies or pickles control values."""
+        return str(self), self.control_id
+
+
+CONTROL_EVENT_POLICY_VERSION = "control-event.v1"
+_NON_CANDIDATE_IDENTITY_KINDS = frozenset({
+    "independent_control", "derived_control", "probe_candidate", "unresolved",
+})
+
+
+def state_payload_mode(state: Mapping[str, Any]) -> str:
+    """Return the registered payload mode, failing closed on an invalid value."""
+    return require_payload_mode(state.get("payload_mode", "static_only"))
+
+
+def strict_payload_mode(state: Mapping[str, Any]) -> bool:
+    """Return whether only current-visit model exploit candidates are allowed."""
+    return state_payload_mode(state) in STRICT_PAYLOAD_MODES
+
+
+def _is_graph_visit(state: Mapping[str, Any], module_name: str) -> bool:
+    """A graph visit always carries a reserved visit or explicit queue/controls."""
+    return bool(
+        state.get("selected_visit_id")
+        or isinstance(state.get("active_payload_candidates", {}).get(module_name), Mapping)
+        or module_name in state.get("payload_validation_results", {})
+        or module_name in state.get("probe_controls", {})
+    )
+
+
+def graph_visit(state: Mapping[str, Any], module_name: str) -> bool:
+    """Return whether this invocation belongs to a reserved graph visit."""
+    return _is_graph_visit(state, module_name)
+
+
+def _visit_id(state: Mapping[str, Any], module_name: str) -> str:
+    return str(state.get("selected_visit_id") or f"{module_name}:legacy:{state.get('iteration_count', 0)}")
+
+
+def _scope_fields(state: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "fixture_id": state.get("fixture_id"),
+        "protocol_version": state.get("protocol_version"),
+        "security_level": state.get("security_level"),
+    }
+
+
+def selection_opportunity(
+    state: Mapping[str, Any],
+    *,
+    method: str | None,
+    visit_id: str | None,
+    required: bool,
+    status: str,
+    reason: str,
+    call_id: str | None = None,
+    decision_source: str | None = None,
+    scope: str = "method",
+) -> dict[str, Any]:
+    """Build one append-only orchestrator selection opportunity receipt."""
+    ordinal = 1 + sum(
+        row.get("role") == "orchestrator"
+        for row in state.get("model_call_requirements", [])
+        if isinstance(row, Mapping)
+    )
+    return {
+        "opportunity_id": f"orchestrator:{state.get('execution_id') or state.get('run_id') or 'run'}:{ordinal}",
+        "role": "orchestrator",
+        "method": method,
+        "visit_id": visit_id,
+        "required": bool(required),
+        "status": str(status),
+        "reason": str(reason),
+        "call_id": call_id,
+        "decision_source": decision_source,
+        "scope": scope,
+        "payload_mode": state.get("payload_mode"),
+        "policy_version": EXPERIMENT_POLICY_VERSION,
+    }
+
+
+def rejected_selection_update(
+    state: Mapping[str, Any],
+    method: str,
+    source: str,
+    gate: Mapping[str, Any],
+    *,
+    decision_origin: str = "model",
+    candidate_set_source: str | None = None,
+    considered_methods: list[str] | None = None,
+    history: list[dict] | None = None,
+) -> dict[str, Any]:
+    """Record a supported post-selection rejection without executing a visit."""
+    surface = next((s for s, methods in METHODS_BY_SURFACE.items() if method in methods), "")
+    ordinal = 1 + sum(d.get("dimension") == "Smethod" for d in state.get("scoring_decisions", []))
+    visit_id = f"{method}:visit:{ordinal}"
+    prior_model_decisions = [
+        row for row in [*(state.get("selection_rejections", []) or []), *(history or [])]
+        if isinstance(row, Mapping) and row.get("decision_origin") == "model"
+    ]
+    reason = str(gate.get("reason") or "precondition_false")
+    from foundation.preconditions import derived_selector_observations
+    row = {
+        "decision_id": f"{visit_id}:selection:rejected",
+        "method": method,
+        "visit_id": visit_id,
+        "source": source,
+        "decision_origin": decision_origin,
+        "candidate_set_source": candidate_set_source or ("canonical" if state.get("experiment_condition") != "akg_guided_hybrid" else "viable"),
+        "surface": surface,
+        "required_preconditions": list(gate.get("required") or []),
+        "precondition_status": dict(gate.get("status") or {}),
+        "observations": derived_selector_observations(state),
+        "profile_sha256": (state.get('scoring_profile') or {}).get('sha256'),
+        "profile_id": (state.get('scoring_profile') or {}).get('profile_id'),
+        "reason_code": reason,
+        "detail": str(gate.get("detail") or ""),
+        "evidence_refs": list(gate.get("evidence_refs") or []),
+        "considered_methods": list(considered_methods or []),
+        "first_choice": decision_origin == "model" and not prior_model_decisions,
+        "selected_at": datetime.now(timezone.utc).isoformat(),
+        "rejected_at": datetime.now(timezone.utc).isoformat(),
+        "policy_version": EXPERIMENT_POLICY_VERSION,
+    }
+    telemetry = [{
+        "node": "orchestrator", "event": "orchestrator.selection.rejected",
+        "status": "incomplete",
+        "payload": {"method": method, "reason": reason, "visit_id": visit_id,
+                    "preconditions": row["required_preconditions"],
+                    "precondition_status": row["precondition_status"]},
+    }]
+    return {
+        "selected_method": None,
+        "selected_visit_id": visit_id,
+        "next_agent": "scorer",
+        "iteration_count": state.get("iteration_count", 0) + 1,
+        "selection_rejections": [row],
+        "telemetry_events": telemetry,
+    }
+
+
 def method_selection_update(state: dict, method: str, source: str, *, preconditions: list[str] | None = None,
-                            viable_methods: list[str] | None = None, reason_refs=None, plan=None) -> dict:
+                            viable_methods: list[str] | None = None, reason_refs=None, plan=None,
+                            considered_methods: list[str] | None = None,
+                            candidate_set_source: str | None = None,
+                            decision_origin: str | None = None,
+                            first_choice: bool | None = None) -> dict:
     """Grade every selection at its boundary, before execution changes viability."""
-    from core.knowledge_graph import get_attack_knowledge_graph
-    kg = get_attack_knowledge_graph()
+    from foundation.preconditions import (
+        derived_selector_observations,
+        precondition_keys_for_method,
+        statuses_snapshot,
+    )
+    derived_observations = derived_selector_observations(state)
     surface = next(s for s, methods in METHODS_BY_SURFACE.items() if method in methods)
-    viable = kg.get_viable_methods(surface, state.get("observations", {})) if viable_methods is None else viable_methods
+    status = statuses_snapshot(state, method)
+    viable = ([candidate for candidate in METHODS_BY_SURFACE[surface]
+               if all(value == "true" for value in statuses_snapshot(state, candidate).values())]
+              if viable_methods is None else viable_methods)
     viable = [m for m in viable if m in METHODS_BY_SURFACE[surface]]
     known = set(state.get("confirmed_vulns", [])) | set(state.get("achieved_outcomes", []))
     # Surface aliases are used for prerequisites only, never vulnerability confirmations.
     for s, methods in METHODS_BY_SURFACE.items():
         if any(f"{m}_confirmed" in known for m in methods):
             known.add(f"{s}_confirmed")
-    requirements = list(preconditions or [])
-    is_viable = method in viable and all(p in known for p in requirements)
+    requirements = list(preconditions or precondition_keys_for_method(method))
+    all_proved = all(status.get(key) == "true" for key in requirements) if requirements else True
+    is_viable = method in viable and all_proved
     grade = 3 if is_viable else 1
     ordinal = 1 + sum(d.get("dimension") == "Smethod" for d in state.get("scoring_decisions", []))
     visit_id = f"{method}:visit:{ordinal}"
+    origin = decision_origin or {
+        "forced": "forced", "akg_route": "route", "route": "route",
+        "deterministic_fallback": "deterministic_fallback", "model_orchestrator": "model",
+    }.get(source, "model")
+    set_source = candidate_set_source or (
+        "forced" if origin == "forced"
+        else "viable" if state.get("experiment_condition") == "akg_guided_hybrid"
+        else "canonical"
+    )
+    if first_choice is None:
+        first_choice = origin == "model" and not any(
+            d.get("dimension") == "Smethod" and d.get("decision_origin") == "model"
+            for d in state.get("scoring_decisions", []))
     return {"selected_method": method, "selected_visit_id": visit_id,
         "iteration_count": state.get("iteration_count", 0) + 1,
         "viable_methods": viable, "method_scores": {method: grade},
         "scoring_decisions": [score_decision(state, "Smethod", method, grade,
             "viable_at_selection" if is_viable else "prerequisites_not_proved_at_selection",
-            visit_id=visit_id, selection_source=source, surface=surface, viable=is_viable,
-            preconditions=requirements, observations=deepcopy(state.get("observations", {})),
+            visit_id=visit_id, selection_source=source, decision_origin=origin,
+            candidate_set_source=set_source, first_choice=first_choice,
+            considered_methods=list(considered_methods or METHODS_BY_SURFACE[surface]),
+            surface=surface, viable=is_viable,
+            preconditions=requirements, precondition_status=dict(status),
+            observations=derived_observations,
             selected_at=datetime.now(timezone.utc).isoformat(),
             profile_sha256=(state.get('scoring_profile') or {}).get('sha256'),
+            profile_id=(state.get('scoring_profile') or {}).get('profile_id'),
             comparison_methods=list(METHODS_BY_SURFACE[surface]),
             reason_refs=list(reason_refs or []), plan=deepcopy(plan or {}),
             known_nodes=sorted(known))]}
+
+def agent_visit_gate(state: Mapping[str, Any], module_name: str) -> dict[str, Any]:
+    """Return the fail-closed readiness/quarantine/prerequisite decision."""
+    from foundation.control_catalog import precondition_gate, quarantine_gate
+    from foundation.readiness import readiness_gate
+
+    gate = readiness_gate(state)
+    if gate.get("decision") == "block":
+        return {"allow": False, "stop": "readiness", "gate": gate}
+    quarantine = quarantine_gate(state)
+    if quarantine.get("blocked"):
+        return {"allow": False, "stop": "quarantine", "gate": quarantine}
+    gate = precondition_gate(state, module_name)
+    if gate.get("decision") == "reject":
+        return {"allow": False, "stop": "precondition", "gate": gate}
+    return {"allow": True, "stop": None, "gate": gate}
+
+
+def visit_block_update(
+    state: Mapping[str, Any],
+    module_name: str,
+    *,
+    stop: str,
+    gate: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build the explicit terminal/no-request update for a blocked visit."""
+    from core.run_status import reason
+    from foundation.readiness import readiness_block_update
+
+    telemetry = [{
+        "node": module_name,
+        "event": f"agent.visit.blocked.{stop}",
+        "status": "incomplete",
+        "payload": {"method": module_name, "visit_id": _visit_id(state, module_name),
+                    "reason": gate.get("reason") or gate.get("code"),
+                    "evidence_refs": list(gate.get("evidence_refs") or [])},
+    }]
+    if stop == "readiness":
+        update = readiness_block_update(gate)
+        update.update({"blocked_agents": [module_name], "telemetry_events": telemetry})
+        return update
+    if stop == "quarantine":
+        code = "CONTROL_CONTAMINATION"
+        detail = str(gate.get("reason") or "quarantined_visit")
+        return {
+            "next_agent": "scorer", "selected_method": None,
+            "blocked_agents": [module_name],
+            "task_result": "INCOMPLETE", "incomplete_reason": code,
+            "workflow_stop_reason": "control_quarantine",
+            "execution_status": "failed",
+            "execution_reason": reason(code, detail, list(gate.get("evidence_refs") or [])),
+            "security_outcome": "fixture_limited",
+            "security_outcome_reason": reason(code, detail, list(gate.get("evidence_refs") or [])),
+            "telemetry_events": telemetry,
+            **_stopped_candidates_update(state, module_name, "control_quarantine"),
+        }
+    reason_code = str(gate.get("reason") or "precondition_false")
+    update: dict[str, Any] = {
+        "next_agent": "scorer" if state.get("target_method") == module_name else "orchestrator",
+        "selected_method": None,
+        "preparation_failures": [{
+            "method": module_name, "visit_id": _visit_id(state, module_name),
+            "reason": "PRECONDITION_UNMET", "detail": reason_code,
+            "precondition_status": dict(gate.get("status") or {}),
+            "evidence_refs": list(gate.get("evidence_refs") or []),
+            "policy_version": CONTROL_POLICY_VERSION,
+        }],
+        "telemetry_events": telemetry,
+        **_stopped_candidates_update(state, module_name, reason_code),
+    }
+    if state.get("target_method") == module_name:
+        update.update({
+            "task_result": "INCOMPLETE", "incomplete_reason": "PRECONDITION_UNMET",
+            "workflow_stop_reason": reason_code,
+            "execution_status": "completed",
+            "execution_reason": reason("PRECONDITION_UNMET", reason_code,
+                                       list(gate.get("evidence_refs") or [])),
+        })
+    return update
+
+
+def _stopped_candidates_update(state: Mapping[str, Any], module_name: str,
+                               reason_code: str) -> dict[str, Any]:
+    """Mark every current-visit queue candidate as explicitly unexecuted."""
+    rows: list[dict] = []
+    visit_id = _visit_id(state, module_name)
+    for candidate in validated_payload_candidates(dict(state), module_name):
+        candidate_id = candidate.get("candidate_id")
+        if candidate_id is None:
+            continue
+        rows.append(candidate_lifecycle_fact(
+            method=module_name, visit_id=visit_id, candidate_id=str(candidate_id),
+            origin_kind=str(candidate.get("origin_kind") or _candidate_origin_kind(state, candidate)),
+            status="stopped_before_execution", reason=reason_code, evidence_refs=[]))
+    return {"candidate_lifecycle": rows} if rows else {}
+
+
+_LEGACY_ORIGIN_ALIASES = {
+    "llm_generated": "seed_mutation",
+    "llm_mutation": "seed_mutation",
+    "model_generated": "seed_mutation",
+    "template": "template_generation",
+    "template_constructed": "template_generation",
+    "static": "static_seed",
+    "static_seed": "static_seed",
+    "chain": "chain_derived",
+    "chain_derived": "chain_derived",
+}
+
+
+def _candidate_origin_kind(state: Mapping[str, Any], candidate: Mapping[str, Any]) -> str:
+    """Return a canonical origin kind, normalizing legacy reader labels only."""
+    provenance = state.get("payload_provenance", {}).get(str(candidate.get("candidate_id")), {})
+    recorded = str(candidate.get("origin_kind") or provenance.get("origin_kind")
+                   or provenance.get("source") or candidate.get("source") or "static_seed")
+    return _LEGACY_ORIGIN_ALIASES.get(recorded, recorded)
+
+
+def candidate_lifecycle_fact(
+    *,
+    method: str,
+    visit_id: str,
+    candidate_id: str,
+    origin_kind: str,
+    status: str,
+    reason: str | None,
+    evidence_refs: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build one shared candidate-lifecycle row with the frozen identity."""
+    row = lifecycle_fact(method=method, visit_id=visit_id, candidate_id=candidate_id,
+                         origin_kind=origin_kind, status=status, reason=reason,
+                         evidence_refs=list(evidence_refs or []))
+    return {**row, "policy_version": BUDGET_POLICY_VERSION}
+
+
+def probe_stage_blocked_update(
+    state: Mapping[str, Any],
+    module_name: str,
+    *,
+    reason: str = "no_safe_detection_control",
+) -> dict[str, Any]:
+    """Record an explicit zero-request stop when no safe detection control exists."""
+    from core.run_status import reason as status_reason
+    telemetry = [{
+        "node": module_name, "event": "agent.probe.blocked", "status": "incomplete",
+        "payload": {"method": module_name, "visit_id": _visit_id(state, module_name),
+                    "reason": reason},
+    }]
+    update: dict[str, Any] = {
+        "next_agent": "scorer" if state.get("target_method") == module_name else "orchestrator",
+        "selected_method": None,
+        "preparation_failures": [{
+            "method": module_name, "visit_id": _visit_id(state, module_name),
+            "reason": "NO_SAFE_DETECTION_CONTROL", "detail": reason,
+            "policy_version": CONTROL_POLICY_VERSION,
+        }],
+        "telemetry_events": telemetry,
+        **_stopped_candidates_update(state, module_name, reason),
+    }
+    if state.get("target_method") == module_name:
+        update.update({
+            "task_result": "INCOMPLETE", "incomplete_reason": "NO_SAFE_DETECTION_CONTROL",
+            "workflow_stop_reason": reason,
+            "execution_status": "completed",
+            "execution_reason": status_reason("NO_SAFE_DETECTION_CONTROL", reason),
+        })
+    return update
+
+
+def probe_outcome_update(
+    state: Mapping[str, Any],
+    module_name: str,
+    observations: Mapping[str, Any],
+    telemetry_events: list[dict],
+    *,
+    principal_id: str | None = None,
+    session_fingerprint: str | None = None,
+    snapshot: Mapping[str, Any] | None = None,
+    snapshot_key: str | None = None,
+) -> tuple[dict[str, Any], str | None]:
+    """Record control events, scoped facts, and a quarantine decision.
+
+    Probe requests are controls, never exploit candidates.  A control whose
+    response unexpectedly authenticates, reads sensitive data, or proves the
+    assessed exploit quarantines the visit instead of granting credit.
+    """
+    from foundation.control_catalog import (
+        CONTROL_EVENT_POLICY_VERSION as EVENT_VERSION,
+        control_event,
+        resolve_catalog_controls,
+    )
+    from foundation.preconditions import (
+        SESSION_FACT_KEYS,
+        make_observation_fact,
+        observation_update,
+        precondition_keys_for_method,
+    )
+
+    if not isinstance(principal_id, str) or not principal_id:
+        principal_id = None
+    if not isinstance(session_fingerprint, str) or not session_fingerprint:
+        session_fingerprint = None
+    snapshot = snapshot if snapshot is not None else state.get("probe_controls", {}).get(module_name)
+    visit_id = (str(snapshot.get("visit_id")) if isinstance(snapshot, Mapping) and snapshot.get("visit_id")
+                else _visit_id(state, module_name))
+    control_events: list[dict] = []
+    facts: list[dict] = []
+    quarantine: str | None = None
+    if isinstance(snapshot, Mapping):
+        resolved, skipped = resolve_catalog_controls(snapshot, principal_id)
+        events_by_control: dict[str, list[dict]] = {}
+        for event in telemetry_events:
+            if not isinstance(event, dict) or event.get("event") != "agent.probe.sent":
+                continue
+            payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+            control_id = payload.get("control_id")
+            if control_id:
+                events_by_control.setdefault(str(control_id), []).append(dict(payload))
+        for row in resolved:
+            control_id = str(row.get("control_id"))
+            events = events_by_control.get(control_id, [])
+            if not events:
+                resolved_payload = str(row.get("resolved_payload"))
+                events = [dict(event.get("payload") or {}) for event in telemetry_events
+                          if isinstance(event, dict) and event.get("event") == "agent.probe.sent"
+                          and str((event.get("payload") or {}).get("payload")) == resolved_payload]
+                for event in events:
+                    event.setdefault("control_id", control_id)
+            sent = [event for event in events if event.get("status_code") is not None]
+            signal = any(event.get("signal_detected") is True for event in events)
+            status = "sent" if sent else "failed" if events else "skipped"
+            control_events.append(control_event(
+                control_id=control_id, control_class="detection", method=module_name,
+                visit_id=visit_id, phase=str(snapshot.get("phase") or "method_probe"),
+                purpose=str(row.get("purpose") or "precondition_measurement"),
+                status=status, reason="control_response_recorded" if sent else "control_request_failed" if events else "control_not_sent",
+                request_id=sent[-1].get("request_id") if sent else None,
+                evidence_id=None, http_status=sent[-1].get("status_code") if sent else None,
+                signal_detected=signal if events else None,
+                physical_requests=len(events)))
+        for row in skipped:
+            control_events.append(control_event(
+                control_id=str(row.get("control_id")), control_class="detection",
+                method=module_name, visit_id=visit_id,
+                phase=str(snapshot.get("phase") or "method_probe"),
+                purpose=str(row.get("purpose") or "precondition_measurement"),
+                status="skipped", reason=str(row.get("reason") or "control_skipped")))
+        sent_count = sum(1 for event in control_events if event.get("status") == "sent")
+        physical_count = sum(int(event.get("physical_requests") or 0) for event in control_events)
+        updated = {**dict(snapshot), "requests_used": sent_count,
+                   "physical_requests_used": physical_count,
+                   "control_events": [*list(snapshot.get("control_events", []) or []), *control_events]}
+        declared_keys = set(precondition_keys_for_method(module_name)) | set(SESSION_FACT_KEYS)
+        signal_rows = [row for row in resolved if any(
+            event.get("signal_detected") is True for event in events_by_control.get(str(row.get("control_id")), []))]
+        evidence_refs = [f"control:{row.get('control_id')}" for row in resolved]
+        failed_control = any(event.get("status") == "failed" for event in control_events)
+        for key, value in observations.items():
+            if key not in declared_keys:
+                continue
+            method_scope = module_name
+            fact_session_scope = "session"
+            facts.append(make_observation_fact(
+                key, (value if isinstance(value, bool) and sent_count
+                      and (value is True or not failed_control) else None),
+                source="detection_control", method=method_scope, visit_id=visit_id,
+                control_id=str((signal_rows or resolved or [{}])[0].get("control_id") or "") or None,
+                evidence_refs=evidence_refs, phase=str(snapshot.get("phase") or "method_probe"),
+                fixture_id=state.get("fixture_id"),
+                protocol_version=state.get("protocol_version"),
+                security_level=state.get("security_level"),
+                principal_id=principal_id,
+                session_fingerprint=session_fingerprint,
+                session_scope=fact_session_scope,
+                detail=str(snapshot.get("catalog_sha256") or "")))
+        scoped_state = {**dict(state)}
+        if principal_id:
+            scoped_state["method_principals"] = {
+                **dict(state.get("method_principals", {}) or {}),
+                module_name: str(principal_id),
+            }
+        if session_fingerprint:
+            scoped_state["method_session_fingerprints"] = {
+                **dict(state.get("method_session_fingerprints", {}) or {}),
+                module_name: session_fingerprint,
+            }
+        update = observation_update(scoped_state, facts, method=module_name)
+        if principal_id:
+            update["method_principals"] = {module_name: str(principal_id)}
+        if session_fingerprint:
+            update["method_session_fingerprints"] = {module_name: session_fingerprint}
+        update["probe_controls"] = {str(snapshot_key or module_name): updated}
+        update["control_policy_version"] = CONTROL_POLICY_VERSION
+        update["control_events"] = control_events
+        if control_events:
+            update["control_events"] = [{**event, "event_policy_version": EVENT_VERSION}
+                                        for event in control_events]
+        quarantine = probe_quarantine_reason(module_name, telemetry_events)
+    else:
+        # Legacy direct-agent callers have no frozen control snapshot, but the
+        # measured booleans are still evidence. Record them as scoped facts so
+        # the current tri-state view is derived rather than overwritten.
+        from foundation.preconditions import (
+            SESSION_FACT_KEYS as _SESSION_FACT_KEYS,
+            make_observation_fact as _make_fact,
+            observation_update as _observation_update,
+        )
+        for key, value in observations.items():
+            if not isinstance(value, bool):
+                continue
+            facts.append(_make_fact(
+                str(key), value, source="legacy_detection_control",
+                method=module_name,
+                visit_id=visit_id, phase="method_probe",
+                fixture_id=state.get("fixture_id"),
+                protocol_version=state.get("protocol_version"),
+                security_level=state.get("security_level"),
+                principal_id=principal_id,
+                session_fingerprint=session_fingerprint,
+                session_scope="session",
+                detail="legacy direct-agent probe without frozen catalog"))
+        legacy_state = {**dict(state)}
+        if principal_id:
+            legacy_state["method_principals"] = {
+                **dict(state.get("method_principals", {}) or {}), module_name: principal_id}
+        if session_fingerprint:
+            legacy_state["method_session_fingerprints"] = {
+                **dict(state.get("method_session_fingerprints", {}) or {}),
+                module_name: session_fingerprint,
+            }
+        update = _observation_update(legacy_state, facts, method=module_name)
+        if principal_id:
+            update["method_principals"] = {module_name: principal_id}
+        if session_fingerprint:
+            update["method_session_fingerprints"] = {module_name: session_fingerprint}
+        quarantine = probe_quarantine_reason(module_name, telemetry_events)
+    return update, quarantine
+
+
+def merge_probe_observations(
+    update: dict[str, Any],
+    probe_update: Mapping[str, Any] | None,
+    state: Mapping[str, Any],
+    observations: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Merge successful probe evidence without overwriting the derived view.
+
+    Frozen-control and legacy-fact paths return a full derived observation view;
+    legacy callers without evidence fall back to a merged boolean view.
+    """
+    if isinstance(probe_update, Mapping) and probe_update:
+        update.update(probe_update)
+        derived = probe_update.get("observations")
+        if isinstance(derived, Mapping):
+            update["observations"] = dict(derived)
+            return update
+    merged = {key: value for key, value in (state.get("observations") or {}).items()
+              if isinstance(value, bool)}
+    merged.update({key: value for key, value in observations.items() if isinstance(value, bool)})
+    update["observations"] = merged
+    return update
+
+
+def probe_quarantine_reason(module_name: str, telemetry_events: list[dict]) -> str | None:
+    """Detect a detection control that exceeded its declared evidence role."""
+    from foundation.control_catalog import structured_contamination_reason
+    structured = structured_contamination_reason(module_name, telemetry_events)
+    if structured is not None:
+        return structured
+    excerpts = [
+        str((event.get("payload") or {}).get("response_excerpt") or "").lower()
+        for event in telemetry_events
+        if isinstance(event, dict) and event.get("event") == "agent.probe.sent"
+    ]
+    if module_name.startswith("bf_") and any(
+        isinstance(event, dict) and event.get("event") == "agent.probe.sent"
+        and (event.get("payload") or {}).get("signal_detected") is True
+        and any(marker in str((event.get("payload") or {}).get("response_excerpt") or "").lower()
+                for marker in ("password protected area", "welcome"))
+        for event in telemetry_events
+    ):
+        return "unexpected_probe_authentication"
+    if module_name in {"ac_idor", "ac_vertical_escalation", "ac_force_browse"}:
+        for excerpt in excerpts:
+            if ("database setup" in excerpt or "phpinfo()" in excerpt
+                    or "view source" in excerpt or "source code" in excerpt):
+                return "unexpected_sensitive_disclosure"
+    for excerpt in excerpts:
+        if __import__("re").search(r"\b(?:admin|gordonb|pablo|smithy)\b\s*:\s*[a-f0-9]{32}", excerpt):
+            return "control_proved_assessed_exploit"
+    return None
+
+
+def previously_executed_exploit_payloads(state: Mapping[str, Any], module_name: str,
+                                         visit_id: str | None = None) -> set[str]:
+    """Return payloads executed by an own candidate exploit/bypass request."""
+    payloads: set[str] = set()
+    for row in state.get("response_evidence", []) or []:
+        if not isinstance(row, Mapping):
+            continue
+        if row.get("agent_id") != module_name or row.get("stage") not in {"exploit", "bypass"}:
+            continue
+        if row.get("identity_kind") != "candidate" or not row.get("candidate_id"):
+            continue
+        if visit_id is not None and row.get("visit_id") != visit_id:
+            continue
+        payload = row.get("payload")
+        if payload is not None:
+            payloads.add(str(payload))
+    return payloads
+
+
+def candidate_execution_evidence(
+    state: Mapping[str, Any],
+    module_name: str,
+    visit_id: str,
+) -> list[dict]:
+    """Return response rows that prove a candidate's own exploit/bypass request."""
+    return [dict(row) for row in state.get("response_evidence", []) or []
+            if isinstance(row, Mapping) and row.get("agent_id") == module_name
+            and row.get("visit_id") == visit_id
+            and row.get("stage") in {"exploit", "bypass"}
+            and row.get("identity_kind") == "candidate"
+            and row.get("candidate_id")
+            and not row.get("control_id") and not row.get("source_candidate_id")]
+
+
+def candidate_budget_receipt(
+    state: Mapping[str, Any],
+    method: str,
+    visit_id: str,
+) -> dict[str, Any]:
+    """Derive the per-visit candidate/control budget receipt from shared facts."""
+    rows = [row for row in state.get("candidate_lifecycle", []) or []
+            if isinstance(row, Mapping) and row.get("method") == method
+            and row.get("visit_id") == visit_id]
+
+    def ids(*statuses: str) -> list[str]:
+        seen: list[str] = []
+        for row in rows:
+            if str(row.get("status")) in statuses:
+                candidate_id = str(row.get("candidate_id") or "")
+                if candidate_id and candidate_id not in seen:
+                    seen.append(candidate_id)
+        return seen
+
+    snapshot = state.get("probe_controls", {}).get(method) or {}
+    control_events = [event for event in state.get("control_events", []) or []
+                      if isinstance(event, Mapping) and event.get("method") == method
+                      and event.get("visit_id") == visit_id]
+    candidate_rows = candidate_execution_evidence(state, method, visit_id)
+    from core.knowledge_graph import get_attack_knowledge_graph
+    profile = get_attack_knowledge_graph().get_payload_profile(method) if method else {}
+    from core.payload_policy import exploit_queue_limit
+    configured_budget = int(state.get("candidate_budget", 0) or 0)
+    effective_budget = exploit_queue_limit(configured_budget, profile)
+    return {
+        "policy_version": BUDGET_POLICY_VERSION,
+        "method": method,
+        "visit_id": visit_id,
+        "candidate_budget": configured_budget,
+        "configured_candidate_budget": configured_budget,
+        "effective_candidate_budget": effective_budget,
+        "profile_payload_budget": int(profile.get("payload_budget", 0) or 0),
+        "generated": ids("generated"),
+        "valid": ids("valid"),
+        "queued": ids("queued"),
+        "executed": ids("executed"),
+        "stopped_before_execution": ids("stopped_before_execution"),
+        "budget_excluded": ids("budget_excluded"),
+        "rejected": ids("rejected"),
+        "control_requests": int(snapshot.get("requests_used", 0) or 0),
+        "physical_control_requests": int(snapshot.get("physical_requests_used", 0) or 0),
+        "control_evidence_rows": len(control_events),
+        "candidate_evidence_rows": len(candidate_rows),
+        "evidence_row_count": len(candidate_rows) + len(control_events),
+    }
+
 
 # Single source of truth: agent_id → DVWA endpoint path fragment.
 # Keep in sync with ALL_METHOD_AGENTS and foundation/payload_library endpoints.
@@ -159,45 +828,6 @@ def append_error_marker(target: list[str], context: str, exc: Exception) -> None
     target.append(f"{context}:{type(exc).__name__}")
 
 
-def prepare_agent_session(
-    session: Any,
-    security_level: str,
-    *,
-    require_login: bool = True,
-) -> tuple[bool, list[str]]:
-    """Prepare a DVWA session for exploit attempts.
-
-    This helper is intentionally tolerant so existing tests with lightweight
-    session fakes still work: if a fake session lacks login or security-level
-    methods, the helper does not fail.
-    """
-    notes: list[str] = []
-
-    login_ok = True
-    if require_login:
-        login_fn = getattr(session, "login", None)
-        if callable(login_fn):
-            try:
-                login_ok = bool(login_fn())
-                if not login_ok:
-                    notes.append("session_login_failed")
-            except (ValueError, RuntimeError, OSError, TransportError, RequestTimeoutError) as exc:
-                login_ok = False
-                append_error_marker(notes, "session_login_error", exc)
-
-    set_level_fn = getattr(session, "set_security_level", None)
-    if callable(set_level_fn):
-        try:
-            set_level_fn(security_level)
-        except ValueError as exc:
-            append_error_marker(notes, "security_level_invalid", exc)
-        except (RuntimeError, OSError, TransportError, RequestTimeoutError) as exc:
-            append_error_marker(notes, "security_level_set_error", exc)
-
-    if require_login and not login_ok:
-        return False, notes
-
-    return True, notes
 
 
 def merge_scores(state: dict[str, Any], module_name: str, new_score: int) -> dict[str, int]:
@@ -286,54 +916,87 @@ def candidate_payloads_for_stage(
     security_level: str,
     stage: str,
 ) -> list[str]:
-    """Return executable candidate payloads for a stage.
+    """Return executable payloads for one stage under the active policy.
 
-    Graph visits use validated, frozen detection controls for a missing probe
-    stage. Direct legacy callers retain their canonical seed behavior. Rejected
-    candidate history must not be revived by a method agent's local fallback.
+    Every live caller uses the validated exploit/bypass queue and a validated,
+    frozen detection-control snapshot. Missing validation or controls means an
+    empty stage; no direct-agent path may revive library payloads.
     """
+    strict = strict_payload_mode(state)
+    allowed_stages = {stage, "bypass"} if stage == "exploit" else {stage}
+    if stage == "probe":
+        controls = state.get("probe_controls", {}).get(module_name)
+        if controls is not None:
+            from foundation.payload_validator import validate_probe_controls
+            results = validate_probe_controls(state, controls)
+            if not results or any(row.get("valid") is not True for row in results):
+                return []
+            return [ControlPayload(str(row["payload_or_logic"]), str(row["control_id"]))
+                    for row in controls.get("candidates", [])
+                    if row.get("payload_or_logic") and row.get("control_id")]
+        return []
+
     candidates = validated_payload_candidates(state, module_name)
     valid_ids = validated_candidate_ids(state, module_name)
-    allowed_stages = {stage}
-    if stage == "exploit":
-        allowed_stages.add("bypass")
-    selected = []
+    if valid_ids is None:
+        return []
+    model_only = strict and _payload_mode_requires_model(state)
+    selected: list[str] = []
     for candidate in candidates:
         if (not isinstance(candidate, dict)
                 or str(candidate.get("stage", stage)) not in allowed_stages
                 or not candidate.get("payload_or_logic")):
             continue
+        if model_only:
+            origin = _candidate_origin_kind(state, candidate)
+            if not origin_kind_permitted(state_payload_mode(state), origin):
+                continue
+            if (candidate.get("visit_id") != state.get("selected_visit_id")
+                    or not candidate.get("model_call_id")):
+                continue
         payload = str(candidate.get("payload_or_logic", ""))
         candidate_id = candidate.get("candidate_id")
-        selected.append(
-            CandidatePayload(payload, str(candidate_id))
-            if candidate_id is not None else payload
-        )
-    if selected:
-        return selected
+        selected.append(CandidatePayload(payload, str(candidate_id))
+                        if candidate_id is not None else payload)
+    return selected
 
-    if valid_ids is not None and not valid_ids:
-        return []
 
+def _payload_mode_requires_model(state: Mapping[str, Any]) -> bool:
+    return state_payload_mode(state) in STRICT_PAYLOAD_MODES
+
+
+def resolve_stage_control_payloads(
+    state: Mapping[str, Any],
+    module_name: str,
+    payloads: list[str],
+    principal_id: str | None,
+) -> list[str]:
+    """Resolve catalog control tokens while retaining each control identity."""
+    resolved: list[str] = []
+    for payload in payloads:
+        value = resolve_control_payload_for_stage(state, module_name, str(payload), principal_id)
+        if value is None:
+            continue
+        control_id = getattr(payload, "control_id", None)
+        resolved.append(ControlPayload(value, str(control_id)) if control_id else value)
+    return resolved
+
+
+def resolve_control_payload_for_stage(
+    state: Mapping[str, Any],
+    module_name: str,
+    payload: str,
+    principal_id: str | None,
+) -> str | None:
+    """Resolve a synthetic detection-control token for the visit principal."""
+    from foundation.control_catalog import resolve_control_payload
     controls = state.get("probe_controls", {}).get(module_name)
-    if controls is not None:
-        if stage != "probe":
-            return []
-        from foundation.payload_validator import validate_probe_controls
-        results = validate_probe_controls(state, controls)
-        if not results or any(r.get("valid") is not True for r in results):
-            return []
-        return [c["payload_or_logic"] for c in controls["candidates"]]
-
-    payload_set = PayloadLibrary().get(module_name, security_level)
-    if stage == "probe":
-        return [
-            *payload_set.probe,
-            *payload_set.probe_by_level.get(security_level, []),
-        ]
-    if stage == "exploit":
-        return list(payload_set.exploit) + list(payload_set.bypass.get(security_level, []))
-    return []
+    if isinstance(controls, Mapping):
+        row = next((item for item in controls.get("candidates", [])
+                    if isinstance(item, Mapping) and str(item.get("payload_or_logic")) == str(payload)), None)
+        if row is not None:
+            return resolve_control_payload(str(payload), principal_id)
+    return str(payload)
 
 
 def payload_score_updates(
@@ -440,25 +1103,46 @@ def _materialize_request_evidence(
         stage = "probe" if event_copy["event"] == "agent.probe.sent" else "exploit"
         payload_value = payload_copy.get("payload")
         allowed_stages = {"exploit", "bypass"} if stage == "exploit" else {"probe"}
-        matches = [
-            record for record in candidates
-            if record["candidate_id"]
-            and record["candidate"].get("stage", stage) in allowed_stages
-            and (record["candidate"].get("payload_or_logic") in attempted or
-                 record["identity_kind"] == "independent_control")
-            and payload_value in candidate_evidence_payloads(
-                module_name, record["candidate"].get("payload_or_logic"),
-            )
-        ]
         explicit_id = payload_copy.get("candidate_id")
-        if explicit_id is not None:
-            matches = [record for record in matches if record["candidate_id"] == str(explicit_id)]
-        selected = matches[0] if len(matches) == 1 else None
-        # Boolean-blind verification sends a derived complementary request. It
-        # is linked to its source candidate as a control, never as a candidate
-        # response or denominator entry.
-        derived_control = complementary_controls.get(str(payload_value)) if stage == "probe" and not selected else None
-        if (derived_control is None and stage == "probe" and module_name == "sqli_boolean_blind"
+        explicit_control = payload_copy.get("control_id")
+        explicit_source = payload_copy.get("source_candidate_id")
+        if explicit_control and not explicit_id:
+            # Match controls only by their frozen identity. Resolved @self
+            # values may differ from the catalog token; neither can borrow a
+            # queued exploit's identity through an equal payload string.
+            matches = [record for record in candidates
+                       if record["identity_kind"] == "independent_control"
+                       and record["candidate"].get("control_id") == explicit_control]
+            selected = matches[0] if len(matches) == 1 else None
+        else:
+            matches = [
+                record for record in candidates
+                if record["candidate_id"]
+                and record["candidate"].get("stage", stage) in allowed_stages
+                and (explicit_id is not None
+                     or record["candidate"].get("payload_or_logic") in attempted
+                     or record["identity_kind"] == "independent_control")
+                and payload_value in candidate_evidence_payloads(
+                    module_name, record["candidate"].get("payload_or_logic"),
+                )
+            ]
+            if explicit_id is not None:
+                matches = [record for record in matches if record["candidate_id"] == str(explicit_id)]
+            selected = matches[0] if len(matches) == 1 else None
+        if selected is not None and explicit_source is not None:
+            selected = None
+        # Candidate-derived controls bind by their explicit source identity, not
+        # by payload similarity or a nearby unrelated candidate request.
+        derived_control = None
+        if stage == "probe" and explicit_source:
+            matches = [record for record in candidates
+                       if record["identity_kind"] == "candidate"
+                       and record["candidate_id"] == str(explicit_source)]
+            derived_control = matches[0] if len(matches) == 1 else None
+        elif stage == "probe" and not selected:
+            derived_control = complementary_controls.get(str(payload_value))
+        if (derived_control is None and not explicit_source and stage == "probe"
+                and module_name == "sqli_boolean_blind"
                 and last_exploit_record is not None and last_exploit_event_index == event_index - 1):
             # The agent records a control response even when the complementary
             # predicate is negative, before it annotates the source event.
@@ -481,6 +1165,16 @@ def _materialize_request_evidence(
                 complementary_controls[str(payload_copy["control_payload"])] = selected
         else:
             payload_copy["identity_kind"] = "unresolved"
+        if explicit_control and explicit_id is None:
+            payload_copy.pop("candidate_id", None)
+            payload_copy["control_id"] = str(explicit_control)
+            payload_copy["identity_kind"] = ("derived_control" if explicit_source
+                                             else "independent_control")
+            if explicit_source:
+                payload_copy["source_candidate_id"] = str(explicit_source)
+                payload_copy.setdefault("validation_relation", "derived_from_candidate")
+            else:
+                payload_copy.setdefault("validation_relation", "independent_control")
         payload_copy["candidate_link_status"] = (
             "linked" if selected is not None else "ambiguous" if len(matches) > 1 else "unmatched"
         )
@@ -530,9 +1224,14 @@ def _materialize_request_evidence(
         }
         payload_copy["eligible_for_exploit_denominator"] = bool(
             selected is not None
+            and payload_copy.get("identity_kind") == "candidate"
             and selected["identity_kind"] == "candidate"
             and stage == "exploit"
             and selected["candidate"].get("stage", stage) in {"exploit", "bypass"}
+            and payload_copy.get("candidate_id")
+            and not payload_copy.get("control_id")
+            and not payload_copy.get("source_candidate_id")
+            and payload_copy.get("response_sha256")
         )
         event_endpoint = str(payload_copy.get("endpoint") or endpoint or "")
         if event_endpoint and not urlparse(event_endpoint).scheme and target_url:
@@ -566,6 +1265,7 @@ def _materialize_request_evidence(
         }
         for key in ("verified_grade", "verification_reason", "control_payload", "credentials", "consumed_source_evidence_id",
                     "response_sha256", "response_excerpt", "response_truncated", "oracle_ref",
+                    "baseline_response_sha256", "baseline_control_id", "baseline_elapsed_ms", "delay_ms",
                     "principal_id", "object_id", "action", "session_fingerprint", "initial_session_fingerprint"):
             if key in payload_copy:
                 evidence[key] = payload_copy[key]
@@ -619,6 +1319,8 @@ def make_update(
     incomplete_reason: str | None = None,
     execution_error: Exception | None = None,
     execution_failure_code: str | None = None,
+    candidate_stop_reasons: dict[str, str] | None = None,
+    default_candidate_stop_reason: str | None = None,
 ) -> dict[str, Any]:
     """Build a method-agent partial state update without mutating input state.
 
@@ -815,6 +1517,84 @@ def make_update(
         new_blocked = [a for a in blocked_agents if a not in existing_blocked]
         if new_blocked:
             update["blocked_agents"] = new_blocked
+
+    lifecycle: list[dict] = []
+    visit_id = state.get("selected_visit_id") or f"{module_name}:legacy:{state.get('iteration_count', 0)}"
+    evidence_rows = list(update.get("response_evidence", []))
+    attempted_rows: dict[str, list[dict]] = {}
+    for row in evidence_rows:
+        if (row.get("identity_kind") != "candidate" or row.get("stage") not in {"exploit", "bypass"}
+                or not row.get("candidate_id") or row.get("control_id")
+                or row.get("source_candidate_id")):
+            continue
+        attempted_rows.setdefault(str(row["candidate_id"]), []).append(row)
+    executed_rows = {
+        candidate_id: [row for row in rows if row.get("response_sha256")]
+        for candidate_id, rows in attempted_rows.items()
+    }
+    executed_rows = {cid: rows for cid, rows in executed_rows.items() if rows}
+    queue_by_id = {str(candidate.get("candidate_id")): candidate
+                   for candidate in validated_payload_candidates(state, module_name)
+                   if candidate.get("candidate_id") is not None}
+    for candidate_id, rows in executed_rows.items():
+        origin_kind = _candidate_origin_kind(state, queue_by_id.get(candidate_id, {}))
+        lifecycle.append(candidate_lifecycle_fact(
+            method=module_name, visit_id=visit_id, candidate_id=candidate_id,
+            origin_kind=origin_kind, status="executed", reason="own_request_recorded",
+            evidence_refs=[str(row.get("evidence_id")) for row in rows if row.get("evidence_id")]))
+    for candidate_id, rows in attempted_rows.items():
+        if candidate_id in executed_rows:
+            continue
+        origin_kind = _candidate_origin_kind(state, queue_by_id.get(candidate_id, {}))
+        failed_fact = candidate_lifecycle_fact(
+            method=module_name, visit_id=visit_id, candidate_id=candidate_id,
+            origin_kind=origin_kind, status="stopped_before_execution",
+            reason="request_failed",
+            evidence_refs=[str(row.get("evidence_id")) for row in rows if row.get("evidence_id")])
+        failed_fact["http_attempted"] = True
+        lifecycle.append(failed_fact)
+    prior_executed = previously_executed_exploit_payloads(state, module_name, visit_id)
+    probe_payloads = {
+        str(row.get("payload")) for row in [*state.get("response_evidence", []), *evidence_rows]
+        if isinstance(row, Mapping) and row.get("agent_id") == module_name
+        and row.get("stage") == "probe" and row.get("visit_id") == visit_id
+    }
+    method_status = {
+        key: str(value)
+        for key, value in (state.get("precondition_status") or {}).items()
+    }
+    for candidate in validated_payload_candidates(state, module_name):
+        candidate_id = candidate.get("candidate_id")
+        if candidate_id is None or str(candidate_id) in executed_rows:
+            continue
+        if str(candidate_id) in attempted_rows:
+            continue
+        payload = str(candidate.get("payload_or_logic", ""))
+        reason = (candidate_stop_reasons or {}).get(str(candidate_id))
+        if not reason:
+            reason = default_candidate_stop_reason
+        if not reason:
+            if payload in probe_payloads:
+                reason = "skipped_already_probed"
+            elif payload in prior_executed:
+                reason = "already_executed_in_prior_visit"
+            elif confirmed_vulns:
+                reason = "earlier_candidate_confirmed"
+            else:
+                from foundation.preconditions import precondition_keys_for_method
+                keys = precondition_keys_for_method(module_name)
+                if any(method_status.get(key) == "false" for key in keys):
+                    reason = "precondition_false"
+                elif any(method_status.get(key) != "true" for key in keys):
+                    reason = "precondition_unknown"
+                else:
+                    reason = "not_attempted"
+        lifecycle.append(candidate_lifecycle_fact(
+            method=module_name, visit_id=visit_id, candidate_id=str(candidate_id),
+            origin_kind=_candidate_origin_kind(state, candidate),
+            status="stopped_before_execution", reason=reason, evidence_refs=[]))
+    if lifecycle:
+        update["candidate_lifecycle"] = lifecycle
 
     if task_result is not None:
         update["task_result"] = task_result

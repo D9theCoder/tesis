@@ -1,18 +1,20 @@
 """Tests for 3-surface orchestrator."""
 
 from agents.orchestrator import orchestrator
+from tests.support import READY_RECEIPT
 from core.knowledge_graph import AttackKnowledgeGraph
 
 def test_orchestrator_stops_when_budget_exhausted():
     """Verifies orchestrator stops when budget exhausted behavior."""
     state = {
         "target_url": "http://localhost/dvwa",
+        "readiness": READY_RECEIPT,
         "confirmed_vulns": [],
         "achieved_outcomes": [],
         "iteration_count": 30,
         "max_iterations": 30,
         "security_level": "low",
-        "llm_provider": "gemini",
+        "llm_provider": "openai_compatible",
         "current_surface": "sqli",
         "observations": {},
         "attempted_agents": [],
@@ -28,24 +30,18 @@ def test_orchestrator_stops_when_budget_exhausted():
     assert update["next_agent"] == "scorer"
     assert update["task_result"] == "INCOMPLETE"
     assert update["incomplete_reason"] == "ITERATION_LIMIT"
-    assert update["telemetry_events"] == [{
-        "node": "orchestrator",
-        "iteration": 30,
-        "event": "orchestrator.stop",
-        "status": "incomplete",
-        "payload": {"reason": "ITERATION_LIMIT"},
-    }]
 
 def test_orchestrator_critical_outcome_routes_to_scorer():
     """Verifies orchestrator critical outcome routes to scorer behavior."""
     state = {
         "target_url": "http://localhost/dvwa",
+        "readiness": READY_RECEIPT,
         "confirmed_vulns": [],
         "achieved_outcomes": ["admin_session_obtained"],
         "iteration_count": 1,
         "max_iterations": 30,
         "security_level": "low",
-        "llm_provider": "gemini",
+        "llm_provider": "openai_compatible",
         "current_surface": "sqli",
         "observations": {},
         "attempted_agents": [],
@@ -61,25 +57,20 @@ def test_orchestrator_critical_outcome_routes_to_scorer():
     assert update["next_agent"] == "scorer"
 def test_orchestrator_stops_without_model_call_after_method_exhaustion(monkeypatch):
     """An exhausted viable set stops deterministically with a terminal reason."""
-    class FakeKnowledgeGraph(AttackKnowledgeGraph):
-        def get_viable_methods(self, surface, observations):
-            return ["ac_force_browse"]
-
     class FakeLLM:
         def invoke(self, messages):
             return type("Response", (), {
                 "content": '{"next_agent":"scorer","reason_code":"best_viable"}',
             })()
 
-    monkeypatch.setattr("agents.orchestrator.get_attack_knowledge_graph", FakeKnowledgeGraph)
-    monkeypatch.setattr("core.workflow_policy.get_attack_knowledge_graph", FakeKnowledgeGraph)
     monkeypatch.setattr("agents.orchestrator.get_llm", lambda *args, **kwargs: FakeLLM())
     result = orchestrator({
         "target_url": "http://localhost/dvwa",
+        "readiness": READY_RECEIPT,
         "security_level": "high",
         "llm_provider": "openai_compatible",
         "current_surface": "access_control",
-        "observations": {},
+        "observations": {"force_browse_endpoints_visible": True},
         "confirmed_vulns": [],
         "achieved_outcomes": [],
         "attempted_agents": ["ac_force_browse"],
@@ -109,25 +100,20 @@ def test_orchestrator_stops_without_model_call_after_method_exhaustion(monkeypat
 
 def test_orchestrator_distinguishes_model_scorer_stop_before_exhaustion(monkeypatch):
     """A semantic scorer stop before method exhaustion is not all-methods failure."""
-    class FakeKnowledgeGraph(AttackKnowledgeGraph):
-        def get_viable_methods(self, surface, observations):
-            return ["ac_force_browse", "ac_idor"]
-
     class FakeLLM:
         def invoke(self, messages):
             return type("Response", (), {
                 "content": '{"next_agent":"scorer","reason_code":"best_viable"}',
             })()
 
-    monkeypatch.setattr("agents.orchestrator.get_attack_knowledge_graph", FakeKnowledgeGraph)
-    monkeypatch.setattr("core.workflow_policy.get_attack_knowledge_graph", FakeKnowledgeGraph)
     monkeypatch.setattr("agents.orchestrator.get_llm", lambda *args, **kwargs: FakeLLM())
     result = orchestrator({
         "target_url": "http://localhost/dvwa",
+        "readiness": READY_RECEIPT,
         "security_level": "high",
         "llm_provider": "openai_compatible",
         "current_surface": "access_control",
-        "observations": {},
+        "observations": {"force_browse_endpoints_visible": True, "object_ids_enumerable": True},
         "confirmed_vulns": [],
         "achieved_outcomes": [],
         "attempted_agents": ["ac_force_browse"],
@@ -152,25 +138,20 @@ def test_orchestrator_distinguishes_model_scorer_stop_before_exhaustion(monkeypa
 
 def test_orchestrator_counts_execution_failure_as_attempted_for_terminal_reason(monkeypatch):
     """A recorded agent failure must not degrade an exhausted stop to unspecified."""
-    class FakeKnowledgeGraph(AttackKnowledgeGraph):
-        def get_viable_methods(self, surface, observations):
-            return ["ac_force_browse"]
-
     class FakeLLM:
         def invoke(self, messages):
             return type("Response", (), {
                 "content": '{"next_agent":"scorer","reason_code":"best_viable"}',
             })()
 
-    monkeypatch.setattr("agents.orchestrator.get_attack_knowledge_graph", FakeKnowledgeGraph)
-    monkeypatch.setattr("core.workflow_policy.get_attack_knowledge_graph", FakeKnowledgeGraph)
     monkeypatch.setattr("agents.orchestrator.get_llm", lambda *args, **kwargs: FakeLLM())
     result = orchestrator({
         "target_url": "http://localhost/dvwa",
+        "readiness": READY_RECEIPT,
         "security_level": "high",
         "llm_provider": "openai_compatible",
         "current_surface": "access_control",
-        "observations": {},
+        "observations": {"force_browse_endpoints_visible": True},
         "confirmed_vulns": [],
         "achieved_outcomes": [],
         "attempted_agents": [],

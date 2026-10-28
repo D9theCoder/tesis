@@ -584,6 +584,35 @@ def _config_from_record(record: Mapping[str, Any], parent: Mapping[str, Any] | N
     return _deep_merge(_deep_merge(parent_config, setup), own_config)
 
 
+def _metadata_record(
+    record: Mapping[str, Any],
+    parent: Mapping[str, Any] | None,
+    keys: Iterable[str],
+) -> Mapping[str, Any] | None:
+    """Return a record-valued metadata field (policy epoch, readiness, ...).
+
+    ``_metadata_value`` treats a mapping as a container and only returns scalars,
+    so record fields must be read directly from the run, its matrix container,
+    or the recognized nested record containers.
+    """
+    for source in (record, parent):
+        if source is None:
+            continue
+        value = _first_value(source, keys)
+        mapping = _as_mapping(value)
+        if mapping is not None:
+            return mapping
+        for container_key in _NESTED_RECORD_KEYS:
+            nested = _as_mapping(_mapping_get(source, container_key, default=None))
+            if nested is None:
+                continue
+            value = _first_value(nested, keys)
+            mapping = _as_mapping(value)
+            if mapping is not None:
+                return mapping
+    return None
+
+
 def _metadata_value(
     record: Mapping[str, Any],
     parent: Mapping[str, Any] | None,
@@ -685,6 +714,14 @@ class ArtifactMetadata:
     surface: str | None = None
     security_level: str | None = None
     payload_mode: str | None = None
+    experiment_condition: str | None = None
+    experiment_block: str | None = None
+    target_method: str | None = None
+    repeat_index: int | None = None
+    policy_epoch: str | None = None
+    readiness_status: str | None = None
+    source_hashes_sha256: str | None = None
+    fixture_restoration_status: str | None = None
     config_fingerprint: str | None = None
     artifact_kind: str = "single"
     item_index: int | None = None
@@ -749,6 +786,35 @@ def _metadata_from_record(
         _metadata_value(record, parent, ("security_level", "security", "level"))
     )
     payload_mode = _string_value(_metadata_value(record, parent, ("payload_mode", "payload_kind")))
+    experiment_condition = _string_value(_metadata_value(record, parent, ("experiment_condition",)))
+    experiment_block = _string_value(_metadata_value(record, parent, ("experiment_block",)))
+    target_method = _string_value(_metadata_value(record, parent, ("target_method",)))
+    repeat_raw = _metadata_value(record, parent, ("repeat_index",))
+    repeat_index = repeat_raw if isinstance(repeat_raw, int) and not isinstance(repeat_raw, bool) else None
+    epoch_value = _metadata_record(record, parent, ("policy_epoch",))
+    policy_epoch = (
+        _string_value(epoch_value.get("epoch_id"))
+        if isinstance(epoch_value, Mapping)
+        else _string_value(_metadata_value(record, parent, ("policy_epoch",)))
+    )
+    readiness_value = _metadata_record(record, parent, ("readiness",))
+    if not isinstance(readiness_value, Mapping):
+        state = record.get("final_state")
+        readiness_value = state.get("readiness") if isinstance(state, Mapping) else None
+    readiness_status = (
+        _string_value(readiness_value.get("status")) if isinstance(readiness_value, Mapping) else None
+    )
+    restoration_value = (
+        readiness_value.get("fixture_restoration")
+        if isinstance(readiness_value, Mapping) else None
+    )
+    fixture_restoration_status = (
+        _string_value(restoration_value.get("equivalence"))
+        if isinstance(restoration_value, Mapping) else None
+    )
+    source_hashes_sha256 = _string_value(
+        _metadata_value(record, parent, ("source_hashes_sha256",))
+    ) or _string_value(config.get("source_hashes_sha256"))
     schema_version = _string_value(_metadata_value(record, parent, ("schema_version", "schema")))
     timestamp = _record_timestamp(record) or (_record_timestamp(parent) if parent else None)
 
@@ -763,6 +829,12 @@ def _metadata_from_record(
     surface = surface or _string_value(_first_value(config, ("surface", "current_surface")))
     security_level = security_level or _string_value(_first_value(config, ("security_level", "level")))
     payload_mode = payload_mode or _string_value(_first_value(config, ("payload_mode", "payload_kind")))
+    experiment_condition = experiment_condition or _string_value(_first_value(config, ("experiment_condition",)))
+    experiment_block = experiment_block or _string_value(_first_value(config, ("experiment_block",)))
+    target_method = target_method or _string_value(_first_value(config, ("target_method",)))
+    if repeat_index is None:
+        config_repeat = _first_value(config, ("repeat_index",))
+        repeat_index = config_repeat if isinstance(config_repeat, int) and not isinstance(config_repeat, bool) else None
 
     return ArtifactMetadata(
         path=path,
@@ -774,6 +846,14 @@ def _metadata_from_record(
         surface=surface,
         security_level=security_level,
         payload_mode=payload_mode,
+        experiment_condition=experiment_condition,
+        experiment_block=experiment_block,
+        target_method=target_method,
+        repeat_index=repeat_index,
+        policy_epoch=policy_epoch,
+        readiness_status=readiness_status,
+        source_hashes_sha256=source_hashes_sha256,
+        fixture_restoration_status=fixture_restoration_status,
         config_fingerprint=fingerprint,
         artifact_kind=artifact_kind,
         item_index=item_index,
@@ -1144,7 +1224,12 @@ def _matches_filters(item: ArtifactMetadata, filters: Mapping[str, object]) -> b
     for key, requested in filters.items():
         normalised = _normalise_key(key)
         normalised = aliases.get(normalised, normalised)
-        if normalised not in {"status", "execution_status", "security_outcome", "provider", "surface", "security_level", "payload_mode"}:
+        if normalised not in {
+            "status", "execution_status", "security_outcome", "provider", "surface",
+            "security_level", "payload_mode", "experiment_condition",
+            "experiment_block", "target_method", "repeat_index", "policy_epoch",
+            "readiness_status", "source_hashes_sha256", "fixture_restoration_status",
+        }:
             continue
         if not _matches_filter(getattr(item, normalised), requested):
             return False

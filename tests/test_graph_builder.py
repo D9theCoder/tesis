@@ -23,7 +23,7 @@ def test_runtime_with_default_budget_remains_bounded(monkeypatch):
 
     monkeypatch.setattr(orchestrator_module, "get_llm", fail_get_llm)
 
-    app = build_framework(llm_provider="gemini")
+    app = build_framework(llm_provider="openai_compatible")
     state = deepcopy(DEFAULT_STATE)
 
     result = app.invoke(state, config={"configurable": {"thread_id": "test"}})
@@ -61,7 +61,7 @@ def test_stage6_real_scorer_node_executes(monkeypatch):
 
     monkeypatch.setattr(orchestrator_module, "get_llm", fail_get_llm)
 
-    app = build_framework(llm_provider="gemini")
+    app = build_framework(llm_provider="openai_compatible")
     state = deepcopy(DEFAULT_STATE)
     state["iteration_count"] = state["max_iterations"]
     state["scores"] = {"sqli_union": 3}

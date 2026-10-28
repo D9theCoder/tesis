@@ -129,7 +129,7 @@ class TestEvasionStatePropagation:
         artifact = run_single_engagement(
             target_url="http://localhost/dvwa",
             security_level="low",
-            llm_provider="gemini",
+            llm_provider="openai_compatible",
             evasion_enabled=True,
             evasion_mode="reactive",
         )
@@ -187,7 +187,7 @@ class TestEvasionStatePropagation:
         run_single_engagement(
             target_url="http://localhost/dvwa",
             security_level="low",
-            llm_provider="gemini",
+            llm_provider="openai_compatible",
         )
 
         init_state = captured_states[0]

@@ -588,17 +588,109 @@ def build_audit(root, forward_manifest):
             'forward-capture.json': forward}
 
 
+def audit_policy_contracts(reader, artifact_paths):
+    """Audit candidate/visit, fallback and control-policy contracts.
+
+    Read-only: every source is hash-pinned before and after the audit. Only
+    artifacts that declare the new payload policy are expected to satisfy the
+    versioned catalog/fallback contract; historical records are reported as
+    ``historical_policy`` instead of being relabeled.
+    """
+    from evaluation.scoring_evidence import (
+        candidate_execution_rows, candidate_lifecycle_status, candidate_is_executed,
+    )
+    from core.payload_policy import STRICT_PAYLOAD_MODES
+    rows = []
+    for path in artifact_paths:
+        path = Path(path)
+        artifact = reader.read(path)
+        final_state = artifact.get('final_state') if isinstance(artifact.get('final_state'), dict) else {}
+        config = artifact.get('config') if isinstance(artifact.get('config'), dict) else {}
+        policy_version = config.get('payload_policy_version') or final_state.get('payload_policy_version')
+        epoch = 'versioned_policy' if policy_version else 'historical_policy'
+        method = artifact.get('selected_method') or final_state.get('selected_method')
+        issued = []
+        for candidate in final_state.get('payload_candidates', {}).get(method, []) or []:
+            if not isinstance(candidate, dict) or candidate.get('candidate_id') is None:
+                continue
+            candidate_id = candidate['candidate_id']
+            status = candidate_lifecycle_status(artifact, candidate_id, method)
+            if status == 'executed' and not candidate_is_executed(artifact, candidate_id, method):
+                issued.append({'code': 'executed_without_own_request', 'candidate_id': candidate_id})
+            for _index, row in candidate_execution_rows(artifact, candidate_id, method):
+                if not row.get('visit_id') or not row.get('response_sha256'):
+                    issued.append({'code': 'execution_missing_visit_or_response', 'candidate_id': candidate_id})
+        for event in final_state.get('fallback_events', []) or []:
+            if not isinstance(event, dict):
+                continue
+            if not event.get('role') and not event.get('origin'):
+                issued.append({'code': 'fallback_without_role_binding', 'event': event.get('event')})
+            if str(config.get('payload_mode')) in set(STRICT_PAYLOAD_MODES) and 'static' in str(event.get('event')):
+                issued.append({'code': 'strict_mode_static_fallback', 'event': event.get('event')})
+        controls_by_method = final_state.get('probe_controls') if isinstance(final_state.get('probe_controls'), dict) else {}
+        all_controls = [controls_by_method.get(method)] if method else []
+        all_controls.extend(value for key, value in controls_by_method.items() if key != method)
+        control_events = final_state.get('control_events') if isinstance(final_state.get('control_events'), list) else []
+        for snapshot in all_controls:
+            if not isinstance(snapshot, dict):
+                continue
+            if epoch == 'versioned_policy' and snapshot.get('candidates'):
+                if not snapshot.get('policy_version') or not snapshot.get('catalog_sha256'):
+                    issued.append({'code': 'unversioned_control_catalog'})
+            for event in snapshot.get('control_events', []) or []:
+                if isinstance(event, dict) and not event.get('policy_version'):
+                    issued.append({'code': 'unversioned_control_event', 'control_id': event.get('control_id')})
+        for event in control_events:
+            if isinstance(event, dict) and not event.get('policy_version'):
+                issued.append({'code': 'unversioned_control_event', 'control_id': event.get('control_id')})
+        for visit in final_state.get('quarantined_visits', []) or []:
+            if isinstance(visit, dict) and visit.get('evidence_refs') is None:
+                issued.append({'code': 'quarantine_without_evidence', 'visit_id': visit.get('visit_id')})
+        for row in final_state.get('candidate_lifecycle', []) or []:
+            if (isinstance(row, dict) and row.get('status') == 'executed'
+                    and str(row.get('reason')) == 'request_failed'):
+                issued.append({'code': 'executed_failed_request', 'candidate_id': row.get('candidate_id')})
+        if epoch == 'versioned_policy' and not isinstance(final_state.get('readiness'), dict):
+            issued.append({'code': 'readiness_missing'})
+        requirements = final_state.get('model_call_requirements')
+        if isinstance(requirements, list):
+            receipts = {str(row.get('call_id')) for row in artifact.get('llm_performance', [])
+                        if isinstance(row, dict) and row.get('call_id')}
+            for row in requirements:
+                if not isinstance(row, dict) or row.get('required') is not True:
+                    continue
+                status = str(row.get('status') or '')
+                if status in {'failed', 'blocked', 'not_run'} and not row.get('reason'):
+                    issued.append({'code': 'required_call_status_without_reason',
+                                   'role': row.get('role'), 'visit_id': row.get('visit_id'), 'status': status})
+                if status == 'completed' and row.get('call_id') and str(row['call_id']) not in receipts:
+                    issued.append({'code': 'required_call_receipt_missing',
+                                   'role': row.get('role'), 'visit_id': row.get('visit_id')})
+        rows.append({'source': reader.binding(path), 'epoch': epoch,
+                     'payload_policy_version': policy_version,
+                     'control_policy_version': (controls_by_method.get(method) or {}).get('policy_version')
+                        if isinstance(controls_by_method.get(method), dict) else None,
+                     'method': method, 'issues': issued, 'status': 'pass' if not issued else 'fail'})
+    return rows
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-root', required=True)
     parser.add_argument('--forward-manifest', required=True)
     parser.add_argument('--output-dir', required=True)
+    parser.add_argument('--contract-artifacts', nargs='*', default=None,
+        help='Optional new-epoch artifacts to audit for candidate/control policy contracts')
     args = parser.parse_args(argv)
     output = Path(args.output_dir).resolve()
     require(not output.exists(), 'Audit output must be a new evidence epoch')
     output.parent.mkdir(parents=True, exist_ok=True)
     require(not output.is_relative_to(Path(args.source_root).resolve()), 'Audit output must be outside frozen source root')
     evidence = build_audit(args.source_root, args.forward_manifest)
+    if args.contract_artifacts:
+        contract_reader = EvidenceReader()
+        evidence['policy-contracts.json'] = audit_policy_contracts(contract_reader, args.contract_artifacts)
+        contract_reader.verify_unchanged()
     output.mkdir()
     for name, data in evidence.items():
         with (output / name).open('x', encoding='utf-8') as stream:

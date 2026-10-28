@@ -74,13 +74,14 @@ def test_mutation_only_graph_export_saved_probe_replay(monkeypatch, condition, l
     controls = frozen['probe_controls'][method]
     assert controls['visit_id'] == frozen['selected_visit_id']
     assert controls['candidates'] and all(r['valid'] for r in controls['validation_results'])
-    probe_ids = {c['candidate_id'] for c in controls['candidates']}
-    assert all(c['source'] == 'static_seed' and c['source_seed_id'] == c['candidate_id']
-        and c['method'] == method and c['stage'] == 'probe' for c in controls['candidates'])
+    probe_ids = {c['control_id'] for c in controls['candidates']}
     exploit_ids = {c['candidate_id'] for c in queue}
     assert not probe_ids & exploit_ids
     probes = [r for r in artifact['response_evidence'] if r['stage'] == 'probe']
-    assert probes and all(r.get('candidate_id') in probe_ids for r in probes)
+    assert probes and all(not r.get('candidate_id') and (
+        (r.get('identity_kind') == 'independent_control' and r.get('control_id') in probe_ids)
+        or (r.get('identity_kind') == 'derived_control' and r.get('source_candidate_id') in exploit_ids)
+    ) for r in probes)
     assert all(r.get('method') == method and r.get('visit_id') == frozen['selected_visit_id']
         and r.get('validation_ref') and r.get('request_id') and r.get('request_ref')
         and r.get('request_structure', {}).get('available') is True
@@ -90,7 +91,10 @@ def test_mutation_only_graph_export_saved_probe_replay(monkeypatch, condition, l
     for row in artifact['response_evidence']:
         assert resolve_pointer(artifact, row['request_ref']) == row['request_structure']
         validation = resolve_pointer(artifact, row['validation_ref'])
-        assert validation.get('candidate_id') == row.get('candidate_id', row.get('source_candidate_id'))
+        independent = row.get('identity_kind') == 'independent_control'
+        assert validation.get('control_id' if independent else 'candidate_id') == (
+            row.get('control_id') if independent else
+            row.get('candidate_id') or row.get('source_candidate_id'))
         assert validation.get('valid') is True
     if method.startswith('ac_'):
         assert all(r.get('session_descriptor', {}).get('available') is True
@@ -114,7 +118,9 @@ def test_mutation_only_graph_export_saved_probe_replay(monkeypatch, condition, l
     assert len(fixture.requests) > requests
     assert replay['fresh_provider_calls'] == 0 and fixture.provider_calls == providers
     assert source.read_bytes() == before
-    assert all(r.get('candidate_id') in probe_ids | exploit_ids for r in replay['response_evidence'])
+    assert all((r.get('control_id') in probe_ids and not r.get('candidate_id'))
+        or r.get('candidate_id') in exploit_ids
+        or r.get('source_candidate_id') in exploit_ids for r in replay['response_evidence'])
     assert all(r.get('method') == method and r.get('validation_ref') and r.get('request_id')
         and r.get('request_ref') and r.get('request_structure', {}).get('available') is True
         and r.get('request_structure', {}).get('redaction_applied') is True
@@ -123,7 +129,10 @@ def test_mutation_only_graph_export_saved_probe_replay(monkeypatch, condition, l
     for row in replay['response_evidence']:
         assert resolve_pointer(replay, row['request_ref']) == row['request_structure']
         validation = resolve_pointer(replay, row['validation_ref'])
-        assert validation.get('candidate_id') == row.get('candidate_id', row.get('source_candidate_id'))
+        independent = row.get('identity_kind') == 'independent_control'
+        assert validation.get('control_id' if independent else 'candidate_id') == (
+            row.get('control_id') if independent else
+            row.get('candidate_id') or row.get('source_candidate_id'))
         assert validation.get('valid') is True
     assert [r['payload'] for r in replay['response_evidence']] == [r['payload'] for r in artifact['response_evidence']]
     queue_review = review_queue(source)
@@ -144,16 +153,14 @@ def test_revisited_visits_keep_distinct_queues_probe_and_request_links(monkeypat
 
     from agents.agent_telemetry import exploit_event, probe_event
     from agents.state_utils import make_update
-    from core.state import new_default_state
     from evaluation.runner import run_single_engagement
-    from evaluation.scoring_evidence import evidence_hash
+    from foundation.payload_generator import _stamp_static_candidates
     from foundation.payload_library import PayloadLibrary
-    from foundation.payload_validator import validate_payload_candidates, validate_probe_controls
+    from foundation.payload_validator import payload_validator_node
 
     method = 'sqli_union'
     level = 'medium'
     seeds = PayloadLibrary().load_seed_candidates(method, level)
-    probes = [candidate for candidate in seeds if candidate.get('stage') == 'probe']
     visit_candidates = [
         next(candidate for candidate in seeds if candidate.get('stage') == 'exploit'),
         next(candidate for candidate in seeds if candidate.get('stage') == 'bypass'),
@@ -177,38 +184,32 @@ def test_revisited_visits_keep_distinct_queues_probe_and_request_links(monkeypat
                     'payload_mode': 'static_only',
                 })
                 historical = list(state.get('payload_candidates', {}).get(method, []))
-                if candidate['candidate_id'] not in {row.get('candidate_id') for row in historical}:
-                    historical.append(deepcopy(candidate))
-                state['payload_candidates'] = {method: historical}
-
-                validation = validate_payload_candidates(state)
-                state['payload_candidates'] = validation['payload_candidates']
-                validation_by_id = {
-                    str(row.get('candidate_id')): row
-                    for row in [*state.get('payload_validation_results', {}).get(method, []),
-                                *validation['payload_validation_results'][method]]
-                    if isinstance(row, dict) and row.get('candidate_id') is not None
-                }
+                prior_validation = list(state.get('payload_validation_results', {}).get(method, []))
+                current = _stamp_static_candidates(
+                    method, level, visit_id, visit_candidates[:visit_number])
+                state['payload_candidates'] = {method: [*historical, *current]}
+                state['active_payload_candidates'] = {method: {
+                    'visit_id': visit_id, 'status': 'pending',
+                    'candidate_ids': [row['candidate_id'] for row in current],
+                }}
+                validation = payload_validator_node(state)
+                queue = validation['payload_candidates'][method]
+                assert queue and all(row['valid'] for row in
+                                     validation['payload_validation_results'][method])
+                state['payload_candidates'] = {method: [*historical, *queue]}
                 state['payload_validation_results'] = {method: [
-                    validation_by_id[str(row['candidate_id'])]
-                    for row in state['payload_candidates'][method]
-                ]}
+                    *prior_validation, *validation['payload_validation_results'][method]]}
                 state['payload_provenance'] = {
                     **state.get('payload_provenance', {}), **validation['payload_provenance'],
                 }
-                controls = {
-                    'visit_id': visit_id,
-                    'candidates': deepcopy(probes),
-                    'sha256': evidence_hash(probes),
-                }
-                controls['validation_results'] = validate_probe_controls(state, controls)
-                assert controls['validation_results'] and all(
-                    row.get('valid') is True for row in controls['validation_results'])
-                state['probe_controls'] = {method: controls}
-
-                probe = probes[visit_number - 1]
+                state['active_payload_candidates'] = validation['active_payload_candidates']
+                state['probe_controls'] = validation['probe_controls']
+                controls = state['probe_controls'][method]
+                probe = controls['candidates'][visit_number - 1]
                 probe_payload = probe['payload_or_logic']
-                exploit_payload = candidate['payload_or_logic']
+                selected = next(row for row in current
+                                if row['source_seed_id'] == candidate['candidate_id'])
+                exploit_payload = selected['payload_or_logic']
                 endpoint = 'http://localhost/dvwa/vulnerabilities/sqli/'
                 probe_response = httpx.Response(200, text='offline probe response', request=
                     httpx.Request('GET', endpoint, params={'id': probe_payload}))
@@ -218,9 +219,9 @@ def test_revisited_visits_keep_distinct_queues_probe_and_request_links(monkeypat
                     {'node': 'payload_validator', 'event': 'payload.validation.completed',
                      'status': 'ok', 'payload': {'method': method, 'visit_id': visit_id}},
                     probe_event(method, probe_payload, 200, False, endpoint=endpoint,
-                                response=probe_response),
+                                response=probe_response, control_id=probe['control_id']),
                     exploit_event(method, exploit_payload, 200, False, endpoint=endpoint,
-                                  response=exploit_response),
+                                  response=exploit_response, candidate_id=selected['candidate_id']),
                 ]
                 updates = make_update(
                     state=state, module_name=method, score=0,
@@ -254,10 +255,12 @@ def test_revisited_visits_keep_distinct_queues_probe_and_request_links(monkeypat
     ]
     first_queue = inputs[0]['state']['payload_candidates'][method]
     second_queue = inputs[1]['state']['payload_candidates'][method]
-    assert {row['candidate_id'] for row in first_queue} == {visit_candidates[0]['candidate_id']}
-    assert {row['candidate_id'] for row in second_queue} == {
+    assert [row['source_seed_id'] for row in first_queue] == [visit_candidates[0]['candidate_id']]
+    assert {row['source_seed_id'] for row in second_queue} == {
         candidate['candidate_id'] for candidate in visit_candidates
     }
+    assert not {row['candidate_id'] for row in first_queue} & {
+        row['candidate_id'] for row in second_queue}
     assert all(row['valid'] for visit in inputs for row in
         visit['state']['payload_validation_results'][method])
     assert all(visit['state']['probe_controls'][method]['visit_id'] ==
@@ -274,9 +277,12 @@ def test_revisited_visits_keep_distinct_queues_probe_and_request_links(monkeypat
         for row in dispositions
     }
     first_visit_id, second_visit_id = [row['state']['selected_visit_id'] for row in inputs]
-    first_candidate_id, second_candidate_id = [candidate['candidate_id'] for candidate in visit_candidates]
+    first_candidate_id = first_queue[0]['candidate_id']
+    second_ids = {row['source_seed_id']: row['candidate_id'] for row in second_queue}
+    second_first_id = second_ids[visit_candidates[0]['candidate_id']]
+    second_candidate_id = second_ids[visit_candidates[1]['candidate_id']]
     assert disposition_by_visit_candidate[(method, first_visit_id, first_candidate_id)]['disposition'] == 'selected_executed'
-    revisited_unexecuted = disposition_by_visit_candidate[(method, second_visit_id, first_candidate_id)]
+    revisited_unexecuted = disposition_by_visit_candidate[(method, second_visit_id, second_first_id)]
     assert revisited_unexecuted['disposition'] == 'already_tried'
     assert revisited_unexecuted['selection_status'] == 'selected'
     assert revisited_unexecuted['stop_reason'] == 'already_tried_before_visit'
@@ -312,7 +318,9 @@ def test_revisited_visits_keep_distinct_queues_probe_and_request_links(monkeypat
             assert row['validation_ref'].startswith(expected_prefix)
             assert resolve_pointer(artifact, row['request_ref']) == row['request_structure']
             validation = resolve_pointer(artifact, row['validation_ref'])
-            assert validation['candidate_id'] == row.get('candidate_id', row.get('source_candidate_id'))
+            assert validation['candidate_id'] == (
+                row['control_id'] if row['identity_kind'] == 'independent_control'
+                else row.get('candidate_id', row.get('source_candidate_id')))
             assert validation['valid'] is True
 
     artifact_path = evidence_dir / f'{execution_id}.json'

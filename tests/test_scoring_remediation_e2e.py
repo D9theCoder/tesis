@@ -21,6 +21,7 @@ from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.reporter import write_json_report
 from evaluation.runner import run_single_engagement
 from foundation.http_client import ContainmentError, HTTPClient
+from llm.runtime import LLMRuntime
 from tests.test_method_agents_e2e import Fixture
 
 
@@ -106,6 +107,99 @@ class ScoringFixture(Fixture):
         return result
 
 
+class FixtureRuntime(LLMRuntime):
+    """Runtime-compatible fixture: no provider dispatch, real call records."""
+
+    def __init__(self, fixture):
+        super().__init__(max_concurrency=1)
+        self.fixture = fixture
+
+    def invoke(self, *, context, role, system_message, user_message, schema=None,
+               schema_version=None, validator=None, max_tokens=None, evidence_context=None):
+        from datetime import datetime, timezone
+        from evaluation.scoring_evidence import evidence_hash
+        from llm.runtime import LLMCallResult, LLMOutputError
+        evidence_context = dict(evidence_context or {})
+        call_id = context.next_call_id(role)
+        response = None
+        try:
+            response = self.fixture.invoke([SimpleNamespace(content=user_message)])
+        except Exception as exc:  # noqa: BLE001 - provider/transport boundary
+            performance = {
+                'method': evidence_context.get('method'), 'visit_id': evidence_context.get('visit_id'),
+                'role': role, 'provider': 'offline', 'model': 'fixture',
+                'model_profile': 'offline-fixture', 'schema_version': schema_version,
+                'call_id': call_id, 'coordinate_id': context.coordinate_id,
+                'started_at': datetime.now(timezone.utc).isoformat(),
+                'input': evidence_context.get('input', {}),
+                'input_sha256': evidence_hash(evidence_context.get('input', {})),
+                'prompt_hash': 'sha256:fixture', 'attempt': 1, 'attempts': 1,
+                'attempt_records': [], 'provider_dispatches': 1, 'provider_requests': 1,
+                'max_retries': 0, 'cache_hit': False, 'queue_wait_ms': 0,
+                'call_duration_ms': 0, 'elapsed_ms': 0, 'structured_output_mode': 'json',
+                'validation_status': 'invalid', 'parse_status': 'provider_error',
+                'error_type': type(exc).__name__, 'error_message': str(exc),
+                'failure_class': 'provider_error', 'output': None,
+                'output_sha256': evidence_hash(None),
+            }
+            failure = {'failure_class': 'provider_error', 'provider': 'offline',
+                       'model': 'fixture', 'model_profile': 'offline-fixture', 'role': role,
+                       'call_id': call_id, 'parse_status': 'provider_error',
+                       'error_type': type(exc).__name__, 'message': str(exc),
+                       'attempts': 1, 'provider': 'offline'}
+            performance['failure'] = failure
+            context.append_record(performance)
+            context.emit_activity('llm.failed', call_id=call_id, record=performance)
+            try:
+                setattr(exc, 'provider_failure', dict(failure))
+            except (AttributeError, TypeError):
+                pass
+            raise
+        text = str(getattr(response, 'content', ''))
+        performance = {
+            'method': evidence_context.get('method'), 'visit_id': evidence_context.get('visit_id'),
+            'role': role, 'provider': 'offline', 'model': 'fixture',
+            'model_profile': 'offline-fixture', 'schema_version': schema_version,
+            'call_id': call_id, 'coordinate_id': context.coordinate_id,
+            'started_at': datetime.now(timezone.utc).isoformat(),
+            'input': evidence_context.get('input', {}),
+            'input_sha256': evidence_hash(evidence_context.get('input', {})),
+            'prompt_hash': 'sha256:fixture', 'attempt': 1, 'attempts': 1,
+            'attempt_records': [], 'provider_dispatches': 1, 'provider_requests': 1,
+            'max_retries': 0, 'cache_hit': False, 'queue_wait_ms': 0,
+            'call_duration_ms': 0, 'elapsed_ms': 0, 'structured_output_mode': 'json',
+            'validation_status': 'valid', 'parse_status': 'ok',
+        }
+        parsed = None
+        try:
+            parsed = json.loads(text)
+            if validator is not None:
+                parsed = validator(parsed)
+            if role == 'orchestrator' and isinstance(parsed, dict) and parsed.get('next_agent') not in {None, 'scorer'}:
+                performance['method'] = parsed['next_agent']
+                ordinal = evidence_context.get('visit_ordinal')
+                if ordinal:
+                    performance['visit_id'] = f"{parsed['next_agent']}:visit:{ordinal}"
+        except Exception as exc:  # noqa: BLE001 - returned output failure
+            message = f'{type(exc).__name__}: {exc}'
+            performance.update({
+                'validation_status': 'invalid',
+                'parse_status': 'incomplete' if type(exc).__name__ == 'LengthFinishReasonError' else 'invalid',
+                'error_type': type(exc).__name__, 'error_message': message,
+                'output': None, 'output_sha256': evidence_hash(None),
+            })
+            context.append_record(performance)
+            context.emit_activity('llm.failed', call_id=call_id, record=performance)
+            raise LLMOutputError(message, text=text, performance=performance) from exc
+        performance.update({
+            'output': parsed, 'output_sha256': evidence_hash(parsed),
+        })
+        context.append_record(performance)
+        context.emit_activity('llm.started', call_id=call_id, record=performance)
+        context.emit_activity('llm.completed', call_id=call_id, record=performance)
+        return LLMCallResult(text=text, parsed=parsed, performance=performance)
+
+
 def control(monkeypatch, name, *, automatic=False, condition='linear_hybrid', method='sqli_union', ranked=False):
     fixture = ScoringFixture(method, name)
     monkeypatch.setattr(httpx.Client, 'request', lambda client, *a, **k: fixture.request(client, *a, **k))
@@ -114,17 +208,23 @@ def control(monkeypatch, name, *, automatic=False, condition='linear_hybrid', me
     monkeypatch.setattr('foundation.payload_generator.get_llm', lambda *a, **k: fixture)
     graph = build_framework()
     monkeypatch.setattr('evaluation.runner.build_framework', lambda **kwargs: graph)
+    runtime = FixtureRuntime(fixture)
     config = dict(target_url='http://localhost/dvwa', security_level='low',
         llm_provider='openai_compatible', surface='sqli', payload_mode='hybrid' if name == 'mixed_candidates' else 'static_only',
         target_method=None if automatic else method, experiment_condition=condition,
         max_iterations=12, execution_id=name, output_dir=str(ROOT / 'controls' / name),
+        llm_runtime=runtime,
         llm_role_configs={r: {'structured_output': 'off'} for r in ('orchestrator', 'payload_generator')})
     if ranked:
         config.update(scoring_mode='human', scoring_rubric_version='scoring.v4',
-            scoring_profile=frozen_test_profile(), fixture_id='synthetic-dvwa', protocol_version='offline.v1')
-    artifact = run_single_engagement(**config)
+            scoring_profile=frozen_test_profile(), fixture_id='synthetic-dwva', protocol_version='offline.v1')
+    try:
+        artifact = run_single_engagement(**config)
+    finally:
+        runtime.close()
     write_json_report(ROOT / 'controls' / name / 'fixture.json', {
-        'kind': 'offline_control', 'config': config, 'requests': fixture.requests,
+        'kind': 'offline_control', 'config': {k: v for k, v in config.items() if k != 'llm_runtime'},
+        'requests': fixture.requests,
         'fresh_http_calls': 0, 'fresh_provider_calls': 0, 'fake_provider_calls': fixture.provider_calls,
         'expected': name, 'code_sha256': {str(p): sha256(p.read_bytes()).hexdigest()
             for p in (Path('core/scorer.py'), Path('core/state.py'), Path('agents/state_utils.py'))}})
@@ -222,9 +322,10 @@ def test_scoring_candidate_evidence_and_revisit(monkeypatch):
     assert state['payload_provenance'][failed['candidate_id']]['source'] == 'static_seed'
     assert state['payload_provenance'][success['candidate_id']]['source'] == 'llm_generated'
     probes = [r for r in artifact['response_evidence'] if r['stage'] == 'probe']
-    assert all(state['payload_scores'][r['candidate_id']] <= 1 for r in probes)
-    unused = {c['candidate_id'] for c in state['payload_candidates']['sqli_union']} - {r['candidate_id'] for r in artifact['response_evidence'] if r.get('candidate_id')}
-    assert unused and all(cid not in state['payload_scores'] for cid in unused)
+    assert probes
+    assert all(r.get('identity_kind') == 'independent_control'
+        and not r.get('candidate_id')
+        and r['control_id'] not in state['payload_scores'] for r in probes)
     fixture.control = 'negative'
     config = {'configurable': {'thread_id': next(iter(graph.checkpointer.storage))}}
     graph.update_state(config, {'tried_payloads': Overwrite({}), 'attempted_agents': Overwrite([])}, as_node='recon')
@@ -234,7 +335,11 @@ def test_scoring_candidate_evidence_and_revisit(monkeypatch):
     assert len(set(visits)) == 2
     assert final['iteration_count'] > artifact['final_state']['iteration_count']
     decisions = [d for d in final['scoring_decisions'] if d['dimension'] == 'Spayload' and d.get('candidate_id') == success['candidate_id']]
-    assert [d['score'] for d in decisions] == [3, 0]
+    assert [d['score'] for d in decisions] == [3]
+    later = [d for d in final['scoring_decisions']
+        if d['dimension'] == 'Spayload' and d.get('visit_id') == visits[-1]]
+    assert later and all(d['score'] == 0 and d['candidate_id'] != success['candidate_id']
+        for d in later)
     assert final['payload_scores'][success['candidate_id']] == 3
     row = next(r for r in exported['manual_scoring_evidence'] if r['candidate_id'] == success['candidate_id'])
     assert row['scoring_decision']['decision_id'] == decisions[0]['decision_id']
@@ -350,13 +455,18 @@ def test_scoring_saved_data_repair_uses_no_transport_or_provider(monkeypatch):
 
 @pytest.mark.parametrize('method,name', [('sqli_time_blind', 'negative'),
     ('sqli_boolean_blind', 'negative'), ('ac_idor', 'negative'), ('bf_dictionary', 'throttle')])
-def test_scoring_probe_candidates_require_the_declared_signal(monkeypatch, method, name):
+def test_scoring_probe_controls_require_the_declared_signal(monkeypatch, method, name):
     from tests import test_method_agents_e2e as existing
     monkeypatch.setattr(existing, 'EVIDENCE', ROOT / 'controls' / 'probe-signals')
     artifact, _ = existing.run_control(monkeypatch, method, 'low', name)
-    probes = [r for r in artifact['response_evidence'] if r['stage'] == 'probe']
-    assert probes
-    assert all(artifact['final_state']['payload_scores'][r['candidate_id']] == 0 for r in probes)
+    controls = [event for event in artifact['control_events']
+        if event['method'] == method and event['phase'] == 'method_probe']
+    assert controls and any(event['status'] == 'sent' for event in controls)
+    assert all(event['signal_detected'] is False for event in controls if event['status'] == 'sent')
+    assert all(event['control_id'] not in artifact['final_state']['payload_scores'] for event in controls)
+    assert any(row['method'] == method and row['reason_code'] == 'precondition_false'
+        for row in artifact['selection_rejections'])
+    assert not any(row['stage'] == 'exploit' for row in artifact['response_evidence'])
 
 
 def test_scoring_candidate_receipts_retain_the_response_that_earned_the_grade(monkeypatch):

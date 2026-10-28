@@ -10,21 +10,9 @@ import httpx
 import json
 import pytest
 
-from agents.state_utils import candidate_payloads_for_stage, prepare_agent_session
+from agents.state_utils import candidate_payloads_for_stage
 
 
-def test_prepare_agent_session_requires_login_when_requested():
-    """Verifies prepare agent session requires login when requested behavior."""
-    class FakeSession:
-        """Groups regression tests for FakeSession behavior."""
-        def login(self):
-            """Supports regression tests for test state utils."""
-            return False
-
-    ready, notes = prepare_agent_session(FakeSession(), "low", require_login=True)
-
-    assert ready is False
-    assert "session_login_failed" in notes
 
 
 from core.state import new_default_state
@@ -312,13 +300,19 @@ def test_duplicate_payload_values_keep_their_distinct_candidate_identity():
         "selected_visit_id": "sqli_union:visit:1",
         "payload_candidates": {"sqli_union": [
             {"candidate_id": "static-duplicate", "method": "sqli_union", "stage": "exploit",
-             "payload_or_logic": "same-value", "source": "static_seed"},
+             "payload_or_logic": "same-value", "source": "static_seed",
+             "origin_kind": "static_seed", "visit_id": "sqli_union:visit:1",
+             "policy_version": "payload-policy.v2"},
             {"candidate_id": "llm-duplicate", "method": "sqli_union", "stage": "exploit",
-             "payload_or_logic": "same-value", "source": "llm_generated"},
+             "payload_or_logic": "same-value", "source": "llm_generated",
+             "origin_kind": "seed_mutation", "visit_id": "sqli_union:visit:1",
+             "policy_version": "payload-policy.v2"},
         ]},
         "payload_validation_results": {"sqli_union": [
-            {"candidate_id": "static-duplicate", "valid": True, "reason": "ok"},
-            {"candidate_id": "llm-duplicate", "valid": True, "reason": "ok"},
+            {"candidate_id": "static-duplicate", "valid": True, "reason": "ok",
+             "visit_id": "sqli_union:visit:1"},
+            {"candidate_id": "llm-duplicate", "valid": True, "reason": "ok",
+             "visit_id": "sqli_union:visit:1"},
         ]},
     })
     payloads = candidate_payloads_for_stage(state, "sqli_union", "low", "exploit")

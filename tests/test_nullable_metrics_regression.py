@@ -48,7 +48,7 @@ AVAILABLE = {
 }
 
 
-def _artifact(summary, provider="gemini"):
+def _artifact(summary, provider="openai_compatible"):
     return {
         "run_id": "r-1",
         "status": "success",
@@ -121,7 +121,7 @@ def test_score_table_renders_na_for_unavailable():
 
 def test_provider_comparison_mixed_old_new():
     rendered = format_provider_comparison_table(
-        {"runs": [_artifact(dict(LEGACY), "gemini"), _artifact(dict(AVAILABLE), "claude")]}
+        {"runs": [_artifact(dict(LEGACY), "openai_compatible"), _artifact(dict(AVAILABLE), "claude")]}
     )
     assert "N/A (1 unavail)" in rendered
     assert "1.25 (1 avail)" in rendered
@@ -135,7 +135,7 @@ def test_artifact_summary_prefers_nested_report():
 
 def test_score_summary_rejects_availability_mismatch():
     base = dict(
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         security_level="low",
         total_modules_tested=1,
         score_distribution={0: 1},
@@ -209,7 +209,7 @@ def test_available_nonfinite_fails_closed():
 
 def test_score_summary_rejects_nonfinite_available():
     base = dict(
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         security_level="low",
         total_modules_tested=1,
         score_distribution={0: 1},
@@ -231,7 +231,7 @@ def test_artifact_summary_backfills_stub_nested():
     artifact = {
         "run_id": "r-1",
         "status": "success",
-        "config": {"provider": "gemini"},
+        "config": {"provider": "openai_compatible"},
         **dict(AVAILABLE),
         "report": {
             "summary": {"chain_exploits_achieved": 0},
@@ -246,7 +246,7 @@ def test_artifact_summary_backfills_stub_nested():
 
 def test_score_summary_rejects_unflagged_numeric():
     base = dict(
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         security_level="low",
         total_modules_tested=1,
         score_distribution={0: 1},

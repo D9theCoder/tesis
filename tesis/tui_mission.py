@@ -23,6 +23,7 @@ from textual.widgets.option_list import Option
 
 from evaluation.multi_llm_runner import run_provider_matrix
 from evaluation.runner import run_single_engagement
+from tesis.config_fields import payload_mode_label
 from tesis.config_loader import load_and_resolve_config
 from tesis.tui_config import TuiConfigCache
 from tesis.runtime_events import CancellationToken, RunEvent
@@ -483,7 +484,7 @@ class MissionControlScreen(Screen):
                 "provider": _cell(row.provider.split("__", 1)[0] if row.provider else None),
                 "surface": _cell(row.surface),
                 "level": _cell(row.level),
-                "mode": _cell(row.mode),
+                "mode": _cell(payload_mode_label(row.mode) if row.mode else "—"),
                 "method": _cell(row.selected_method or row.target_method),
                 # A queued or in-flight coordinate has no finding count yet;
                 # reporting 0 there would be a fabricated zero.

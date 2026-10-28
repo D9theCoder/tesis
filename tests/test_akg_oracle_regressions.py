@@ -9,7 +9,7 @@ from evaluation.scoring_evidence import attach_oracle_evidence, oracle_confirmed
 from tests.test_scoring_v4_permission_chain_e2e import FakeSession, chain_artifact
 
 
-@pytest.mark.parametrize("value", ["false", "true", 1, [], {"value": True}])
+@pytest.mark.parametrize("value", ["false", "unknown", 1, [], {"value": True}])
 def test_method_preconditions_require_observed_boolean_true(value):
     assert AttackKnowledgeGraph().get_viable_methods("brute_force", {"no_rate_limit": value}) == []
 
@@ -285,7 +285,7 @@ def test_selected_exploit_replay_retains_saved_queue_probes(monkeypatch, tmp_pat
     frozen = artifact['method_execution_inputs'][0]['state']
     method = frozen['selected_method']
     queue = frozen['payload_candidates'][method]
-    assert any(candidate.get('stage') == 'probe' for candidate in queue)
+    assert frozen['probe_controls'][method]['candidates']
     selected = next(candidate['candidate_id'] for candidate in queue if candidate.get('stage') == 'exploit')
     source = tmp_path / 'source.json'
     write_json_report(source, artifact)
@@ -303,17 +303,25 @@ def test_chain_measures_idor_in_recovered_principal_once(monkeypatch, visible):
     from core.chaining_coordinator import chaining_router_node
     from core.state import new_default_state
     from evaluation.payload_replay import _apply_state_update
+    from foundation.preconditions import make_observation_fact
     from tests.test_chaining_coordinator import proved_chain_source
     state={**new_default_state(), **proved_chain_source('authenticated_session'),
         'target_url':'http://fixture.invalid/dvwa', 'experiment_condition':'akg_guided_hybrid',
         'current_surface':'brute_force','stop_policy':'coverage','coverage_target':1.0,
         'achieved_outcomes':['authenticated_session'],'attempted_agents':['bf_dictionary','ac_force_browse'],
         'observations':{'no_rate_limit':True,'object_ids_enumerable':False}}
+    # The old negative was measured in a different session; it cannot block
+    # a destination control for the recovered principal.
+    state['observation_facts'] = [make_observation_fact(
+        'object_ids_enumerable', False, source='previous_session',
+        method='ac_idor', security_level='low', principal_id='pablo',
+        session_fingerprint='previous-session', session_scope='session')]
     session=MagicMock()
     session.http.cookies={'PHPSESSID':'control-session'}
+    from foundation.session_manager import session_fingerprint
     session.get.return_value=SimpleNamespace(status_code=200, url='http://fixture.invalid/dvwa/vulnerabilities/authbypass/get_user_data.php',
         text='[{"user_id":"2","first_name":"gordonb"}]' if visible else '{"result":"fail","error":"Access denied"}')
-    factory=MagicMock(return_value=(session,'fixture-user','initial-session','source-evidence'))
+    factory=MagicMock(return_value=(session,'gordonb',session_fingerprint(session),'source-evidence'))
     monkeypatch.setattr('agents.access_control.session.open_access_control_session', factory)
     update=chaining_router_node(state)
     assert update['observations']['object_ids_enumerable'] is visible

@@ -29,9 +29,13 @@ RUBRIC_VERSION = 'scoring.v3'
 JUDGE_VERSION = 'judge.v1'
 WEIGHTS = {'Smethod': .2, 'Spayload': .2, 'Sexploit': .3, 'Schain': .1, 'Soutput': .2}
 SCORING_MODES = ('human', 'ai', 'both')
+EXPERIMENT_ROLES = frozenset({'orchestrator', 'payload_generator'})
 # These are verifier evidence classes, never translations of legacy scores.
 PROOF_TIERS = {
     'probe_signal': 1, 'verified_probe_precondition': 1,
+    # Candidate-bound early signals; they require an actual candidate request and
+    # a method-appropriate baseline before tier 1 can be credited.
+    'candidate_error_signal': 1, 'candidate_baseline_contrast': 1,
     'partial_union_data': 2, 'evaluated_boolean_branch': 2,
     'repeatable_boolean_branch': 2, 'bounded_delay_signal': 2,
     'visibility_without_permission_oracle': 2,
@@ -261,6 +265,9 @@ def _candidate_proof(artifact, candidate, method, refs):
         row = _resolve(artifact, ref)
         if not isinstance(row, dict) or row.get('candidate_id') != candidate or row.get('agent_id') != method or row.get('stage') not in {'exploit', 'bypass'}:
             continue
+        if (row.get('control_id') or row.get('source_candidate_id')
+                or row.get('identity_kind') not in (None, 'candidate')):
+            continue
         if row.get('status_code') not in (200, 404) or not row.get('response_sha256'):
             continue
         verifier = next((v for v in history if v.get('visit_id') == row.get('visit_id') and
@@ -268,6 +275,16 @@ def _candidate_proof(artifact, candidate, method, refs):
         tier = PROOF_TIERS.get(row.get('verification_reason'))
         if verifier is None or tier is None:
             continue
+        if row.get('verification_reason') in {'candidate_error_signal', 'candidate_baseline_contrast'}:
+            # A relevant error/difference produced by this candidate needs a
+            # method-appropriate baseline bound to the same candidate and visit.
+            from evaluation.scoring_evidence import candidate_baseline_evidence
+            if candidate_baseline_evidence(artifact, candidate, method, row) is None:
+                tier = None
+            elif row.get('signal_detected') is not True:
+                tier = None
+            if tier is None:
+                continue
         if tier == 3 and verifier.get('decision') != 'confirmed':
             tier = 2
         if tier == 3 and method == 'sqli_boolean_blind':
@@ -320,7 +337,7 @@ def review_queue(source: str | Path) -> dict:
         candidate = candidates.get(cid, {})
         refs = list(dict.fromkeys(row.get('response_evidence_ref', []) + row.get('timing_evidence_ref', [])))
         refs.extend(ref for d in state.get('scoring_decisions', [])
-            if d.get('dimension') == 'Spayload' and d.get('candidate_id') == cid and d.get('method') == method
+            if d.get('dimension') in {'Spayload', 'Sexploit'} and d.get('candidate_id') == cid and d.get('method') == method
             for ref in d.get('evidence_refs', []) if isinstance(_resolve(artifact, ref), dict) and ref not in refs)
         if not refs:
             refs = [f'#/final_state/{field}/{i}' for field in ('response_evidence', 'timing_evidence')
@@ -332,7 +349,14 @@ def review_queue(source: str | Path) -> dict:
                 if v.get('candidate_id') == cid), {})
         valid = validation.get('valid') is True
         stage = candidate.get('stage')
-        executed = bool(refs) or candidate.get('payload_or_logic') in state.get('tried_payloads', {}).get(method, [])
+        from evaluation.scoring_evidence import candidate_execution_evidence, candidate_lifecycle_status
+        execution_rows = candidate_execution_evidence(artifact, cid, method)
+        lifecycle_status = candidate_lifecycle_status(artifact, cid, method)
+        executed = bool(execution_rows) and lifecycle_status not in {
+            'stopped_before_execution', 'budget_excluded', 'rejected', 'conflicting', 'request_failed'}
+        container = 'final_state/' if isinstance(state.get('response_evidence'), list) else ''
+        execution_refs = [f"#/{container}response_evidence/{index}" for index, _row in execution_rows]
+        refs = list(dict.fromkeys([*refs, *execution_refs]))
         eligible = valid and stage in {'exploit', 'bypass'} and executed
         provenance = state.get('payload_provenance', {}).get(cid, {})
         if version == 'scoring.v4':
@@ -361,15 +385,24 @@ def review_queue(source: str | Path) -> dict:
             'signal_absent' if ceiling == 0 else 'pending_review')
         rows.append({'candidate_id': cid, 'method': method, 'stage': stage, 'eligible': eligible,
             'status': status, 'proof_ceiling': ceiling, 'base_proof': base, 'evidence_refs': refs,
+            'executed': executed, 'execution_evidence_refs': [f"#/{'final_state/' if isinstance(state.get('response_evidence'), list) else ''}response_evidence/{index}" for index, _row in execution_rows],
+            'candidate_lifecycle_status': lifecycle_status,
             'validation': validation, 'validity_grade': None if valid else 0, 'provenance': provenance,
             'candidate': redact_secrets(candidate),
             'evidence': redact_secrets([_resolve(artifact, ref) for ref in refs])})
     selection_evidence, output_reason = {}, None
     if version == 'scoring.v4':
-        from evaluation.scoring_evidence import automatic_components
+        from evaluation.scoring_evidence import automatic_components, component_pending_reasons
         components, selection_evidence, output_reason = automatic_components(artifact, method, rows)
+        pending_reasons = component_pending_reasons(artifact, method, rows, components,
+            selection_evidence, output_reason)
     else:
         components = _automatic_components(artifact, method, rows)
+        pending_reasons = {k: ('ranking_unavailable:' + str(selection_evidence.get('reason')) if k == 'Smethod'
+            else output_reason if k == 'Soutput' else 'missing_required_evidence')
+            for k, v in components.items() if v is None}
+    from evaluation.research_metrics import scoring_policy, compute_run_metrics
+    metrics = compute_run_metrics(artifact, rubric_version=version, rows=rows, components=components)
     component_refs = {
         'Smethod': [f'#/final_state/scoring_decisions/{i}' for i,d in enumerate(state.get('scoring_decisions', []))
             if d.get('dimension') == 'Smethod' and d.get('method') == method],
@@ -381,22 +414,26 @@ def review_queue(source: str | Path) -> dict:
     }
     if version == 'scoring.v4':
         component_refs['Soutput'] = [f'#/llm_performance/{i}' for i,r in enumerate(artifact.get('llm_performance', []))
-            if r.get('role') in {'orchestrator', 'payload_generator'} and (r.get('method') == method or r.get('scope') == 'run')]
+            if isinstance(r, dict) and r.get('role') in {'orchestrator', 'payload_generator'} and (r.get('method') == method or r.get('scope') == 'run')]
         component_refs['Schain'].extend(f'#/final_state/weak_chain_opportunities/{i}'
             for i,r in enumerate(state.get('weak_chain_opportunities', [])) if r.get('method') == method)
         component_refs['Smethod'].append('#/config/scoring_profile')
+        component_refs['Soutput'].extend(f'#/final_state/model_call_requirements/{i}'
+            for i, r in enumerate(state.get('model_call_requirements', []) or [])
+            if isinstance(r, dict) and r.get('role') in {'orchestrator', 'payload_generator'})
     return {**terminal_status(artifact), 'rubric_version': version, 'source_path': str(path.resolve()),
         'source_sha256': sha256(raw).hexdigest(), 'run_id': artifact.get('run_id'),
         'execution_id': artifact.get('execution_id'), 'selection': mode,
         'evaluator': redact_secrets(evaluator), 'method': method, 'candidates': rows,
         'components': components, 'component_evidence_refs': component_refs,
         'selection_evidence': selection_evidence, 'output_reason': output_reason,
-        'component_pending_reasons': {k: ('ranking_unavailable:' + str(selection_evidence.get('reason')) if k == 'Smethod'
-            else output_reason if k == 'Soutput' else 'missing_required_evidence') for k,v in components.items() if v is None},
+        'component_pending_reasons': pending_reasons,
+        'scoring_policy': scoring_policy(artifact),
+        'prompt_identities': _prompt_identities(artifact),
         'scoring_rule_sha256': sha256(b''.join((Path(__file__).resolve().parents[1] / p).read_bytes() for p in (
             'evaluation/thesis_scoring.py', 'evaluation/scoring_evidence.py', 'foundation/verifier.py'))).hexdigest() if version == 'scoring.v4'
             else sha256(Path(__file__).read_bytes()).hexdigest(),
-        'metrics': _thesis_metrics(artifact, rows, components),
+        'metrics': metrics,
         'config': redact_secrets(config), 'stop_reason': (terminal_status(artifact)['execution_reason'] or terminal_status(artifact)['security_outcome_reason'] or {}).get('code')}
 
 
@@ -449,37 +486,9 @@ def _automatic_components(artifact, method, rows):
 
 
 def _thesis_metrics(artifact, rows, components):
-    state = artifact['final_state']
-    valid = [r for r in rows if r['validation'].get('valid') is True and r['stage'] in {'exploit', 'bypass'}]
-    executed = [r for r in rows if r['eligible']]
-    assessed = [r for r in executed if r['proof_ceiling'] is not None]
-    successes = sum(r['proof_ceiling'] >= 3 for r in assessed)
-    calls = artifact.get('llm_activity', {}).get('completed', 0)
-    by_id = {r['candidate_id']: r for r in executed}
-    order = list(dict.fromkeys(r.get('candidate_id') for r in state.get('response_evidence', [])
-        if r.get('candidate_id') in by_id and r.get('stage') in {'exploit', 'bypass'}))
-    attempts = next((i+1 for i, cid in enumerate(order) if by_id[cid]['proof_ceiling'] is not None
-        and by_id[cid]['proof_ceiling'] >= 3), None) if set(order) == set(by_id) else None
-    values = {
-        'payload_validity_rate': sum(r['validation'].get('valid') is True for r in rows)/len(rows) if rows else None,
-        'payload_execution_success_rate': successes/len(valid) if valid and len(assessed) == len(executed) else None,
-        'full_exploit_rate': int(components['Sexploit'] >= 3) if components['Sexploit'] is not None else None,
-        'attempts_to_success': attempts,
-        'chain_enabled_exploit_count': int(components['Schain'] >= 3) if components['Schain'] is not None else None,
-        'invalid_json_rate': min(len(state.get('invalid_json_events', []))/calls, 1) if calls else None,
-        'guardrail_activation_rate': min(len(state.get('guardrail_activations', []))/calls, 1) if calls else None,
-        'fallback_rate': min(len(state.get('fallback_events', []))/calls, 1) if calls else None,
-        'first_choice_accuracy': None, 'method_alignment_rate': None, 'akg_path_validity': None,
-        'token_cost_per_success': None,
-    }
-    reasons = {'first_choice_accuracy': 'no_preregistered_optimal_method_ranking',
-        'method_alignment_rate': 'validator_does_not_record_separate_alignment_verdict',
-        'akg_path_validity': 'selection_trace_is_not_an_edge_by_edge_graph_path',
-        'token_cost_per_success': 'no_frozen_token_price_schedule'}
-    return {'values': values, 'availability': {k: v is not None for k, v in values.items()},
-        'unavailable_reason': {k: reasons.get(k, 'insufficient_evidence_or_not_applicable') for k,v in values.items() if v is None},
-        'denominators': {'valid_exploit_candidates': len(valid), 'executed_candidates': len(executed),
-            'assessed_candidates': len(assessed), 'returned_llm_outputs': calls}}
+    """Compute evidence-backed metrics for the artifact's own scoring epoch."""
+    from evaluation.research_metrics import compute_run_metrics
+    return compute_run_metrics(artifact, rows=rows, components=components)
 
 
 def _validated_reviews(queue, decisions):
@@ -525,6 +534,35 @@ def _validated_reviews(queue, decisions):
 
 def _review_identity(queue):
     return re.sub(r'[^a-zA-Z0-9_.-]', '_', str(queue['execution_id'] or queue['run_id']))
+
+
+def _prompt_identities(artifact):
+    """Recorded prompt/schema identities for pair compatibility.
+
+    These are read from retained call evidence (and generation prompt receipts
+    when exported); a missing identity leaves the list empty rather than
+    inventing today's manifest identity.
+    """
+    roles = {}
+    rows = artifact.get('llm_performance')
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or row.get('role') not in EXPERIMENT_ROLES:
+            continue
+        prompt_id = str(row.get('prompt_id') or '')
+        schema = str(row.get('schema_version') or '')
+        identity = ':'.join(part for part in (prompt_id, schema) if part)
+        if identity:
+            roles.setdefault(str(row['role']), set()).add(identity)
+    state = artifact.get('final_state') if isinstance(artifact.get('final_state'), dict) else {}
+    prompts = state.get('generation_prompts')
+    for event in prompts if isinstance(prompts, list) else []:
+        if not isinstance(event, dict):
+            continue
+        identity = ':'.join(str(part) for part in (
+            event.get('prompt_id'), event.get('schema_version')) if part)
+        if identity:
+            roles.setdefault('payload_generator', set()).add(identity)
+    return {role: sorted(values) for role, values in sorted(roles.items())}
 
 
 def review_ledger_path(source, *, output_dir=None, queue=None):
@@ -655,6 +693,9 @@ def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=Fals
         **{k: queue[k] for k in ('execution_status', 'execution_reason', 'security_outcome', 'security_outcome_reason')},
         'artifact_type': 'thesis_review_status', 'config': queue['config'], 'method': queue['method'],
         'scoring_rule_sha256': queue['scoring_rule_sha256'],
+        'scoring_policy': queue.get('scoring_policy'),
+        'prompt_identities': queue.get('prompt_identities') or [],
+        'metrics_epoch': (queue.get('metrics') or {}).get('metrics_epoch'),
         'decision_ledger_path': str(review_ledger_path(source,
             output_dir=out if isolated_output else None, queue=queue).resolve()),
         'receipts': {}, 'workflows': {}, 'fresh_http_calls': 0, 'fresh_provider_calls': 0}
@@ -697,6 +738,9 @@ def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=Fals
             'execution_status', 'execution_reason', 'security_outcome', 'security_outcome_reason')}
         receipt.update({'artifact_type': 'thesis_score_receipt', 'scoring_mode': mode, 'status': 'final',
             'composite_score_status': f"thesis_final_{queue['rubric_version']}", 'thesis_scoring_status': 'final',
+            'scoring_policy': queue.get('scoring_policy'),
+            'prompt_identities': queue.get('prompt_identities') or [],
+            'metrics_epoch': (queue.get('metrics') or {}).get('metrics_epoch'),
             'selection_evidence': queue['selection_evidence'], 'output_reason': queue['output_reason'],
             'generated_at': datetime.now(timezone.utc).isoformat(), 'candidate_grades': grades,
             'review_history': [d for d in decisions if d['scoring_mode'] == mode],
@@ -840,10 +884,22 @@ def evaluate_queue(queue, evaluator, *, invoke=None, candidate_ids=None, expecte
     return result
 
 
+REPEAT_IDENTITY_KEYS = frozenset({
+    'repeat_index', 'coordinate_index', 'matrix_coordinate_index', 'matrix_run_index', 'coordinate_id',
+})
+
+
 def _comparison_fingerprint(record):
-    """Group by oracle protocol settings; retain per-execution proof in receipts."""
+    """Group by oracle protocol settings; retain per-execution proof in receipts.
+
+    Repeat identity (repeat index, matrix coordinate index) is excluded: repeats
+    are the aggregation unit, not a compatibility boundary. It is still reported
+    per group so repeat coverage stays visible.
+    """
     from tesis.artifact_repository import config_fingerprint
     config = dict(record['config'])
+    for key in REPEAT_IDENTITY_KEYS:
+        config.pop(key, None)
     if 'scoring_oracles' in config:
         config['scoring_oracles'] = [{
             'source_id': source['source_id'], 'origin': source['origin'],
@@ -855,15 +911,143 @@ def _comparison_fingerprint(record):
             # frozen protocol. Their IDs and documents describe observations.
             if 'protocol_source_sha256' not in source['document']]
     return config_fingerprint({**config, 'assessed_method': record['method'],
-        'scoring_rule_sha256': record['scoring_rule_sha256']})
+        'scoring_rule_sha256': record['scoring_rule_sha256'],
+        'prompt_identities': record.get('prompt_identities') or [],
+        'scoring_policy': record.get('scoring_policy') or {}})
+
+
+def receipt_compatibility_key(receipt):
+    """Public compatibility key for grouped/paired receipt analysis.
+
+    Identical keys mean the same rubric/rules/config/fixture/protocol/coordinate;
+    repeat identity is deliberately excluded and reported separately.
+    """
+    return _comparison_fingerprint(receipt)
+
+
+# Config axes that are intentionally contrasted or derived by the experiment
+# condition and therefore cannot be pair-compatibility boundaries. Everything
+# else (fixture/protocol/budget/guardrail/price/policy/profile/provider/oracle
+# protocol/prompt-schema/source identity) is invariant for a matched pair.
+PAIR_DERIVED_CONFIG_KEYS = frozenset({'experiment_condition', 'selected_method'})
+
+
+def _pair_config(receipt):
+    config = dict(receipt.get('config') or {})
+    for key in REPEAT_IDENTITY_KEYS | PAIR_DERIVED_CONFIG_KEYS:
+        config.pop(key, None)
+    if 'scoring_oracles' in config:
+        config['scoring_oracles'] = [{
+            'source_id': source['source_id'], 'origin': source['origin'],
+            'document': {k: v for k, v in source['document'].items()
+                if k not in {'attestations', 'negative_attestations', 'dependencies', 'controls', 'dependency_controls',
+                    'candidate_replay', 'requests', 'policy_evidence'}},
+        } for source in config['scoring_oracles'] or []
+            if 'protocol_source_sha256' not in source['document']]
+    return config
+
+
+def pair_compatibility_components(receipt):
+    """Return the scorer-owned matched-pair identity components.
+
+    Two receipts may form one Linear/AKG pair only when every component is
+    identical. The condition and the derived method choice are excluded because
+    they are the contrasted treatment/outcome; repeat identity is a pairing
+    axis. Grader mode is included and remains a separate analysis key.
+    """
+    policy = receipt.get('scoring_policy') if isinstance(receipt.get('scoring_policy'), dict) else {}
+    return {
+        'rubric_version': receipt.get('rubric_version'),
+        'scoring_mode': receipt.get('scoring_mode'),
+        'metrics_epoch': receipt.get('metrics_epoch'),
+        'scoring_rule_sha256': receipt.get('scoring_rule_sha256'),
+        'scoring_policy': {key: policy.get(key) for key in (
+            'policy_version', 'metrics_epoch', 'rate_definition_version', 'source_hashes')},
+        'prompt_identities': receipt.get('prompt_identities') or [],
+        'config': _pair_config(receipt),
+    }
+
+
+def pair_compatibility_key(receipt):
+    """Stable key for full matched-pair compatibility (see components)."""
+    payload = pair_compatibility_components(receipt)
+    return sha256(json.dumps(payload, sort_keys=True, separators=(',', ':'),
+                             ensure_ascii=False, default=str).encode()).hexdigest()
+
+
+def pair_compatibility_mismatches(left, right):
+    """Return sorted changed component names for an incompatible pair."""
+    left_components = pair_compatibility_components(left)
+    right_components = pair_compatibility_components(right)
+    return sorted(key for key in left_components
+                  if left_components.get(key) != right_components.get(key))
+
+
+def _selection_repeat_summaries(records):
+    """Compare choices across identical inputs, never by the chosen method."""
+    from evaluation.scoring_evidence import evidence_hash
+
+    groups = {}
+    for record in records:
+        config = record.get('config') or {}
+        if config.get('target_method') or config.get('experiment_block') == 'forced':
+            continue
+        identity = pair_compatibility_components(record)
+        identity.pop('scoring_mode', None)
+        identity['config'].pop('method', None)
+        identity['config']['experiment_condition'] = config.get('experiment_condition')
+        identity['prompt_identities'] = [
+            row for row in identity['prompt_identities']
+            if isinstance(row, dict) and row.get('role') == 'orchestrator'
+        ]
+        fingerprint = evidence_hash(identity)
+        source = record.get('source_sha256')
+        if not source:
+            continue
+        group = groups.setdefault(fingerprint, {})
+        entry = (((record.get('metrics') or {}).get('denominators') or {})
+                 .get('first_choice_accuracy') or {})
+        choice = (entry.get('chosen_method')
+                  if entry.get('origin') == 'model' else None)
+        previous = group.get(source)
+        if previous and previous['choice'] and choice and previous['choice'] != choice:
+            raise ValueError('One source cannot contain contradictory first model choices')
+        if previous is None or choice:
+            group[source] = {'choice': choice, 'repeat_index': config.get('repeat_index')}
+    summaries = []
+    for fingerprint, records_by_source in groups.items():
+        counts = Counter(row['choice'] for row in records_by_source.values() if row['choice'])
+        available = sum(counts.values())
+        total = len(records_by_source)
+        repeats = [row['repeat_index'] for row in records_by_source.values()]
+        reason = (
+            'missing_repeat_identity' if any(index is None for index in repeats) else
+            'duplicate_repeat_identity' if len(set(repeats)) != len(repeats) else
+            'fewer_than_two_comparable_choices' if available < 2 else None
+        )
+        summaries.append({
+            'config_fingerprint': fingerprint,
+            'population': 'independent_model_origin_first_choices',
+            'n_records': total, 'n_first_choice_available': available,
+            'first_choice_methods': dict(counts),
+            'first_choice_consistency': max(counts.values()) / available if reason is None else None,
+            'numerator': max(counts.values(), default=0), 'denominator': available,
+            'coverage': available / total if total else None,
+            'unavailable_reason': reason, 'repeat_indices': repeats,
+            'sources': sorted(records_by_source),
+            'definition_version': 'selection-consistency.v1',
+        })
+    return summaries
 
 
 def compare_receipts(paths, *, planned_repeats=None):
     """Aggregate repeats only within identical frozen settings/grader/rubric."""
     groups, pending = {}, []
+    all_records = []
     versions, profiles = set(), set()
     for path in paths:
         receipt = json.loads(Path(path).read_bytes())
+        all_records.append(receipt)
         versions.add(receipt.get('rubric_version'))
         profiles.add((receipt.get('config', {}).get('scoring_profile') or {}).get('sha256'))
         if receipt.get('artifact_type') == 'thesis_review_status':
@@ -887,6 +1071,7 @@ def compare_receipts(paths, *, planned_repeats=None):
         raise ValueError('Cannot compare mixed rubric versions or ranking profiles')
     pending_by_base = defaultdict(set)
     pending_example = {}
+    pending_records = defaultdict(list)
     for status in pending:
         fingerprint = _comparison_fingerprint(status)
         for mode, workflow in status.get('workflows', {}).items():
@@ -894,6 +1079,7 @@ def compare_receipts(paths, *, planned_repeats=None):
                 base = (status['rubric_version'], mode, fingerprint)
                 pending_by_base[base].add(status['source_sha256'])
                 pending_example.setdefault(base, status)
+                pending_records[base].append(status)
     group_counts = Counter((rubric, mode, fingerprint) for rubric, mode, _, fingerprint in groups)
     for base in pending_by_base:
         if group_counts[base] != 1:
@@ -913,6 +1099,14 @@ def compare_receipts(paths, *, planned_repeats=None):
             raise ValueError('planned_repeats must be an integer covering all observed repeats')
         output_counts = Counter(r['components']['Soutput'] for r in receipts)
         example = receipts[0] if receipts else pending_example[base]
+        status_records = pending_records.get(base, [])
+        records = [*receipts, *status_records]
+        repeat_indices = sorted({r.get('config', {}).get('repeat_index') for r in records
+                                 if r.get('config', {}).get('repeat_index') is not None}, key=str)
+        pending_reason_counts = Counter(
+            workflow.get('reason') for status in status_records
+            for mode_name, workflow in status.get('workflows', {}).items()
+            if mode_name == mode and workflow.get('status') == 'pending' and workflow.get('reason'))
         result.append({'rubric_version': rubric, 'scoring_mode': mode, 'config_fingerprint': fingerprint,
             'reviewer_id': graders[0][0] if len(graders) == 1 else None,
             'review_version': graders[0][1] if len(graders) == 1 else None,
@@ -920,14 +1114,37 @@ def compare_receipts(paths, *, planned_repeats=None):
             'n_final': len(receipts), 'mean': round(mean(scores), 4) if scores else None,
             'median': median(scores) if scores else None,
             'n_pending': len(pending_hashes), 'n_planned': planned,
+            'repeat_indices': repeat_indices,
+            'n_status_records': len(status_records),
+            'execution_status_counts': dict(Counter(str(r.get('execution_status')) for r in records)),
+            'security_outcome_counts': dict(Counter(str(r.get('security_outcome')) for r in records)),
+            'pending_reason_counts': dict(pending_reason_counts),
+            'n_failed': sum(r.get('execution_status') == 'failed' for r in records),
+            'n_interrupted': sum(r.get('execution_status') == 'interrupted' for r in records),
+            'n_incomplete': (pending_reason_counts.get('missing_component_evidence', 0)
+                             + pending_reason_counts.get('output_not_applicable', 0)
+                             + sum(1 for r in records if r.get('execution_status') == 'completed'
+                                   and r.get('thesis_scoring_status') not in (None, 'final'))),
+            'n_unassessable': pending_reason_counts.get('no_assessable_candidates', 0),
+            'n_pending_review': pending_reason_counts.get('pending_candidate_grades', 0),
+            'n_fallback_runs': sum(1 for r in records
+                if isinstance((r.get('metrics') or {}).get('values'), dict)
+                and ((r['metrics']['values'].get('fallback_rate') or 0) > 0)),
+            'metrics_epochs': sorted({str((r.get('metrics') or {}).get('metrics_epoch'))
+                for r in records if (r.get('metrics') or {}).get('metrics_epoch')}),
+            'policy_versions': sorted({str((r.get('scoring_policy') or {}).get('policy_version'))
+                for r in records if (r.get('scoring_policy') or {}).get('policy_version')}),
             'output_stability': max(output_counts.values())/len(receipts) if len(receipts) > 1 else None,
+            'selection_consistency_grouping':
+                'See selection_groups: final-method score groups are not selection-input populations.',
             'output_stability_numerator': max(output_counts.values(), default=0), 'output_stability_denominator': len(receipts),
             'output_stability_definition': 'modal Soutput frequency among assessable independent repeats',
             'consistency_score': max(modal.values())/len(receipts) if len(receipts) > 1 else None,
             'consistency_definition': 'modal complete component vector frequency across identical repeats',
             'sources': [r['source_sha256'] for r in receipts], 'pending_sources': sorted(pending_hashes),
             'model': example['config'].get('model'), 'provider': example['config'].get('provider')})
-    return {'groups': result, 'cross_grader_composite': None}
+    return {'groups': result, 'selection_groups': _selection_repeat_summaries(all_records),
+            'cross_grader_composite': None}
 
 
 def main(argv=None):

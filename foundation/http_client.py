@@ -10,12 +10,173 @@ import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import wraps
+from copy import deepcopy
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
 logger = logging.getLogger(__name__)
 _CONTAINMENT_RECEIPTS: ContextVar[list | None] = ContextVar("containment_receipts", default=None)
+HTTP_ACCOUNTING_POLICY_VERSION = "http-accounting.v1"
+HTTP_PHASES = ("recon", "destination", "method", "verification", "token", "other")
+HTTP_ROLES = ("detection_control", "candidate", "independent_control", "candidate_verification", "other")
+_HTTP_COUNTER: ContextVar[dict | None] = ContextVar("http_request_counter", default=None)
+_HTTP_SCOPE: ContextVar[dict] = ContextVar("http_request_scope", default={
+    "phase": "other", "role": "other", "method": None,
+})
+
+
+def _blank_http_counter() -> dict:
+    return {
+        "total_requests": 0,
+        "by_phase": {phase: 0 for phase in HTTP_PHASES},
+        "by_role": {role: 0 for role in HTTP_ROLES},
+        "per_method": {},
+        "retries": 0,
+        "redirect_hops": 0,
+        "failed_requests": 0,
+        "unattributed_requests": 0,
+        "complete": True,
+    }
+
+
+@contextmanager
+def http_request_accounting():
+    """Create a run-scoped physical request counter for contained HTTP."""
+    counter = _blank_http_counter()
+    token = _HTTP_COUNTER.set(counter)
+    try:
+        yield counter
+    finally:
+        _HTTP_COUNTER.reset(token)
+
+
+def snapshot_http_request_counters(counter: dict | None = None) -> dict:
+    """Return the public, secret-free request accounting receipt."""
+    live = counter if counter is not None else _HTTP_COUNTER.get()
+    if not isinstance(live, dict):
+        return {
+            "policy_version": HTTP_ACCOUNTING_POLICY_VERSION,
+            "scope": "run",
+            "total_requests": 0,
+            "by_phase": {phase: 0 for phase in HTTP_PHASES},
+            "by_role": {role: 0 for role in HTTP_ROLES},
+            "per_method": {},
+            "retries": 0,
+            "redirect_hops": 0,
+            "failed_requests": 0,
+            "complete": False,
+            "capture_status": "unavailable",
+        }
+    snapshot = {
+        "policy_version": HTTP_ACCOUNTING_POLICY_VERSION,
+        "scope": "run",
+        **deepcopy({key: value for key, value in live.items() if key != "complete"}),
+        "complete": bool(live.get("complete")),
+        "capture_status": "complete" if live.get("complete") else "partial",
+    }
+    return snapshot
+
+
+def http_request_counters() -> dict | None:
+    """Return the current counter snapshot, or ``None`` when not accounting."""
+    if _HTTP_COUNTER.get() is None:
+        return None
+    return snapshot_http_request_counters()
+
+
+@contextmanager
+def request_scope(*, phase: str | None = None, role: str | None = None, method: str | None = None):
+    """Tag contained HTTP traffic with a phase/role/method; nested scopes merge."""
+    current = dict(_HTTP_SCOPE.get())
+    if phase is not None:
+        current["phase"] = phase if phase in HTTP_PHASES else "other"
+    if role is not None:
+        current["role"] = role if role in HTTP_ROLES else "other"
+    if method is not None:
+        current["method"] = method
+    token = _HTTP_SCOPE.set(current)
+    try:
+        yield current
+    finally:
+        _HTTP_SCOPE.reset(token)
+
+
+def http_accounted(*, phase: str | None = None, role: str | None = None, method: str | None = None):
+    """Decorator form of :func:`request_scope` for contained call boundaries."""
+    def decorator(function):
+        @wraps(function)
+        def wrapped(*args, **kwargs):
+            with request_scope(phase=phase, role=role, method=method):
+                return function(*args, **kwargs)
+        return wrapped
+    return decorator
+
+
+def record_http_retry(count: int = 1) -> None:
+    """Record a higher-level bounded retry (provider-independent HTTP retry)."""
+    counter = _HTTP_COUNTER.get()
+    if not isinstance(counter, dict):
+        return
+    counter["retries"] += max(0, int(count))
+    method = _HTTP_SCOPE.get().get("method")
+    if method:
+        entry = counter["per_method"].setdefault(method, _blank_http_counter())
+        entry["retries"] += max(0, int(count))
+
+
+def _record_http_failure() -> None:
+    counter = _HTTP_COUNTER.get()
+    if not isinstance(counter, dict):
+        return
+    counter["failed_requests"] += 1
+    method = _HTTP_SCOPE.get().get("method")
+    if method:
+        entry = counter["per_method"].setdefault(method, _blank_http_counter())
+        entry["failed_requests"] += 1
+
+
+def _record_http_redirect() -> None:
+    """Record one followed redirect hop; the hop's own request is counted separately."""
+    counter = _HTTP_COUNTER.get()
+    if not isinstance(counter, dict):
+        return
+    counter["redirect_hops"] += 1
+    method = _HTTP_SCOPE.get().get("method")
+    if method:
+        entry = counter["per_method"].setdefault(method, _blank_http_counter())
+        entry["redirect_hops"] += 1
+
+
+def _record_http_dispatch(*, redirect: bool = False, failed: bool = False) -> None:
+    counter = _HTTP_COUNTER.get()
+    if not isinstance(counter, dict):
+        return
+    scope = _HTTP_SCOPE.get()
+    phase, role, method = scope.get("phase", "other"), scope.get("role", "other"), scope.get("method")
+    counter["total_requests"] += 1
+    counter["by_phase"][phase] = counter["by_phase"].get(phase, 0) + 1
+    counter["by_role"][role] = counter["by_role"].get(role, 0) + 1
+    if phase == "other" or role == "other":
+        counter["unattributed_requests"] = int(counter.get("unattributed_requests", 0) or 0) + 1
+        counter["complete"] = False
+    if redirect:
+        counter["redirect_hops"] += 1
+    if failed:
+        counter["failed_requests"] += 1
+    if method:
+        entry = counter["per_method"].setdefault(method, _blank_http_counter())
+        entry["total_requests"] += 1
+        entry["by_phase"][phase] = entry["by_phase"].get(phase, 0) + 1
+        entry["by_role"][role] = entry["by_role"].get(role, 0) + 1
+        if phase == "other" or role == "other":
+            entry["unattributed_requests"] = int(entry.get("unattributed_requests", 0) or 0) + 1
+            entry["complete"] = False
+        if redirect:
+            entry["redirect_hops"] += 1
+        if failed:
+            entry["failed_requests"] += 1
 
 
 @contextmanager
@@ -246,18 +407,24 @@ class HTTPClient:
             current_url = url
             request_kwargs = dict(kwargs)
             for _ in range(6):
-                resp = self._client.request(
-                    current_method,
-                    current_url,
-                    follow_redirects=False,
-                    **request_kwargs,
-                )
+                _record_http_dispatch()
+                try:
+                    resp = self._client.request(
+                        current_method,
+                        current_url,
+                        follow_redirects=False,
+                        **request_kwargs,
+                    )
+                except (httpx.TimeoutException, httpx.NetworkError):
+                    _record_http_failure()
+                    raise
                 status_code = int(getattr(resp, "status_code", 0) or 0)
                 if not 300 <= status_code < 400:
                     break
                 location = resp.headers.get("location")
                 if not location:
                     break
+                _record_http_redirect()
                 current_url = self._resolve_url(
                     urljoin(current_url, location),
                     kind="redirect",

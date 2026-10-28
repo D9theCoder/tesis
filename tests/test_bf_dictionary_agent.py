@@ -5,11 +5,12 @@ from unittest.mock import MagicMock, patch
 
 from agents.brute_force.bf_dictionary_agent import bf_dictionary_agent
 from core.state import new_default_state
+from tests.support import ready_state
 
 @pytest.fixture
 def base_state():
     """Supports regression tests for test bf dictionary agent."""
-    state = new_default_state()
+    state = ready_state("bf_dictionary")
     state["target_url"] = "http://localhost/dvwa"
     state["security_level"] = "low"
     return state

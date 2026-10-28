@@ -5,6 +5,7 @@ LLM adapters, agents, evaluation, or CLI integration without changing runtime
 code."""
 import pytest
 from unittest.mock import MagicMock, patch
+from tests.support import READY_RECEIPT
 
 
 def test_clean_response_skips_evasion():
@@ -12,8 +13,9 @@ def test_clean_response_skips_evasion():
     from agents.orchestrator import orchestrator
     state = {
         "target_url": "http://localhost/dvwa",
+        "readiness": READY_RECEIPT,
         "security_level": "low",
-        "llm_provider": "gemini",
+        "llm_provider": "openai_compatible",
         "current_surface": "sqli",
         "observations": {},
         "confirmed_vulns": [],

@@ -7,10 +7,25 @@ import re
 from typing import Any
 
 from agents.agent_telemetry import exploit_event, probe_event, score_event
-from agents.state_utils import already_tried_payloads, candidate_payloads_for_stage, chain_check as _chain_check, make_update, normalize_security_level
+from foundation.http_client import http_accounted
+from agents.state_utils import (
+    agent_visit_gate,
+    candidate_payloads_for_stage,
+    chain_check as _chain_check,
+    graph_visit,
+    make_update,
+    merge_probe_observations,
+    normalize_security_level,
+    previously_executed_exploit_payloads,
+    probe_outcome_update,
+    probe_stage_blocked_update,
+    resolve_stage_control_payloads,
+    visit_block_update,
+)
+from foundation.control_catalog import quarantine_update
 from core.state import ExploitationState, MODULE_TO_KG_NODE
 from foundation.payload_library import PayloadLibrary
-from foundation.session_manager import DVWASession
+from foundation.session_manager import DVWASession, session_fingerprint
 from foundation.verifier import Verifier
 
 logger = logging.getLogger(__name__)
@@ -46,6 +61,7 @@ def _request(session: DVWASession, security_level: str, payload: str):
     return session.get(MODULE_PATH, params=request_data)
 
 
+@http_accounted(role="detection_control", method=AGENT_ID)
 def _probe_preconditions(
     session: DVWASession,
     payloads: list[str],
@@ -86,6 +102,7 @@ def _probe_preconditions(
     return False, tried, observations, events
 
 
+@http_accounted(phase="method", role="candidate", method=AGENT_ID)
 def _attempt_exploit(
     session: DVWASession,
     payloads: list[str],
@@ -157,6 +174,9 @@ def sqli_union_agent(state: ExploitationState) -> dict[str, Any]:
 
     if not target_url:
         return make_update(state=state, module_name=AGENT_ID, score=0, tried_payloads=[])
+    visit_gate = agent_visit_gate(state, AGENT_ID)
+    if not visit_gate["allow"]:
+        return visit_block_update(state, AGENT_ID, stop=visit_gate["stop"], gate=visit_gate["gate"])
 
     session = DVWASession(target_url)
     try:
@@ -168,7 +188,6 @@ def sqli_union_agent(state: ExploitationState) -> dict[str, Any]:
             )
         session.set_security_level(security_level)
 
-        already_tried = already_tried_payloads(state, AGENT_ID)
         confirmed_vulns: list[str] = []
         achieved_outcomes: list[str] = []
         score = 0
@@ -176,30 +195,53 @@ def sqli_union_agent(state: ExploitationState) -> dict[str, Any]:
         all_tried: list[str] = []
         observations: dict[str, bool] = {}
 
-        # Stage 1: PROBE
+        # Stage 1: PROBE (frozen detection controls only)
         probe_payloads = candidate_payloads_for_stage(state, AGENT_ID, security_level, "probe")
+        principal_id = getattr(session, "_principal_id", None) or getattr(session, "_username", None)
+        probe_payloads = resolve_stage_control_payloads(state, AGENT_ID, probe_payloads, principal_id)
+        if graph_visit(state, AGENT_ID) and not probe_payloads:
+            return probe_stage_blocked_update(state, AGENT_ID)
         probe_ok, tried, probe_obs, probe_events = _probe_preconditions(
-            session, probe_payloads, already_tried, security_level
+            session, probe_payloads, set(), security_level
         )
         all_tried.extend(tried)
         telemetry_events.extend(probe_events)
         observations.update(probe_obs)
-
-        if not probe_ok:
+        probe_update, quarantine = probe_outcome_update(
+            state, AGENT_ID, observations, probe_events, principal_id=principal_id,
+            session_fingerprint=session_fingerprint(session))
+        if quarantine:
+            blocked = quarantine_update(
+                state, method=AGENT_ID, visit_id=state.get("selected_visit_id"),
+                control_id=f"{AGENT_ID}:probe:control", control_class="detection",
+                reason=quarantine, detail="detection control exceeded its evidence role",
+                evidence_refs=[f"control:{AGENT_ID}"],
+                snapshot=probe_update.get("probe_controls", {}).get(AGENT_ID))
+            blocked.update(visit_block_update(
+                state, AGENT_ID, stop="quarantine",
+                gate={"reason": quarantine, "evidence_refs": []}))
+            blocked["telemetry_events"] = [*telemetry_events, *blocked.get("telemetry_events", [])]
+            return blocked
+        probe_status = (probe_update.get("precondition_status") or {}).get(_PROBE_OBSERVATION_KEY)
+        if probe_status != "true":
             update = make_update(
                 state=state, module_name=AGENT_ID, score=0,
                 tried_payloads=all_tried, telemetry_events=telemetry_events,
+                default_candidate_stop_reason=(
+                    "precondition_false" if probe_status == "false" else "precondition_unknown"),
             )
-            update["observations"] = observations
+            update.update(probe_update)
             return update
 
         score = max(score, 1)
 
-        # Stage 2: EXPLOIT
+        # Stage 2: EXPLOIT (own current-visit candidate requests only)
         all_exploit = candidate_payloads_for_stage(state, AGENT_ID, security_level, "exploit")
+        exploit_done = previously_executed_exploit_payloads(
+            state, AGENT_ID, state.get("selected_visit_id"))
 
         exploit_score, tried, confirmed, exploit_events = _attempt_exploit(
-            session, all_exploit, already_tried | set(all_tried), security_level
+            session, all_exploit, exploit_done, security_level
         )
         all_tried.extend(tried)
         telemetry_events.extend(exploit_events)
@@ -226,7 +268,7 @@ def sqli_union_agent(state: ExploitationState) -> dict[str, Any]:
             achieved_outcomes=achieved_outcomes or None,
             telemetry_events=telemetry_events,
         )
-        update["observations"] = observations
+        merge_probe_observations(update, probe_update, state, observations)
         return update
     except Exception as exc:
         logger.warning("[%s] Session or execution failed: %s", AGENT_ID, exc)

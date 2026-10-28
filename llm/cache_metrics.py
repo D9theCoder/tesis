@@ -124,5 +124,8 @@ def cache_performance_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "provider_cache_usage_coverage": round(reported / attempts, 4) if attempts else None,
         "cache_hits": response_hits,
         "response_cache_hits": response_hits,
-        "response_cache_hit_rate": round(response_hits / len(rows), 4) if rows else 0.0,
+        "response_cache_hit_rate": round(response_hits / len(rows), 4) if rows else None,
+        "response_cache_hit_rate_numerator": response_hits,
+        "response_cache_hit_rate_denominator": len(rows),
+        "response_cache_hit_rate_status": "measured" if rows else "no_calls",
     }

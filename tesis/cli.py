@@ -30,20 +30,21 @@ def _dry_run(config_path: str) -> int:
     """Validate one resolved configuration without contacting DVWA or an LLM.
 
     The dry run deliberately exercises only deterministic local components:
-    configuration parsing, AKG construction, graph compilation, and static seed
-    validation for every method reachable from the configured surface(s).  It
-    is therefore safe to use before an authorized live DVWA experiment.
+    configuration parsing, AKG construction, graph compilation, and the
+    mode-specific payload contract for every reachable coordinate. It is
+    therefore safe to use before an authorized live DVWA experiment, and it is
+    not evidence that DVWA readiness, templates at execution time, or provider
+    behaviour will succeed.
     """
     from core.graph_builder import build_framework
     from core.knowledge_graph import AttackKnowledgeGraph
-    from core.state import METHODS_BY_SURFACE, new_default_state
-    from foundation.payload_library import PayloadLibrary
-    from foundation.payload_validator import validate_payload_candidates
+    from core.state import METHODS_BY_SURFACE
     from tesis.config_loader import ConfigError, load_and_resolve_config
+    from tesis.offline_contracts import check_payload_contracts
 
     try:
         config = load_and_resolve_config(config_path=config_path, cli_args={})
-        graph = AttackKnowledgeGraph()
+        AttackKnowledgeGraph()
         # Compilation validates the canonical runtime topology without invoking
         # a node, so neither the HTTP client nor a model provider is touched.
         build_framework(llm_provider=config.provider, surface=config.surface)
@@ -58,29 +59,19 @@ def _dry_run(config_path: str) -> int:
             for surface in surfaces
             for method in METHODS_BY_SURFACE[surface]
         ]
-        checked = 0
-        payload_library = PayloadLibrary()
-        for method in methods:
-            for level in levels:
-                for payload_mode in payload_modes:
-                    seeds = payload_library.load_seed_candidates(method, level)
-                    result = validate_payload_candidates({
-                        **new_default_state(),
-                        "selected_method": method,
-                        "security_level": level,
-                        "payload_mode": payload_mode,
-                        "payload_candidates": {method: seeds},
-                    })
-                    rejected = [
-                        item for item in result["payload_validation_results"][method]
-                        if not item.get("valid", False)
-                    ]
-                    if not result["payload_candidates"][method] or rejected:
-                        raise ConfigError(
-                            f"Static payload validation failed for {method}/{level}/{payload_mode}: "
-                            f"{rejected or 'no accepted candidates'}"
-                        )
-                    checked += 1
+        contracts = check_payload_contracts(
+            methods, levels, payload_modes, candidate_budget=config.candidate_budget,
+        )
+        if contracts["issues"]:
+            failures = contracts["issues"][:8]
+            detail = "; ".join(
+                f"{row['method'] or 'prompt'}/{row['security_level'] or '-'}/"
+                f"{row['payload_mode'] or '-'}: {row['code']}: {row['detail']}"
+                for row in failures
+            )
+            raise ConfigError(
+                f"Payload contract preflight failed in {len(contracts['issues'])} check(s): {detail}"
+            )
     except (ConfigError, ValueError, KeyError) as exc:
         print(
             f"TESIS dry-run failed: {type(exc).__name__}: {_safe_config_error_text(exc)}",
@@ -88,9 +79,16 @@ def _dry_run(config_path: str) -> int:
         )
         return EXIT_RUNTIME_ERROR
 
+    limitations = contracts["limitations"]
+    limitation_text = (
+        f"; explicit template limitations={len(limitations)}"
+        if limitations
+        else ""
+    )
     print(
-        f"TESIS dry-run passed: {checked} payload coordinate(s) validated; "
-        f"AKG and runtime graph compiled from {Path(config_path)}."
+        f"TESIS dry-run passed: {contracts['checked_coordinates']} payload coordinate(s) "
+        f"validated{limitation_text}; AKG and runtime graph compiled from {Path(config_path)}. "
+        "This is an offline contract check, not a live DVWA readiness test."
     )
     return EXIT_OK
 
@@ -193,6 +191,15 @@ def _headless_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-dir", default=None, help="Experiment-local directory holding checkpoints.sqlite3.")
     parser.add_argument("--experiment-id", default=None, help="Stable experiment identity for checkpoint thread IDs.")
     parser.add_argument(
+        "--fixture-restoration-evidence",
+        default=None,
+        help=(
+            "Authorized fixture-restoration.v1 evidence for paired analysis: one JSON "
+            "document, a list of documents, or a {by_level: {level: document}} envelope. "
+            "Plan/identity metadata stays outside the attested document."
+        ),
+    )
+    parser.add_argument(
         "--json",
         dest="json_output",
         action="store_true",
@@ -213,6 +220,7 @@ def _headless_overrides(namespace: argparse.Namespace) -> dict[str, object]:
         "guardrail_retry_enabled", "guardrail_handling", "llm_max_concurrency", "llm_cache",
         "orchestrator_model_profile", "orchestrator_model", "payload_model_profile", "payload_model",
         "checkpoint_dir", "experiment_id",
+        "fixture_restoration_evidence",
     ):
         value = values.get(key)
         if value is not None:
@@ -232,9 +240,11 @@ def _headless_summary(result: dict[str, object], artifact_root: Path) -> dict[st
         "artifact_dir": str(artifact_root),
         "manifest": str(artifact_root / "experiment.manifest.json"),
     }
-    for key in ("execution_id", "run_id", "error", "matrix", "totals"):
+    for key in ("execution_id", "run_id", "error", "matrix", "totals", "experiment_block", "readiness"):
         if key in result:
             summary[key] = result[key]
+    config = result.get("config") if isinstance(result.get("config"), dict) else {}
+    summary.setdefault("experiment_block", config.get("experiment_block"))
     return summary
 
 
@@ -297,6 +307,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         from tesis.doctor import main as doctor_main
 
         return doctor_main(arguments[1:])
+    if arguments and arguments[0] == "study":
+        if len(arguments) > 1 and arguments[1] == "analyze":
+            from evaluation.research_analysis import main as study_main
+
+            return study_main(arguments[2:])
+        from evaluation.research_plan import main as study_main
+
+        return study_main(arguments[1:])
     dry_run_config = _parse_dry_run(arguments)
     if dry_run_config is not None:
         return _dry_run(dry_run_config)
@@ -310,6 +328,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "       python -m tesis auth login|status|models|logout [options]\n"
             "       python -m tesis export-observer --source-root ID=PATH [--review-root EPOCH=PATH] --output results/FILE.json\n"
             "       python -m tesis doctor [--config config.yaml] [--live] [--json]\n"
+            "       python -m tesis study plan|freeze-profile|run|analyze [options]\n"
             "       python -m tesis run --dry-run [--config config.yaml]\n"
             "       python -m tesis run --headless --mode single|matrix [options]",
             file=sys.stderr,

@@ -19,7 +19,9 @@ from agents.access_control.ac_force_browse_agent import _probe_preconditions
 from evaluation.manual_scoring_sheet import manual_scoring_rows
 from core.state import new_default_state
 from foundation.payload_library import PayloadLibrary
-from foundation.payload_validator import validate_payload_candidates
+from foundation.payload_validator import freeze_probe_controls, validate_payload_candidates, validate_probe_controls
+from tests.support import READY_RECEIPT, ready_state
+from foundation.session_manager import session_fingerprint
 
 
 @pytest.mark.parametrize("method", ["bf_dictionary", "bf_spray"])
@@ -29,8 +31,12 @@ def test_brute_force_literal_credentials_keep_their_own_retry_evidence(monkeypat
     seeds = PayloadLibrary().load_seed_candidates(method, "high")
     probe = next(c for c in seeds if c["stage"] == "probe")
     seed = next(c for c in seeds if c["stage"] == "exploit")
-    candidates = [probe, *[
+    visit_id = f"{method}:visit:1"
+    candidates = [*[
         {**seed, "candidate_id": candidate_id, "source": "llm_generated",
+         "origin_kind": "seed_mutation", "visit_id": visit_id,
+         "policy_version": "payload-policy.v2",
+         "model_call_id": "alias-generation",
          "mutation_type": "pacing_strategy", "payload_or_logic": payload}
         for candidate_id, payload in [
             ("a-prefixed", "credential_pair=admin:unused"),
@@ -39,8 +45,28 @@ def test_brute_force_literal_credentials_keep_their_own_retry_evidence(monkeypat
     ]]
     state = new_default_state()
     state.update(target_url="http://localhost/dvwa", security_level="high",
-                 current_surface="brute_force", selected_method=method, payload_mode="hybrid")
+                 current_surface="brute_force", selected_method=method, payload_mode="hybrid",
+                 selected_visit_id=visit_id, readiness=READY_RECEIPT)
+    state["generation_prompts"] = [{
+        "method": method, "visit_id": visit_id,
+        "call_id": "alias-generation",
+        "prompt_id": "payload_generation.constrained_variant",
+        "schema_version": "payload-variants.v3",
+        "policy_version": "payload-policy.v2",
+        "prompt_visible_seed_ids": [seed["source_seed_id"]],
+        "prompt_visible_seeds": [{"source_seed_id": seed["source_seed_id"],
+                                  "payload_or_logic": seed["payload_or_logic"],
+                                  "stage": "exploit"}],
+    }]
+    state["model_call_requirements"] = [{
+        "role": "payload_generator", "receipt_stage": "generation",
+        "method": method, "visit_id": visit_id, "call_id": "alias-generation",
+        "required": True, "status": "completed",
+    }]
     state["payload_candidates"] = {method: candidates}
+    controls = freeze_probe_controls(state, method, visit_id)
+    controls["validation_results"] = validate_probe_controls(state, controls)
+    state["probe_controls"] = {method: controls}
     state.update(validate_payload_candidates(state))
     assert all(v["valid"] for v in state["payload_validation_results"][method])
     original = deepcopy(state)
@@ -93,7 +119,8 @@ def test_brute_force_literal_credentials_keep_their_own_retry_evidence(monkeypat
         "live_calls": 0, "credential_requests": requests, "artifact": artifact, "legacy_artifact": legacy,
     }, indent=2) + "\n")
 
-    assert requests == [("rate_test", "test"), ("credential_pair=admin", "unused"),
+    assert requests == [("rate_test", "test"), ("probe", "probe"),
+                        ("credential_pair=admin", "unused"),
                         ("credential_pair=admin", "unused"), ("admin", "unused")]
     attempts = [e for e in update["response_evidence"] if e["stage"] == "exploit"]
     assert [e["candidate_id"] for e in attempts] == ["a-prefixed", "a-prefixed", "b-plain"]
@@ -143,19 +170,31 @@ def test_legacy_export_does_not_invent_unemitted_parameter_prefixes(method, para
 def test_access_control_agent_exports_only_actual_candidate_attempts(monkeypatch, method, probe, first, unused):
     """Offline agent→state→artifact check; no provider or DVWA calls."""
     module = importlib.import_module(f"agents.access_control.{method}_agent")
-    state = new_default_state()
+    state = ready_state(method)
     state.update(target_url="http://localhost/dvwa", security_level="low", payload_mode="hybrid")
+    visit_id = f"{method}:visit:1"
     candidates = [
-        {"candidate_id": candidate_id, "method": method, "stage": stage, "payload_or_logic": payload,
-         "target_param": "path" if method == "ac_force_browse" else "userId", "source": "llm_generated"}
-        for candidate_id, stage, payload in [("probe", "probe", probe), ("attempted", "exploit", first), ("unused", "exploit", unused)]
+        {"candidate_id": candidate_id, "method": method, "stage": "exploit",
+         "payload_or_logic": payload, "origin_kind": "seed_mutation",
+         "policy_version": "payload-policy.v2", "visit_id": visit_id,
+         "target_param": "path" if method == "ac_force_browse" else "userId",
+         "source": "llm_generated"}
+        for candidate_id, payload in [("attempted", first), ("unused", unused)]
     ]
     state["payload_candidates"] = {method: candidates}
+    state["selected_visit_id"] = visit_id
     state["payload_provenance"] = {c["candidate_id"]: c for c in candidates}
     state["payload_validation_results"] = {method: [
         {"candidate_id": c["candidate_id"], "valid": c["candidate_id"] != "unused",
-         "reason": "duplicate_normalized_candidate" if c["candidate_id"] == "unused" else "ok"}
+         "reason": "duplicate_normalized_candidate" if c["candidate_id"] == "unused" else "ok",
+         "visit_id": visit_id}
         for c in candidates]}
+    state["active_payload_candidates"] = {method: {
+        "visit_id": visit_id, "status": "validated", "candidate_ids": ["attempted"],
+    }}
+    controls = freeze_probe_controls(state, method, visit_id)
+    controls["validation_results"] = validate_probe_controls(state, controls)
+    state["probe_controls"] = {method: controls}
     original = deepcopy(state)
 
     class Session:
@@ -173,9 +212,10 @@ def test_access_control_agent_exports_only_actual_candidate_attempts(monkeypatch
         def get(self, path, params=None):
             uid = (params or {}).get("userId", "1")
             if method == "ac_force_browse":
-                text = "View Source" if "view_source" in path else "Database Setup and DVWA Security Level"
-            elif method == "ac_vertical_escalation" and uid.strip() == "1":
-                text = json.dumps({"user_id": "1", "first_name": "admin"})
+                text = ("This page should only be accessible by the admin user" if "authbypass" in path
+                        else "View Source" if "view_source" in path else "Database Setup and DVWA Security Level")
+            elif method == "ac_vertical_escalation" and uid.strip() == "2":
+                text = json.dumps({"user_id": "2", "first_name": "gordonb"})
             elif method == "ac_idor":
                 text = f"First name: Gordon; surname: Brown; user id: {uid}"
             else:
@@ -184,7 +224,7 @@ def test_access_control_agent_exports_only_actual_candidate_attempts(monkeypatch
 
     session = Session()
     monkeypatch.setattr(module, "open_access_control_session",
-        lambda *args: (session, "gordonb", "initial-session-fingerprint", None))
+        lambda *args: (session, "gordonb", session_fingerprint(session), None))
     update = getattr(module, f"{method}_agent")(state)
     artifact = {
         "config": {"provider": "openai_compatible", "surface": "access_control", "payload_mode": "hybrid"},
@@ -200,12 +240,12 @@ def test_access_control_agent_exports_only_actual_candidate_attempts(monkeypatch
     (evidence_dir / f"{method}-{'spaces' if first != first.strip() else 'plain'}-{probe.strip()}.json").write_text(json.dumps(artifact, indent=2) + "\n")
     rows = {row["candidate_id"]: row for row in artifact["manual_scoring_evidence"]}
     assert update["scores"][method] == 1
-    for candidate_id in ["probe", "attempted"]:
+    # Detection controls must never be exported as exploit candidates.
+    assert not set(rows) & {r.get("control_id") for r in update["response_evidence"]}
+    for candidate_id in ["attempted"]:
         row = rows[candidate_id]
         assert row["response_evidence_ref"] and row["execution_log_ref"]
         assert row["verifier_decision"]["decision"] == "not_confirmed"
-        if candidate_id == "probe":
-            assert row["score_0_4"] == 1
         for field in ["response_evidence", "execution_log"]:
             for pointer in row[f"{field}_ref"]:
                 record = artifact[field][int(pointer.rsplit("/", 1)[1])]
@@ -284,6 +324,8 @@ def test_legacy_normalized_aliases_use_recorded_candidate_score_or_remain_unlink
         "verifier_decision": {"agent_id": "ac_force_browse", "decision": "confirmed"},
     }
     rows = {r["candidate_id"]: r for r in manual_scoring_rows(artifact)}
+    # A recorded score disambiguates the normalized alias; without one the
+    # legacy evidence stays unlinked (ambiguous aliases never borrow rows).
     assert rows["seed"]["response_evidence_ref"] == (["#/response_evidence/0"] if score is not None else [])
     assert rows["variant"]["response_evidence_ref"] == []
     assert rows["variant"]["verifier_decision"] is None
@@ -309,16 +351,18 @@ def test_legacy_access_control_links_stripped_ids(method):
 @pytest.mark.parametrize("method", ["bf_dictionary", "bf_spray"])
 def test_high_security_token_retry_retains_the_same_candidate_identity(monkeypatch, method):
     module = importlib.import_module(f"agents.brute_force.{method}_agent")
-    state = new_default_state()
-    state.update(target_url="http://localhost/dvwa", security_level="high")
-    state["payload_candidates"] = {method: [
-        {"candidate_id": "probe", "stage": "probe", "payload_or_logic": "rate_test:test"},
-        {"candidate_id": "login", "stage": "exploit", "payload_or_logic": "admin:password"},
-    ]}
-    state["payload_validation_results"] = {method: [{"candidate_id": c, "valid": True} for c in ["probe", "login"]]}
+    state = ready_state(method, level="high")
+    state["target_url"] = "http://localhost/dvwa"
+    candidate = next(row for row in state["payload_candidates"][method]
+                     if row["payload_or_logic"] == "admin:password")
+    candidate_id = candidate["candidate_id"]
+    state["payload_candidates"] = {method: [candidate]}
 
     class Session:
         requests = 0
+        http = SimpleNamespace(cookies={"PHPSESSID": "fixture-admin"})
+        _principal_id = "admin"
+        _username = "admin"
 
         def login(self):
             return True
@@ -343,7 +387,7 @@ def test_high_security_token_retry_retains_the_same_candidate_identity(monkeypat
     update = getattr(module, f"{method}_agent")(state)
     attempts = [r for r in update["response_evidence"] if r["stage"] == "exploit"]
     assert update["scores"][method] == 3 and len(attempts) == 2
-    assert all(r["candidate_id"] == "login" for r in attempts)
+    assert all(r["candidate_id"] == candidate_id for r in attempts)
 
 
 def test_manual_scoring_links_only_the_candidate_recorded_evidence():

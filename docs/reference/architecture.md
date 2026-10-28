@@ -451,15 +451,16 @@ ran with zero provider calls. This evidence gap remains documented in the
 [completed, scope-limited acceptance handoff](../completed/HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md);
 saved inputs must not be supplemented with fresh seeds during replay.
 
-New validator visits freeze implicit detection seeds in `probe_controls[method]`
-before execution, with the visit ID, ordered canonical candidates, SHA-256 and
-validation receipts. This field persists in checkpoints and is retained in each
-`method_execution_inputs` snapshot. Agents use these validated probes and link
-their response receipts to the control candidate IDs. Controls retain seed
-provenance within their candidate records and stay outside the scored exploit
-queue and its budget. Replay revalidates the saved controls against the canonical
-catalog and rejects changed hashes, values, order, provenance or visits before
-HTTP. Legacy snapshots with missing stages remain incomplete.
+Recon, destination and method visits freeze versioned, bounded detection
+controls in `probe_controls`, including approved seed-derived and synthetic
+controls. Their recorded scope, hashes, budgets and validation receipts persist
+in checkpoints and method-input snapshots. Control IDs survive principal-specific
+resolution and link request evidence to the matching frozen validation; failed
+transport cannot establish a negative precondition. Independent detection
+controls and candidate-derived verification controls stay outside exploit
+candidate budgets and scoring denominators. Replay revalidates recorded
+controls and the saved candidate queue without fresh provider calls, rejecting
+tampering before HTTP. Missing historical controls remain incomplete.
 
 Permission oracle coverage requires allowed and denied controls for the assessed
 object/action, with independently matching principal identities. Controls may
@@ -611,3 +612,25 @@ and [the Indonesian contract](summary_id.md#status-eksekusi-dan-hasil-keamanan).
 `evaluation/observer_reviews.py` validates separate Human/AI workflows using existing evidence/decision readers, frozen config/method/rubric bindings, and receipt arithmetic. `evaluation/observer_export.py` serializes grouped metadata with the current `core/run_status.py` classifier and `evaluation/metrics.py` readers. The CLI is `python -m tesis export-observer`; it makes no HTTP/provider calls, performs no scoring finalization, and publishes only a new derived file under `results/`. Classifier/code hashes and all input byte hashes identify the export epoch. The web observer reads the projection and revalidates sources; it never launches the exporter.
 
 `write_json_report` publishes primary, manifest, matrix and review JSON with a unique same-directory temporary file, flush/fsync and atomic replacement. Failure preserves the previous complete file and propagates the exception. Existing descriptor publication and append-only runtime journals retain their contracts. Manifests now declare parent identity and available invocation-owned journal/snapshot references with one-based indexes; the DTO uses explicit zero-based coordinate indexes.
+
+## Chapter 3 epoch and evidence fields (2026-10-28)
+
+New execution artifacts add a non-rewriting identity layer. The root carries `experiment_block` (`selection|forced`), `policy_epoch` (`epoch_id`, policy/payload/control/budget/workflow/graph/state/schema versions, optional `source_hashes_sha256`), `payload_policy_version`, `control_policy_version`, `budget_policy_version`, `experiment_policy_version`, `readiness`, `candidate_lifecycle`, `candidate_budget_receipts`, `selection_rejections`, `model_call_requirements`, `chain_assessment`, `control_events`, `quarantined_visits`, `payload_generation_opportunities`, `scoring_policy`, and `score_epoch`. The frozen `config` repeats the block, scoring policy epoch, token price schedule, source hash, policy versions, `scoring_policy_version`, and `metrics_epoch`. `timing` separates `wall_time_ms`, `summed_role_call_duration_ms`, and `non_call_overhead_ms`. Root `composite_score_status` is `runtime_provisional_scoring.v2`; `thesis_scoring_status` remains `pending_review` until a separate final v4 receipt exists. No historical artifact is rewritten or silently upgraded.
+
+`readiness` is a fail-closed receipt with requested/observed level, authentication, endpoints/token, fixture/protocol, session, setup state, structured reasons, and fixture-restoration equivalence. `candidate_lifecycle` is append-only (`generated|valid|queued|executed|stopped_before_execution|budget_excluded|rejected`) and `candidate_budget_receipts` is derived per method/visit; detection/verification controls have their own request budgets. `selection_rejections` records a rejected forced/automatic choice with `decision_origin` and `candidate_set_source`. `model_call_requirements` binds required roles to method/visit/call, and `chain_assessment` separates `not_run`/`insufficient_evidence` from a proved absence. `observation_facts` and derived `precondition_status` keep scoped history; endpoint discovery alone is not proof.
+
+Matrix aggregates never average across conditions, blocks, payload modes, targets, fixtures, protocols, or policy epochs: the group key contains those axes plus the recorded policy epoch, and the aggregate declares its grouping and provisional score epoch. Runtime aggregates are operational only; thesis summaries consume compatible final Human/AI receipts through the public `receipt_compatibility_key`, keep planned/error/pending/unassessable counts, and never zero-fill. The artifact repository exposes `experiment_condition`, `experiment_block`, `target_method`, `repeat_index`, and `policy_epoch` filters without changing legacy discovery.
+
+Offline validation is limited to configuration, graph/AKG compilation, payload-mode contracts, template coverage, and prompt/schema manifests. Live readiness, DVWA state, provider availability, and fixture restoration require separate authorized evidence. `token_price_schedule` accepts `input_per_million`/`output_per_million` and optional cache categories, is validated by `evaluation.research_metrics.validate_token_price_schedule`, and is never inferred from a historical epoch.
+
+The two-block study is declared by `config/research/chapter3_study.json` and operated by `evaluation/research_plan.py` (`freeze-profile`, `plan`, `run`) with `evaluation/research_analysis.py` (`chapter3-analysis.v3`, `compare_receipts` grouping, paired statistics). The same commands are exposed as `python -m tesis study …`. Plans freeze config/profile/oracle/price/policy/source/fixture/protocol identities, refuse drift, and never modify `evaluation/scoring_v4_matrix.py` or historical artifacts.
+
+### Correction release fields (2026-10-28)
+
+`READINESS_NOT_READY` and `RUN_QUARANTINED` are explicit no-call terminal reasons; they retain `execution_status=failed`/`security_outcome=fixture_limited` and are never rewritten to `LLM_NOT_CALLED`. A target-request failure is scoped to the final visit's own candidate exploit/bypass evidence; unrelated controls and earlier visits remain independent limitations. Hybrid provider-generation failures stay operational model-component failures, with the independent security outcome preserved.
+
+Every normal runner/headless artifact carries `source_identity` from the shared `chapter3-source-identity.v1` helper (`identity_version`, `config_sha256`, `source_hashes_sha256`) and `source_hashes_sha256`; missing identity is explicitly provisional, never an `unset` shared epoch. `fixture_restoration_evidence` (`fixture-restoration.v1` operator attestation) and its `fixture_restoration_sha256` are threaded config → runner state → recon/readiness; one shared projection (`tesis.config_fields.normalize_fixture_documents`) accepts a raw document, a list of documents, or a `{"by_level": {...}}` envelope and selects the coordinate's level. Plan provenance (`identity_sha256`, `source_path`, `sha256`) stays outside the attested document, and any such key inside it is rejected. Absence/mismatch leaves restoration `unknown`, pairs unmatched, and never calls a reset endpoint. A quarantined visit is terminal for the current run: an authorized `fixture-restoration.v1` attestation is still required for any continuation, and the runner does not auto-clear quarantine.
+
+Artifacts also carry `recorded_payload_policy` (payload policy version plus the hash-pinned `template.<method>.<level>` registry snapshot), on the artifact root, `final_state`, and each frozen `method_execution_inputs[*].state`. Historical replay validation consumes that recorded snapshot; a missing snapshot is a precise unavailable result, never a re-validation against today's mutable registry. `payload_generation_opportunities` is filtered to `role="payload_generator"` and `receipt_stage="generation"`; `payload_generation_opportunity_coverage` distinguishes recorded coverage from `generation_receipt_missing`, so validation-only evidence is never read as a measured zero opportunities. `http_request_counters` (policy `http-accounting.v1`) carries actual physical request/retry/redirect/failure totals by phase/role/method; evidence-row counts are separate. `payload_generation_opportunities` is generation-stage only and deduplicated by `opportunity_id`; `payload_validation_opportunities` is separate.
+
+Matrix aggregation groups by provider, model, surface, level, mode, condition, block, target, guardrail policy, fixture, protocol, policy versions, source hash, and frozen price-schedule hash. Empty groups use `null` provisional means with `avg_score_reason="no_completed_runs"`; provider-only rollups and the overall `totals` object are operational counts only (`score_aggregation="not_computed_pooled_coordinates"`), with no pooled metric means. Oracle/verification HTTP is tagged `phase="verification"` with `candidate_verification` or `independent_control` roles inside the same run-scoped counter. Doctor checks only configured single/matrix coordinates; the all-registry template/prompt audit is separate. The derived DOCX replaces only rubric Tables 3.5–3.11; the Markdown revision is the full methodology and DOCX visual layout is unverified.

@@ -13,6 +13,7 @@ def test_payload_capsule_drops_credential_observations_and_seed_rationale():
         static_seeds=[{
             "candidate_id": "seed-1",
             "source_seed_id": "seed-1",
+            "stage": "exploit",
             "payload_or_logic": "seed",
             "target_param": "id",
             "expected_signal": "rows",

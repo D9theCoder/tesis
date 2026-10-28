@@ -1,6 +1,7 @@
 """Tests for orchestrator loop prevention and telemetry accuracy."""
 
 from __future__ import annotations
+from tests.support import READY_RECEIPT
 
 from unittest.mock import MagicMock, patch
 
@@ -24,9 +25,10 @@ class TestUsedFallbackAccuracy:
             "observations": {},
             "scores": {},
             "consecutive_clean_responses": 0,
-            "llm_provider": "gemini",
+            "llm_provider": "openai_compatible",
             "security_level": "low",
             "evasion_enabled": False,
+            "readiness": dict(READY_RECEIPT),
         }
 
         fake_llm = MagicMock()
@@ -55,9 +57,10 @@ class TestUsedFallbackAccuracy:
             "observations": {},
             "scores": {},
             "consecutive_clean_responses": 0,
-            "llm_provider": "gemini",
+            "llm_provider": "openai_compatible",
             "security_level": "low",
             "evasion_enabled": False,
+            "readiness": dict(READY_RECEIPT),
         }
 
         fake_llm = MagicMock()
@@ -88,9 +91,10 @@ class TestUsedFallbackAccuracy:
             "observations": {},
             "scores": {},
             "consecutive_clean_responses": 0,
-            "llm_provider": "gemini",
+            "llm_provider": "openai_compatible",
             "security_level": "low",
             "evasion_enabled": False,
+            "readiness": dict(READY_RECEIPT),
         }
 
         fake_llm = MagicMock()
@@ -124,6 +128,7 @@ class TestUsedFallbackAccuracy:
             "llm_provider": "openai_compatible",
             "security_level": "low",
             "evasion_enabled": False,
+            "readiness": dict(READY_RECEIPT),
             "experiment_condition": "akg_guided_hybrid",
         }
 

@@ -54,7 +54,9 @@ def test_execution_review_independent_receipts_and_fractional_mean(monkeypatch):
     path = source(monkeypatch)
     before = path.read_bytes()
     queue = review_queue(path)
-    assert {r['status'] for r in queue['candidates']} >= {'signal_absent', 'pending_review', 'probe_only'}
+    assert {r['status'] for r in queue['candidates']} >= {'signal_absent', 'pending_review'}
+    # Detection probes live in frozen controls, never in the exploit review queue.
+    assert not any(r['stage'] == 'probe' for r in queue['candidates'])
     assert not finalize_reviews(path, [], output_dir=ROOT / 'pending')['receipts']
     human = grades(queue, 'human', 3)
     result = finalize_reviews(path, human, output_dir=ROOT / 'dual')

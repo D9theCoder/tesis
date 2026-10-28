@@ -28,7 +28,12 @@ from tesis.model_config import (
     PAYLOAD_MODES,
     RoleConfig,
 )
-from tesis.config_fields import FORM_MATRIX, FORM_SINGLE, validate_config as validate_field_schema
+from tesis.config_fields import (
+    FORM_MATRIX,
+    FORM_SINGLE,
+    fixture_evidence_envelope,
+    validate_config as validate_field_schema,
+)
 from tesis.provider_registry import expanded_model_sections
 
 
@@ -207,6 +212,7 @@ def load_env_overrides(prefix: str = "TESIS_") -> dict[str, Any]:
         "GUARDRAIL_RETRY_MODE": "guardrail_handling",
         "GUARDRAIL_RETRY_MAX": "guardrail_retry_max",
         "GUARDRAIL_RETRY_COOLDOWN_THRESHOLD": "guardrail_retry_cooldown_threshold",
+        "FIXTURE_RESTORATION_EVIDENCE": "fixture_restoration_evidence",
         # LLM-only runtime controls.  These are intentionally kept separate
         # from provider model credentials so a run can select role overrides
         # without changing the shared model profiles.
@@ -374,6 +380,7 @@ def _extract_cli_overrides(cli_args: Mapping[str, Any]) -> dict[str, Any]:
         "guardrail_handling": "guardrail_handling",
         "guardrail_retry_max": "guardrail_retry_max",
         "guardrail_retry_cooldown_threshold": "guardrail_retry_cooldown_threshold",
+        "fixture_restoration_evidence": "fixture_restoration_evidence",
     }
 
     bool_flags = {"matrix", "enriched_reporting", "diagnose", "evasion_enabled", "guardrail_retry_enabled"}
@@ -819,6 +826,36 @@ def _validate_llm_runtime_config(config: LLMRuntimeConfig) -> None:
             )
 
 
+def _validate_policy_epoch(epoch: Mapping[str, Any]) -> None:
+    """Validate an explicitly frozen Chapter 3 policy epoch; empty is unset."""
+    if not epoch:
+        return
+    if not isinstance(epoch, Mapping):
+        raise ConfigError("scoring_policy_epoch must be a mapping or a JSON file path")
+    for field in ("epoch_id", "policy_version", "frozen_at"):
+        if not isinstance(epoch.get(field), str) or not epoch[field].strip():
+            raise ConfigError(f"scoring_policy_epoch requires a nonempty {field}")
+    from datetime import datetime
+    try:
+        parsed = datetime.fromisoformat(str(epoch["frozen_at"]))
+    except ValueError as exc:
+        raise ConfigError("scoring_policy_epoch.frozen_at must be an ISO timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ConfigError("scoring_policy_epoch.frozen_at requires a timezone")
+
+
+def _validate_token_price_schedule(schedule: Mapping[str, Any]) -> None:
+    """Validate the frozen price schedule with the canonical research validator."""
+    if not schedule:
+        return
+    from evaluation.research_metrics import validate_token_price_schedule
+
+    try:
+        validate_token_price_schedule(dict(schedule))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"token_price_schedule invalid: {exc}") from exc
+
+
 def _validate_engagement_config(config: EngagementConfig) -> None:
     """Supports validate engagement config behavior for this module."""
     validate_target_url(config.target_url)
@@ -826,6 +863,44 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
     validate_scoring_config(config.scoring_mode, config.scoring_evaluator)
     from evaluation.scoring_evidence import validate_evidence_config
     validate_evidence_config(config.scoring_rubric_version, config.scoring_profile, config.scoring_oracles)
+    _validate_policy_epoch(config.scoring_policy_epoch)
+    _validate_token_price_schedule(config.token_price_schedule)
+    if config.fixture_restoration_evidence:
+        from foundation.readiness import validate_fixture_restoration_evidence
+
+        configured_levels = set(config.levels if config.matrix else [config.level])
+        try:
+            envelope = fixture_evidence_envelope(config.fixture_restoration_evidence)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"fixture_restoration_evidence invalid: {exc}") from exc
+        documents = envelope.get("by_level") or {}
+        outside = sorted(set(documents) - configured_levels)
+        if outside:
+            raise ConfigError(
+                "fixture_restoration_evidence targets levels outside this configuration: "
+                + ", ".join(outside)
+            )
+        if not config.matrix and config.level not in documents:
+            raise ConfigError(
+                f"fixture_restoration_evidence has no attestation for level {config.level!r}"
+            )
+        frozen_source_hash = (config.scoring_policy_epoch or {}).get("source_hashes_sha256")
+        for level, document in documents.items():
+            try:
+                validate_fixture_restoration_evidence(
+                    document,
+                    fixture_id=config.fixture_id,
+                    protocol_version=config.protocol_version,
+                    security_level=level,
+                    epoch_id=config.scoring_policy_epoch.get("epoch_id"),
+                    source_hashes_sha256=frozen_source_hash,
+                )
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(
+                    f"fixture_restoration_evidence invalid for level {level!r}: {exc}"
+                ) from exc
+        envelope["missing_levels"] = sorted(configured_levels - set(documents))
+        config.fixture_restoration_evidence = envelope
     if config.iterations <= 0:
         raise ConfigError("iterations must be > 0")
     if config.repeats <= 0:
@@ -1040,7 +1115,13 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any],
 
     import json
     evidence_config = {}
-    for key, default in (("scoring_profile", {}), ("scoring_oracles", [])):
+    for key, default in (
+        ("scoring_profile", {}),
+        ("scoring_oracles", []),
+        ("scoring_policy_epoch", {}),
+        ("token_price_schedule", {}),
+        ("fixture_restoration_evidence", {}),
+    ):
         value = merged.get(key, default)
         if isinstance(value, str):
             path = Path(value)
@@ -1060,6 +1141,9 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any],
         scoring_rubric_version=str(merged.get("scoring_rubric_version", "scoring.v4")),
         scoring_profile=evidence_config["scoring_profile"],
         scoring_oracles=evidence_config["scoring_oracles"],
+        scoring_policy_epoch=dict(evidence_config["scoring_policy_epoch"] or {}),
+        token_price_schedule=dict(evidence_config["token_price_schedule"] or {}),
+        fixture_restoration_evidence=evidence_config["fixture_restoration_evidence"] or {},
         fixture_id=merged.get("fixture_id"),
         protocol_version=merged.get("protocol_version"),
         experiment_condition=str(merged.get("experiment_condition") or "linear_hybrid").strip().lower(),

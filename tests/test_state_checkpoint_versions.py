@@ -29,7 +29,7 @@ def test_run_artifact_carries_version_stamps(monkeypatch):
     artifact = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         max_iterations=5,
         repeat_index=0,
         target_method="sqli_union",

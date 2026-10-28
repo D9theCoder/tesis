@@ -2,10 +2,12 @@
 
 from unittest.mock import MagicMock, patch
 from importlib import import_module
+from types import SimpleNamespace
 
 import pytest
 
-from core.state import new_default_state
+from core.payload_policy import PAYLOAD_POLICY_VERSION
+from tests.support import ready_state
 
 dictionary_module = import_module("agents.brute_force.bf_dictionary_agent")
 spray_module = import_module("agents.brute_force.bf_spray_agent")
@@ -114,18 +116,13 @@ def test_high_random_latency_is_not_classified_as_rate_limited(module):
 )
 def test_slow_probe_does_not_skip_exploit_stage(module, agent, agent_id):
     """Regression for runs that tried only rate_test/probe on a slow DVWA."""
-    state = new_default_state()
+    state = ready_state(agent_id)
     state["target_url"] = "http://localhost/dvwa"
-    state["security_level"] = "low"
-    state["payload_candidates"] = {
-        agent_id: [
-            {"stage": "probe", "payload_or_logic": "rate_test:test"},
-            {"stage": "probe", "payload_or_logic": "probe:probe"},
-            {"stage": "exploit", "payload_or_logic": "admin:password"},
-        ]
-    }
 
     session = MagicMock()
+    session.http = SimpleNamespace(cookies={"PHPSESSID": "fixture-admin"})
+    session._principal_id = "admin"
+    session._username = "admin"
     session.login.return_value = True
     session.set_security_level.return_value = None
 

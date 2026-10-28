@@ -36,7 +36,7 @@ def _coordinate(**overrides):
     from evaluation.runner import _effective_llm_runtime_config
     runtime = LLMRuntime(max_concurrency=overrides.pop("_concurrency", 1))
     try:
-        with runtime.coordinate(coordinate_id="identity", default_provider="gemini") as context:
+        with runtime.coordinate(coordinate_id="identity", default_provider="openai_compatible") as context:
             identity = _effective_llm_runtime_config(context, candidate_budget=5)
     finally:
         runtime.close()
@@ -46,7 +46,7 @@ def _coordinate(**overrides):
         "scoring_mode": "human", "scoring_evaluator": {}, "fixture_id": None, "protocol_version": None,
         "evasion_max_retries": 3, "evasion_cooldown_threshold": 5,
         "target_url": "http://localhost/dvwa",
-        "provider": "gemini",
+        "provider": "openai_compatible",
         "surface": "sqli",
         "security_level": "low",
         "payload_mode": "static_only",
@@ -165,16 +165,19 @@ _CRASH_WRITER = textwrap.dedent(
     from langgraph.checkpoint.sqlite import SqliteSaver
 
     from core.graph_builder import build_framework
+    from core.payload_policy import PAYLOAD_POLICY_VERSION
     from core.state import new_default_state
     from foundation.payload_library import PayloadLibrary
 
     graph_db = Path(sys.argv[1])
+    visit_id = "sqli_union:visit:1"
 
     def base(**over):
         st = {
             **new_default_state(),
             "target_url": "http://localhost/dvwa",
             "selected_method": "sqli_union",
+            "selected_visit_id": visit_id,
             "target_method": "sqli_union",
             "payload_mode": "static_only",
             "security_level": "low",
@@ -182,13 +185,24 @@ _CRASH_WRITER = textwrap.dedent(
         st.update(over)
         return st
 
-    seeds = PayloadLibrary().load_seed_candidates("sqli_union", "low")[:2]
+    # Current live queues carry trusted origin, policy and visit identity, and a
+    # static queue contains execution-stage seeds only (probes are controls).
+    seeds = [
+        {
+            **row,
+            "origin_kind": "static_seed",
+            "policy_version": PAYLOAD_POLICY_VERSION,
+            "visit_id": visit_id,
+        }
+        for row in PayloadLibrary().load_seed_candidates("sqli_union", "low")
+        if row.get("stage") in {"exploit", "bypass"}
+    ]
     assert seeds
 
     conn = sqlite3.connect(str(graph_db), check_same_thread=False)
     saver = SqliteSaver(conn)
     saver.setup()
-    app = build_framework(llm_provider="gemini", surface="sqli", checkpointer=saver)
+    app = build_framework(llm_provider="openai_compatible", surface="sqli", checkpointer=saver)
     app.update_state(
         {"configurable": {"thread_id": "sp-validator-empty"}},
         base(next_agent="sqli_union", payload_candidates={}),
@@ -258,7 +272,7 @@ _CRASH_READER = textwrap.dedent(
         saver = SqliteSaver(conn)
         saver.setup()
         app = build_framework(
-            llm_provider="gemini", surface="sqli", checkpointer=saver
+            llm_provider="openai_compatible", surface="sqli", checkpointer=saver
         )
         for thread in (
             "sp-validator-empty",
@@ -368,7 +382,7 @@ def _base_run_kwargs(out_dir: Path, ckpt: Path, experiment_id: str) -> dict:
     return {
         "target_url": "http://localhost/dvwa",
         "security_level": "low",
-        "llm_provider": "gemini",
+        "llm_provider": "openai_compatible",
         "target_method": "sqli_union",
         "output_dir": str(out_dir),
         "checkpoint_dir": str(ckpt),
@@ -510,6 +524,7 @@ def test_recovery_partial_resume_sets_both_flags(tmp_path, monkeypatch):
     import httpx
 
     from evaluation.runner import run_single_engagement
+    from tests.support import ready_state
 
     ckpt = tmp_path / "ckpt-partial"
     out_dir = tmp_path / "out"
@@ -534,12 +549,12 @@ def test_recovery_partial_resume_sets_both_flags(tmp_path, monkeypatch):
         saver = SqliteSaver(conn)
         saver.setup()
         app = build_framework(
-            llm_provider="gemini", surface="sqli", checkpointer=saver
+            llm_provider="openai_compatible", surface="sqli", checkpointer=saver
         )
         app.update_state(
             {"configurable": {"thread_id": thread}},
             {
-                **new_default_state(),
+                **ready_state(),
                 "target_url": "http://localhost/dvwa",
                 "selected_method": "sqli_union",
                 "target_method": "sqli_union",
@@ -566,7 +581,7 @@ def test_recovery_partial_resume_sets_both_flags(tmp_path, monkeypatch):
     resumed = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         target_method="sqli_union",
         output_dir=str(out_dir),
         checkpoint_dir=str(ckpt),
@@ -597,7 +612,7 @@ def test_recovery_shared_db_matrix_concurrency(tmp_path, monkeypatch):
     ckpt = tmp_path / "ckpt-matrix"
     artifacts = run_provider_matrix(
         target_url="http://localhost/dvwa",
-        providers=["gemini"],
+        providers=["openai_compatible"],
         security_levels=["low"],
         surfaces=["sqli"],
         payload_modes=["static_only"],

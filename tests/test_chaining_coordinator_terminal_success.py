@@ -7,6 +7,7 @@ from core.chaining_coordinator import (
 )
 from core.scorer import scorer
 from tests.test_chaining_coordinator import proved_chain_source
+from tests.support import READY_RECEIPT
 
 def _brute_force_chain_state(**overrides):
     state = {
@@ -20,6 +21,7 @@ def _brute_force_chain_state(**overrides):
         "blocked_agents": [],
         "failure_agents": [],
         "observations": {"no_rate_limit": True, "force_browse_endpoints_visible": True},
+        "readiness": dict(READY_RECEIPT),
         **proved_chain_source("authenticated_session"),
     }
     state.update(overrides)

@@ -45,7 +45,7 @@ def test_settings_evaluator_selection_reaches_frozen_review_and_ai_receipt(evalu
         runtime.setattr("llm.runtime.get_llm", lambda *_a, **_k: fixture)
         artifact = run_single_engagement(
             target_url=config.target_url, security_level="low", llm_provider=config.provider,
-            surface="sqli", payload_mode="hybrid", target_method="sqli_union",
+            surface="sqli", payload_mode="hybrid",
             experiment_condition="linear_hybrid", max_iterations=12, candidate_budget=5,
             execution_id=execution_id, output_dir=str(folder / "run"),
             model_config=asdict(config.models[config.provider]),

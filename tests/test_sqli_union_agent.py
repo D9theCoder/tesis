@@ -2,14 +2,16 @@
 
 import pytest
 from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
 
 from agents.sqli.sqli_union_agent import sqli_union_agent
 from core.state import new_default_state
+from tests.support import ready_state
 
 @pytest.fixture
 def base_state():
     """Supports regression tests for test sqli union agent."""
-    state = new_default_state()
+    state = ready_state("sqli_union")
     state["target_url"] = "http://localhost/dvwa"
     state["security_level"] = "low"
     return state
@@ -17,6 +19,8 @@ def base_state():
 def _make_mock_session(login_ok=True):
     """Supports regression tests for test sqli union agent."""
     session = MagicMock()
+    session.http = SimpleNamespace(cookies={"PHPSESSID": "fixture-admin"})
+    session._principal_id = "admin"
     session.login.return_value = login_ok
     session.set_security_level.return_value = None
     return session

@@ -17,7 +17,7 @@ from typing import Any, Iterator
 
 from bs4 import BeautifulSoup
 
-from foundation.http_client import HTTPClient, RequestResult, TransportError, RequestTimeoutError
+from foundation.http_client import HTTPClient, RequestResult, TransportError, RequestTimeoutError, http_accounted
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,21 @@ def _dvwa_identity(html: str) -> str | None:
     """Read the authenticated identity from DVWA navigation without retaining HTML."""
     text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
     match = re.search(r"Username:\s*([A-Za-z0-9_.-]+)\b", text)
+    return match.group(1) if match else None
+
+
+def parse_security_level_page(html: str) -> str | None:
+    """Return the server-selected security level from the settings page."""
+    soup = BeautifulSoup(html, "html.parser")
+    select = soup.select_one("select[name='security']")
+    if select:
+        selected = select.find("option", attrs={"selected": True})
+        if selected is None:
+            selected = select.find("option", selected=True)
+        value = (selected.get("value") if selected is not None else "") or ""
+        if str(value).lower() in VALID_LEVELS:
+            return str(value).lower()
+    match = re.search(r"security level.*?\b(low|medium|high)\b", str(html).lower())
     return match.group(1) if match else None
 
 
@@ -151,6 +166,10 @@ class DVWASession:
             Defaults to ``http://localhost/dvwa``.
     """
 
+    _principal_id: str | None = None
+    _initial_session_fingerprint: str | None = None
+    _consumed_source_evidence_id: str | None = None
+
     def __init__(self, base_url: str = "http://localhost/dvwa") -> None:
         """Supports init behavior for this module."""
         self.http = HTTPClient(base_url)
@@ -176,6 +195,7 @@ class DVWASession:
             return token_el["value"]
         return None
 
+    @http_accounted(phase="token")
     def login(self, username: str | None = None, password: str | None = None) -> bool:
         """Authenticate to DVWA and persist the session.
 
@@ -262,6 +282,7 @@ class DVWASession:
         """Current DVWA security level (``"low"``, ``"medium"``, ``"high"``)."""
         return self._security_level
 
+    @http_accounted(phase="token")
     def set_security_level(self, level: str) -> None:
         """Set DVWA security level and persist it via cookie + form submission.
 
@@ -275,6 +296,7 @@ class DVWASession:
 
         Raises:
             ValueError: If *level* is not a valid DVWA security level.
+            RuntimeError: If the requested level cannot be verified server-side.
         """
         normalized = level.lower().strip()
         if normalized not in VALID_LEVELS:
@@ -286,49 +308,43 @@ class DVWASession:
         self._security_level = normalized
         self._apply_security_level_cookie()
         if not self._submit_security_form(normalized):
-            logger.error("Security level form submission failed — server-side level may not match cookie")
+            raise RuntimeError(
+                f"Requested DVWA security level {normalized!r} was not verified server-side"
+            )
+
+    @http_accounted(phase="token")
+    def observed_security_level(self) -> str | None:
+        """Return the authoritative server-side level, or ``None`` if unverified.
+
+        A cookie or a local cached value is never accepted as proof.
+        """
+        try:
+            resp = self.http.get("security.php")
+        except (TransportError, RequestTimeoutError):
+            return None
+        observed = parse_security_level_page(resp.text)
+        if observed in VALID_LEVELS:
+            self._security_level = observed
+            return observed
+        return None
 
     def detect_security_level(self) -> str:
-        """Detect the current DVWA security level from cookies and page content.
+        """Detect the current DVWA security level from page content or cookie.
 
-        Checks in order:
-        1. Parse the DVWA security settings page (authoritative server-side state).
-        2. Fallback: the ``security`` cookie value.
+        This legacy helper keeps the historical cookie fallback for callers
+        that are not readiness evidence. Readiness uses
+        :meth:`observed_security_level`, which never accepts a cookie as proof.
 
         Returns:
             Detected security level string (normalized to ``"low"`` if unknown).
         """
-        # Prefer authoritative server-side page state over cookie value.
-        try:
-            resp = self.http.get("security.php")
-            soup = BeautifulSoup(resp.text, "html.parser")
-
-            # Look for the selected option in the security dropdown
-            select = soup.select_one("select[name='security']")
-            if select:
-                # Try attrs={"selected": True} first, then fallback to selected=True
-                selected = select.find("option", attrs={"selected": True})
-                if selected is None:
-                    selected = select.find("option", selected=True)
-                if selected and selected.get("value", "").lower() in VALID_LEVELS:
-                    self._security_level = selected["value"].lower()
-                    return self._security_level
-
-            # Check hidden input or text indication
-            level_match = re.search(r"security level.*?(low|medium|high)", resp.text.lower())
-            if level_match:
-                self._security_level = level_match.group(1)
-                return self._security_level
-
-        except (TransportError, RequestTimeoutError):
-            logger.warning("Failed to detect security level from page content")
-
-        # Fallback: use cookie only if server-side parse did not produce a level.
+        observed = self.observed_security_level()
+        if observed is not None:
+            return observed
         sec_cookie = self.http.cookies.get("security")
         if sec_cookie and sec_cookie.lower() in VALID_LEVELS:
             self._security_level = sec_cookie.lower()
             return self._security_level
-
         return self._security_level
 
     # ── Convenience HTTP methods ─────────────────────────────────
@@ -403,6 +419,7 @@ class DVWASession:
         else:
             self.http.set_cookie("security", self._security_level)
 
+    @http_accounted(phase="token")
     def _submit_security_form(self, level: str) -> bool:
         """Submit DVWA's security settings form to persist the level server-side.
 
@@ -425,7 +442,15 @@ class DVWASession:
                 payload["user_token"] = token
 
             self.http.post("security.php", data=payload)
-            logger.info("Security level set to %r (form submitted)", level)
+            # Persisting the form is not proof; verify the server-side state.
+            observed = self.observed_security_level()
+            if observed != level:
+                logger.warning(
+                    "Security level form submission did not persist level %r (observed %r)",
+                    level, observed,
+                )
+                return False
+            logger.info("Security level set to %r (server-side state verified)", level)
             return True
 
         except (TransportError, RequestTimeoutError) as exc:

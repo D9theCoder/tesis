@@ -105,6 +105,16 @@ def build_score_report(state: dict) -> ScorerReport:
     aggregate_scores = state.get("scores", {})
     normalized = normalize_method_scores(aggregate_scores)
     attempted = state.get("attempted_agents", [])
+    # Only methods with an actual visit or recorded result count as tested.
+    # An unattempted registry entry is not a zero-score failure.
+    attempted_methods = [
+        method for method in ALL_METHOD_AGENTS
+        if method in set(attempted)
+        or method in state.get("method_scores", {})
+        or method in state.get("payload_scores", {})
+        or method == state.get("selected_method")
+    ]
+    attempted_scores = {method: normalized[method] for method in attempted_methods}
     tried_payloads = state.get("tried_payloads", {})
     method_selection = round(method_selection_accuracy(normalized, attempted), 4)
     adaptation = round(adaptation_rate(normalized, attempted), 4)
@@ -144,8 +154,8 @@ def build_score_report(state: dict) -> ScorerReport:
         security_outcome_reason=state.get("security_outcome_reason"),
         llm_provider=state.get("llm_provider", "gemini"),
         security_level=state.get("security_level", "low"),
-        total_modules_tested=len(ALL_METHOD_AGENTS),
-        score_distribution=score_distribution(normalized),
+        total_modules_tested=len(attempted_methods),
+        score_distribution=score_distribution(attempted_scores),
         chain_exploits_achieved=len({h["route_id"] for h in state.get("chain_history", [])
             if h.get("status") == "completed" and h.get("route_id")}) if state.get("scoring_decisions") else chain_exploit_count({
             key: int(value)
@@ -233,6 +243,28 @@ def scorer(state: dict) -> dict:
     summary = {
         "workflow": workflow_progress(state),
         **dataclasses.asdict(report.summary),
+        "attempted_methods": [
+            method for method in ALL_METHOD_AGENTS
+            if method in set(attempted)
+            or method in state.get("method_scores", {})
+            or method in state.get("payload_scores", {})
+            or method == state.get("selected_method")
+        ],
+        "unattempted_methods": [
+            method for method in ALL_METHOD_AGENTS
+            if not (
+                method in set(attempted)
+                or method in state.get("method_scores", {})
+                or method in state.get("payload_scores", {})
+                or method == state.get("selected_method")
+            )
+        ],
+        "registered_methods": list(ALL_METHOD_AGENTS),
+        "score_epoch": {
+            "runtime_provisional": "scoring.v2",
+            "thesis_final": "scoring.v4",
+            "final_status": "pending_review",
+        },
         "total_surfaces_tested": len(SURFACES),
         "akg_path": akg_path,
         "selected_method": state.get("selected_method"),

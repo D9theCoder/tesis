@@ -855,16 +855,17 @@ static/AKG fallback path described in section 3.6.
 
 ### 5.3 Payload Candidate Builder
 
-The builder loads the full static seed catalog from `payload_library`, then
-creates LLM variants if `hybrid` or `llm_mutation_only` is active. The mutation
-prompt exposes only execution-ready `exploit`/`bypass` seeds and labels their
-stage, target parameter, and expected signal. Probe seeds remain available for
-Stage 1 method-agent preconditions but are not valid mutation sources for Stage
-2. The LLM receives only the selected method, security level, applicable
-observations, selected execution-ready seeds, mutation constraints, expected
-signals, and candidate budget.
+The builder loads the static seed catalog and generates seed-bound variants in
+`hybrid` and `llm_mutation_only`. The mutation prompt exposes only executable
+`exploit`/`bypass` seeds with their stage, target parameter and expected signal.
+Detection uses a separate, versioned and bounded catalog of approved
+seed-derived or synthetic controls; controls are not mutation sources or scored
+exploit candidates. Failed control transport remains unknown, not false.
+`llm_template` instead uses a neutral template without exposing executable
+seeds or control results to the model. Both strict modes require validated
+model-origin candidates and never substitute static candidates.
 
-The LLM candidate output is limited to:
+The mutation candidate output is limited to:
 
 ```json
 {
@@ -1745,3 +1746,21 @@ New `thesis_review_status` files include execution/run identity, source path/has
 Manifests retain v1 and add model/profile, repeat, parent identity, stored timing and relative detail references. Manifest indexes remain one-based; projection/event coordinate indexes are zero-based. A source root can be a flat directory or one exact source file. Embedded children retain their own identity/evidence; duplicate copies and missing primary/detail files are diagnosed. Primary/manifest/matrix/review JSON is published by atomic replacement of a unique same-directory temporary file. Journals retain their existing append behavior.
 
 Projection coverage separates planned, represented, completed, failed, interrupted, unknown, skipped/unstarted and confirmed counts. Historical legacy totals and hash-bound analysis labels remain separate from canonical outcomes. Runtime scores retain their provisional origin; absent dimensions stay null. Final payload scores retain the distinct eligible-candidate mean and fractional components. Metrics require finite values with explicit availability; legacy numeric placeholders remain unavailable. Web API/UI integration has separate acceptance requirements.
+
+## 17. Chapter 3 experiment flow revision (2026-10-28)
+
+The revised methodology is [the derived Chapter 3 document](../active/CHAPTER_3_REVISED_2026-10-28.md). It is a derived revision; the source `bab 3 only.docx` is preserved unchanged. Rubric Tables 3.5–3.11 follow [`thesis_scoring.md`](thesis_scoring.md#report-rubric-and-illustrative-conditions), not the older DOCX wording.
+
+The primary study now declares two blocks. The **selection** block uses `target_method=None` and keeps `linear_hybrid` and `akg_guided_hybrid` with `hybrid`; only `decision_origin=model` choices can support method-selection claims. The **forced** block assigns each registered method and measures per-method agent/payload coverage; it cannot establish model selection ability. Each coordinate requires at least three repeats, and the plan freezes config, ranking profile, oracles, token-price schedule, policy/prompt/schema versions, source hashes, fixture and protocol before execution. Any change starts a new epoch; historical runs and the frozen 108-coordinate `scoring_v4_matrix.py` are never rewritten.
+
+Payload modes are `static_only`, `hybrid`, strict `llm_mutation_only`, and `llm_template` (TUI label **Template**). Strict modes never revive a static or chain-derived candidate after refusal, malformed output, provider failure, rejection, exhausted budget, revisit, or stale queue. Template uses a neutral registry and a closed-allowlist prompt/schema; it never receives working seeds, solved credentials, raw control results, or prior successes. Detection controls remain separate, versioned, bounded, and outside the exploit queue and model-success denominator. Candidate execution requires the candidate's own visit-bound exploit/bypass request; a matching probe string is not execution evidence.
+
+Readiness is fail-closed and records requested versus observed level, authentication, endpoints/token, fixture/protocol, session, reasons and restoration evidence. Endpoint discovery is not precondition proof; observations are append-only scoped facts with derived `true`/`false`/`unknown` status. Offline `--dry-run` validates config, graph, and per-mode payload contracts only; it does not prove DVWA or provider readiness. Runtime composites remain provisional `scoring.v2`; final `scoring.v4` receipts are separate Human/AI reviews. Research summaries group only compatible final receipts and report planned, failed, pending, unassessable, fallback, and unmatched counts without zero-filling. Matched Linear/AKG pairs require fixture-equivalence evidence; Wilcoxon signed-rank, rank-biserial effect size, bootstrap uncertainty, and Holm correction are predeclared, while Mann–Whitney remains exploratory.
+
+### Correction note (2026-10-28): status, counters, identity, aggregation
+
+Readiness/quarantine outcomes are environment/control outcomes, not model failures: `READINESS_NOT_READY` and `RUN_QUARANTINED` retain `execution_status=failed` and `security_outcome=fixture_limited`, and are never rewritten to `LLM_NOT_CALLED`. A failed unrelated/derived control or an earlier visit does not by itself fail a completed final visit; only the final visit's own candidate execution evidence can produce a scoped target-request failure. Hybrid provider-generation failure remains an operational model-component failure while the independent security outcome is preserved separately.
+
+Artifacts carry real source identity from the shared `chapter3-source-identity.v1` helper (`source_identity`, `source_hashes_sha256`, config hash); a missing identity is labelled provisional/unmatched, not a shared `unset` epoch. `http_request_counters` records actual contained-client physical requests, retries, redirect hops, failures, and phase/role/method totals; evidence-row counts are named separately and never relabelled as requests. `payload_generation_opportunities` is generation-only (role and receipt stage filtered) and deduplicated by `opportunity_id`; validation receipts are separate, and `payload_generation_opportunity_coverage` reports `generation_receipt_missing` instead of a measured zero when only validation rows exist. Oracle/verification HTTP is tagged `phase="verification"` with `candidate_verification`/`independent_control` roles in the same run-scoped counter. Fixture restoration/equivalence is an authorized operator attestation (`fixture-restoration.v1`) threaded from config/runner through recon/readiness; one raw document, a list, or a `by_level` envelope is accepted, plan provenance stays outside the document, absent or mismatched evidence stays `unknown` and pairs remain unmatched. No reset endpoint is invoked automatically.
+
+Runtime aggregates group by provider, model, surface, level, mode, condition, block, target, guardrail policy, fixture, protocol, policy versions, source hash, and frozen price-schedule hash. Empty groups expose null provisional means with reasons, and provider-only rollups plus overall totals are operational counts only with no pooled metric means. Artifacts persist a hash-pinned `recorded_payload_policy` (payload policy version plus the template-registry snapshot) for historical replay; a missing snapshot is unavailable and is never revalidated against today's mutable registry. A quarantined visit is terminal for the current run; authorized restoration evidence is required for any continuation and is never applied automatically. Final research scores still come exclusively from compatible final v4 receipts. The derived DOCX replaces only Tables 3.5–3.11; the revised Markdown is the full methodology and the DOCX visual layout remains unverified.

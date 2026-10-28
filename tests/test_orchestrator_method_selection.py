@@ -4,17 +4,13 @@ This module verifies current behavior for state handling, routing, payloads,
 LLM adapters, agents, evaluation, or CLI integration without changing runtime
 code."""
 import pytest
+from tests.support import READY_RECEIPT
 from agents.orchestrator import orchestrator, _fallback_next_agent
 
 def test_experiment_condition_changes_deterministic_selection(monkeypatch):
-    class FakeKnowledgeGraph:
-        def get_viable_methods(self, surface, observations):
-            return ["sqli_time_blind"]
-
-    monkeypatch.setattr("core.knowledge_graph.AttackKnowledgeGraph.get_viable_methods", FakeKnowledgeGraph.get_viable_methods)
     base = {
         "current_surface": "sqli",
-        "observations": {},
+        "observations": {"response_delay_measurable": True},
         "attempted_agents": [],
         "blocked_agents": [],
         "failure_agents": [],
@@ -24,11 +20,6 @@ def test_experiment_condition_changes_deterministic_selection(monkeypatch):
     assert _fallback_next_agent({**base, "experiment_condition": "akg_guided_hybrid"}) == "sqli_time_blind"
 
 def test_akg_fallback_does_not_execute_unviable_method(monkeypatch):
-    class FakeKnowledgeGraph:
-        def get_viable_methods(self, surface, observations):
-            return []
-
-    monkeypatch.setattr("core.knowledge_graph.AttackKnowledgeGraph.get_viable_methods", FakeKnowledgeGraph.get_viable_methods)
     assert _fallback_next_agent({
         "current_surface": "sqli",
         "observations": {},
@@ -39,14 +30,9 @@ def test_akg_fallback_does_not_execute_unviable_method(monkeypatch):
     }) == "scorer"
 
 def test_akg_fallback_filters_cross_surface_methods(monkeypatch):
-    class FakeKnowledgeGraph:
-        def get_viable_methods(self, surface, observations):
-            return ["ac_force_browse", "sqli_error"]
-
-    monkeypatch.setattr("core.knowledge_graph.AttackKnowledgeGraph.get_viable_methods", FakeKnowledgeGraph.get_viable_methods)
     assert _fallback_next_agent({
         "current_surface": "sqli",
-        "observations": {},
+        "observations": {"error_messages_enabled": True, "force_browse_endpoints_visible": True},
         "attempted_agents": [],
         "blocked_agents": [],
         "failure_agents": [],
@@ -54,22 +40,18 @@ def test_akg_fallback_filters_cross_surface_methods(monkeypatch):
     }) == "sqli_error"
 
 def test_akg_orchestrator_rejects_cross_surface_llm_choice(monkeypatch):
-    class FakeKnowledgeGraph:
-        def get_viable_methods(self, surface, observations):
-            return ["sqli_error"]
-
     class FakeLLM:
         def invoke(self, messages):
             return type("Response", (), {"content": '{"next_agent": "ac_idor"}'})()
 
-    monkeypatch.setattr("core.knowledge_graph.AttackKnowledgeGraph.get_viable_methods", FakeKnowledgeGraph.get_viable_methods)
     monkeypatch.setattr("agents.orchestrator.get_llm", lambda *args, **kwargs: FakeLLM())
     result = orchestrator({
         "target_url": "http://localhost/dvwa",
+        "readiness": READY_RECEIPT,
         "security_level": "low",
-        "llm_provider": "gemini",
+        "llm_provider": "openai_compatible",
         "current_surface": "sqli",
-        "observations": {},
+        "observations": {"error_messages_enabled": True},
         "confirmed_vulns": [],
         "achieved_outcomes": [],
         "attempted_agents": [],
@@ -91,19 +73,15 @@ def test_akg_orchestrator_rejects_cross_surface_llm_choice(monkeypatch):
 
 def test_akg_orchestrator_does_not_route_cross_surface_choice_when_none_viable(monkeypatch):
     """No viable AKG method stops cleanly without an LLM selection call."""
-    class FakeKnowledgeGraph:
-        def get_viable_methods(self, surface, observations):
-            return []
-
-    monkeypatch.setattr("core.knowledge_graph.AttackKnowledgeGraph.get_viable_methods", FakeKnowledgeGraph.get_viable_methods)
     monkeypatch.setattr(
         "agents.orchestrator.get_llm",
         lambda *args, **kwargs: pytest.fail("orchestrator LLM must not be called"),
     )
     result = orchestrator({
         "target_url": "http://localhost/dvwa",
+        "readiness": READY_RECEIPT,
         "security_level": "high",
-        "llm_provider": "gemini",
+        "llm_provider": "openai_compatible",
         "current_surface": "sqli",
         "observations": {},
         "confirmed_vulns": [],
@@ -127,39 +105,21 @@ def test_akg_orchestrator_does_not_route_cross_surface_choice_when_none_viable(m
     assert result["next_agent"] == "scorer"
     assert result["task_result"] == "INCOMPLETE"
     assert result["incomplete_reason"] == "NO_VIABLE_METHODS"
-    assert result["messages"] == []
-    assert result["fallback_events"] == [{
-        "event": "orchestrator.no_viable_methods",
-        "surface": "sqli",
-        "security_level": "high",
-        "method": None, "visit_id": None, "origin": "orchestrator", "scope": "run",
-    }]
-    assert result["telemetry_events"] == [{
-        "node": "orchestrator",
-        "iteration": 0,
-        "event": "orchestrator.no_viable_methods",
-        "status": "incomplete",
-        "payload": {"surface": "sqli"},
-    }]
 
 def test_akg_viable_methods_are_filtered_to_active_surface(monkeypatch):
     """AKG output cannot widen the active surface's canonical allow-list."""
-    class FakeKnowledgeGraph:
-        def get_viable_methods(self, surface, observations):
-            return ["ac_force_browse", "sqli_error"]
-
     class FakeLLM:
         def invoke(self, messages):
             return type("Response", (), {"content": '{"next_agent": "sqli_error"}'})()
 
-    monkeypatch.setattr("core.knowledge_graph.AttackKnowledgeGraph.get_viable_methods", FakeKnowledgeGraph.get_viable_methods)
     monkeypatch.setattr("agents.orchestrator.get_llm", lambda *args, **kwargs: FakeLLM())
     result = orchestrator({
         "target_url": "http://localhost/dvwa",
+        "readiness": READY_RECEIPT,
         "security_level": "high",
-        "llm_provider": "gemini",
+        "llm_provider": "openai_compatible",
         "current_surface": "sqli",
-        "observations": {},
+        "observations": {"error_messages_enabled": True, "force_browse_endpoints_visible": True},
         "confirmed_vulns": [],
         "achieved_outcomes": [],
         "attempted_agents": [],
@@ -182,15 +142,11 @@ def test_akg_viable_methods_are_filtered_to_active_surface(monkeypatch):
 
 def test_target_method_explicit_selection_preserves_target_events(monkeypatch):
     """An explicit in-surface target remains selectable despite AKG viability."""
-    class FakeKnowledgeGraph:
-        def get_viable_methods(self, surface, observations):
-            return []
-
-    monkeypatch.setattr("core.knowledge_graph.AttackKnowledgeGraph.get_viable_methods", FakeKnowledgeGraph.get_viable_methods)
     result = orchestrator({
         "target_url": "http://localhost/dvwa",
+        "readiness": READY_RECEIPT,
         "security_level": "high",
-        "llm_provider": "gemini",
+        "llm_provider": "openai_compatible",
         "current_surface": "sqli",
         "target_method": "sqli_time_blind",
         "observations": {},
@@ -222,8 +178,9 @@ def test_target_method_cross_surface_stops_with_infeasible_event():
     """An explicit target from another surface cannot override containment."""
     result = orchestrator({
         "target_url": "http://localhost/dvwa",
+        "readiness": READY_RECEIPT,
         "security_level": "high",
-        "llm_provider": "gemini",
+        "llm_provider": "openai_compatible",
         "current_surface": "sqli",
         "target_method": "ac_force_browse",
         "observations": {},

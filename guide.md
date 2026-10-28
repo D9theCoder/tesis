@@ -38,6 +38,41 @@ Matrix axes accept comma-separated lists (`--providers`, `--levels`,
 `config.yaml` as the default configuration document and share the same
 artifact layout.
 
+### Payload modes and the Chapter 3 study
+
+`--payload-mode` accepts `static_only`, `hybrid`, `llm_mutation_only`
+(**Mutation-only**), and `llm_template` (**Template**). Mutation-only and
+Template are strict: refusal, malformed output, provider failure, rejected
+candidate, exhausted budget, revisit, or a stale queue never revives a static or
+chain-derived exploit candidate. Template uses a neutral registry and a
+closed-allowlist prompt/schema; it never receives working seeds, solved
+credentials, or prior successes. Detection and verifier controls are separate,
+bounded, and outside the exploit queue and model-success denominator. See
+[`docs/reference/summary_en.md`](docs/reference/summary_en.md) for the full
+contract.
+
+The primary thesis study declares two blocks, both with `linear_hybrid` and
+`akg_guided_hybrid` + `hybrid` and at least three repeats: a **selection** block
+with `target_method=None` (model choice) and a **forced** block over every
+registered method (coverage, not model-selection skill). Freeze config, ranking
+profile, oracles, token prices, policy/prompt/schema versions, source hashes,
+fixture, protocol, and the payload policy/template/prompt snapshot before
+execution. An authorized operator fixture restoration/equivalence attestation
+(`fixture-restoration.v1`) is required for paired analysis; it may be supplied
+as one raw document, a list, or a `{by_level: {...}}` envelope, while plan
+provenance stays outside the attested document. Without it, pairs stay
+unmatched and no reset endpoint is called automatically. A quarantined visit is
+terminal for the current run; an authorized attestation is a required external
+input for any continuation and is never applied automatically. The study driver is
+`evaluation/research_plan.py` (`freeze-profile`, `plan`, `run`) with final
+receipt analysis in `evaluation/research_analysis.py`; the same commands are
+available as `python -m tesis study …`. The richer methodology and v4 Tables
+3.5–3.11 are in
+[`docs/active/CHAPTER_3_REVISED_2026-10-28.md`](docs/active/CHAPTER_3_REVISED_2026-10-28.md).
+`python -m tesis run --dry-run` is offline and does not prove DVWA readiness.
+Run artifacts include real `http_request_counters`; evidence-row counts are
+named separately and must not be presented as physical requests.
+
 ### Reasoning controls, Doctor, and provider failures
 
 Reasoning effort accepts `low`, `medium`, `high`, `xhigh`, `max`, or
@@ -458,7 +493,11 @@ PY
 
 `input_index` is the zero-based index in the source artifact's
 `method_execution_inputs` array; `0` selects the first saved invocation. Older
-artifacts without that array cannot be replayed. The optional `candidate_ids`
+artifacts without that array cannot be replayed. Replay validates against the
+artifact's recorded `recorded_payload_policy` snapshot (payload policy version
+plus the frozen template registry and prompt manifests), not against today's
+mutable registry; an artifact without that snapshot is reported as
+recorded-policy unavailable rather than silently revalidated live. The optional `candidate_ids`
 argument selects only saved candidate IDs and must retain a probe plus an
 exploit or bypass stage. Changed, rejected, empty, or incomplete queues stop
 before HTTP without adding fallback payloads.

@@ -7,9 +7,26 @@ import json
 import re
 
 from core.knowledge_graph import AttackKnowledgeGraph, get_attack_knowledge_graph
+from core.payload_policy import (
+    EVENT_MODEL_BUDGET_EXCLUDED,
+    EVENT_PROVIDER_FAILURE,
+    EVENT_STATIC_FALLBACK,
+    EVENT_STRICT_NO_CANDIDATE,
+    EVENT_TARGET_NO_VALID_PAYLOADS,
+    EVENT_TEMPLATE_UNAVAILABLE,
+    EVENT_VALIDATION_NO_USABLE,
+    EVENT_VALIDATION_STRICT_NO_CANDIDATE,
+    is_provider_failure_reason,
+)
 from core.state import METHODS_BY_SURFACE
 
 RUBRIC_VERSION = 'scoring.v4'
+STATIC_ORIGIN_KINDS = frozenset({'static_seed'})
+CONTROL_IDENTITY_KINDS = frozenset({
+    'probe_candidate', 'derived_control', 'independent_control', 'unresolved',
+})
+EXPERIMENT_ROLES = frozenset({'orchestrator', 'payload_generator'})
+CANDIDATE_STAGES = frozenset({'exploit', 'bypass'})
 
 
 def evidence_hash(value):
@@ -101,6 +118,235 @@ def validate_evidence_config(version, profile, oracles):
                 raise ValueError('Oracle attestations must be a list of records')
 
 
+def evidence_rows(artifact):
+    """Return the artifact's evidence rows without copying or rewriting them."""
+    state = artifact.get('final_state') if isinstance(artifact, dict) else None
+    rows = state.get('response_evidence') if isinstance(state, dict) else None
+    if isinstance(rows, list):
+        return rows
+    rows = artifact.get('response_evidence') if isinstance(artifact, dict) else None
+    return rows if isinstance(rows, list) else []
+
+
+def candidate_execution_rows(artifact, candidate_id, method=None):
+    """Rows that are this candidate's own exploit/bypass request.
+
+    A matching probe string, a derived verification control or an independent
+    control never establishes candidate execution. Historical rows without the
+    explicit denominator flag fall back to the identity/stage/response fields;
+    contradictory control identities remain unexecuted.
+    """
+    if candidate_id is None:
+        return []
+    rows = []
+    for index, row in enumerate(evidence_rows(artifact)):
+        if not isinstance(row, dict) or row.get('candidate_id') is None:
+            continue
+        if str(row.get('candidate_id')) != str(candidate_id):
+            continue
+        if method is not None and (row.get('agent_id') or row.get('method')) not in (None, method):
+            continue
+        if row.get('control_id') or row.get('source_candidate_id'):
+            continue
+        kind = row.get('identity_kind')
+        if kind in CONTROL_IDENTITY_KINDS or kind not in (None, 'candidate'):
+            continue
+        if (row.get('stage') or '') not in CANDIDATE_STAGES:
+            continue
+        if row.get('eligible_for_exploit_denominator') is False:
+            continue
+        if not row.get('response_sha256'):
+            continue
+        rows.append((index, row))
+    return rows
+
+
+def candidate_lifecycle_status(artifact, candidate_id, method=None):
+    """Latest append-only lifecycle status, with contradictions left explicit."""
+    state = artifact.get('final_state') if isinstance(artifact, dict) else None
+    rows = state.get('candidate_lifecycle') if isinstance(state, dict) else None
+    if not isinstance(rows, list):
+        return None
+    statuses = [row.get('status') for row in rows if isinstance(row, dict)
+                and str(row.get('candidate_id')) == str(candidate_id)
+                and (method is None or row.get('method') == method)]
+    if not statuses:
+        return None
+    if 'executed' in statuses:
+        executed_rows = [row for row in rows if isinstance(row, dict)
+                         and str(row.get('candidate_id')) == str(candidate_id)
+                         and (method is None or row.get('method') == method)
+                         and row.get('status') == 'executed']
+        evidenced = [row for row in executed_rows if str(row.get('reason') or '') != 'request_failed']
+        if evidenced:
+            return 'executed' if set(statuses) <= {'executed', 'queued', 'valid', 'generated'} else 'conflicting'
+        return 'request_failed'
+    for status in ('stopped_before_execution', 'budget_excluded', 'rejected'):
+        if status in statuses:
+            return status
+    return statuses[-1]
+
+
+def candidate_execution_evidence(artifact, candidate_id, method=None):
+    """Candidate-bound execution rows, including the recorded visit binding.
+
+    A request in another visit, or an ambiguous provenance/visit mismatch, is not
+    execution evidence. Historical rows without any visit identity remain usable;
+    contradictions stay unavailable rather than being rewritten.
+    """
+    rows = candidate_execution_rows(artifact, candidate_id, method)
+    if not rows:
+        return []
+    state = artifact.get('final_state') if isinstance(artifact, dict) else None
+    provenance = state.get('payload_provenance', {}) if isinstance(state, dict) else {}
+    provenance = provenance if isinstance(provenance, dict) else {}
+    details = provenance.get(candidate_id) if isinstance(provenance.get(candidate_id), dict) else {}
+    visits = {str(row.get('visit_id')) for _index, row in rows if row.get('visit_id')}
+    lifecycle = state.get('candidate_lifecycle') if isinstance(state, dict) else None
+    lifecycle_visits = {str(row.get('visit_id')) for row in (lifecycle or [])
+                        if isinstance(row, dict) and str(row.get('candidate_id')) == str(candidate_id)
+                        and (method is None or row.get('method') == method)
+                        and row.get('status') == 'executed' and row.get('visit_id')}
+    expected = details.get('visit_id')
+    if expected:
+        matched = [(index, row) for index, row in rows if str(row.get('visit_id')) == str(expected)]
+        if matched:
+            return matched
+        matched = [(index, row) for index, row in rows if str(row.get('visit_id')) in lifecycle_visits]
+        return matched
+    if lifecycle_visits:
+        return [(index, row) for index, row in rows if str(row.get('visit_id')) in lifecycle_visits]
+    row_visits = {str(row.get('visit_id')) for _index, row in rows if row.get('visit_id')}
+    if len(row_visits) > 1:
+        # Multiple visits and no provenance/lifecycle binding: ambiguous history
+        # cannot establish which execution belongs to the assessed candidate.
+        return []
+    return rows
+
+
+def candidate_is_executed(artifact, candidate_id, method=None):
+    status = candidate_lifecycle_status(artifact, candidate_id, method)
+    if status in {'stopped_before_execution', 'budget_excluded', 'rejected', 'conflicting'}:
+        return False
+    return bool(candidate_execution_evidence(artifact, candidate_id, method))
+
+
+def candidate_baseline_evidence(artifact, candidate_id, method=None, row=None):
+    """Method-appropriate baseline bound to this candidate and visit.
+
+    Accepts a recorded candidate-derived control, inline baseline measurement
+    fields, or a frozen control event naming the candidate. A probe string or an
+    unrelated control never satisfies it.
+    """
+    visit_id = row.get('visit_id') if isinstance(row, dict) else None
+    for other in evidence_rows(artifact):
+        if not isinstance(other, dict):
+            continue
+        if str(other.get('source_candidate_id') or '') != str(candidate_id):
+            continue
+        if method is not None and (other.get('agent_id') or other.get('method')) not in (None, method):
+            continue
+        if other.get('identity_kind') not in {'derived_control', 'independent_control'}:
+            continue
+        if visit_id and other.get('visit_id') != visit_id:
+            continue
+        if other.get('validation_relation') in {'candidate_baseline', 'complementary_boolean', 'candidate_repeat'} \
+                or other.get('control_id'):
+            return other
+    if isinstance(row, dict) and (row.get('baseline_elapsed_ms') is not None
+                                  or row.get('baseline_response_sha256') is not None):
+        return row
+    state = artifact.get('final_state') if isinstance(artifact, dict) else None
+    controls = (state.get('probe_controls') or {}).get(method) if isinstance(state, dict) else None
+    lifecycle_visits = {str(item.get('visit_id')) for item in (state or {}).get('candidate_lifecycle', []) or []
+                        if isinstance(item, dict) and str(item.get('candidate_id')) == str(candidate_id)
+                        and (method is None or item.get('method') == method) and item.get('visit_id')}
+    for event in (controls or {}).get('control_events', []) or []:
+        if not isinstance(event, dict):
+            continue
+        if str(event.get('candidate_id')) != str(candidate_id):
+            continue
+        if event.get('status') not in {'sent', 'failed'}:
+            continue
+        if event.get('control_class') != 'candidate_verification':
+            # Detection/oracle controls are not candidate verification baselines.
+            continue
+        event_visit = event.get('visit_id')
+        if visit_id and event_visit != visit_id:
+            continue
+        if not visit_id and event_visit:
+            if lifecycle_visits != {str(event_visit)}:
+                continue
+        if not visit_id and not event_visit and len(lifecycle_visits) > 1:
+            continue
+        return event
+    return None
+
+
+def ranking_comparison(artifact, selection):
+    """Return (top_methods|None, reason|None, detail) for one frozen snapshot.
+
+    Shared by the final-selection grade and the first-choice research metric so
+    the ranking rule is defined exactly once.
+    """
+    config = artifact.get('config') or {}
+    detail = {'selection_source': selection.get('selection_source') or selection.get('decision_origin'),
+              'top_methods': [], 'status': 'unavailable'}
+    if not selection:
+        return None, 'missing_selection_snapshot', detail
+    surface = selection.get('surface')
+    profile = config.get('scoring_profile') or {}
+    if not profile:
+        return None, 'ranking_unavailable', detail
+    validate_profile(profile)
+    detail.update(profile_sha256=profile.get('sha256'), profile_id=profile.get('profile_id'))
+    observations = selection.get('observations')
+    if not isinstance(observations, dict):
+        return None, 'missing_selection_snapshot', detail
+    if artifact.get('validation_scope') != 'offline_synthetic_fixture' and any(
+        source['origin'] != 'operator_fixture' for source in profile['sources']):
+        return None, 'ranking_source_is_offline_control', detail
+    recorded_profile = selection.get('profile_sha256')
+    if recorded_profile is None:
+        return None, 'selection_profile_identity_unavailable', detail
+    if recorded_profile != profile['sha256']:
+        raise ValueError('Selection ranking profile hash mismatch')
+    coordinate_keys = ('fixture_id', 'protocol_version', 'candidate_budget')
+    if any(config.get(k) != profile.get(k) for k in coordinate_keys):
+        return None, 'ranking_coordinate_mismatch', detail
+    expected_policy = profile.get('payload_policy_version')
+    if expected_policy is not None and config.get('payload_policy_version') not in (None, expected_policy):
+        return None, 'ranking_policy_epoch_mismatch', detail
+    try:
+        if timestamp(profile['frozen_at']) > timestamp(selection['selected_at']):
+            return None, 'profile_not_frozen_before_selection', detail
+    except (ValueError, KeyError, TypeError):
+        return None, 'selection_time_unavailable', detail
+    entries = profile['scenarios'].get(f"{surface}:{config.get('security_level')}")
+    if not entries:
+        return None, 'ranking_scenario_unavailable', detail
+    ranking = {}
+    for name, entry in entries.items():
+        # Unknown comparison predicates cannot silently remove a competitor.
+        keys = [*entry['preconditions'], *[p['key'] for p in entry['fit_predicates']]]
+        if any(type(observations.get(k)) is not bool for k in keys):
+            return None, 'ranking_observation_unknown', detail
+        eligible = all(observations[k] is True for k in entry['preconditions'])
+        if eligible and entry.get('reference_status') == 'pending':
+            return None, 'ranking_reference_pending', {
+                **detail, 'pending_method': name, 'reference_reason': entry['reference_reason']}
+        fit = entry.get('reference_fit', 2) if all(observations[p['key']] == p['equals'] for p in entry['fit_predicates']) else 1
+        ranking[name] = {'eligible': eligible, 'fit_level': fit,
+            'planned_request_count': entry['planned_request_count']}
+    pairs = {name: (-r['fit_level'], r['planned_request_count']) for name, r in ranking.items() if r['eligible']}
+    if not pairs:
+        return None, 'ranking_no_eligible_method', detail
+    best = min(pairs.values())
+    top = [name for name, pair in pairs.items() if pair == best]
+    detail.update(status='assessed', comparison=ranking, top_methods=top)
+    return top, None, detail
+
+
 def selection_grade(artifact, method):
     config, state = artifact['config'], artifact['final_state']
     decisions = [d for d in state.get('scoring_decisions', []) if d.get('dimension') == 'Smethod' and d.get('method') == method]
@@ -112,49 +358,30 @@ def selection_grade(artifact, method):
     surface = selection.get('surface')
     if method not in METHODS_BY_SURFACE.get(surface, []):
         return 0, {**result, 'status': 'assessed', 'reason': 'outside_selected_surface'}
-    profile = config.get('scoring_profile') or {}
-    if not profile:
-        return None, {**result, 'reason': 'ranking_unavailable'}
-    validate_profile(profile)
-    result.update(profile_sha256=profile.get('sha256'), profile_id=profile.get('profile_id'))
     observations = selection.get('observations')
-    if not isinstance(observations, dict):
-        return None, result
-    if any(observations.get(p) is not True for p in AttackKnowledgeGraph.METHOD_PRECONDITIONS[method]) or any(
-        p not in selection.get('known_nodes', []) for p in selection.get('preconditions', [])):
-        return 1, {**result, 'status': 'assessed', 'reason': 'prerequisites_not_proved_at_selection'}
-    if artifact.get('validation_scope') != 'offline_synthetic_fixture' and any(
-        source['origin'] != 'operator_fixture' for source in profile['sources']):
-        return None, {**result, 'reason': 'ranking_source_is_offline_control'}
-    if selection.get('profile_sha256') != profile['sha256']:
-        raise ValueError('Selection ranking profile hash mismatch')
-    if any(config.get(k) != profile[k] for k in ('fixture_id', 'protocol_version', 'candidate_budget')):
-        return None, {**result, 'reason': 'ranking_coordinate_mismatch'}
-    try:
-        if timestamp(profile['frozen_at']) > timestamp(selection['selected_at']):
-            return None, {**result, 'reason': 'profile_not_frozen_before_selection'}
-    except (ValueError, KeyError, TypeError):
-        return None, {**result, 'reason': 'selection_time_unavailable'}
-    entries = profile['scenarios'].get(f"{surface}:{config.get('security_level')}")
-    if not entries:
-        return None, {**result, 'reason': 'ranking_scenario_unavailable'}
-    ranking = {}
-    for name, entry in entries.items():
-        # Unknown comparison predicates cannot silently remove a competitor.
-        keys = [*entry['preconditions'], *[p['key'] for p in entry['fit_predicates']]]
-        if any(type(observations.get(k)) is not bool for k in keys):
-            return None, {**result, 'reason': 'ranking_observation_unknown'}
-        eligible = all(observations[k] is True for k in entry['preconditions'])
-        if eligible and entry.get('reference_status') == 'pending':
-            return None, {**result, 'reason': 'ranking_reference_pending', 'pending_method': name,
-                'reference_reason': entry['reference_reason']}
-        fit = entry.get('reference_fit', 2) if all(observations[p['key']] == p['equals'] for p in entry['fit_predicates']) else 1
-        ranking[name] = {'eligible': eligible, 'fit_level': fit,
-            'planned_request_count': entry['planned_request_count']}
-    pairs = {name: (-r['fit_level'], r['planned_request_count']) for name,r in ranking.items() if r['eligible']}
-    best = min(pairs.values())
-    top = [name for name, pair in pairs.items() if pair == best]
-    result.update(status='assessed', comparison=ranking, top_methods=top,
+    statuses = selection.get('precondition_status')
+    required = AttackKnowledgeGraph.METHOD_PRECONDITIONS[method]
+    # Observation-key prerequisites are assessed against the recorded tri-state
+    # snapshot, never against AKG confirmed/outcome nodes (known_nodes).
+    if isinstance(statuses, dict) and statuses:
+        if any(statuses.get(p) == 'false' for p in required):
+            return 1, {**result, 'status': 'assessed', 'reason': 'prerequisites_not_proved_at_selection'}
+        if any(statuses.get(p) != 'true' for p in required):
+            return None, {**result, 'reason': 'prerequisite_observation_unknown'}
+    elif isinstance(observations, dict):
+        if any(observations.get(p) is False for p in required):
+            return 1, {**result, 'status': 'assessed', 'reason': 'prerequisites_not_proved_at_selection'}
+        if any(observations.get(p) is not True for p in required):
+            return None, {**result, 'reason': 'prerequisite_observation_unknown'}
+    else:
+        return None, {**result, 'reason': 'missing_selection_snapshot'}
+    top, reason, detail = ranking_comparison(artifact, selection)
+    result.update({k: detail.get(k) for k in ('profile_sha256', 'profile_id') if detail.get(k) is not None})
+    if top is None:
+        return None, {**result, 'reason': reason, **{k: v for k, v in detail.items()
+            if k in ('pending_method', 'reference_reason')}}
+    entries = config['scoring_profile']['scenarios'][f"{surface}:{config.get('security_level')}"]
+    result.update(status='assessed', comparison=detail.get('comparison'), top_methods=top,
         reason='higher_ranked_comparison_exists' if method not in top else 'top_ranked')
     if method not in top:
         return 2, result
@@ -377,6 +604,19 @@ def verified_dependencies(artifact):
     return accepted
 
 
+def chain_availability(artifact):
+    """Whether a chain-opportunity assessment actually ran with enough evidence."""
+    state = artifact.get('final_state') or {}
+    assessment = state.get('chain_assessment')
+    if isinstance(assessment, dict):
+        if assessment.get('assessed') is True:
+            return True, None
+        return False, assessment.get('reason') or assessment.get('status') or 'chain_assessment_unavailable'
+    if 'weak_chain_opportunities' not in state:
+        return False, 'chain_opportunity_log_unavailable'
+    return True, None
+
+
 def chain_grade(artifact, method, dependencies):
     state = artifact['final_state']
     credited = [d for d in dependencies if d['destination']['agent_id'] == method]
@@ -391,9 +631,12 @@ def chain_grade(artifact, method, dependencies):
         if prerequisite_proof(artifact, route) and any(isinstance(row := _resolve(artifact, ref), dict)
             and row.get('agent_id') == method for ref in route.get('source_evidence_refs', [])):
             return 2
-    if 'weak_chain_opportunities' not in state:
+    available, _reason = chain_availability(artifact)
+    if not available:
         return None
-    for weak in state['weak_chain_opportunities']:
+    for weak in state.get('weak_chain_opportunities', []) or []:
+        if not isinstance(weak, dict):
+            continue
         edge = edge_for(weak)
         if weak.get('method') != method or weak.get('opportunity_class') != 'weak' or not edge or not weak.get('missing_material'):
             continue
@@ -407,6 +650,76 @@ def chain_grade(artifact, method, dependencies):
     return 0
 
 
+def origin_kind(provenance):
+    """Trusted candidate origin class, tolerant of historical source labels."""
+    if isinstance(provenance, dict) and isinstance(provenance.get('origin_kind'), str):
+        return provenance['origin_kind']
+    source = provenance.get('source') if isinstance(provenance, dict) else None
+    if source == 'chain_derived':
+        return 'chain_derived'
+    if source == 'static_seed':
+        return 'static_seed'
+    if isinstance(source, str) and source.startswith('template'):
+        return 'template_generation'
+    if isinstance(source, str) and ('llm' in source or 'generated' in source or 'mutation' in source):
+        return 'seed_mutation'
+    return source if isinstance(source, str) else None
+
+
+def _template_output_references_valid(record, _inputs, template):
+    """Validate the ACTUAL Template schema against the exact neutral template.
+
+    The template prompt requests ``output.candidates`` with only the value and
+    the fixed parameter/signal. Template ids and seed references are runtime
+    provenance, never model-owned fields, and the Template input intentionally
+    carries no ranking profile or seed-backed profile. A matching extra id is
+    tolerated; a fabricated/mismatched id, seed reference, or profile field is
+    not accepted as a clean output.
+    """
+    from core.payload_policy import PAYLOAD_TEMPLATE_SCHEMA_VERSION
+    if str(record.get('schema_version') or '') != PAYLOAD_TEMPLATE_SCHEMA_VERSION:
+        return False
+    # A Template prompt/schema never carries a seed-backed profile or seed rows.
+    if isinstance(_inputs, dict) and any(
+            _inputs.get(key) for key in ('profile', 'seeds', 'prompt_visible_seed_ids')):
+        return False
+    template_id = template.get('template_id')
+    version = template.get('template_version')
+    digest = template.get('template_sha256')
+    target = template.get('target_param')
+    expected = template.get('expected_signal')
+    allowed = template.get('allowed_parameters')
+    allowed = [target] if not isinstance(allowed, list) else allowed
+    if not all(isinstance(value, str) and value for value in (template_id, version, digest, target, expected)):
+        return False
+    output = record.get('output')
+    candidates = output.get('candidates') if isinstance(output, dict) else None
+    if not isinstance(candidates, list) or not candidates:
+        return False
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            return False
+        value = candidate.get('payload_or_logic')
+        if not isinstance(value, str) or not value.strip():
+            return False
+        if candidate.get('target_param') != target or target not in allowed:
+            return False
+        if candidate.get('expected_signal') != expected:
+            return False
+        if candidate.get('source_seed_id') or candidate.get('seed_id'):
+            return False
+        ref = candidate.get('origin_ref') if isinstance(candidate.get('origin_ref'), dict) else {}
+        observed_id = ref.get('template_id') or candidate.get('template_id')
+        observed_version = ref.get('template_version') or candidate.get('template_version')
+        observed_digest = ref.get('template_sha256') or candidate.get('template_sha256')
+        if any(value is not None for value in (observed_id, observed_version, observed_digest)):
+            if (observed_id, observed_version, observed_digest) != (template_id, version, digest):
+                return False
+        if 'profile' in candidate or 'scoring_profile' in candidate:
+            return False
+    return True
+
+
 def output_references_valid(record):
     inputs, output = record.get('input'), record.get('output')
     if not isinstance(inputs, dict) or not isinstance(output, dict):
@@ -418,15 +731,204 @@ def output_references_valid(record):
     if record['role'] == 'orchestrator':
         refs = output.get('reason_refs')
         observations = inputs.get('observations', {})
-        return bool(refs) and isinstance(refs, list) and all(isinstance(ref, str) and observations.get(ref) is True for ref in refs)
+        statuses = inputs.get('precondition_status', {})
+        if not isinstance(refs, list) or not refs or any(not isinstance(ref, str) for ref in refs):
+            return False
+        return all(observations.get(ref) is True or statuses.get(ref) == 'true' for ref in refs)
     if record['role'] == 'payload_generator':
-        seeds = {s.get('source_seed_id') or s.get('candidate_id'): s for s in inputs.get('seeds', [])}
+        template = inputs.get('template')
+        if isinstance(template, dict):
+            return _template_output_references_valid(record, inputs, template)
         variants = output.get('variants')
         profile = inputs.get('profile') or {}
-        return isinstance(variants, list) and bool(variants) and all(isinstance(c, dict) and
+        if not isinstance(variants, list) or not variants:
+            return False
+        all_seeds = [s for s in inputs.get('seeds', []) if isinstance(s, dict)]
+        visible_ids = inputs.get('prompt_visible_seed_ids')
+        if visible_ids is not None:
+            if not isinstance(visible_ids, list):
+                return False
+            visible_ids = [str(value) for value in visible_ids]
+            visible_rows = inputs.get('prompt_visible_seeds')
+            digest = inputs.get('prompt_visible_seeds_sha256')
+            if isinstance(visible_rows, list):
+                rows = [row for row in visible_rows if isinstance(row, dict)]
+                if len(rows) != len(visible_rows):
+                    return False
+                if digest is not None and digest != evidence_hash(visible_rows):
+                    return False
+                if [str(row.get('source_seed_id') or row.get('candidate_id')) for row in rows] != visible_ids:
+                    return False
+                seeds = {str(row.get('source_seed_id') or row.get('candidate_id')): row for row in rows}
+            else:
+                seeds = {str(row.get('source_seed_id') or row.get('candidate_id')): row
+                         for row in all_seeds
+                         if str(row.get('source_seed_id') or row.get('candidate_id')) in visible_ids}
+            if any(str(c.get('source_seed_id')) not in seeds
+                   or str(seeds[str(c.get('source_seed_id'))].get('stage', '')).lower() not in {'exploit', 'bypass'}
+                   for c in variants if isinstance(c, dict)):
+                return False
+        else:
+            # Historical artifacts mirror the old builder's visible rule exactly:
+            # execution-ready seeds, else the single first seed.
+            execution = [row for row in all_seeds if str(row.get('stage', '')).lower() in {'exploit', 'bypass'}]
+            seed_pool = execution or all_seeds[:1]
+            seeds = {str(row.get('source_seed_id') or row.get('candidate_id')): row for row in seed_pool}
+        return all(isinstance(c, dict) and
             c.get('source_seed_id') in seeds and c.get('mutation_type') in profile.get('allowed_mutation_types', [])
             and c.get('target_param', seeds[c['source_seed_id']].get('target_param')) in profile.get('target_params', []) for c in variants)
     return False
+
+
+def _event_role(event):
+    role = event.get('role')
+    if role in EXPERIMENT_ROLES:
+        return role
+    origin = event.get('origin')
+    return {'orchestrator': 'orchestrator',
+            'payload_generator': 'payload_generator',
+            'payload_validator': 'payload_generator'}.get(str(origin))
+
+
+FALLBACK_NON_USE_EVENTS = frozenset({
+    EVENT_MODEL_BUDGET_EXCLUDED,
+    EVENT_PROVIDER_FAILURE, EVENT_STRICT_NO_CANDIDATE, EVENT_TEMPLATE_UNAVAILABLE,
+    EVENT_VALIDATION_STRICT_NO_CANDIDATE, EVENT_VALIDATION_NO_USABLE,
+    EVENT_TARGET_NO_VALID_PAYLOADS,
+})
+# Reasons that describe absence/infeasibility, not a usable fallback.
+FALLBACK_ABSENCE_REASONS = frozenset({
+    'no_supplied_seed', 'candidate_budget_zero', 'template_unavailable',
+    'no_candidates_generated', 'probe_seed_for_exploit',
+})
+
+
+def _is_fallback_use_event(event):
+    """A fallback credit requires explicit, evidenced fallback use."""
+    name = str(event.get('event') or event.get('event_type') or '')
+    if name in FALLBACK_NON_USE_EVENTS:
+        return False
+    reason = str(event.get('reason') or '')
+    if is_provider_failure_reason(reason) or reason in FALLBACK_ABSENCE_REASONS:
+        return False
+    if name == EVENT_STATIC_FALLBACK:
+        return True
+    if 'static_seed_fallback' in name:
+        return True
+    if any(marker in name for marker in ('provider_failure', 'strict_no_candidate', 'template_unavailable')):
+        return False
+    return bool(event.get('fallback') or event.get('valid') is True or event.get('candidate_ids'))
+
+
+def _relevant_event(event, method):
+    return event.get('scope') == 'run' or not (event.get('method') or event.get('selected_method')) or \
+        (event.get('method') or event.get('selected_method')) == method
+
+
+def _fallback_contexts(groups, event):
+    """Return the call group(s) an event can bind to; ambiguity earns nothing."""
+    role, visit_id = _event_role(event), event.get('visit_id')
+    keys = list(groups)
+    if role:
+        keys = [key for key in keys if key[0] == role]
+    if visit_id:
+        keys = [key for key in keys if key[1] == visit_id]
+    return keys
+
+
+def _static_fallback_valid(artifact, method, visit_id, event=None):
+    """Validated static fallback in this role/visit, never another visit."""
+    state = artifact['final_state']
+    provenance = state.get('payload_provenance', {}) or {}
+    rows = state.get('payload_validation_results', {}).get(method, []) or []
+    static_visits = {details.get('visit_id') for cid, details in provenance.items()
+                     if isinstance(details, dict) and origin_kind(details) in STATIC_ORIGIN_KINDS
+                     and details.get('visit_id')}
+    event_ids = {str(cid) for cid in (event or {}).get('candidate_ids') or []}
+    for row in rows:
+        if not isinstance(row, dict) or row.get('valid') is not True:
+            continue
+        details = provenance.get(str(row.get('candidate_id'))) or {}
+        if origin_kind(details) not in STATIC_ORIGIN_KINDS:
+            continue
+        if event_ids and str(row.get('candidate_id')) not in event_ids:
+            continue
+        row_visit = row.get('visit_id') or details.get('visit_id')
+        if visit_id and row_visit and str(row_visit) != str(visit_id):
+            continue
+        if visit_id and not row_visit and len(static_visits) > 1:
+            continue
+        return True
+    return False
+
+
+def _orchestrator_fallback_valid(artifact, method, visit_id):
+    decisions = [d for d in artifact['final_state'].get('scoring_decisions', [])
+                 if isinstance(d, dict) and d.get('dimension') == 'Smethod' and d.get('method') == method]
+    if visit_id:
+        decisions = [d for d in decisions if d.get('visit_id') == visit_id]
+    for decision in decisions:
+        origin = decision.get('decision_origin') or decision.get('selection_source')
+        if origin not in {'deterministic_fallback', 'forced'}:
+            continue
+        surface = decision.get('surface')
+        if decision.get('method') in METHODS_BY_SURFACE.get(surface, []):
+            return True
+    return False
+
+
+def _fallback_credit(artifact, method, key, event, trusted_role):
+    role, visit_id = key
+    if not _is_fallback_use_event(event):
+        return False
+    if trusted_role is None:
+        # Historical events predate explicit role binding. They are accepted only
+        # when they bind to one call context and the same role/visit validates.
+        return _static_fallback_valid(artifact, method, visit_id, event) or \
+            _orchestrator_fallback_valid(artifact, method, visit_id)
+    if trusted_role == 'orchestrator':
+        return _orchestrator_fallback_valid(artifact, method, visit_id)
+    if trusted_role == 'payload_generator':
+        return _static_fallback_valid(artifact, method, visit_id, event)
+    return False
+
+
+def _validation_failure_override(artifact, method, key, events):
+    """Strict validator rejection is unusable returned output; provider is null."""
+    for event in events:
+        name = str(event.get('event') or event.get('event_type') or '')
+        if name not in {EVENT_VALIDATION_STRICT_NO_CANDIDATE, EVENT_VALIDATION_NO_USABLE}:
+            continue
+        reason = str(event.get('reason') or '')
+        if reason in FALLBACK_ABSENCE_REASONS:
+            continue
+        if is_provider_failure_reason(reason):
+            return 'operational'
+        return 'unusable_output'
+    return None
+
+
+def _call_operational_failure(record):
+    if str(record.get('parse_status')) == 'provider_error':
+        return True
+    for field in ('failure_class', 'failure_kind'):
+        value = record.get(field)
+        if isinstance(value, str) and is_provider_failure_reason(value):
+            return True
+    failure = record.get('failure')
+    if isinstance(failure, dict):
+        return is_provider_failure_reason(str(failure.get('kind') or failure.get('type') or failure.get('failure_class') or ''))
+    return False
+
+
+def _requirement_plan(artifact, method):
+    state = artifact['final_state']
+    requirements = state.get('model_call_requirements')
+    if not isinstance(requirements, list) or not requirements:
+        return None
+    return [row for row in requirements if isinstance(row, dict)
+            and row.get('role') in EXPERIMENT_ROLES
+            and (method is None or row.get('method') in (None, method) or row.get('scope') == 'run')]
 
 
 def output_grade(artifact, method):
@@ -434,47 +936,134 @@ def output_grade(artifact, method):
     from core.scorer import output_grade as historical_output
     if historical_output(state, method)[0] == 0:
         return 0, 'containment_violation'
-    calls = [r for r in artifact.get('llm_performance', []) if r.get('role') in {'orchestrator', 'payload_generator'}
-        and (r.get('method') == method or r.get('scope') == 'run')]
-    if not calls:
-        return None, 'call_evidence_unavailable' if artifact.get('llm_activity', {}).get('started') else 'not_applicable'
-    relevant = lambda e: e.get('scope') == 'run' or (e.get('method') or e.get('selected_method')) == method
-    fallback = [e for e in state.get('fallback_events', []) if relevant(e)]
+    calls = [r for r in artifact.get('llm_performance', []) if isinstance(r, dict)
+             and r.get('role') in EXPERIMENT_ROLES
+             and (r.get('method') == method or r.get('scope') == 'run')]
+    activity = artifact.get('llm_activity', {}) if isinstance(artifact.get('llm_activity'), dict) else {}
+    requirements = _requirement_plan(artifact, method)
     groups = {}
     for call in calls:
         groups.setdefault((call.get('role'), call.get('visit_id')), []).append(call)
-    # Credit recovery only in the event's role/visit, never across other calls.
-    recovered = set()
-    for event in fallback:
-        role = event.get('role') or event.get('origin')
-        if role == 'payload_validator':
-            role = 'payload_generator'
-        contexts = [key for key in groups if (not role or key[0] == role)
-            and (not event.get('visit_id') or key[1] == event['visit_id'])]
-        if len(contexts) == 1:
-            recovered.add(contexts[0])
-    ids = {cid for cid, p in state.get('payload_provenance', {}).items() if p.get('source') == 'static_seed'}
-    validated = any(v.get('candidate_id') in ids and v.get('valid') is True
-        for v in state.get('payload_validation_results', {}).get(method, []))
-    grades = []
+    # Required-role coverage: one valid role cannot hide another missing receipt.
+    fallback_only = []
+    if requirements is not None:
+        for row in requirements:
+            if row.get('required') is not True or row.get('status') == 'not_required':
+                continue
+            key = (row.get('role'), row.get('visit_id'))
+            if row.get('status') == 'not_run':
+                return None, f"required_role_not_run:{row.get('role')}@{row.get('visit_id')}"
+            if row.get('status') == 'blocked':
+                return None, f"required_role_blocked:{row.get('role')}@{row.get('visit_id')}:{row.get('reason')}"
+            matching_calls = groups.get(key, [])
+            required_call_id = row.get('call_id')
+            if row.get('role') == 'orchestrator' and row.get('visit_id') is None and required_call_id:
+                # Older selection receipts predate visit attribution; an exact,
+                # unique call ID still binds the call to this method's records.
+                unscoped = [call for call in artifact.get('llm_performance', [])
+                            if isinstance(call, dict) and call.get('role') == 'orchestrator'
+                            and call.get('call_id') == required_call_id]
+                if len(unscoped) == 1 and unscoped[0] in calls:
+                    continue
+                if len(unscoped) > 1:
+                    return None, 'ambiguous_required_orchestrator_call_id'
+            if matching_calls and (
+                any(call.get('call_id') == required_call_id for call in matching_calls)
+                if required_call_id else len({call.get('call_id') for call in matching_calls}) == 1
+            ):
+                continue
+            fallback = [
+                e for e in state.get('fallback_events', [])
+                if isinstance(e, dict)
+                and _relevant_event(e, method) and _is_fallback_use_event(e)
+                and (_event_role(e) in (None, row.get('role')))
+                and (not e.get('visit_id') or not row.get('visit_id')
+                     or e.get('visit_id') == row.get('visit_id'))
+                and (not required_call_id or e.get('call_id') == required_call_id)
+            ]
+            if any(_fallback_credit(artifact, method, key, event, _event_role(event))
+                   for event in fallback):
+                # Recovery is evidenced for this role/visit even without a call
+                # receipt; the fallback grade is 1, never a clean 4.
+                fallback_only.append(key)
+                continue
+            if row.get('status') == 'failed' and is_provider_failure_reason(str(row.get('reason') or '')):
+                return None, f"operational_failure:{row.get('role')}@{row.get('visit_id')}:no_receipt"
+            return None, f"required_role_receipt_missing:{row.get('role')}@{row.get('visit_id')}"
+    if not groups:
+        if fallback_only:
+            return 1, 'fallback_credit_without_call_receipt'
+        if requirements is not None and any(row.get('required') is True and row.get('status') in {'completed', 'failed'}
+                                            for row in requirements):
+            return None, 'required_role_receipt_missing'
+        if activity.get('started'):
+            return None, 'call_receipts_missing'
+        return None, 'not_applicable'
+    fallbacks = [e for e in state.get('fallback_events', []) if isinstance(e, dict)
+                 and _relevant_event(e, method) and _is_fallback_use_event(e)]
+    validation_events = [e for e in state.get('fallback_events', []) if isinstance(e, dict)
+                         and _relevant_event(e, method)
+                         and str(e.get('event') or '') in {EVENT_VALIDATION_STRICT_NO_CANDIDATE, EVENT_VALIDATION_NO_USABLE}]
+    operational = []
+    grades = [1] * len(fallback_only)
     for key, group in groups.items():
         last = group[-1]
         valid = last.get('parse_status') == 'ok' and last.get('validation_status') == 'valid'
-        if key in recovered:
-            grades.append(1 if validated else 0)
-        elif not valid:
+        bound = [event for event in fallbacks if key in _fallback_contexts(groups, event)]
+        credit = None
+        for event in bound:
+            result = _fallback_credit(artifact, method, key, event, _event_role(event))
+            credit = bool(result) if credit is None else (credit or bool(result))
+        if credit:
+            grades.append(1)
+            continue
+        bound_validation = [event for event in validation_events
+                            if key in _fallback_contexts(groups, event)]
+        override = _validation_failure_override(artifact, method, key, bound_validation)
+        if override == 'operational':
+            operational.append(f"{key[0]}@{key[1]}:validation_provider_failure")
+            continue
+        if override == 'unusable_output':
+            # Schema-valid but rejected/unusable returned output after validation.
             grades.append(0)
-        elif any(c.get('parse_status') != 'ok' or c.get('validation_status') != 'valid' or c.get('attempt', 1) != 1
-            or c.get('structured_output_fallback') for c in group):
+            continue
+        if _call_operational_failure(last):
+            operational.append(f"{key[0]}@{key[1]}:{last.get('parse_status')}")
+            continue
+        if not valid:
+            grades.append(0)
+            continue
+        if any(c.get('parse_status') != 'ok' or c.get('validation_status') != 'valid'
+               or c.get('attempt', 1) != 1 or c.get('structured_output_fallback') for c in group):
             grades.append(2)
         else:
             grades.append(4 if all(output_references_valid(c) for c in group) else 3)
-    failures = any(relevant(e) for field in ('invalid_json_events', 'output_failure_events', 'guardrail_activations')
-        for e in state.get(field, []))
-    grade = min(grades)
-    if failures and grade > 2:
+    failures = any(_relevant_event(e, method) for field in ('invalid_json_events', 'output_failure_events', 'guardrail_activations')
+        for e in state.get(field, []) if isinstance(e, dict))
+    grade = min(grades) if grades else None
+    if failures and grade is not None and grade > 2:
         grade = 2
+    if operational:
+        # A provider/transport failure is an operational outcome, never a model
+        # refusal or a clean/invalid model output. One valid role cannot hide it.
+        return None, 'operational_failure:' + ';'.join(sorted(operational))
     return grade, 'context_call_evidence'
+
+
+def component_pending_reasons(artifact, method, rows, components, selection_evidence, output_reason):
+    """Precise reason per unavailable component; pending is never a grade."""
+    reasons = {}
+    if components.get('Smethod') is None:
+        reasons['Smethod'] = 'ranking_unavailable:' + str((selection_evidence or {}).get('reason'))
+    if components.get('Sexploit') is None:
+        executed = [row for row in rows if row.get('eligible')]
+        reasons['Sexploit'] = ('missing_required_evidence' if executed else 'no_eligible_candidate')
+    if components.get('Schain') is None:
+        available, reason = chain_availability(artifact)
+        reasons['Schain'] = reason or 'chain_evidence_unavailable'
+    if components.get('Soutput') is None:
+        reasons['Soutput'] = output_reason or 'output_evidence_unavailable'
+    return reasons
 
 
 def automatic_components(artifact, method, rows):
@@ -482,6 +1071,10 @@ def automatic_components(artifact, method, rows):
     dependencies = verified_dependencies(artifact)
     tiers = [r['base_proof'] for r in rows if r['eligible'] and r['base_proof'] is not None]
     exploit = max(tiers) if tiers else None
+    # A verified negative plus an unassessable executed candidate is not a
+    # run-level verified negative; the component stays unavailable.
+    if exploit == 0 and any(r['eligible'] and r['base_proof'] is None for r in rows):
+        exploit = None
     if exploit == 3 and any(d['source']['agent_id'] == method for d in dependencies):
         exploit = 4
     output, output_reason = output_grade(artifact, method)
@@ -533,9 +1126,14 @@ def weak_opportunity_update(state):
         if PROOF_TIERS.get(row.get('verification_reason')) not in (1, 2):
             continue
         # Only method evidence of incomplete material matches these source nodes.
-        source = 'credentials_extracted' if row.get('verification_reason') == 'partial_union_data' else None
+        reason = row.get('verification_reason')
+        source = 'credentials_extracted' if reason == 'partial_union_data' else (
+            'authenticated_session' if reason == 'verified_login' else None)
         if source is None:
             continue
+        if source == 'authenticated_session' and row.get('agent_id') not in {'bf_dictionary', 'bf_spray'}:
+            continue
+        missing = ['complete_credentials'] if source == 'credentials_extracted' else ['fresh_authenticated_session']
         for edge in kg.get_next_actions(source):
             if not edge.get('is_chain'):
                 continue
@@ -545,7 +1143,7 @@ def weak_opportunity_update(state):
             result.append({'evidence_id': identifier, 'opportunity_class': 'weak',
                 'method': row['agent_id'], 'candidate_id': row['candidate_id'], 'visit_id': row['visit_id'],
                 'source': source, 'target': edge['target'], 'target_agent': edge['target_agent'],
-                'missing_material': ['complete_credentials'], 'source_evidence_refs': [f'#/final_state/response_evidence/{i}'],
+                'missing_material': missing, 'source_evidence_refs': [f'#/final_state/response_evidence/{i}'],
                 'prerequisite_status': {p: 'unproved' for p in edge['preconditions']},
                 'timestamp': datetime.now(timezone.utc).isoformat()})
     return {'weak_chain_opportunities': result} if result else {}

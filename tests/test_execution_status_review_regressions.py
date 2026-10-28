@@ -17,6 +17,7 @@ from foundation.http_client import RequestTimeoutError, TransportError
 from tesis.runtime_events import RunEvent
 from tesis.tui_state import TuiRunState, apply_run_event
 from tests.test_execution_security_status import evidence_artifact
+from tests.support import ready_state
 
 
 def method_module(method):
@@ -32,7 +33,7 @@ def method_module(method):
 ])
 def test_caught_method_setup_error_preserves_explicit_failure(monkeypatch, method, stage, error_type, code):
     module = method_module(method)
-    state = new_default_state()
+    state = ready_state(method)
     state.update(target_url='http://localhost/dvwa', selected_method=method)
     before = deepcopy(state)
     closed = []
@@ -80,7 +81,7 @@ def test_explicit_session_login_rejection_is_a_setup_failure(monkeypatch, method
     from types import SimpleNamespace
     module = method_module(method)
     monkeypatch.setattr(module, 'DVWASession', lambda *args: SimpleNamespace(login=lambda: False, close=lambda: None))
-    state = dict(new_default_state(), target_url='http://localhost/dvwa')
+    state = dict(ready_state(method), target_url='http://localhost/dvwa')
     update = getattr(module, method + '_agent')(state)
     assert update['execution_status'] == 'failed'
     assert update['execution_reason']['code'] == 'SESSION_LOGIN_FAILED'
@@ -104,7 +105,7 @@ def test_runner_retains_caught_setup_failure_without_response_evidence(monkeypat
             yield dict(initial, **failure, task_result='INCOMPLETE', incomplete_reason='ALL_METHODS_FAILED')
     monkeypatch.setattr('evaluation.runner.build_framework', lambda **kwargs: SnapshotApp())
     artifact = run_single_engagement(target_url='http://localhost/dvwa', security_level='low',
-        llm_provider='gemini', target_method='sqli_union', output_dir=str(tmp_path))
+        llm_provider='openai_compatible', target_method='sqli_union', output_dir=str(tmp_path))
     assert artifact['status'] == 'error'
     assert artifact['execution_status'] == 'failed'
     assert artifact['execution_reason'] == failure['execution_reason']

@@ -27,7 +27,7 @@ def test_manifest_indexes_runs_and_repository_skips_manifest(tmp_path: Path) -> 
     layout = ExperimentArtifactLayout.allocate(tmp_path, "matrix", now=datetime(2026, 8, 19))
     child = layout.child_directory(
         {
-            "provider": "gemini",
+            "provider": "openai_compatible",
             "surface": "sqli",
             "security_level": "low",
             "payload_mode": "hybrid",
@@ -39,12 +39,12 @@ def test_manifest_indexes_runs_and_repository_skips_manifest(tmp_path: Path) -> 
         encoding="utf-8",
     )
     manifest = layout.write_manifest(
-        config={"provider": "gemini", "api_key": "secret"},
+        config={"provider": "openai_compatible", "api_key": "secret"},
         artifacts=[{
             "execution_id": "exec-1",
             "run_id": "run-1",
             "status": "success",
-            "provider": "gemini",
+            "provider": "openai_compatible",
             "surface": "sqli",
             "security_level": "low",
             "payload_mode": "hybrid",
@@ -60,7 +60,7 @@ def test_manifest_indexes_runs_and_repository_skips_manifest(tmp_path: Path) -> 
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert payload["schema_version"] == "artifact-manifest.v1"
     assert payload["config"]["api_key"] == "[REDACTED]"
-    assert payload["runs"][0]["artifact"] == "run-001-gemini-sqli-low-hybrid/exec-1.json"
+    assert payload["runs"][0]["artifact"] == "run-001-openai_compatible-sqli-low-hybrid/exec-1.json"
     assert payload["aggregate"]["artifact"] == "matrix-1.matrix.json"
 
     discovered = ArtifactRepository(layout.root).scan()
@@ -75,14 +75,14 @@ def test_matrix_runner_can_route_each_coordinate_to_a_child_directory(monkeypatc
         seen.append(Path(kwargs["output_dir"]))
         return {
             "execution_id": "exec-child",
-            "run_id": "gemini-sqli-low-hybrid-0",
+            "run_id": "openai_compatible-sqli-low-hybrid-0",
             "status": "success",
-            "provider": "gemini",
+            "provider": "openai_compatible",
             "surface": "sqli",
             "security_level": "low",
             "payload_mode": "hybrid",
             "config": {
-                "provider": "gemini",
+                "provider": "openai_compatible",
                 "surface": "sqli",
                 "security_level": "low",
                 "payload_mode": "hybrid",
@@ -92,12 +92,12 @@ def test_matrix_runner_can_route_each_coordinate_to_a_child_directory(monkeypatc
         }
 
     monkeypatch.setattr("evaluation.multi_llm_runner.run_single_engagement", fake_run)
-    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["gemini"])
+    monkeypatch.setattr("evaluation.multi_llm_runner.SUPPORTED_PROVIDERS", ["openai_compatible"])
     layout = ExperimentArtifactLayout.allocate(tmp_path, "matrix", now=datetime(2026, 8, 19))
 
     artifacts, _ = run_provider_matrix(
         target_url="http://localhost/dvwa",
-        providers=["gemini"],
+        providers=["openai_compatible"],
         security_levels=["low"],
         surfaces=["sqli"],
         payload_modes=["hybrid"],
@@ -107,4 +107,4 @@ def test_matrix_runner_can_route_each_coordinate_to_a_child_directory(monkeypatc
     )
 
     assert len(artifacts) == 1
-    assert seen == [layout.root / "run-001-gemini-sqli-low-hybrid"]
+    assert seen == [layout.root / "run-001-openai_compatible-sqli-low-hybrid"]

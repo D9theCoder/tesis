@@ -169,10 +169,13 @@ class TestDVWASessionSecurityLevel:
 
         # Mock the GET and POST for security form
         sec_response = MagicMock()
-        sec_response.text = '<input type="hidden" name="user_token" value="sec_tok">'
         mock_http.get.return_value = sec_response
 
         for level in VALID_LEVELS:
+            sec_response.text = (
+                '<input type="hidden" name="user_token" value="sec_tok">'
+                f'DVWA Security Level: {level}'
+            )
             session = DVWASession("http://localhost/dvwa")
             session.set_security_level(level)
             assert session.security_level == level
@@ -194,13 +197,23 @@ class TestDVWASessionSecurityLevel:
         mock_http_cls.return_value = mock_http
 
         sec_response = MagicMock()
-        sec_response.text = '<input type="hidden" name="user_token" value="tok">'
+        sec_response.text = '<input type="hidden" name="user_token" value="tok">DVWA Security Level: medium'
         mock_http.get.return_value = sec_response
 
         session = DVWASession("http://localhost/dvwa")
         session.set_security_level("medium")
 
         mock_http.set_cookie.assert_called_once_with("security", "medium")
+
+    @patch("foundation.session_manager.HTTPClient")
+    def test_set_security_level_rejects_unverified_server_state(self, mock_http_cls):
+        mock_http_cls.return_value.get.return_value.text = (
+            '<input type="hidden" name="user_token" value="tok">DVWA Security Level: low'
+        )
+        session = DVWASession("http://localhost/dvwa")
+        with pytest.raises(RuntimeError, match="not verified server-side"):
+            session.set_security_level("medium")
+        assert session.observed_security_level() == "low"
 
     @patch("foundation.session_manager.HTTPClient")
     def test_detect_security_level_prefers_server_page_over_cookie(self, mock_http_cls):

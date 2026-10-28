@@ -256,8 +256,10 @@ def test_new_complete_input_epoch_has_saved_shapes_and_zero_provider_replay(monk
     assert fixture.provider_calls == before_calls and replay['fresh_provider_calls'] == 0
     assert not replay['validation_rejections']
     assert source.read_bytes() == source_bytes
-    assert [(r['candidate_id'], r['stage'], r['payload']) for r in replay['response_evidence']] == [
-        (r['candidate_id'], r['stage'], r['payload']) for r in artifact['response_evidence']]
+    assert [(r.get('candidate_id'), r.get('control_id'), r.get('source_candidate_id'), r['stage'], r['payload'])
+        for r in replay['response_evidence']] == [
+        (r.get('candidate_id'), r.get('control_id'), r.get('source_candidate_id'), r['stage'], r['payload'])
+        for r in artifact['response_evidence']]
     frozen = artifact['method_execution_inputs'][0]['state']
     assert frozen['probe_controls'][method]['candidates']
     assert frozen['payload_candidates'][method]

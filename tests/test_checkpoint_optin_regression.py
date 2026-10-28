@@ -32,7 +32,7 @@ def test_default_matrix_forwards_none_and_creates_no_sqlite(tmp_path, monkeypatc
     monkeypatch.setattr(multi_mod, "run_single_engagement", fake_run)
     artifacts = run_provider_matrix(
         target_url="http://localhost/dvwa",
-        providers=["gemini"],
+        providers=["openai_compatible"],
         security_levels=["low"],
         surfaces=["sqli"],
         payload_modes=["static_only"],
@@ -61,7 +61,7 @@ def test_resume_without_metadata_fails_closed_pre_execution(tmp_path, monkeypatc
     missing = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         target_method="sqli_union",
         output_dir=str(tmp_path),
         checkpoint_dir=str(tmp_path / "empty"),
@@ -91,7 +91,7 @@ def test_corrupt_metadata_db_fails_closed_pre_execution(tmp_path, monkeypatch):
     bad = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         target_method="sqli_union",
         output_dir=str(tmp_path),
         checkpoint_dir=str(ckpt_dir),
@@ -112,7 +112,7 @@ def test_malformed_receipt_fails_closed_pre_execution(tmp_path, monkeypatch):
 
     coord = {
         "target_url": "http://localhost/dvwa",
-        "provider": "gemini",
+        "provider": "openai_compatible",
         "surface": "sqli",
         "security_level": "low",
         "payload_mode": "static_only",
@@ -158,7 +158,7 @@ def test_malformed_receipt_fails_closed_pre_execution(tmp_path, monkeypatch):
     bad = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         target_method="sqli_union",
         output_dir=str(tmp_path),
         checkpoint_dir=str(tmp_path),
@@ -178,7 +178,7 @@ def test_completed_receipt_replay_sets_both_resume_flags(tmp_path, monkeypatch):
     first = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         target_method="sqli_union",
         output_dir=str(tmp_path),
         checkpoint_dir=str(tmp_path),
@@ -199,7 +199,7 @@ def test_completed_receipt_replay_sets_both_resume_flags(tmp_path, monkeypatch):
     replayed = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         target_method="sqli_union",
         output_dir=str(tmp_path),
         checkpoint_dir=str(tmp_path),
@@ -233,7 +233,7 @@ def test_incomplete_legacy_fingerprint_refuses_completed_replay(tmp_path, monkey
 
     coord = {
         "target_url": "http://localhost/dvwa",
-        "provider": "gemini",
+        "provider": "openai_compatible",
         "surface": "sqli",
         "security_level": "low",
         "payload_mode": "static_only",
@@ -292,7 +292,7 @@ def test_incomplete_legacy_fingerprint_refuses_completed_replay(tmp_path, monkey
     replayed = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         target_method="sqli_union",
         output_dir=str(tmp_path),
         checkpoint_dir=str(tmp_path),
@@ -349,7 +349,7 @@ def test_default_path_runs_without_sqlite_saver_subprocess(tmp_path):
         artifact = run_single_engagement(
             target_url="http://localhost/dvwa",
             security_level="low",
-            llm_provider="gemini",
+            llm_provider="openai_compatible",
             target_method="sqli_union",
             output_dir=str(out_dir),
         )
@@ -360,7 +360,7 @@ def test_default_path_runs_without_sqlite_saver_subprocess(tmp_path):
         blocked = run_single_engagement(
             target_url="http://localhost/dvwa",
             security_level="low",
-            llm_provider="gemini",
+            llm_provider="openai_compatible",
             target_method="sqli_union",
             output_dir=str(out_dir),
             checkpoint_dir=str(out_dir / "ckpt"),

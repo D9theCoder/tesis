@@ -53,10 +53,105 @@ def _find_next_unvisited(viable: list[str], attempted: list[str], blocked: list[
     return None
 
 
+CHAIN_ASSESSMENT_POLICY_VERSION = "chain-assessment.v1"
+
+
 def _derive_surface_confirmed(confirmed: set[str]) -> set[str]:
     """Map method-confirmed nodes to surface-confirmed nodes for chain precondition checks."""
     return {f"{surface}_confirmed" for surface, methods in METHODS_BY_SURFACE.items()
         if any(MODULE_TO_KG_NODE[method] in confirmed for method in methods)}
+
+
+def _known_chain_nodes(state: dict) -> set[str]:
+    confirmed = set(state.get("confirmed_vulns", []))
+    return confirmed | set(state.get("achieved_outcomes", [])) | _derive_surface_confirmed(confirmed)
+
+
+def _route_receipts(state: dict) -> list[dict]:
+    rows: list[dict] = []
+    for row in state.get("chain_history", []) or []:
+        if isinstance(row, dict) and row.get("route_id"):
+            rows.append(row)
+    return rows
+
+
+def _chain_source_assessed(state: dict) -> bool:
+    """Require current candidate proof before claiming an assessed absence."""
+    from evaluation.scoring_evidence import candidate_base, candidate_execution_rows
+
+    method = state.get("selected_method")
+    visit_id = state.get("selected_visit_id")
+    if not method or not visit_id:
+        return False
+    artifact = {
+        "config": {"scoring_oracles": state.get("scoring_oracles", [])},
+        "final_state": state,
+    }
+    proofs = []
+    for candidate in state.get("payload_candidates", {}).get(method, []):
+        if candidate.get("stage") not in {"exploit", "bypass"} or candidate.get("visit_id") != visit_id:
+            continue
+        candidate_id = candidate.get("candidate_id")
+        refs = [
+            f"#/final_state/response_evidence/{index}"
+            for index, row in candidate_execution_rows(artifact, candidate_id, method)
+            if row.get("visit_id") == visit_id
+        ]
+        proofs.append(candidate_base(artifact, candidate_id, method, refs))
+    return any(proof is not None and proof > 0 for proof in proofs) or (
+        bool(proofs) and all(proof == 0 for proof in proofs)
+    )
+
+
+def build_chain_assessment(
+    state: dict,
+    *,
+    status: str,
+    reason: str,
+    evaluated_edges: int = 0,
+) -> dict:
+    """Record the edge-by-edge chain opportunity assessment for v4 consumers.
+
+    ``assessed`` requires an actual source-proof and static-edge assessment.
+    A completed scan may prove absence; an empty default list cannot.
+    """
+    known = _known_chain_nodes(state)
+    edges: list[dict] = []
+    for source in sorted(known):
+        for edge in _get_kg().get_next_actions(source):
+            if not edge.get("is_chain") or not edge.get("target_agent"):
+                continue
+            infeasible = _chain_infeasibility(state, edge)
+            route = next((row for row in reversed(_route_receipts(state))
+                          if row.get("source") == source and row.get("target_agent") == edge.get("target_agent")), None)
+            if route and route.get("status") in {"completed", "failed", "unverified", "executed"}:
+                edge_status = "confirmed" if route.get("status") == "completed" else "executed"
+                edge_reason = str(route.get("reason") or edge_status)
+            elif infeasible:
+                edge_status, edge_reason = "infeasible", infeasible
+            else:
+                edge_status, edge_reason = "available", "route_available"
+            edges.append({
+                "source": source,
+                "target": edge.get("target"),
+                "target_agent": edge.get("target_agent"),
+                "status": edge_status,
+                "reason": edge_reason,
+                "evidence_refs": list((route or {}).get("source_evidence_refs", [])),
+                "prerequisite_status": {
+                    key: ("proved" if key in known else "unproved")
+                    for key in edge.get("preconditions", [])
+                },
+            })
+    return {
+        "assessed": status == "assessed",
+        "status": status,
+        "reason": reason,
+        "edges": edges,
+        "routes_evaluated": int(evaluated_edges),
+        "policy_version": CHAIN_ASSESSMENT_POLICY_VERSION,
+        "routes": _route_receipts(state),
+    }
 
 
 def route_after_agent(state: dict) -> str:
@@ -204,8 +299,11 @@ def _source_decisions(state: dict, source: str) -> list[dict]:
 def _chain_infeasibility(state: dict, edge: dict, *, check_destination: bool = True) -> str | None:
     """Only schedule dependencies supported by the current destination adapter."""
     method, source = edge["target_agent"], edge["source"]
-    if check_destination and method not in eligible_methods(state, next((s for s, methods in METHODS_BY_SURFACE.items() if method in methods), "")):
-        return "destination_preconditions_not_proved"
+    if check_destination:
+        from foundation.preconditions import statuses_snapshot
+        statuses = statuses_snapshot(state, method)
+        if any(value != "true" for value in statuses.values()):
+            return "destination_preconditions_not_proved"
     if not ((source == "authenticated_session" and method in {"ac_idor", "ac_force_browse"})
             or (source == "credentials_extracted" and method == "bf_dictionary")):
         return "source_consumption_adapter_unavailable"
@@ -307,37 +405,110 @@ def chaining_router_node(state: dict) -> dict:
 
     Returns:
         Partial state update merged into the LangGraph state."""
+    from foundation.control_catalog import quarantine_gate
+    from foundation.readiness import readiness_block_update, readiness_gate
+
+    readiness = readiness_gate(state)
+    if readiness["decision"] == "block":
+        update = readiness_block_update(readiness)
+        update["chain_assessment"] = build_chain_assessment(
+            state, status="not_run", reason="readiness_blocked")
+        update["next_agent"] = "scorer"
+        return update
+    quarantine = quarantine_gate(state)
+    if quarantine.get("blocked"):
+        from core.run_status import reason as status_reason
+        code = "CONTROL_CONTAMINATION"
+        return {
+            "next_agent": "scorer", "selected_method": None,
+            "task_result": "INCOMPLETE", "incomplete_reason": code,
+            "workflow_stop_reason": "control_quarantine",
+            "execution_status": "failed",
+            "execution_reason": status_reason(code, str(quarantine.get("reason") or ""),
+                                              list(quarantine.get("evidence_refs") or [])),
+            "security_outcome": "fixture_limited",
+            "security_outcome_reason": status_reason(code, str(quarantine.get("reason") or ""),
+                                                     list(quarantine.get("evidence_refs") or [])),
+            "chain_assessment": build_chain_assessment(
+                state, status="not_run", reason="run_quarantined"),
+        }
+
     destination_update = {}
     if not stop_reason(state):
+        from foundation.preconditions import precondition_keys_for_method, statuses_snapshot
+
         for edge in _chain_candidates(state):
             if _chain_infeasibility(state, edge) is None:
                 break
             if _chain_infeasibility(state, edge, check_destination=False) is not None:
                 continue
+            target_agent = str(edge["target_agent"])
+            required_keys = precondition_keys_for_method(target_agent)
+            statuses = statuses_snapshot(state, target_agent)
+            if any(statuses.get(key) == "false" for key in required_keys):
+                # Measured negative evidence is a rejection, not a reason to probe.
+                continue
             measured = {}
-            if (edge["source"] == "credentials_extracted" and edge["target_agent"] == "bf_dictionary"
-                    and "no_rate_limit" not in state.get("observations", {})):
+            if target_agent == "bf_dictionary":
+                if all(statuses.get(key) == "true" for key in required_keys):
+                    continue
                 from foundation.recon import probe_brute_force_destination
                 measured = probe_brute_force_destination(state)
-            elif edge["source"] == "authenticated_session" and edge["target_agent"] in {"ac_idor", "ac_force_browse"}:
+            elif target_agent in {"ac_idor", "ac_force_browse"}:
+                if all(statuses.get(key) == "true" for key in required_keys):
+                    continue
                 from foundation.recon import probe_access_control_destination
                 refs = {ref for decision in _source_decisions(state, edge["source"]) for ref in decision.get("evidence_refs", [])}
                 source_ids = [row["evidence_id"] for i, row in enumerate(state.get("response_evidence", []))
                     if f"#/final_state/response_evidence/{i}" in refs and row.get("evidence_id")]
-                measured = probe_access_control_destination(state, edge["target_agent"], source_ids)
+                measured = probe_access_control_destination(state, target_agent, source_ids)
             for key, value in measured.items():
                 if key == "observations":
                     destination_update[key] = {**destination_update.get(key, {}), **value}
+                elif isinstance(value, dict):
+                    destination_update[key] = {**destination_update.get(key, {}), **value}
                 else:
                     destination_update[key] = [*destination_update.get(key, []), *value]
-            measured_state = {**state, "observations": {**state.get("observations", {}), **destination_update.get("observations", {})}}
+            measured_state = {**state, **destination_update,
+                "observations": {**state.get("observations", {}), **destination_update.get("observations", {})},
+                "precondition_status": {**state.get("precondition_status", {}), **destination_update.get("precondition_status", {})}}
+            measured_statuses = statuses_snapshot(measured_state, target_agent)
+            if any(measured_statuses.get(key) == "false" for key in required_keys):
+                continue
+            if not all(measured_statuses.get(key) == "true" for key in required_keys):
+                # An attempted but inconclusive control cannot authorize the
+                # destination visit; retain the limitation explicitly.
+                destination_update.setdefault("preparation_failures", []).append({
+                    "method": target_agent,
+                    "visit_id": f"{target_agent}:destination_probe",
+                    "reason": "destination_precondition_unknown",
+                    "detail": "bounded destination control did not establish the prerequisite",
+                })
+                continue
             if _chain_infeasibility(measured_state, edge) is None:
                 break
-    routing_state = {**state, "observations": {
+    routing_state = {**state, **destination_update, "observations": {
         **state.get("observations", {}), **destination_update.get("observations", {}),
     }}
     next_agent, event = evaluate_chain_route(routing_state)
     updates: dict = {**destination_update, **_complete_routed_visit(state), "next_agent": next_agent}
+    prior_routes = [row for row in _route_receipts(state)
+                    if row.get("status") in {"completed", "failed", "unverified", "executed", "ready", "routed"}]
+    candidates = _chain_candidates(routing_state) if state.get("experiment_condition") == "akg_guided_hybrid" else []
+    evaluated = len(candidates) + (1 if prior_routes and not candidates else 0)
+    if _chain_source_assessed(routing_state):
+        assessment_status, assessment_reason = "assessed", "source_and_chain_edges_assessed"
+    elif stop_reason(state):
+        assessment_status, assessment_reason = "not_run", str(stop_reason(state))
+    elif evaluated:
+        assessment_status, assessment_reason = "assessed", "chain_opportunity_evaluated"
+    else:
+        assessment_status, assessment_reason = "insufficient_evidence", "no_proved_enabling_outcome"
+    updates["chain_assessment"] = build_chain_assessment(
+        routing_state, status=assessment_status, reason=assessment_reason,
+        evaluated_edges=evaluated)
+    updates["chain_assessment"]["routes_evaluated"] = max(
+        evaluated, len(updates["chain_assessment"]["edges"]))
     if next_agent == "scorer":
         updates["workflow_stop_reason"] = event.get("reason")
     rejected = event.pop("infeasible_routes", [])

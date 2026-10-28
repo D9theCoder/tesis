@@ -168,7 +168,15 @@ class ExperimentArtifactLayout:
                 "experiment_condition": artifact.get(
                     "experiment_condition", artifact_config.get("experiment_condition")
                 ),
+                "experiment_block": artifact.get(
+                    "experiment_block", artifact_config.get("experiment_block")
+                ),
                 "target_method": artifact.get("target_method", artifact_config.get("target_method")),
+                "policy_epoch": artifact.get("policy_epoch") or artifact_config.get("policy_epoch"),
+                "readiness_status": (
+                    (artifact.get("readiness") or {}).get("status")
+                    if isinstance(artifact.get("readiness"), Mapping) else None
+                ),
                 **{key: artifact.get(key, artifact_config.get(key)) for key in (
                     "model", "model_profile", "repeat_index", "selected_method",
                 )},

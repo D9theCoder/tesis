@@ -25,6 +25,7 @@ from core.state import METHODS_BY_SURFACE
 from evaluation.reporter import write_json_report
 from tests.test_scoring_remediation_e2e import control
 from tests.test_thesis_scoring_e2e import grades
+from tests.support import ready_state
 
 ROOT = Path('results/validation/scoring-evidence-v4')
 
@@ -73,15 +74,19 @@ def artifact_v4(monkeypatch):
     selection.update(observations={key: True for keys in AttackKnowledgeGraph.METHOD_PRECONDITIONS.values()
         for key in keys}, reason_refs=['union_select_possible'], plan={'kind': 'stop_after_target'},
         selected_at='2026-10-01T00:00:00+00:00', profile_sha256=artifact['config']['scoring_profile']['sha256'])
+    selection['precondition_status'] = {key: 'true' for key in selection['observations']}
     call_input = {'observations': selection['observations']}
     output = {'next_agent': 'sqli_union', 'reason_code': 'supported observation',
         'reason_refs': ['union_select_possible'], 'plan': {'kind': 'stop_after_target'}}
+    generator_calls = [r for r in artifact.get('llm_performance', [])
+                       if isinstance(r, dict) and r.get('role') == 'payload_generator']
     artifact['llm_performance'] = [{'call_id': 'call:1', 'role': 'orchestrator',
         'method': 'sqli_union', 'visit_id': selection['visit_id'], 'schema_version': 'orchestrator.v1',
         'input': call_input, 'output': output, 'input_sha256': digest(call_input),
         'output_sha256': digest(output), 'parse_status': 'ok', 'validation_status': 'valid',
         'attempt': 1, 'provider': 'offline', 'model': 'fixture',
-        'started_at': '2026-10-01T00:00:00+00:00'}]
+        'started_at': '2026-10-01T00:00:00+00:00'},
+        *generator_calls]
     return artifact
 
 
@@ -92,7 +97,9 @@ def test_ranking_export_review(monkeypatch, case, expected):
     artifact = artifact_v4(monkeypatch)
     selection = next(d for d in artifact['final_state']['scoring_decisions'] if d['dimension'] == 'Smethod')
     if case == 'outside': selection['surface'] = 'brute_force'
-    if case == 'prerequisite': selection['observations']['union_select_possible'] = False
+    if case == 'prerequisite':
+        selection['observations']['union_select_possible'] = False
+        selection['precondition_status']['union_select_possible'] = 'false'
     if case == 'lower':
         artifact['config']['scoring_profile']['scenarios']['sqli:low']['sqli_error']['planned_request_count'] = 1
         rehash(artifact['config']['scoring_profile'])
@@ -539,7 +546,8 @@ def test_malformed_oracle_attestations_fail_before_review(monkeypatch):
         review_queue(export(artifact, 'malformed-attestations'))
 
 
-@pytest.mark.parametrize('case,expected', [('weak', 1), ('claim', 0), ('missing_log', None)])
+@pytest.mark.parametrize('case,expected', [('weak', 1), ('claim', 0),
+    ('assessment_only', 0), ('missing_log', None)])
 def test_passive_chain_opportunity(monkeypatch, case, expected):
     from evaluation.thesis_scoring import review_queue
     a = artifact_v4(monkeypatch)
@@ -554,7 +562,10 @@ def test_passive_chain_opportunity(monkeypatch, case, expected):
             'missing_material': ['complete_credentials'],
             'prerequisite_status': {'credentials_extracted': 'unproved'}})
     if case == 'claim': state['weak_chain_opportunities'].append({'opportunity_class': 'weak', 'method': 'sqli_union'})
-    if case == 'missing_log': state.pop('weak_chain_opportunities')
+    if case in {'assessment_only', 'missing_log'}:
+        state.pop('weak_chain_opportunities')
+    if case == 'missing_log':
+        state.pop('chain_assessment', None)
     q = review_queue(export(a, case))
     assert q['components']['Schain'] == expected
 
@@ -751,11 +762,20 @@ def test_all_pending_repeats_remain_visible(monkeypatch):
 
 def test_report_tables_examples_and_package_preservation(tmp_path):
     from evaluation.rubric_document import update_document
+    from xml.dom import minidom
+    from zipfile import ZipFile
+
+    def trailing_tables(path):
+        with ZipFile(path) as archive:
+            document = minidom.parseString(archive.read('word/document.xml'))
+        return [table.toxml() for table in document.getElementsByTagName('w:tbl')[-2:]]
+
     source = Path('metrik_penilaian_tesis.docx')
     handoff = Path('docs/completed/HANDOFF_SCORING_EVIDENCE_AND_RUBRIC_COMPLETION_2026-10-01.md')
     result = update_document(source, handoff, tmp_path / 'rubric.docx')
     assert result['tables'] == 7 and result['examples'] == 35
     assert result['math_preserved'] is True and result['other_package_parts_preserved'] is True
+    assert trailing_tables(source) == trailing_tables(tmp_path / 'rubric.docx')
     assert result['visual_layout'] == 'unverified'
     write_json_report(ROOT / 'docx-control.json', result)
 
@@ -783,7 +803,7 @@ def test_optional_decision_rejection_keeps_selection_alive(monkeypatch, mode, op
                 'reason_code': 'best_viable', **optional}), usage_metadata={}, response_metadata={})
 
     monkeypatch.setattr('llm.runtime.get_llm', lambda *a, **k: Client())
-    state = new_default_state()
+    state = ready_state()
     state.update(target_url='http://localhost/dvwa', current_surface='sqli',
         observations={'union_select_possible': True}, selected_method='sqli_union')
     runtime = LLMRuntime(max_concurrency=1)
@@ -828,7 +848,7 @@ def test_native_chain_plan_reaches_selection_grade_four(monkeypatch):
     p['scenarios']['sqli:low']['sqli_union']['allowed_plans'].append('chain')
     rehash(p)
     a['config'].update(target_method=None, experiment_condition='akg_guided_hybrid')
-    state = new_default_state()
+    state = ready_state()
     state.update(target_url='http://localhost/dvwa', current_surface='sqli',
         experiment_condition='akg_guided_hybrid', scoring_profile=p,
         observations=a['final_state']['scoring_decisions'][0]['observations'])

@@ -98,7 +98,7 @@ def test_runner_carries_containment_state_into_artifact(monkeypatch, tmp_path):
     artifact = run_single_engagement(
         target_url="http://localhost/dvwa",
         security_level="low",
-        llm_provider="gemini",
+        llm_provider="openai_compatible",
         surface="sqli",
         payload_mode="static_only",
         target_method="sqli_union",

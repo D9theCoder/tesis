@@ -13,15 +13,26 @@ ITERATION_UNIT = "method_visit"
 
 
 def eligible_methods(state: dict, surface: str | None = None) -> list[str]:
-    """Return unvisited methods under the configured experiment condition."""
+    """Return unvisited methods under the configured experiment condition.
+
+    Linear receives the canonical surface list.  AKG receives only methods
+    whose derived prerequisites are currently ``true``; unknown evidence is
+    never promoted to viable.  Rejected selections and preparation failures are
+    never offered again as if they had not happened.
+    """
+    from foundation.preconditions import statuses_snapshot
+
     surface = surface or state.get("current_surface", "sqli")
     canonical = METHODS_BY_SURFACE.get(surface, [])
     candidates = (
-        get_attack_knowledge_graph().get_viable_methods(surface, state.get("observations", {}))
+        [method for method in canonical
+         if all(value == "true" for value in statuses_snapshot(state, method).values())]
         if state.get("experiment_condition") == "akg_guided_hybrid" else canonical
     )
     excluded = set(state.get("attempted_agents", [])) | set(state.get("blocked_agents", [])) | set(state.get("failure_agents", []))
     excluded.update(row["method"] for row in state.get("preparation_failures", []) if row.get("method"))
+    excluded.update(row.get("method") for row in state.get("selection_rejections", [])
+                    if isinstance(row, dict) and row.get("method"))
     return [method for method in candidates if method in canonical and method not in excluded]
 
 

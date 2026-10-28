@@ -4,10 +4,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
-from llm.reasoning import REASONING_EFFORTS
+from core.payload_policy import (
+    EXPERIMENT_POLICY_VERSION,
+    PAYLOAD_MODE_LABELS,
+    PAYLOAD_MODES as _POLICY_PAYLOAD_MODES,
+    PAYLOAD_POLICY_VERSION,
+    STRICT_PAYLOAD_MODES,
+    mode_display_label,
+)
 
 EVASION_MODES: frozenset[str] = frozenset({"reactive", "proactive", "disabled"})
-PAYLOAD_MODES: frozenset[str] = frozenset({"static_only", "hybrid", "llm_mutation_only"})
+# One registry: core.payload_policy owns the canonical payload-mode tuple.
+PAYLOAD_MODES: frozenset[str] = frozenset(_POLICY_PAYLOAD_MODES)
+# The Chapter 3 design declares two separate study blocks in one policy epoch.
+EXPERIMENT_BLOCKS: tuple[str, ...] = ("selection", "forced")
 LLM_CACHE_SCOPES: frozenset[str] = frozenset({"none", "run"})
 STRUCTURED_OUTPUT_MODES: frozenset[str] = frozenset({"auto", "native", "json_prompt"})
 LLM_RUNTIME_ROLES: tuple[str, ...] = ("orchestrator", "payload_generator")
@@ -131,6 +141,12 @@ class EngagementConfig:
     scoring_rubric_version: str = "scoring.v4"
     scoring_profile: dict[str, Any] = field(default_factory=dict)
     scoring_oracles: list[dict[str, Any]] = field(default_factory=list)
+    # Chapter 3 epoch identity and cost evidence are external inputs. They stay
+    # empty unless the operator freezes them; nothing is inferred or filled
+    # from a historical epoch.
+    scoring_policy_epoch: dict[str, Any] = field(default_factory=dict)
+    token_price_schedule: dict[str, Any] = field(default_factory=dict)
+    fixture_restoration_evidence: dict[str, Any] = field(default_factory=dict)
     fixture_id: str | None = None
     protocol_version: str | None = None
 
@@ -152,8 +168,23 @@ class EngagementConfig:
 
         return self.llm_runtime.roles
 
+    @property
+    def experiment_block(self) -> str:
+        """Return the declared study block of a single-run configuration.
+
+        A fixed ``target_method`` is a forced-method coordinate; leaving it
+        unset is the automatic surface-selection block. Matrix expansion
+        declares its block explicitly in the coordinate/plan.
+        """
+
+        return "forced" if self.target_method else "selection"
+
 
 __all__ = [
+    "EVASION_MODES",
+    "EVASION_STRATEGIES",
+    "EXPERIMENT_BLOCKS",
+    "EXPERIMENT_POLICY_VERSION",
     "EngagementConfig",
     "LLMRoleConfig",
     "LLMRuntimeConfig",
@@ -161,6 +192,10 @@ __all__ = [
     "LLM_RUNTIME_ROLES",
     "ModelConfig",
     "PAYLOAD_MODES",
+    "PAYLOAD_MODE_LABELS",
+    "PAYLOAD_POLICY_VERSION",
     "RoleConfig",
+    "STRICT_PAYLOAD_MODES",
     "STRUCTURED_OUTPUT_MODES",
+    "mode_display_label",
 ]

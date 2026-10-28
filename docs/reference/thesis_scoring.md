@@ -86,13 +86,16 @@ expected principal identities. A control with an unproved identity cannot
 satisfy coverage. Controls may use different principals with known permission
 decisions on the same object/action.
 
-Detection seeds loaded outside the scored queue are frozen before execution as
-`probe_controls[method]`, with canonical candidate/provenance records, a visit
-ID, SHA-256 and validation receipts. Checkpoints and saved method inputs retain
-these controls. Probe responses link their control IDs; those IDs do not enter
-the exploit review denominator or candidate budget. Replay uses the saved
-controls and rejects canonical-content, ordering, hash or visit mismatches
-before HTTP. Historical inputs missing their probe stage remain incomplete.
+Detection controls are frozen outside the scored queue from a versioned,
+bounded catalog of approved seed-derived and synthetic controls. Recon,
+destination and method-visit snapshots retain the ordered identities, scope,
+hashes, budgets and validation receipts. Independent control responses link to
+their own frozen control validation; candidate-derived verification controls
+link to their own validated source candidate. Neither enters the exploit review
+denominator or candidate budget. Failed transport remains unknown, not a
+negative precondition. Replay revalidates the recorded policy and controls,
+rejects mismatches before HTTP, and retains the saved candidate execution order.
+Historical inputs missing required controls remain incomplete.
 
 Payload tier 4 requires independently confirmed downstream use of that candidate.
 `Sexploit` uses base confirmation separately and checks a use whose source method
@@ -122,6 +125,10 @@ required contexts still contribute 0.
 Discarded recon references retain telemetry without that penalty. Zero calls
 means `not_applicable`; missing call records mean pending. Required-schema
 failures remain invalid. Valid optional references cannot hide previous failures.
+Selection-call requirements are bound to the selected or rejected method and
+visit after the decision is known. For older unscoped selection requirements,
+only an exact, unique call ID in the relevant method context supplies coverage;
+missing, mismatched or ambiguous calls remain pending.
 
 ```text
 Spayload_final = sum(candidate grades) / number of distinct eligible candidates
@@ -140,6 +147,9 @@ composites in the current execution graph.
 
 The following seven tables match Tabel 3.5–3.11 in the DOCX. High-tier examples
 illustrate the evidence contract; they are not claims of live fixture acceptance.
+The DOCX updater locates these tables by their numbered captions and preserves
+other tables, including appended status tables. Package checks do not verify
+visual layout.
 
 ### Tabel 3.5: kualitas pemilihan metode
 
@@ -439,3 +449,17 @@ The [`observer-projection.v1` contract](observer_projection.md) keeps provisiona
 Only an eligible final receipt can supply final scores: verify the original source-byte hash, exact execution/run identity, frozen selection/method/config/rubric, candidate evidence and decision history, eligible denominator, full weighted formula and four-decimal rounding. Keep fractional component precision. Select the latest valid receipt timestamp per execution/source hash/workflow within declared review roots; deterministic epoch/path ordering resolves ties. A newer pending or mismatched file cannot replace it. Rule hashes retain their original scoring epoch rather than being compared to the exporter's current code hash.
 
 Pending discovery uses the latest eligible declared review epoch and validates its decision ledger. Legacy files missing identity/timestamps require a unique source hash and validated ledger association; directory names alone cannot establish identity. Missing or invalid workflows expose reasons and null finals. Export performs read-only validation of stored evidence and arithmetic, with no new evaluator decision, oracle request, source rewrite or rescore.
+
+## Chapter 3 experiment flow and final-receipt grouping (2026-10-28)
+
+The revised methodology is the [derived Chapter 3 document](../active/CHAPTER_3_REVISED_2026-10-28.md); the source DOCX is unchanged. Tables 3.5–3.11 above remain the normative v4 rubrics. Execution artifacts and runtime composites stay provisional (`runtime_provisional_scoring.v2`); only Human/AI final receipts may support thesis conclusions.
+
+The study declares two blocks. `selection` (`target_method=None`) observes model method choice and adaptation; `forced` assigns every registered method for agent/payload coverage and cannot establish model-selection ability. Both keep the two primary hybrid conditions and at least three repeats. Arbitrary forced or route decisions are not model accuracy; only trusted `decision_origin=model` choices feed first-choice/adaptation metrics. `forced_selection_decisions`, `deterministic_selection_decisions`, and `route_selection_decisions` are reported separately.
+
+Grouping for research summaries must use the public `receipt_compatibility_key` plus explicit block, target method, and repeat identity. Never pool conditions, blocks, targets, payload modes, fixtures, protocols, policy epochs, rubrics, or grader workflows. Keep planned, completed, failed, pending, unassessable, fallback, and unmatched counts; a missing score remains null with a reason. Repeated final receipts from the same source hash/correction are not independent repeats.
+
+`evaluation/research_metrics.py` owns the additive research-metrics contract (`research-metrics.v2`, policy `scoring-policy.v4.2`). A valid token-price schedule has `schedule_id`, `version`, timezone-aware `effective_at`, ISO-4217 `currency`, and `prices` keyed by provider/model with `input_per_million`/`output_per_million` (optional cache categories). `tesis.config_loader` delegates to `validate_token_price_schedule`; absent usage or pricing yields null cost with a reason, never an inferred price. Execution artifacts record `scoring_policy`, `metrics_epoch`, the policy epoch, prompt/schema identities, role/method/visit/call telemetry, and the append-only evidence receipts, while runtime composites remain provisional.
+
+Physical request metrics consume `artifact["http_request_counters"]` (`http-accounting.v1`: actual requests/retries/redirect hops/failures by phase/role/method). Each actual dispatch, including oracle/verification traffic tagged `phase="verification"` with `candidate_verification` or `independent_control` roles, is counted once; redirect hops are a separate counter. Evidence-row counts are named separately as `evidence_requests_total`; a missing/incomplete counter is unavailable, never inferred from rows. `payload_generation_opportunities` is role+generation-stage-unique evidence; validation receipts are joined separately, so one refusal/provider failure is not two opportunities, and `payload_generation_opportunity_coverage` reports `generation_receipt_missing` rather than a measured zero when only validation rows survive. `recorded_payload_policy` (payload policy version + hash-pinned template registry/prompt manifests) is persisted on the artifact, `final_state`, and frozen method inputs; historical replay validates against that recorded snapshot, and a missing snapshot is unavailable rather than today's-registry revalidation. Matrix `totals` and provider rollups are operational counts only, with no pooled metric means across coordinates. Fixture restoration/equivalence comes only from an authorized `fixture-restoration.v1` operator attestation threaded through readiness; absent/mismatched evidence leaves paired analysis unmatched, and no reset endpoint is invoked. `compare_receipts` derives incomplete/unassessable/pending counts from task/pending reasons and canonical statuses, not a nonexistent `execution_status="incomplete"`. Candidate baselines require `candidate_verification` (or a documented explicit baseline purpose); ambiguous historical multi-visit execution stays unavailable.
+
+Matched Linear/AKG pairs require a ready readiness receipt on both sides with matching requested/observed level, fixture/protocol, and attested fixture restoration. Unmatched pairs are counted, not silently dropped. The predeclared paired analysis is a two-sided Wilcoxon signed-rank test with matched-pairs rank-biserial effect size, bootstrap percentile CI for the median paired difference, and Holm–Bonferroni correction within the metric family. Mann–Whitney U is exploratory only because paired coordinates violate independence. `Srun_final` still requires every component, an eligible candidate denominator, and a complete review workflow; no provisional v2 component or invented zero may fill a pending final.

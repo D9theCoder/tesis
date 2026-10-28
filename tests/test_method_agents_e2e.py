@@ -21,6 +21,7 @@ from core.state import METHODS_BY_SURFACE, new_default_state
 from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.runner import run_single_engagement
 from tesis.runtime_events import redact_secrets
+from tests.support import install_fixture_runtime
 
 EVIDENCE = Path(os.environ.get(
     'TESIS_METHOD_AGENTS_EVIDENCE_DIR',
@@ -52,6 +53,12 @@ class Fixture:
             self.control = "positive"
         seeds = __import__('foundation.payload_library', fromlist=['PayloadLibrary']).PayloadLibrary().load_seed_candidates(method, level)
         self.probes = {s['payload_or_logic'] for s in seeds if s['stage'] == 'probe'}
+        self.error_probes = {
+            s['payload_or_logic'] for s in
+            __import__('foundation.payload_library', fromlist=['PayloadLibrary'])
+                .PayloadLibrary().load_seed_candidates('sqli_error', level)
+            if s['stage'] == 'probe'
+        } if control == 'repeat_method' else set()
 
     def request(self, client, verb, url, **kwargs):
         data = dict(kwargs.get('params') or kwargs.get('data') or {})
@@ -86,13 +93,18 @@ class Fixture:
         if path.endswith('index.php'):
             username = self.authenticated.get(session)
             if username:
-                return (f'Username: {username} <a href="logout.php">Logout</a>', 200, .01)
+                return (f'Username: {username} <a href="logout.php">Logout</a>'
+                        '<a href="vulnerabilities/sqli/">SQLi</a>'
+                        '<a href="vulnerabilities/sqli_blind/">Blind</a>'
+                        '<a href="vulnerabilities/authbypass/">AC</a>'
+                        '<a href="vulnerabilities/brute/">Brute</a>', 200, .01)
             return ('<a href="vulnerabilities/sqli/">SQLi</a><a href="vulnerabilities/sqli_blind/">Blind</a><a href="vulnerabilities/authbypass/">AC</a><a href="vulnerabilities/brute/">Brute</a>', 200, .01)
         if path.endswith('vulnerabilities/authbypass/'):
+            form = f'<form action="{path}" method="get"><input name="userId"></form>'
             if self.authenticated.get(session):
-                return ('This page should only be accessible by the admin user. for example gordonb/abc123',
+                return ('This page should only be accessible by the admin user. for example gordonb/abc123' + form,
                     403 if self.control == 'negative' else 200, .01)
-            return ('Login', 200, .01)
+            return ('Login' + form, 200, .01)
         if path.endswith('setup.php') or path.endswith('phpinfo.php') or path.endswith('view_source.php'):
             return ('Database Setup View Source phpinfo()', 403 if self.control == 'negative' else 200, .01)
         if path.endswith('session-input.php'):
@@ -102,6 +114,15 @@ class Fixture:
             field = 'username' if 'brute/' in path else ('userId' if 'authbypass/' in path else 'id')
             return (f'<form action="{path}"><input name="{field}"><input name="user_token" value="fixture-token"></form>', 200, .01)
         value = str(data.get('id', self.stored.get(session, '')))
+        if self.generation == 'repeat_method':
+            if path.endswith('vulnerabilities/sqli_blind/'):
+                exists = '1=2' not in value
+                return ('User ID exists in the database' if exists
+                        else 'User ID is missing from the database', 200, .01)
+            if value in self.error_probes:
+                return ('You have an error in your SQL syntax', 200, .01)
+            if 'extractvalue' in value.lower():
+                return ("XPATH syntax error: '~dvwa'", 200, .01)
         probe = value in self.probes
         if self.method.startswith('bf_'):
             username = data.get('username')
@@ -235,15 +256,14 @@ class Fixture:
                     value = value.replace('SLEEP(3)', call)
             content = json.dumps({'variants': [{'source_seed_id': seed['source_seed_id'], 'mutation_type': capsule['allowed_mutation_types'][0], 'payload_or_logic': value}]})
             if self.generation == 'generated_boolean_error' or self.generation.startswith('generated_false'):
-                expressions = ['nonexistent_one()>77', 'nonexistent_two()>77'] if self.generation == 'generated_boolean_error' else [
-                    'ASCII(SUBSTR((SELECT password FROM users LIMIT 1),1,1))>78',
-                    'ASCII(SUBSTR((SELECT password FROM users LIMIT 1),1,1))>79']
+                expressions = ['nonexistent_one()>77'] if self.generation == 'generated_boolean_error' else [
+                    'ASCII(SUBSTR((SELECT password FROM users LIMIT 1),1,1))>78']
                 prefix, comment = ('1 AND ', '#') if self.level == 'medium' else ("1' AND ", '-- -')
                 content = json.dumps({'variants': [{'source_seed_id': seed['source_seed_id'],
                     'mutation_type': 'predicate_variant', 'payload_or_logic': prefix + expression + comment}
                     for expression in expressions]})
         elif self.generation == 'repeat_method':
-            choice = ['sqli_union', 'sqli_error', 'sqli_union', 'scorer'][min(self.decisions, 3)]
+            choice = ['sqli_union', 'sqli_error', 'sqli_boolean_blind', 'scorer'][min(self.decisions, 3)]
             self.decisions += 1
             content = json.dumps({'next_agent': choice, 'reason_code': 'fixture_selection'})
         elif self.control == 'schema_rejected':
@@ -255,6 +275,7 @@ class Fixture:
 
 def run_control(monkeypatch, method, level, control, condition='linear_hybrid', automatic=False, payload_mode='static_only'):
     fixture = Fixture(method, level, control)
+    install_fixture_runtime(monkeypatch, fixture)
     monkeypatch.setattr(httpx.Client, 'request', lambda client, *args, **kwargs: fixture.request(client, *args, **kwargs))
     monkeypatch.setattr('llm.runtime.get_llm', lambda *a, **k: fixture)
     if method.startswith('bf_'):
@@ -404,7 +425,8 @@ def test_frozen_payload_replay_revalidates_and_preserves_ids(monkeypatch):
     assert replay['fresh_provider_calls'] == 0 and fixture.provider_calls == calls_before
     assert replay['source_sha256']
     assert replay['confirmed_vulns'] == artifact['confirmed_vulns']
-    assert {e['candidate_id'] for e in replay['response_evidence']} <= {c['candidate_id'] for c in artifact['payload_candidates']['sqli_union']}
+    assert {e['candidate_id'] for e in replay['response_evidence'] if e.get('candidate_id')} <= {
+        c['candidate_id'] for c in artifact['payload_candidates']['sqli_union']}
     assert replay['manual_scoring_evidence']
     assert replay['validation_rejections'] == []
     visit_id = artifact['method_execution_inputs'][0]['state']['selected_visit_id']
@@ -517,8 +539,9 @@ def test_generated_replay_selects_only_saved_exploits_and_probe_controls(monkeyp
     assert replay['fresh_provider_calls'] == 0
     assert replay['selected_candidate_ids'] == selected
     assert replay['confirmed_vulns'] == ['sqli_union_confirmed']
-    assert all(e['candidate_id'] in selected for e in replay['response_evidence'])
-    assert any(e['candidate_id'].startswith('sqli_union_llm_') for e in replay['response_evidence'])
+    assert all(e.get('candidate_id') in selected or e.get('control_id')
+        or e.get('source_candidate_id') in selected for e in replay['response_evidence'])
+    assert any(e.get('candidate_id', '').startswith('sqli_union_llm_') for e in replay['response_evidence'])
     assert len(fixture.requests) > before
     before = len(fixture.requests)
     with pytest.raises(ValueError, match='saved'):
@@ -532,10 +555,10 @@ def test_replay_missing_stage_never_restores_unselected_seeds(monkeypatch):
     artifact, fixture = run_control(monkeypatch, 'sqli_union', 'low', 'positive')
     source = EVIDENCE / f'probe-only-{uuid4().hex}.json'
     source.write_text(json.dumps(artifact))
-    queue = artifact['method_execution_inputs'][0]['state']['payload_candidates']['sqli_union']
-    ids = [c['candidate_id'] for c in queue if c['stage'] == 'probe']
+    artifact['method_execution_inputs'][0]['state']['payload_candidates']['sqli_union'] = []
+    source.write_text(json.dumps(artifact))
     before = len(fixture.requests)
-    replay = replay_method_inputs(source, output_path=EVIDENCE / f'probe-stop-{uuid4().hex}.json', candidate_ids=ids)
+    replay = replay_method_inputs(source, output_path=EVIDENCE / f'probe-stop-{uuid4().hex}.json')
     assert replay['validation_rejections']
     assert not replay['response_evidence']
     assert len(fixture.requests) == before
@@ -578,8 +601,7 @@ def test_boolean_generated_false_requires_expression_control(monkeypatch, level,
     queue = artifact['method_execution_inputs'][0]['state']['payload_candidates']['sqli_boolean_blind']
     generated = [c for c in queue if c['source'] == 'llm_generated']
     valid_ids = {r['candidate_id'] for r in artifact['payload_validation_results']['sqli_boolean_blind'] if r['valid']}
-    assert len(generated) == (1 if level == 'medium' else 2)
-    assert all(c['candidate_id'] in valid_ids for c in generated)
+    assert generated and all(c['candidate_id'] in valid_ids for c in generated)
     selected = [c['candidate_id'] for c in queue if c['stage'] == 'probe' or c['source'] == 'llm_generated']
     source = EVIDENCE / artifact['execution_id'] / f"{artifact['execution_id']}.json"
     calls = fixture.provider_calls
@@ -587,14 +609,16 @@ def test_boolean_generated_false_requires_expression_control(monkeypatch, level,
     assert fixture.provider_calls == calls and replay['fresh_provider_calls'] == 0
     assert replay['validation_rejections'] == []
     valid = control == 'generated_false'
-    assert ('sqli_boolean_blind_confirmed' in replay['confirmed_vulns']) is valid
-    assert replay['final_state']['exploitation_scores']['sqli_boolean_blind'] == (3 if valid else 1)
+    confirmed = valid and level == 'medium'
+    grade = 3 if confirmed else 2 if valid else 1
+    assert ('sqli_boolean_blind_confirmed' in replay['confirmed_vulns']) is confirmed
+    assert replay['final_state']['exploitation_scores']['sqli_boolean_blind'] == grade
     exploits = [e for e in replay['response_evidence'] if e['stage'] == 'exploit']
     assert exploits and all(e['success'] is valid for e in exploits)
     controls = [e for e in replay['response_evidence'] if e['stage'] == 'probe' and 'NOT (' in e['payload']]
     assert len(controls) == len(generated) and all(e['signal_detected'] is valid for e in controls)
     grades = replay['final_state']['payload_scores']
-    assert all(grades[c['candidate_id']] == (3 if valid else 0) for c in generated)
+    assert all(grades[c['candidate_id']] == (grade if valid else 0) for c in generated)
 
 
 @pytest.mark.parametrize('level', ['low', 'medium', 'high'])
@@ -631,7 +655,7 @@ def test_commented_oversized_sleep_never_reaches_transport(monkeypatch, level):
     assert receipt['valid'] is False and receipt['reason'] == 'unsafe_resource_cost'
     actual = {str(r['data'].get('id') or unquote(r.get('cookie_id') or '')) for r in fixture.requests}
     assert candidate['payload_or_logic'] not in actual
-    assert not any(e['candidate_id'] == candidate['candidate_id'] for e in artifact['response_evidence'])
+    assert not any(e.get('candidate_id') == candidate['candidate_id'] for e in artifact['response_evidence'])
 
 
 @pytest.mark.parametrize('level', ['low', 'medium', 'high'])
@@ -664,24 +688,14 @@ def test_generated_duplicate_error_requires_extraction_envelope(monkeypatch, lev
     ('generic_probe_positive', True),
     ('generic_probe_negative', False),
 ])
-def test_sqli_error_unrecognized_probe_still_checks_validated_exploits(monkeypatch, control, confirmed):
+def test_sqli_error_unrecognized_probe_blocks_candidate_execution(monkeypatch, control, confirmed):
     artifact_control = f'{control}-{uuid4().hex}'
     artifact, fixture = run_control(monkeypatch, 'sqli_error', 'high', artifact_control)
-    queue = artifact['method_execution_inputs'][0]['state']['payload_candidates']['sqli_error']
-    candidate_ids = {candidate['candidate_id'] for candidate in queue}
-    valid_candidate_ids = {
-        receipt['candidate_id']
-        for receipt in artifact['method_execution_inputs'][0]['state']['payload_validation_results']['sqli_error']
-        if receipt['valid'] is True
-    }
-    exploit_rows = [row for row in artifact['response_evidence'] if row['stage'] == 'exploit']
-
-    assert candidate_ids
-    assert valid_candidate_ids == candidate_ids
-    assert exploit_rows
-    assert all(row['candidate_id'] in candidate_ids for row in exploit_rows)
-    assert artifact['verifier_decision']['decision'] == ('confirmed' if confirmed else 'not_confirmed')
-    assert artifact['final_state']['exploitation_scores']['sqli_error'] == (3 if confirmed else 0)
+    assert not artifact['method_execution_inputs']
+    assert not any(row.get('identity_kind') == 'candidate' for row in artifact['response_evidence'])
+    assert not artifact['confirmed_vulns']
+    assert artifact['incomplete_reason'] == 'TARGET_METHOD_INFEASIBLE'
+    assert artifact['final_state']['selection_rejections'][0]['reason_code'] == 'precondition_false'
     assert fixture.provider_calls == 0
 
 
@@ -745,7 +759,7 @@ def test_revisited_replay_preserves_saved_order_and_accumulated_state(monkeypatc
     assert final['payload_candidates'][method] == queue
     assert [r['candidate_id'] for r in final['payload_validation_results'][method]] == [c['candidate_id'] for c in queue]
     rows = replay['manual_scoring_evidence']
-    fresh_ids = {e['candidate_id'] for e in replay['response_evidence']}
+    fresh_ids = {e['candidate_id'] for e in replay['response_evidence'] if e.get('candidate_id')}
     historical_ids = set(state['payload_scores']) - fresh_ids
     assert historical_ids and any(state['payload_scores'][candidate_id] == 3 for candidate_id in historical_ids)
     assert historical_ids <= set(final['payload_scores'])

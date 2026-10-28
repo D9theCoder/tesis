@@ -5,22 +5,43 @@ from __future__ import annotations
 from core.run_status import terminal_status, lifecycle_alias, EXECUTION_STATUSES, SECURITY_OUTCOMES, reason as status_reason, matrix_terminal_status
 
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean
 from threading import Lock
+from time import perf_counter
 from typing import Any, Callable
 
 from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS
+from core.payload_policy import (
+    BUDGET_POLICY_VERSION,
+    CONTROL_POLICY_VERSION,
+    EXPERIMENT_POLICY_VERSION,
+    PAYLOAD_POLICY_VERSION,
+    is_supported_payload_mode,
+    mode_display_label,
+)
 from evaluation.metrics import aggregate_runs
+from evaluation.research_metrics import SCORING_POLICY_VERSION
+from evaluation.scoring_evidence import evidence_hash
 from evaluation.reporter import write_json_report
+from foundation.http_client import HTTP_PHASES, HTTP_ROLES
 from llm.cache_metrics import cache_performance_summary
 from llm.provider import SUPPORTED_PROVIDERS, provider_capabilities
 from llm.runtime import LLMRuntime, RoleSettings, provider_request_summary
 from tesis.artifact_repository import config_fingerprint, new_execution_id
+from tesis.config_fields import fixture_evidence_envelope
 from tesis.runtime_events import CancellationToken, RunEvent, RuntimeEventSink, redact_secrets
 
-from evaluation.runner import run_single_engagement
+from evaluation.runner import (
+    default_source_hashes_sha256,
+    default_source_identity,
+    fixture_evidence_for_level,
+    generation_opportunity_coverage,
+    recorded_payload_policy_snapshot,
+    run_single_engagement,
+)
 
 
 _EXPERIMENT_CONDITIONS = frozenset({"linear_hybrid", "akg_guided_hybrid"})
@@ -55,7 +76,8 @@ def _llm_performance_summary_defaults() -> dict[str, Any]:
         **provider_request_summary([]),
         **cache_performance_summary([]),
         "invalid_outputs": 0,
-        "invalid_output_rate": 0.0,
+        "invalid_output_rate": None,
+        "invalid_output_rate_status": "no_calls",
         "peak_llm_concurrency": 0,
         "peak_dvwa_node_concurrency": 0,
         "by_role": {},
@@ -132,7 +154,13 @@ def _run_single_with_payload_kwargs(kwargs: dict[str, Any]) -> dict:
             "cancellation_token",
             "execution_id",
             "experiment_condition",
+            "experiment_block",
             "target_method",
+            "scoring_policy_epoch",
+            "token_price_schedule",
+            "fixture_restoration_evidence",
+            "payload_policy_snapshot",
+            "source_hashes_sha256",
             "llm_runtime",
             "llm_role_configs",
             "model_profiles",
@@ -156,8 +184,18 @@ def _run_single_with_payload_kwargs(kwargs: dict[str, Any]) -> dict:
         return _run_single_with_payload_kwargs(legacy_kwargs)
 
 
-def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
-    """Supports build matrix aggregate behavior for this module."""
+def _build_matrix_aggregate(
+    artifacts: list[dict[str, Any]],
+    *,
+    matrix_max_llm_concurrency: int | None = None,
+    payload_policy_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Aggregate matrix children without pooling incompatible coordinates."""
+    recorded_payload_policy = (
+        payload_policy_snapshot
+        if isinstance(payload_policy_snapshot, dict) and payload_policy_snapshot
+        else recorded_payload_policy_snapshot()
+    )
     derived_providers = sorted({
         str(artifact.get("config", {}).get("provider", "unknown"))
         for artifact in artifacts
@@ -172,6 +210,18 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
     })
     derived_payload_modes = sorted({
         str(artifact.get("config", {}).get("payload_mode", "static_only"))
+        for artifact in artifacts
+    })
+    derived_conditions = sorted({
+        str(artifact.get("config", {}).get("experiment_condition", "linear_hybrid"))
+        for artifact in artifacts
+    })
+    derived_blocks = sorted({
+        str(artifact.get("config", {}).get("experiment_block", "selection"))
+        for artifact in artifacts
+    })
+    derived_policy_epochs = sorted({
+        str((artifact.get("policy_epoch") or {}).get("epoch_id") or "unset")
         for artifact in artifacts
     })
     derived_repeats = max(
@@ -194,13 +244,39 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
         status_fields = terminal_status(artifact)
         status = "skipped" if artifact.get("status") == "skipped" else lifecycle_alias(status_fields["execution_status"])
         final_state = artifact.get("final_state", {})
+        condition = str(config.get("experiment_condition", "linear_hybrid"))
+        block = str(config.get("experiment_block", "selection"))
+        target = str(config.get("target_method") or "model-selected")
+        policy_epoch_data = artifact.get("policy_epoch") if isinstance(artifact.get("policy_epoch"), dict) else {}
+        fallback_fingerprint = str(artifact.get("config_fingerprint") or config_fingerprint(config))
+        policy_epoch = str(policy_epoch_data.get("epoch_id") or f"missing-epoch:{fallback_fingerprint}")
+        model_identity = str(config.get("model") or config.get("model_profile") or "unknown-model")
+        guardrail = f"{bool(config.get('evasion_enabled', False))}:{config.get('evasion_mode', 'reactive')}"
+        source_identity = str(
+            artifact.get("source_hashes_sha256")
+            or config.get("source_hashes_sha256")
+            or policy_epoch_data.get("source_hashes_sha256")
+            or f"missing-source:{fallback_fingerprint}"
+        )
+        policy_versions = "/".join(str(value or f"missing-policy:{fallback_fingerprint}") for value in (
+            config.get("payload_policy_version"),
+            config.get("experiment_policy_version"),
+            config.get("scoring_policy_version"),
+        ))
+        price_hash = evidence_hash(config.get("token_price_schedule") or {})
+        group_key = (
+            f"{surface}:{model_identity}:{level}:{payload_mode}:{condition}:{block}:{target}:"
+            f"{guardrail}:{config.get('fixture_id') or 'no-fixture'}:"
+            f"{config.get('protocol_version') or 'no-protocol'}:{policy_epoch}:"
+            f"{source_identity}:{policy_versions}:{price_hash}"
+        )
 
         provider_surface = by_provider_surface_level.setdefault(provider, {}).setdefault(
             surface,
             {},
         )
         provider_level = provider_surface.setdefault(
-            f"{level}:{payload_mode}",
+            group_key,
             {
                 "runs": 0,
                 "statuses": {"success": 0, "error": 0, "skipped": 0, "cancelled": 0},
@@ -218,7 +294,7 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
             },
         )
         provider_level_agg = by_provider_level.setdefault(provider, {}).setdefault(
-            f"{level}:{payload_mode}",
+            group_key,
             {
                 "runs": 0,
                 "statuses": {"success": 0, "error": 0, "skipped": 0, "cancelled": 0},
@@ -237,6 +313,12 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
         )
         provider_level["runs"] += 1
         provider_level_agg["runs"] += 1
+        repeat_index = config.get("repeat_index")
+        if repeat_index is not None:
+            if repeat_index not in provider_level.setdefault("repeat_indices", []):
+                provider_level["repeat_indices"].append(repeat_index)
+            if repeat_index not in provider_level_agg.setdefault("repeat_indices", []):
+                provider_level_agg["repeat_indices"].append(repeat_index)
         if status in provider_level["statuses"]:
             provider_level["statuses"][status] += 1
         if status in provider_level_agg["statuses"]:
@@ -262,6 +344,8 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
             },
         )
         provider_summary["runs"] += 1
+        if repeat_index is not None and repeat_index not in provider_summary.setdefault("repeat_indices", []):
+            provider_summary["repeat_indices"].append(repeat_index)
         if status in provider_summary["statuses"]:
             provider_summary["statuses"][status] += 1
 
@@ -307,26 +391,31 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
         for payload in provider_surfaces.values():
             for level_payload in payload.values():
                 successes = level_payload["statuses"]["success"]
-                level_payload["avg_score"] = round(level_payload["total_score"] / successes, 2) if successes else 0.0
-                level_payload["avg_iterations"] = round(mean(level_payload["iterations"]), 2) if level_payload["iterations"] else 0.0
+                level_payload["provisional_avg_score"] = round(level_payload["total_score"] / successes, 2) if successes else None
+                level_payload["provisional_avg_iterations"] = round(mean(level_payload["iterations"]), 2) if level_payload["iterations"] else None
+                level_payload["avg_score_reason"] = None if successes else "no_completed_runs"
+                level_payload["score_epoch"] = "runtime_provisional_scoring.v2"
 
     for provider_levels in by_provider_level.values():
         for level_payload in provider_levels.values():
             successes = level_payload["statuses"]["success"]
-            level_payload["avg_score"] = round(level_payload["total_score"] / successes, 2) if successes else 0.0
-            level_payload["avg_iterations"] = round(mean(level_payload["iterations"]), 2) if level_payload["iterations"] else 0.0
+            level_payload["provisional_avg_score"] = round(level_payload["total_score"] / successes, 2) if successes else None
+            level_payload["provisional_avg_iterations"] = round(mean(level_payload["iterations"]), 2) if level_payload["iterations"] else None
+            level_payload["avg_score_reason"] = None if successes else "no_completed_runs"
+            level_payload["score_epoch"] = "runtime_provisional_scoring.v2"
 
     for payload in by_provider.values():
-        successful = payload["statuses"]["success"]
-        payload["avg_score"] = round(payload["total_score"] / successful, 2) if successful else 0.0
-        payload["avg_iterations"] = round(mean(payload["iterations"]), 2) if payload["iterations"] else 0.0
-        total_calls_estimate = sum(payload["iterations"]) or 0
-        # NOTE: denominator is total iterations used (LangGraph node transitions),
-        # not LLM call count. This remains a coarse proxy until call counts are tracked.
-        payload["guardrail_per_iteration"] = (
-            round(payload["guardrail_activations"] / total_calls_estimate * 100, 2)
-            if total_calls_estimate > 0
-            else 0.0
+        # Provider-only rollups are operational counts. Provisional runtime
+        # scores are not comparable across the omitted axes and are not exposed.
+        payload.pop("total_score", None)
+        payload.pop("avg_score", None)
+        payload.pop("avg_iterations", None)
+        payload.pop("guardrail_per_iteration", None)
+        payload.pop("score_distribution", None)
+        payload["score_aggregation"] = "not_computed_pooled_coordinates"
+        payload["pooling_warning"] = (
+            "by_provider is an operational count rollup across conditions/blocks/targets/"
+            "guardrails/epochs; it must not be used for research score comparisons."
         )
 
     performance_rows = [
@@ -356,18 +445,42 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
         )
     }
     totals = aggregate_runs(artifacts)
+    # Pooled metric means across incompatible coordinates are not research
+    # evidence; the matrix totals stay an operational count rollup.
+    totals.pop("metrics", None)
+    totals["score_aggregation"] = "not_computed_pooled_coordinates"
+    totals["pooling_warning"] = (
+        "Matrix totals are operational counts. No metric, score, or mean is averaged "
+        "across conditions, blocks, targets, models, guardrails, fixtures, epochs, or graders."
+    )
     totals.update(audit_totals)
 
     return {
         "schema_version": "stage8.v1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "recorded_payload_policy": recorded_payload_policy,
         "matrix": {
             "providers": derived_providers,
             "security_levels": derived_security_levels,
             "surfaces": derived_surfaces,
             "payload_modes": derived_payload_modes,
+            "experiment_conditions": derived_conditions,
+            "experiment_blocks": derived_blocks,
+            "policy_epochs": derived_policy_epochs,
             "repeats": derived_repeats,
             "runs": len(artifacts),
+            "grouping": [
+                "provider", "model", "surface", "security_level", "payload_mode",
+                "experiment_condition", "experiment_block", "target_method",
+                "guardrail_retry_enabled", "guardrail_handling",
+                "fixture_id", "protocol_version", "policy_epoch",
+                "policy_versions", "source_hashes_sha256", "token_price_schedule_sha256",
+            ],
+            "pooling_note": (
+                "Runtime groups never pool models, conditions, blocks, payload modes, targets, "
+                "guardrail policies, fixtures, protocols, policy/source/price identities, or epochs; "
+                "research summaries use final v4 receipts."
+            ),
         },
         "totals": totals,
         "audit_totals": audit_totals,
@@ -384,8 +497,22 @@ def _build_matrix_aggregate(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
             **provider_request_summary(performance_rows),
             **cache_performance_summary(performance_rows),
             "invalid_outputs": invalid_outputs,
-            "invalid_output_rate": round(invalid_outputs / performance_calls, 4) if performance_calls else 0.0,
+            "invalid_output_rate": round(invalid_outputs / performance_calls, 4) if performance_calls else None,
+            "invalid_output_rate_status": "measured" if performance_calls else "no_calls",
+            "invalid_output_rate_numerator": invalid_outputs,
+            "invalid_output_rate_denominator": performance_calls,
             "time_by_role_ms": time_by_role,
+            "summed_role_call_duration_ms": sum(time_by_role.values()),
+            "per_run_peak_llm_concurrency": max(
+                (int((artifact.get("llm_performance_summary") or {}).get("peak_llm_concurrency", 0) or 0)
+                 for artifact in artifacts),
+                default=0,
+            ),
+            "matrix_max_llm_concurrency": matrix_max_llm_concurrency,
+            "concurrency_scope_note": (
+                "matrix_max_llm_concurrency is matrix-wide; per_run_peak_llm_concurrency is "
+                "the maximum simultaneous calls observed inside one coordinate."
+            ),
             "peak_llm_concurrency": max(
                 int((artifact.get("llm_performance_summary") or {}).get("peak_llm_concurrency", 0) or 0)
                 for artifact in artifacts
@@ -429,6 +556,7 @@ def run_provider_matrix(
     execution_id: str | None = None,
     experiment_condition: str = "linear_hybrid",
     target_method: str | None = None,
+    experiment_block: str | None = None,
     experiment_conditions: list[str] | None = None,
     method_level_matrix: bool = False,
     guardrail_configurations: list[tuple[bool, str]] | None = None,
@@ -449,6 +577,11 @@ def run_provider_matrix(
     scoring_rubric_version: str = "scoring.v3",
     scoring_profile: dict[str, Any] | None = None,
     scoring_oracles: list[dict[str, Any]] | None = None,
+    scoring_policy_epoch: dict[str, Any] | None = None,
+    token_price_schedule: dict[str, Any] | None = None,
+    fixture_restoration_evidence: dict[str, Any] | None = None,
+    payload_policy_snapshot: dict[str, Any] | None = None,
+    source_hashes_sha256: str | None = None,
     fixture_id: str | None = None,
     protocol_version: str | None = None,
     dvwa_username: str = "admin",
@@ -488,6 +621,9 @@ def run_provider_matrix(
     chosen_levels = sorted(security_levels or list(SECURITY_LEVELS))
     chosen_surfaces = sorted(surfaces or ["sqli", "access_control", "brute_force"])
     chosen_payload_modes = sorted(payload_modes or ["static_only", "hybrid"])
+    unsupported_modes = [mode for mode in chosen_payload_modes if not is_supported_payload_mode(mode)]
+    if unsupported_modes:
+        raise ValueError(f"unsupported payload modes: {', '.join(unsupported_modes)}")
     chosen_conditions = sorted({
         str(condition).strip().lower()
         for condition in (experiment_conditions or [experiment_condition])
@@ -500,6 +636,30 @@ def run_provider_matrix(
         raise ValueError("llm_max_concurrency must be between 1 and 4")
     if target_method and method_level_matrix:
         raise ValueError("target_method and method_level_matrix cannot be used together")
+    from tesis.model_config import EXPERIMENT_BLOCKS
+
+    block = str(
+        experiment_block or ("forced" if (target_method or method_level_matrix) else "selection")
+    ).strip().lower()
+    if block not in EXPERIMENT_BLOCKS:
+        raise ValueError(f"experiment_block must be one of {EXPERIMENT_BLOCKS}")
+    if block == "selection" and (target_method or method_level_matrix):
+        raise ValueError("selection-block matrices must not force a target method or expand every method")
+    if block == "forced" and not (target_method or method_level_matrix):
+        raise ValueError("forced-block matrices require target_method or method_level_matrix")
+    scoring_policy_epoch = dict(scoring_policy_epoch or {})
+    token_price_schedule = dict(token_price_schedule or {})
+    fixture_restoration_evidence = fixture_evidence_envelope(fixture_restoration_evidence)
+    from evaluation.runner import resolve_recorded_payload_policy
+
+    recorded_payload_policy = resolve_recorded_payload_policy(payload_policy_snapshot)
+    recorded_policy_sha256 = (
+        str(recorded_payload_policy.get("snapshot_sha256") or "")
+        if isinstance(recorded_payload_policy, Mapping)
+        else ""
+    ) or evidence_hash(recorded_payload_policy)
+    if source_hashes_sha256 is None:
+        source_hashes_sha256 = default_source_hashes_sha256()
     if target_method and any(target_method not in METHODS_BY_SURFACE.get(surface, []) for surface in chosen_surfaces):
         raise ValueError("target_method must be valid for every selected surface")
 
@@ -531,10 +691,14 @@ def run_provider_matrix(
                                         "security_level": level,
                                         "payload_mode": payload_mode,
                                         "experiment_condition": condition,
+                                        "experiment_block": block,
                                         "target_method": method,
                                         "guardrail_retry_enabled": guardrail_enabled,
                                         "guardrail_handling": guardrail_mode,
                                         "repeat_index": repeat_index,
+                                        "experiment_policy_version": EXPERIMENT_POLICY_VERSION,
+                                        "payload_policy_version": PAYLOAD_POLICY_VERSION,
+                                        "policy_epoch_id": scoring_policy_epoch.get("epoch_id"),
                                     })
 
     cancellation_token = cancellation_token or CancellationToken()
@@ -561,13 +725,28 @@ def run_provider_matrix(
 
     child_event_sink = _SerializedSink() if event_sink is not None else None
 
+    matrix_started_clock = perf_counter()
     emit("matrix.started", message="Experiment matrix started", data={"total": total_runs})
 
     serialized_role_configs = _serialize_role_configs(llm_role_configs)
     matrix_config = {
         "scoring_rubric_version": scoring_rubric_version,
         "scoring_profile": scoring_profile or {}, "scoring_oracles": scoring_oracles or [],
+        "scoring_policy_epoch": scoring_policy_epoch, "token_price_schedule": token_price_schedule,
+        "source_hashes_sha256": source_hashes_sha256,
+        "source_identity_version": default_source_identity().get("identity_version"),
+        "source_config_sha256": default_source_identity().get("config_sha256"),
+        "fixture_restoration_evidence": fixture_restoration_evidence,
+        "fixture_restoration_sha256": (
+            evidence_hash(fixture_restoration_evidence) if fixture_restoration_evidence else None
+        ),
         "fixture_id": fixture_id, "protocol_version": protocol_version,
+        "experiment_block": block,
+        "experiment_policy_version": EXPERIMENT_POLICY_VERSION,
+        "payload_policy_version": PAYLOAD_POLICY_VERSION,
+        "recorded_payload_policy_sha256": recorded_policy_sha256,
+        "control_policy_version": CONTROL_POLICY_VERSION,
+        "budget_policy_version": BUDGET_POLICY_VERSION,
         "scoring_mode": scoring_mode,
         "scoring_evaluator": redact_secrets(scoring_evaluator or {}),
         "target_url": target_url,
@@ -598,7 +777,11 @@ def run_provider_matrix(
     owns_runtime = llm_runtime is None
 
     def finalize_aggregate(status: str) -> tuple[list[dict], dict[str, Any]]:
-        aggregate = _build_matrix_aggregate(artifacts)
+        aggregate = _build_matrix_aggregate(
+            artifacts,
+            matrix_max_llm_concurrency=int(runtime_service.max_concurrency),
+            payload_policy_snapshot=recorded_payload_policy,
+        )
         aggregate["llm_performance_summary"].update({
             "peak_llm_concurrency": runtime_service.peak_llm_concurrency,
             "peak_dvwa_node_concurrency": runtime_service.peak_http_concurrency,
@@ -618,6 +801,15 @@ def run_provider_matrix(
             "execution_id": matrix_execution_id,
             "run_id": "matrix-" + config_fingerprint(matrix_config).split(":", 1)[-1][:12],
             "status": status,
+            "planned_runs": total_runs,
+            "observed_runs": len(artifacts),
+            "not_started_runs": max(0, total_runs - len(artifacts)),
+            "matrix_wall_time_ms": int((perf_counter() - matrix_started_clock) * 1000),
+            "score_epoch": {
+                "runtime_provisional": "scoring.v2",
+                "thesis_final": scoring_rubric_version,
+                "final_status": "pending_review",
+            },
             **matrix_fields,
             "config": matrix_config,
             "config_fingerprint": config_fingerprint(matrix_config),
@@ -657,13 +849,29 @@ def run_provider_matrix(
             if isinstance(model_config, dict)
             else None
         )
+        coordinate_evidence = fixture_evidence_for_level(
+            fixture_restoration_evidence, str(coordinate["security_level"]),
+        )
         artifact_config = {
             "scoring_rubric_version": scoring_rubric_version,
         "scoring_profile": scoring_profile or {}, "scoring_oracles": scoring_oracles or [],
+        "scoring_policy_epoch": scoring_policy_epoch, "token_price_schedule": token_price_schedule,
+        "source_hashes_sha256": source_hashes_sha256,
+        "source_identity_version": default_source_identity().get("identity_version"),
+        "source_config_sha256": default_source_identity().get("config_sha256"),
+        "fixture_restoration_evidence": coordinate_evidence,
+        "fixture_restoration_sha256": (
+            evidence_hash(coordinate_evidence) if coordinate_evidence else None
+        ),
         "fixture_id": fixture_id, "protocol_version": protocol_version,
         "scoring_mode": scoring_mode,
             "scoring_evaluator": redact_secrets(scoring_evaluator or {}),
             "target_url": target_url,
+            "experiment_block": coordinate.get("experiment_block", block),
+            "experiment_policy_version": EXPERIMENT_POLICY_VERSION,
+            "payload_policy_version": PAYLOAD_POLICY_VERSION,
+            "control_policy_version": CONTROL_POLICY_VERSION,
+            "budget_policy_version": BUDGET_POLICY_VERSION,
             **coordinate,
             "provider": provider,
             "model": model_name,
@@ -753,7 +961,56 @@ def run_provider_matrix(
             "status": status,
             **status_fields,
             "experiment_condition": coordinate["experiment_condition"],
+            "experiment_block": coordinate.get("experiment_block", block),
             "target_method": coordinate["target_method"],
+            "policy_epoch": {
+                "epoch_id": scoring_policy_epoch.get("epoch_id"),
+                "policy_version": EXPERIMENT_POLICY_VERSION,
+                "payload_policy_version": PAYLOAD_POLICY_VERSION,
+                "control_policy_version": CONTROL_POLICY_VERSION,
+                "budget_policy_version": BUDGET_POLICY_VERSION,
+                "scoring_rubric_version": scoring_rubric_version,
+                "source_hashes_sha256": source_hashes_sha256,
+                "recorded_payload_policy_sha256": recorded_policy_sha256,
+            },
+            "readiness": None,
+            "recorded_payload_policy": recorded_payload_policy,
+            "fixture_restoration_evidence": coordinate_evidence,
+            "fixture_restoration_sha256": (
+                evidence_hash(coordinate_evidence) if coordinate_evidence else None
+            ),
+            "source_hashes_sha256": source_hashes_sha256,
+            "source_identity": {
+                key: default_source_identity().get(key)
+                for key in ("identity_version", "source_hashes", "source_hashes_sha256", "config_sha256")
+            },
+            "http_request_counters": {
+                "policy_version": "http-accounting.v1", "scope": "run",
+                "total_requests": 0,
+                "by_phase": {phase: 0 for phase in HTTP_PHASES},
+                "by_role": {role: 0 for role in HTTP_ROLES},
+                "per_method": {},
+                "retries": 0, "redirect_hops": 0, "failed_requests": 0,
+                "complete": False, "capture_status": "unavailable",
+            },
+            "candidate_lifecycle": [],
+            "candidate_budget_receipts": [],
+            "model_call_requirements": [],
+            "chain_assessment": None,
+            "selection_rejections": [],
+            "control_events": [],
+            "quarantined_visits": [],
+            "payload_generation_opportunities": [],
+            "payload_validation_opportunities": [],
+            "payload_generation_opportunity_coverage": generation_opportunity_coverage({
+                "payload_generation_opportunities": [],
+                "payload_validation_opportunities": [],
+                "config": {"payload_mode": coordinate["payload_mode"]},
+            }),
+            "payload_policy_version": PAYLOAD_POLICY_VERSION,
+            "control_policy_version": CONTROL_POLICY_VERSION,
+            "budget_policy_version": BUDGET_POLICY_VERSION,
+            "experiment_policy_version": EXPERIMENT_POLICY_VERSION,
             "repeat_index": coordinate["repeat_index"],
             "provider": provider,
             "model": model_name,
@@ -761,6 +1018,16 @@ def run_provider_matrix(
             "security_level": coordinate["security_level"],
             "payload_mode": coordinate["payload_mode"],
             "llm_required": False,
+            "score_epoch": {
+                "runtime_provisional": "scoring.v2",
+                "thesis_final": scoring_rubric_version,
+                "final_status": "pending_review",
+                "scoring_policy_version": SCORING_POLICY_VERSION,
+            },
+            "scoring_policy": None,
+            "composite_score_status": "runtime_provisional_scoring.v2",
+            "thesis_scoring_status": "pending_review",
+            "payload_mode_label": mode_display_label(coordinate["payload_mode"]),
             "llm_activity": llm_activity,
             "llm_performance": [],
             "llm_performance_summary": llm_performance_summary,
@@ -828,6 +1095,10 @@ def run_provider_matrix(
         run_kwargs = {
             "scoring_rubric_version": scoring_rubric_version,
         "scoring_profile": scoring_profile or {}, "scoring_oracles": scoring_oracles or [],
+        "scoring_policy_epoch": scoring_policy_epoch, "token_price_schedule": token_price_schedule,
+        "fixture_restoration_evidence": fixture_restoration_evidence,
+        "payload_policy_snapshot": recorded_payload_policy,
+        "source_hashes_sha256": source_hashes_sha256,
         "fixture_id": fixture_id, "protocol_version": protocol_version,
         "scoring_mode": scoring_mode,
             "scoring_evaluator": scoring_evaluator or {},
@@ -856,6 +1127,7 @@ def run_provider_matrix(
             "cancellation_token": cancellation_token,
             "execution_id": run_execution_id,
             "experiment_condition": coordinate["experiment_condition"],
+            "experiment_block": coordinate["experiment_block"],
             "target_method": coordinate["target_method"],
             "llm_runtime": runtime_service,
             "llm_role_configs": llm_role_configs or {},
