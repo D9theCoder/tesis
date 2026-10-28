@@ -310,10 +310,14 @@ def _effective_llm_runtime_config(
             "max_tokens": int(resolved.get("max_tokens", default_tokens)),
             "structured_output": settings.structured_output,
             "reasoning_effort": resolved.get("reasoning_effort"),
+            "rate_limit_retries": resolved.get("rate_limit_retries"),
+            "rate_limit_retry_budget_s": resolved.get("rate_limit_retry_budget_s"),
             "model_fingerprint": model_fingerprint({"provider": provider, **resolved}),
         }
     return {
         "max_concurrency": int(context.runtime.max_concurrency),
+        "rate_limit_retries": context.runtime.rate_limit_policy.retries,
+        "rate_limit_retry_budget_s": context.runtime.rate_limit_policy.budget_s,
         "cache_scope": "run" if context.cache_enabled else "none",
         "roles": roles,
     }
@@ -802,7 +806,7 @@ def run_single_engagement(
         llm_cache_enabled = bool(llm_cache)
     if llm_cache_scope is not None:
         llm_cache_enabled = str(llm_cache_scope).strip().lower() == "run"
-    identity_runtime = llm_runtime or LLMRuntime(max_concurrency=1)
+    identity_runtime = llm_runtime or LLMRuntime(max_concurrency=1, rate_limit_config=llm_runtime_config)
     try:
         with identity_runtime.coordinate(coordinate_id=execution_id, default_provider=llm_provider,
                 default_model_config=model_config or {}, model_profiles=model_profiles or {llm_provider: model_config or {}},
@@ -978,7 +982,7 @@ def run_single_engagement(
                 f"cannot record checkpoint identity at {checkpoint_store_path} "
                 f"({type(exc).__name__}: {exc}); refusing run"
             )
-    runtime_service = llm_runtime or LLMRuntime(max_concurrency=1)
+    runtime_service = llm_runtime or LLMRuntime(max_concurrency=1, rate_limit_config=llm_runtime_config)
     owns_runtime = llm_runtime is None
     runtime_event_emitter = None
 

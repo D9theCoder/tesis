@@ -258,6 +258,7 @@ def _validate_config(config) -> dict:
         "pending_ranking_references": pending_references,
         "cache_scope": config.llm_runtime.cache_scope,
         "llm_max_concurrency": config.llm_runtime.max_concurrency,
+        "llm_runtime_config": asdict(config.llm_runtime),
     }
 
 
@@ -433,6 +434,7 @@ def _run_kwargs(config, plan: dict, layout) -> dict:
         "model_configs": {PROVIDER: model_config},
         "llm_role_configs": role_configs,
         "llm_max_concurrency": config.llm_runtime.max_concurrency,
+        "llm_runtime_config": asdict(config.llm_runtime),
         "llm_cache_enabled": config.llm_runtime.cache_enabled,
         "llm_cache_scope": config.llm_runtime.cache_scope,
         "resume": False,

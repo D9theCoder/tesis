@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from threading import BoundedSemaphore, Condition, Lock
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Any, Callable, Iterator, Mapping
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -28,6 +28,7 @@ from llm.diagnostics import (
 )
 from llm.provider import get_llm, provider_capabilities
 from llm.reasoning_evidence import reasoning_evidence
+from llm.rate_limit import RateLimitPolicy
 
 
 ORCHESTRATOR_SCHEMA_VERSION = "orchestrator.v2"
@@ -239,7 +240,8 @@ class ModelCallSpec:
 
     ``configured_max_retries`` and ``effective_max_retries`` retain explicit SDK
     retry settings; the default is zero. ``retry_owner`` is ``"sdk"`` only when
-    retries are configured. ``total_deadline_s`` is
+    retries are configured; otherwise runtime rate-limit retries own dispatch.
+    ``total_deadline_s`` is
     recorded but NOT enforced until telemetry proves attempt accounting.
     """
 
@@ -261,6 +263,8 @@ class ModelCallSpec:
     configured_max_retries: int
     effective_max_retries: int
     retry_owner: str
+    rate_limit_retries: int
+    rate_limit_retry_budget_s: float
     total_deadline_s: float | None
     coordinate_id: str
     call_id: str
@@ -288,6 +292,8 @@ class ModelCallSpec:
             "configured_max_retries": self.configured_max_retries,
             "effective_max_retries": self.effective_max_retries,
             "retry_owner": self.retry_owner,
+            "rate_limit_retries": self.rate_limit_retries,
+            "rate_limit_retry_budget_s": self.rate_limit_retry_budget_s,
             "total_deadline_s": self.total_deadline_s,
             "prompt_hash": self.prompt_hash,
             "cache_key": self.cache_key,
@@ -297,7 +303,7 @@ class ModelCallSpec:
 
 @dataclass(frozen=True, slots=True)
 class AttemptMetadata:
-    """One recorded application-level attempt (currently exactly one per call)."""
+    """One recorded application-level dispatch, including retries and fallbacks."""
 
     attempt_id: str
     status: str
@@ -348,6 +354,7 @@ def build_model_call_spec(
 ) -> "ModelCallSpec":
     """Resolve one immutable call plan with the same inputs as ``invoke``."""
     provider, config, settings = context.role_config(role, max_tokens=max_tokens)
+    retry_policy = RateLimitPolicy.from_config(config)
     fingerprint = model_fingerprint({"provider": provider, **dict(config)})
     try:
         structured_method = provider_capabilities(provider).structured_output_method
@@ -381,7 +388,9 @@ def build_model_call_spec(
         timeout_s=_numeric_setting(config.get("timeout", config.get("request_timeout"))),
         configured_max_retries=int(configured_retries),
         effective_max_retries=int(configured_retries),
-        retry_owner="sdk" if configured_retries else "none",
+        retry_owner="sdk" if configured_retries else "runtime" if retry_policy.retries else "none",
+        rate_limit_retries=retry_policy.retries,
+        rate_limit_retry_budget_s=retry_policy.budget_s,
         total_deadline_s=settings.total_deadline_s,
         coordinate_id=context.coordinate_id,
         call_id=call_id,
@@ -400,8 +409,18 @@ def build_model_call_result(
     performance: Mapping[str, Any],
     attempts: tuple["AttemptMetadata", ...] | None = None,
 ) -> "ModelCallResult":
-    """Wrap one call outcome with single-attempt metadata (retries disabled)."""
+    """Wrap a call outcome, retaining physical dispatch metadata when available."""
     perf = dict(performance)
+    if attempts is None and isinstance(perf.get("attempt_records"), list):
+        attempts = tuple(AttemptMetadata(
+            attempt_id=row["attempt_id"],
+            status=row["status"],
+            elapsed_ms=int(row.get("elapsed_ms") or 0),
+            provider_request_id=(row.get("diagnostic") or {}).get("request_id"),
+            provider_usage=row.get("provider_usage"),
+            failure_class=(row.get("diagnostic") or {}).get("failure_class"),
+            may_have_been_billed=row["status"] == "responded",
+        ) for row in perf["attempt_records"])
     if attempts is None:
         parse_status = str(perf.get("parse_status") or ("ok" if ok else "provider_error"))
         failure = perf.get("failure")
@@ -562,6 +581,8 @@ class CoordinateCallContext:
         extra = base.pop("extra", {})
         if isinstance(extra, Mapping):
             base.update(extra)
+        base.setdefault("rate_limit_retries", self.runtime.rate_limit_policy.retries)
+        base.setdefault("rate_limit_retry_budget_s", self.runtime.rate_limit_policy.budget_s)
         if settings.model_name:
             base["model_name"] = settings.model_name
         if settings.temperature is not None:
@@ -630,6 +651,11 @@ class CoordinateCallContext:
             "provider_dispatches": record.get("provider_dispatches"),
             "provider_requests": record.get("provider_requests"),
             "max_retries": record.get("max_retries"),
+            "retry_owner": record.get("retry_owner"),
+            "rate_limit_retries": record.get("rate_limit_retries"),
+            "rate_limit_retry_budget_s": record.get("rate_limit_retry_budget_s"),
+            "retry_delay_s": record.get("retry_delay_s"),
+            "retry_reason": record.get("retry_reason"),
             "prompt_hash": record.get("prompt_hash"),
             "model_fingerprint": record.get("model_fingerprint"),
             "cache_hit": bool(record.get("cache_hit")),
@@ -744,10 +770,12 @@ class _ClientPool:
 class LLMRuntime:
     """Matrix-scoped client pool and synchronization service."""
 
-    def __init__(self, *, max_concurrency: int = 1) -> None:
+    def __init__(self, *, max_concurrency: int = 1,
+                 rate_limit_config: Mapping[str, Any] | None = None) -> None:
         if not 1 <= int(max_concurrency) <= 4:
             raise ValueError("llm max concurrency must be between 1 and 4")
         self.max_concurrency = int(max_concurrency)
+        self.rate_limit_policy = RateLimitPolicy.from_config(rate_limit_config or {})
         self._llm_slots = BoundedSemaphore(self.max_concurrency)
         self._http_slots = BoundedSemaphore(1)
         self._pool_lock = Lock()
@@ -955,6 +983,7 @@ class LLMRuntime:
         evidence_context = dict(evidence_context or {})
         safe_input = redact_secrets(evidence_context.get('input', {}))
         provider, config, settings = context.role_config(role, max_tokens=max_tokens)
+        retry_policy = RateLimitPolicy.from_config(config)
         pool, fingerprint = self._pool(role, provider, config)
         model = str(config.get("model_name") or config.get("model") or "unknown")
         model_profile = str(settings.model_profile or context.default_provider or provider)
@@ -993,6 +1022,9 @@ class LLMRuntime:
             "provider_dispatches": 0,
             "provider_requests": 0,
             "max_retries": max_retries,
+            "rate_limit_retries": retry_policy.retries,
+            "rate_limit_retry_budget_s": retry_policy.budget_s,
+            "retry_owner": "sdk" if max_retries else "runtime" if retry_policy.retries else "none",
             "model_fingerprint": fingerprint,
             "cache_hit": False,
             "queue_wait_ms": 0,
@@ -1070,7 +1102,7 @@ class LLMRuntime:
         structured_output_fallback: dict[str, Any] | None = None
         attempt_records: list[dict[str, Any]] = []
 
-        def dispatch(client: Any, dispatch_mode: str) -> Any:
+        def dispatch_once(client: Any, dispatch_mode: str) -> Any:
             attempt = {"attempt_id": f"{call_id}:attempt-{len(attempt_records) + 1}",
                        "structured_output_mode": dispatch_mode, "status": "started"}
             attempt_records.append(attempt)
@@ -1091,6 +1123,34 @@ class LLMRuntime:
                 raise
             finally:
                 attempt["elapsed_ms"] = int((perf_counter() - started) * 1000)
+
+        rate_limit_retry_count = 0
+
+        def dispatch(client: Any, dispatch_mode: str) -> Any:
+            nonlocal rate_limit_retry_count
+            while True:
+                try:
+                    return dispatch_once(client, dispatch_mode)
+                except Exception as exc:
+                    attempt = attempt_records[-1]
+                    delay = retry_policy.delay(
+                        exc, status_code=attempt["diagnostic"].get("status_code"),
+                        retry_index=rate_limit_retry_count,
+                        elapsed_s=perf_counter() - acquired_at,
+                    )
+                    if delay is None:
+                        raise
+                    attempt["retry_reason"] = "rate_limit"
+                    attempt["retry_delay_s"] = delay
+                    rate_limit_retry_count += 1
+                    context.emit_activity("llm.retrying", call_id=call_id, record={
+                        **base_record, **attempt_fields(),
+                        "retry_delay_s": delay, "retry_reason": "rate_limit",
+                    })
+                    sleep(delay)
+                    if perf_counter() - acquired_at >= retry_policy.budget_s:
+                        attempt["retry_budget_exhausted"] = True
+                        raise
 
         def attempt_fields() -> dict[str, Any]:
             return {"attempts": len(attempt_records), "attempt_records": list(attempt_records),
@@ -1253,7 +1313,7 @@ class LLMRuntime:
                     endpoint=endpoint,
                     model_profile=model_profile,
                     timeout_s=timeout_s,
-                    attempts=1,
+                    attempts=len(attempt_records),
                     max_retries=max_retries,
                     elapsed_ms=elapsed_ms,
                 )

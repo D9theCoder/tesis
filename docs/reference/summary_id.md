@@ -503,6 +503,20 @@ Credentials DVWA yang dikonfigurasi berlaku pada pemilik session setiap
 koordinat, termasuk pengumpulan oracle, dan tidak dimasukkan ke graph state
 atau input checkpoint.
 
+Panggilan model melalui runtime mengulang rate limit sementara maksimal tiga
+kali secara default, dengan jeda eksponensial (10, 20, 40 detik ditambah jitter)
+dan header provider `Retry-After` / `retry-after-ms`. Retry baru tidak dimulai
+setelah jendela 120 detik; request yang sedang berjalan tetap mengikuti timeout
+request. Setiap dispatch dan jeda dicatat pada artefak. Kehabisan kredit atau
+kuota billing tidak diulang. Retry SDK eksplisit tetap menjadi pemilik retry,
+tanpa loop tambahan dari runtime. Default lintas provider diatur melalui
+`llm_runtime.rate_limit_retries` (0 menonaktifkan) dan
+`llm_runtime.rate_limit_retry_budget_s`. Override pada extra model bersifat
+opsional dan didahulukan dari default global. Lihat [retry rate limit](llm_rate_limit_retries.md).
+Kebijakan ini berlaku pada orchestrator dan payload generator melalui runtime
+bersama; evaluator yang memanggil provider langsung tetap memakai perilaku
+provider yang sudah ada.
+
 ### 3.7 Catatan Perubahan Arsitektur: Sebelum dan Sesudah
 
 Subbagian ini mencatat delta implementasi yang diperkenalkan oleh runtime yang

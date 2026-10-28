@@ -773,7 +773,9 @@ def run_provider_matrix(
         "model_profiles": redact_secrets(model_configs or {}),
     }
 
-    runtime_service = llm_runtime or LLMRuntime(max_concurrency=int(llm_max_concurrency))
+    runtime_service = llm_runtime or LLMRuntime(
+        max_concurrency=int(llm_max_concurrency), rate_limit_config=llm_runtime_config,
+    )
     owns_runtime = llm_runtime is None
 
     def finalize_aggregate(status: str) -> tuple[list[dict], dict[str, Any]]:

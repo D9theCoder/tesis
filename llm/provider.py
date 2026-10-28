@@ -116,6 +116,12 @@ def get_llm(provider_name: str, **kwargs):
 
     Args:
         provider_name: Value used by this function."""
+    from llm.rate_limit import RateLimitPolicy
+
+    RateLimitPolicy.from_config(kwargs)
+    # These are runtime controls, never provider request parameters.
+    kwargs.pop("rate_limit_retries", None)
+    kwargs.pop("rate_limit_retry_budget_s", None)
     normalized_provider = provider_name.strip().lower()
     # Saved responses belong only to CoordinateCallContext. A global LangChain
     # cache would otherwise reuse answers between independent experiment runs.

@@ -795,6 +795,7 @@ def _run_block(plan: dict[str, Any], block: str, *, output_epoch: Path) -> dict[
             guardrail_configurations=[(first["guardrail_retry_enabled"], first["guardrail_handling"])],
             run_output_dir_factory=child_directory,
             llm_max_concurrency=config.llm_max_concurrency,
+            llm_runtime_config=asdict(config.llm_runtime),
             llm_cache_enabled=config.llm_cache,
             llm_role_configs={role: asdict(settings) for role, settings in config.llm_runtime.roles.items()},
             scoring_mode=config.scoring_mode,

@@ -335,6 +335,22 @@ requested config path before loading and includes evaluator reasoning in its
 offline forwarding check; service availability still requires explicit live
 probes.
 
+The shared runtime retries transient HTTP 429 / structured rate-limit errors
+up to three times, using exponential backoff (10, 20, 40 seconds plus jitter)
+and provider retry headers. A 120-second window bounds when another retry may
+start; request timeouts still bound individual dispatches. Global settings
+`llm_runtime.rate_limit_retries` and `llm_runtime.rate_limit_retry_budget_s`
+configure this policy across providers. Optional model extras take precedence.
+The loader validates these controls, and headless, single, matrix, research-plan,
+and runtime Doctor paths forward them into the runtime. Resolved settings remain
+in coordinate artifacts and model fingerprints.
+Each retry adds an `attempt_records` entry and preserves the preceding error,
+`retry_reason`, and `retry_delay_s`; `llm.retrying` emits the wait. Billing/quota
+exhaustion is terminal. SDK retry overrides retain sole ownership, preserving
+unknown physical-request counts. These controls never enter provider requests.
+The runtime retains its concurrency slot during backoff. Direct evaluator
+calls do not pass through this policy. See [rate-limit retries](llm_rate_limit_retries.md).
+
 Provider prompt caching and saved-response caching have separate accounting.
 `llm_performance_summary.cache_hit_rate` is the token-weighted provider
 cache-read input / total input ratio, with null for incomplete usage or unknown

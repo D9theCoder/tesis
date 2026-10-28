@@ -479,6 +479,19 @@ counts and uncertainty separate in run and matrix summaries. Configured DVWA
 credentials are scoped to each coordinate's session owner, including oracle
 collection, and are never added to graph state or checkpoint inputs.
 
+Runtime model calls retry transient rate limits up to three times by default,
+with exponential delays (10, 20, 40 seconds plus jitter) and provider
+`Retry-After` / `retry-after-ms` headers. No retry starts after the 120-second
+retry window; an in-flight request retains its configured request timeout.
+Each dispatch and delay remains in the artifacts. Billing/quota exhaustion is
+not retried. Explicit SDK retries retain ownership without an additional runtime
+retry loop. Provider-agnostic `llm_runtime.rate_limit_retries` (0 disables)
+and `llm_runtime.rate_limit_retry_budget_s` configure the defaults for every
+provider. Optional model extras override these global settings. See
+[rate-limit retries](llm_rate_limit_retries.md). This policy covers the shared
+runtime's orchestrator and payload-generator calls; direct evaluator calls
+retain their existing provider behavior.
+
 ### 3.7 Architecture Change Log: Before and After
 
 This subsection records the implementation delta introduced by the accelerated

@@ -90,6 +90,7 @@ guardrail_retry:
   mode: reactive
 
   # Maximum clarification attempts per guard-railed prompt.
+  # Provider rate limits use llm_runtime.rate_limit_retries below.
   max_retries: 3
 
   # Number of consecutive clean (non-refused) responses before suppressing
@@ -135,6 +136,17 @@ payload_modes:
 llm_runtime:
   max_concurrency: 2
   cache_scope: run
+
+  # Provider-agnostic rate-limit handling for both runtime roles (HTTP 429).
+  # Separate from guardrail_retry: resend the same request after waiting.
+  # Additional attempts after the first request; 0 disables runtime retries.
+  rate_limit_retries: 3
+  # Retry window in seconds; no new retry starts after this window.
+  # Waits are 10/20/40 seconds + jitter, or longer if the provider asks.
+  # An in-flight request still follows its configured request timeout.
+  rate_limit_retry_budget_s: 120
+  # SDK retries default to 0. A positive model extra.max_retries takes
+  # ownership instead, disabling this runtime retry loop for that model.
 
   # Optional run-time override (does not need to be written here):
   # python -m tesis run --headless --mode single --model-profile opencode__gpt-5-6-luna_e33230db3dd7
@@ -195,11 +207,6 @@ api_providers:
   #     - your-other-model-id
   #   timeout: 60
 
-# -----------------------------------------------------------------------------
-# Additional model profiles: ChatGPT sign-in and legacy adapters
-# -----------------------------------------------------------------------------
-# API-key provider/model pairs above expand into models automatically.
-# Keep standalone profiles here for Gemini or openai_codex_auth.
   river-ai:
     display_name: river-ai
     base_url: https://api.river.ai/v1
@@ -209,6 +216,11 @@ api_providers:
       - zai-org/GLM-5.3-Flash
       - deepseek-ai/DeepSeek-V4.1-Flash-1017
     api_key: ${TESIS_PROVIDER_RIVER_AI_8DE913F7_API_KEY}
+# -----------------------------------------------------------------------------
+# Additional model profiles: ChatGPT sign-in and legacy adapters
+# -----------------------------------------------------------------------------
+# API-key provider/model pairs above expand into models automatically.
+# Keep standalone profiles here for Gemini or openai_codex_auth.
 models: {}
   # To opt in, replace {} with the mapping below, sign in with
   # `.venv/bin/python -m tesis auth login --account default`, then select an

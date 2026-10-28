@@ -78,6 +78,8 @@ class LLMRuntimeConfig:
     max_concurrency: int = 1
     cache_scope: str = "none"
     roles: dict[str, RoleConfig] = field(default_factory=dict)
+    rate_limit_retries: int = 3
+    rate_limit_retry_budget_s: float = 120.0
 
     @property
     def cache_enabled(self) -> bool:

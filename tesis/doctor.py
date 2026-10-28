@@ -669,7 +669,7 @@ def _model_probe_checks(config: EngagementConfig) -> list[DoctorCheck]:
     for role_name, settings in role_settings.items():
         settings["model_profile"] = _profile_for_role(config, role_name)[0]
     default_model = profiles.get(config.model_profile or config.provider, {})
-    runtime = LLMRuntime(max_concurrency=1)
+    runtime = LLMRuntime(max_concurrency=1, rate_limit_config=dataclasses.asdict(config.llm_runtime))
     checks: list[DoctorCheck] = []
     schema = {
         "title": "TesisDoctorProbe",

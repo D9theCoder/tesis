@@ -789,6 +789,8 @@ def _parse_llm_runtime_config(
         max_concurrency=max_concurrency,
         cache_scope=cache_scope,
         roles=roles,
+        rate_limit_retries=runtime.get("rate_limit_retries", 3),
+        rate_limit_retry_budget_s=runtime.get("rate_limit_retry_budget_s", 120.0),
     )
     _validate_llm_runtime_config(config)
     return config
@@ -801,6 +803,16 @@ def _validate_surface(surface: str) -> None:
 
 def _validate_llm_runtime_config(config: LLMRuntimeConfig) -> None:
     """Validate concurrency, cache, and role decoding controls."""
+
+    from llm.rate_limit import RateLimitPolicy
+
+    try:
+        RateLimitPolicy.from_config({
+            "rate_limit_retries": config.rate_limit_retries,
+            "rate_limit_retry_budget_s": config.rate_limit_retry_budget_s,
+        })
+    except ValueError as exc:
+        raise ConfigError(f"llm_runtime.{exc}") from exc
 
     if not 1 <= config.max_concurrency <= 4:
         raise ConfigError("llm_runtime.max_concurrency must be between 1 and 4")

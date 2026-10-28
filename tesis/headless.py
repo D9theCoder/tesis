@@ -323,6 +323,7 @@ def run_resolved(
     # direct and headless execution have identical lifecycle semantics.
     runtime_service = LLMRuntime(
         max_concurrency=config.llm_runtime.max_concurrency if config.matrix else 1,
+        rate_limit_config=dataclasses.asdict(config.llm_runtime),
     )
     common["llm_runtime"] = runtime_service
     artifacts: list[dict[str, Any]] = []

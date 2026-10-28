@@ -69,10 +69,13 @@ def response_error(response: httpx.Response, operation: str) -> SIWCRequestError
         body = {"detail": "Non-JSON error response"}
     error = body.get("error") if isinstance(body, dict) else None
     code = error.get("code") or error.get("type") if isinstance(error, dict) else error
-    return SIWCRequestError(operation, status_code=response.status_code, code=code,
+    exc = SIWCRequestError(operation, status_code=response.status_code, code=code,
         param=error.get("param") if isinstance(error, dict) else None,
         request_id=response.headers.get("x-request-id") or response.headers.get("openai-request-id"),
         body=body)
+    exc.retry_headers = {key: response.headers[key] for key in ("retry-after", "retry-after-ms")
+                         if key in response.headers}
+    return exc
 
 
 @dataclass(repr=False)
