@@ -11,7 +11,7 @@
 > **Catatan arsip (2026-10-29).** Dokumen ini dipindahkan ke `docs/completed/`
 > atas arahan pemilik. Lokasi arsip tidak menyatakan bahwa prasyarat eksperimen
 > atau pemeriksaan visual DOCX telah selesai. Keputusan terbaru untuk dokumen
-> gabungan tercatat pada [handoff rekonsiliasi](../active/HANDOFF_COMBINED_THESIS_DOCX_RECONCILIATION_2026-10-29.md),
+> gabungan tercatat pada [handoff rekonsiliasi](HANDOFF_COMBINED_THESIS_DOCX_RECONCILIATION_2026-10-29.md),
 > termasuk pemilihan metode oleh model pada eksperimen utama, target manual
 > untuk diagnostik, dan tidak memasukkan Template ke DOCX gabungan.
 

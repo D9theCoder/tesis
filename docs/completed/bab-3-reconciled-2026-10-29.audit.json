@@ -1,0 +1,49 @@
+{
+  "status": "document reconciliation; visual layout remains unverified",
+  "output_sha256": "8f4a6087d643e995c18af98a50dd1704ad5f30cb4dc0d907fee0438cbe6c5177",
+  "inputs": {
+    "baseline": "8cc45f07b6e1952cb3a72218a43284ac209968d7c95e306d386c514e66dcfcb7",
+    "chapter": "3bcccfeab704332e31068094b4732cb50aace2006de360827f5a1131e9dd5fad",
+    "metrics": "75dd6e877c504e2d7ce37ad8f74df54d0e198463f32b08b8111b00400c50e7d1"
+  },
+  "evidence_root": "results/validation/docx-reconciliation-20261029/",
+  "evidence": {
+    "source_inventory": "source-to-output-inventory.json",
+    "baseline_comparison_and_deletions": "redline-comparison.json",
+    "redline_coverage": "redline-verification.json",
+    "chapter_replacements_and_appendix_removals": "draft-changes.json",
+    "package_integrity": "package-check.json",
+    "source_to_output_block_map": "chapter-block-map.json",
+    "rebuild_script": "build-draft.py"
+  },
+  "decisions": {
+    "structural_base": "Chapter 3 derivative, with metrics detail integrated into existing rubric and artifact sections; duplicate appendix removed with dispositions and text retained in the inventory/change log.",
+    "linear_and_akg": "Original condition table and conceptual explanation retained; both primary conditions use hybrid payloads.",
+    "main_study": "Model selects the method; manual target_method is diagnostic. Count equation changed from number of methods to number of surfaces, with the variable list and definition reconciled. Three repetitions retained.",
+    "template": "No llm_template procedure, Template provenance or Template ablation added.",
+    "evaluator": "Human and AI assessments and receipts are separate. The older DeepSeek setup is described as historical, with limits, isolation and same-model limitation; later epochs use their own frozen configuration.",
+    "metrics_and_null": "Evidence-dependent availability, per-metric denominators, pending and not_applicable, false versus unknown prerequisite, verified negatives, partial proof, full-precision score and no reweighting retained.",
+    "rubric": "Seven five-level four-column tables and 35 examples; only the grade-one method criterion and its example changed relative to the derivative to distinguish known-false from unknown.",
+    "retry_and_chain": "Recovered provider rate-limit retry distinguished from malformed-output repair; unsupported admin-session-to-SQL edge described as conceptual."
+  },
+  "format_and_package": {
+    "baseline_comparison": "Token-level comparison against original baseline; matched text uses baseline run properties, added/revised text is FF0000. Two changed mathematical subscripts are red. The comparison is mechanically verifiable and records deleted text; inherited source colors are not the authority.",
+    "redline_coverage": {
+      "matched_characters": 62434,
+      "new_characters": 22199,
+      "paragraphs": 541
+    },
+    "changed_passages": 119,
+    "unmatched_comparison_paragraphs": 0,
+    "objects": "Four drawings unchanged, no embedded OLE objects, 21 math objects retained; only count formula and corresponding symbol changed.",
+    "table_geometry": "Existing chapter geometry retained from the derivative; two status tables copied from metrics input at three 3000-twip columns each. Their 9000-twip grid fits the 9026-twip text area by nominal geometry; visual layout remains unverified.",
+    "caption_formatting": "Six rubric captions retain the derivative keepNext paragraph property; original run formatting is preserved for matched words.",
+    "other_parts": "All ZIP parts except word/document.xml retain identical bytes, including styles, numbering, media, relationships and section settings. Existing relationship targets resolve; added status tables have no relationships."
+  },
+  "limitations": {
+    "visual": "Not performed: no local LibreOffice/soffice renderer was found. Table readability, captions, equations and pagination are not visually accepted for this hash.",
+    "research": "Examples are illustrative and offline or historical evidence does not establish current live research acceptance.",
+    "tests": "No tests, E2E, provider/model calls, DVWA traffic or experiments were run.",
+    "inventory": "Generated validation evidence is local under results/ and is gitignored; retain it with the audit if the DOCX is moved or shared."
+  }
+}

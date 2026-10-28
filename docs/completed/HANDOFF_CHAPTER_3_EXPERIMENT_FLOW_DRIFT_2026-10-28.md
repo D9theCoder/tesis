@@ -10,7 +10,7 @@ revision is [Chapter 3 revised](CHAPTER_3_REVISED_2026-10-28.md); the source
 `docs/completed/` after implementation; section 8 retains the passing checks
 and outstanding scientific prerequisites. This lifecycle closure does not
 establish full research acceptance. The source DOCX remains in `docs/active/`
-for the [planned document reconciliation](../active/HANDOFF_COMBINED_THESIS_DOCX_RECONCILIATION_2026-10-29.md).
+for the [document reconciliation](HANDOFF_COMBINED_THESIS_DOCX_RECONCILIATION_2026-10-29.md).
 No live experiment result is claimed here.
 
 The original sections below record the investigation and proposed remediation.

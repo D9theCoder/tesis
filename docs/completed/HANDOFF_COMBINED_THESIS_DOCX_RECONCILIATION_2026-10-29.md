@@ -1,10 +1,30 @@
 # Handoff: combine the thesis rubric and metrics DOCX documents
 
-Status: **planned; DOCX implementation has not started**.
+Status: **document reconciliation complete; visual layout review remains unverified**.
 
 This handoff records the owner's reconciliation decisions from the conversation
-on 2026-10-29. The current task creates this plan only. It does not modify the
-DOCX inputs, runtime, configuration, scoring rules, or experiment artifacts.
+on 2026-10-29. Its original preparation created the plan only. Implementation
+must preserve the DOCX inputs, runtime, configuration, scoring rules, and
+experiment artifacts.
+
+### Implementation result, 2026-10-29
+
+- The [combined document](bab-3-reconciled-2026-10-29.docx) has SHA-256
+  `8f4a6087d643e995c18af98a50dd1704ad5f30cb4dc0d907fee0438cbe6c5177`.
+  Its [audit](bab-3-reconciled-2026-10-29.audit.json) identifies the inputs,
+  reconciliation decisions, package checks and exact limitations.
+- The local source-to-output inventory, baseline redline and deletion record,
+  change log and hash-bound checks are under
+  `results/validation/docx-reconciliation-20261029/`. All three source hashes
+  remain unchanged. The original condition table, seven five-level rubrics,
+  35 examples, four drawings and 21 mathematical objects were checked. Only
+  the method-count equation and its definition were revised among the math
+  objects. Existing package parts outside `word/document.xml` are unchanged.
+- Visual review was not performed: no local LibreOffice/soffice renderer was
+  found. Table readability, captions, equations and pagination remain
+  **unverified** for this output hash. No tests, experiments, model calls or
+  DVWA requests were run. This document work does not establish live research
+  acceptance.
 
 ## 1. Deliverable and source boundaries
 
@@ -18,10 +38,10 @@ identifying changed text and preserving the original research intent. It is
 **not a third merge input** and must not be overwritten. Preserve both merge
 inputs as well; write a new derived file.
 
-Planned outputs when implementation is authorized:
+Completed outputs:
 
-- `docs/active/bab-3-reconciled-2026-10-29.docx`.
-- `docs/active/bab-3-reconciled-2026-10-29.audit.json`.
+- [Combined DOCX](bab-3-reconciled-2026-10-29.docx).
+- [Audit](bab-3-reconciled-2026-10-29.audit.json).
 - A source-to-output reconciliation inventory and document comparison evidence
   under `results/validation/docx-reconciliation-20261029/`.
 

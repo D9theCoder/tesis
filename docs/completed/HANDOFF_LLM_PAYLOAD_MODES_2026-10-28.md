@@ -10,7 +10,7 @@ research protocol for the implemented work. The owner moved this handoff to
 acceptance evidence listed in the companion's implementation-verification
 section remain open; this archival does not establish full research acceptance.
 The DOCX remains in `docs/active/` for the
-[planned document reconciliation](../active/HANDOFF_COMBINED_THESIS_DOCX_RECONCILIATION_2026-10-29.md),
+[document reconciliation](HANDOFF_COMBINED_THESIS_DOCX_RECONCILIATION_2026-10-29.md),
 which records the owner's later choices for the consolidated thesis narrative.
 Section 4 is approved implementation policy.
 
