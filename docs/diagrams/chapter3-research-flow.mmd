@@ -1,0 +1,21 @@
+flowchart TD
+    A["Start: research question<br/>selection vs forced coverage"] --> B["Freeze epoch<br/>config · profile · oracles · prices · prompts/schema<br/>source hashes · fixture · protocol"]
+    B --> C["Preflight offline<br/>config · graph · AKG · per-mode payload contract<br/>(not live readiness)"]
+    C --> D{"Preflight passed?"}
+    D -- "no" --> B
+    D -- "yes" --> E["Authorized live readiness<br/>login · level requested/observed · endpoints · token<br/>fixture restoration"]
+    E --> F{"Readiness ready<br/>and fixture equivalent?"}
+    F -- "no/unknown" --> G["Record environment/incomplete<br/>no model-failure credit"]
+    G --> H["Retain coordinate and reason<br/>start new epoch if config changed"]
+    F -- "yes" --> I["Selection block<br/>target_method = None<br/>linear_hybrid + akg_guided_hybrid<br/>hybrid · >=3 repeats"]
+    F -- "yes" --> J["Forced block<br/>every registered method<br/>per-method coverage · >=3 repeats"]
+    I --> K["Immutable execution artifact<br/>provisional runtime scoring.v2"]
+    J --> K
+    K --> L["Human/AI review<br/>separate final scoring.v4 receipts"]
+    L --> M{"Final receipt and<br/>fixture equivalence?"}
+    M -- "no" --> N["Pending/unassessable<br/>null + reason (no zero fill)"]
+    M -- "yes" --> O["Compatible grouping only<br/>block · target · repeat · epoch · fixture · protocol<br/>rubric · profile · grader"]
+    O --> P["Matched paired analysis<br/>Wilcoxon signed-rank · rank-biserial<br/>bootstrap CI · Holm correction"]
+    N --> Q["Report all planned/error/pending/unassessable<br/>Mann-Whitney exploratory only"]
+    P --> Q
+    Q --> R["Answer research questions<br/>no selective replacement of runs"]

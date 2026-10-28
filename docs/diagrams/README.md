@@ -38,6 +38,21 @@ The compiled graph uses `MemorySaver` as its checkpointer. Verification is calle
 inside each static method-agent handler through `foundation/verifier.py`; there
 is no verifier node in the LangGraph topology.
 
+## Chapter 3 revised figures (2026-10-28)
+
+- Figure 3.1 variables/outcomes: [chapter3-figure-3-1.mmd](./chapter3-figure-3-1.mmd)
+- Figure 3.2 study flow: [chapter3-research-flow.mmd](./chapter3-research-flow.mmd)
+- Figure 3.3 runtime/control flow: [chapter3-runtime-flow.mmd](./chapter3-runtime-flow.mmd)
+- Figure 3.4 conceptual AKG edges vs runtime adapters: [chapter3-figure-3-4.mmd](./chapter3-figure-3-4.mmd)
+
+These Mermaid sources accompany the [derived Chapter 3 revision](../active/CHAPTER_3_REVISED_2026-10-28.md).
+They distinguish the selection block (`target_method=None`) from forced-method
+coverage, keep preflight/freeze/execution/review/analysis as separate stages,
+and separate runtime exploit candidates from detection, candidate-verification,
+and independent-oracle controls. A conceptual AKG edge without a runtime adapter
+remains infeasible; it is not drawn as a completed chain. Rendered SVGs may be
+added later; the sources are the normative figure revision.
+
 One implementation detail matters when comparing this diagram with LangGraph's
 built-in `app.get_graph().draw_mermaid()`: the routing functions return `str` and
 the conditional-edge registrations do not supply a `path_map`. The built-in

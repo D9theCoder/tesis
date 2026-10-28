@@ -1,0 +1,12 @@
+{
+  "examples": 35,
+  "math_preserved": true,
+  "other_package_parts_preserved": true,
+  "output": "docs/active/bab-3-v4-rubric-tables-2026-10-28.docx",
+  "output_sha256": "3bcccfeab704332e31068094b4732cb50aace2006de360827f5a1131e9dd5fad",
+  "rubric_version": "scoring.v4",
+  "source": "bab 3 only.docx",
+  "source_sha256": "8cc45f07b6e1952cb3a72218a43284ac209968d7c95e306d386c514e66dcfcb7",
+  "tables": 7,
+  "visual_layout": "unverified"
+}

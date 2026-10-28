@@ -1,0 +1,17 @@
+flowchart TD
+    IV["Independent variables<br/>condition · model/provider · DVWA level<br/>surface · method (forced block) · payload mode (ablation)"]
+    IV --> MQ["Method selection quality<br/>Smethod · first choice · adaptation"]
+    IV --> PQ["Payload quality<br/>validity · execution · LLM attribution"]
+    MQ --> EO["Exploitation outcome<br/>Sexploit · verified positives/negatives"]
+    PQ --> EO
+    EO --> CH["Chain outcome<br/>Schain · edge trace · causal use"]
+    IV --> OUT["LLM output and guardrails<br/>Soutput · invalid/refusal/provider/fallback"]
+    OUT --> CONS["Consistency and efficiency<br/>repeats · usage/pricing · runtime"]
+    MQ --> CONS
+    PQ --> CONS
+    EO --> CONS
+    CH --> CONS
+    CTRL["Controls<br/>fixture · readiness · detection · verification<br/>candidate budget · policy epoch"] -.-> MQ
+    CTRL -.-> PQ
+    CTRL -.-> EO
+    CTRL -.-> CH

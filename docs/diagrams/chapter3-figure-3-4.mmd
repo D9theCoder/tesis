@@ -1,0 +1,31 @@
+flowchart LR
+    UNAUTH["unauthenticated"] --> SQ["sqli"]
+    UNAUTH --> AC["access_control"]
+    UNAUTH --> BF["brute_force"]
+    SQ --> SU["sqli_union"]
+    SQ --> SE["sqli_error"]
+    SQ --> SB["sqli_boolean_blind"]
+    SQ --> ST["sqli_time_blind"]
+    AC --> IDOR["ac_idor"]
+    AC --> VERT["ac_vertical_escalation"]
+    AC --> FB["ac_force_browse"]
+    BF --> BD["bf_dictionary"]
+    BF --> BS["bf_spray"]
+    SU --> SC["sqli_confirmed"]
+    SE --> SC
+    SB --> SC
+    ST --> SC
+    IDOR --> ACC["access_control_confirmed"]
+    VERT --> ACC
+    FB --> ACC
+    BD --> BFC["brute_force_confirmed"]
+    BS --> BFC
+    SC --> CRED["credentials_extracted<br/>(conceptual outcome)"]
+    ACC --> SESS["authenticated_session"]
+    BFC --> ASESS["admin_session_obtained"]
+    CRED -->|"adapter available only when bound source material exists"| BD
+    SESS -->|"adapter available"| IDOR
+    SESS -->|"adapter available"| FB
+    ASESS -. infeasible: no runtime destination adapter .-> SU
+    classDef infeasible stroke-dasharray: 5 5,stroke:#b00020,color:#b00020;
+    class ASESS,SU infeasible;

@@ -1,0 +1,22 @@
+flowchart LR
+    R["Recon<br/>append-only observation facts<br/>derived precondition_status true/false/unknown"] --> RS["Readiness gate<br/>requested vs observed<br/>fail closed"]
+    RS --> O["Orchestrator selection<br/>decision_origin: model/forced/fallback/route<br/>candidate_set_source: canonical/viable"]
+    O --> PG["Payload candidate builder<br/>payload-mode contract"]
+    PG --> PV["Validator<br/>one per-visit exploit/bypass budget<br/>candidate lifecycle facts"]
+    PV --> Q{"Usable exploit/bypass<br/>candidate in own visit?"}
+    Q -- "no" --> STOP["Stop/incomplete/infeasible<br/>no static substitute in strict modes"]
+    Q -- "yes" --> A["Static method agent<br/>own visit-bound exploit request"]
+    A --> V["Verifier + independent controls<br/>candidate-linked evidence"]
+    V --> CR["Chaining router<br/>chain_assessment: available/executed/<br/>confirmed/infeasible"]
+    CR -->|"continue"| O
+    CR -->|"stop"| S["Scorer<br/>provisional runtime composites"]
+    STOP --> S
+    S --> AR["Immutable artifact<br/>policy epoch · readiness · lifecycle · receipts"]
+    AR --> REV["Separate Human/AI final v4 review"]
+    subgraph CONTROLS["Separate bounded control lanes (never exploit queue)"]
+        C1["Detection / precondition controls"]
+        C2["Candidate verification controls"]
+        C3["Independent fixture / oracle controls"]
+    end
+    CONTROLS -.->|"evidence only; no model credit"| V
+    CONTROLS -.->|"quarantine on unexpected success/state change"| RS
