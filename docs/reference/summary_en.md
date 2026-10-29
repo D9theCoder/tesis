@@ -1,5 +1,16 @@
 # Technical Thesis Summary
 
+> **Thesis-report scope (owner decision, 2026-10-29):** The primary thesis
+> compares Linear and AKG-guided workflows using hybrid payloads and
+> model-selected methods, assessed by a human evaluator. Template mode and the
+> AI scorer are experimental software capabilities and must not be described
+> as thesis methods or findings. AI-generated scores may be used only as
+> clearly provisional drafting placeholders until a human review is complete.
+> Their execution, rubric, and evidence must match the thesis study. The
+> implementation details below document software capabilities, not additions
+> to the thesis protocol. This decision supersedes earlier two-block and
+> human/AI/both proposals for the thesis.
+
 ## 1. Fixed Scope
 
 | Aspect          | Decision                                                                                               |
@@ -1057,9 +1068,9 @@ Srun = 0.20 Smethod + 0.20 Spayload + 0.30 Sexploit + 0.10 Schain + 0.20 Soutput
 | `Schain`   |   0.10 | Chain outcome                             |
 | `Soutput`  |   0.20 | LLM output quality and guardrail handling |
 
-New thesis launches use [scoring.v4](thesis_scoring.md), with an
-experiment-wide `human|ai|both` selection. Both graders use one immutable
-execution and the same signal/proof gate, producing separate receipts.
+The thesis uses human assessment under [scoring.v4](thesis_scoring.md).
+The software also supports experimental AI review and separate receipts; that
+capability is outside the thesis methodology.
 `Spayload_final` is the arithmetic mean over distinct executed validated
 exploit/bypass candidates in the final selected/last executed method. Rejected,
 probe and unexecuted candidates are excluded; empty denominators, missing proof
@@ -1762,13 +1773,13 @@ Projection coverage separates planned, represented, completed, failed, interrupt
 
 ## 17. Chapter 3 experiment flow revision (2026-10-28)
 
-The revised methodology is [the derived Chapter 3 document](../completed/CHAPTER_3_REVISED_2026-10-28.md). It is a derived revision; the source `bab 3 only.docx` is preserved unchanged. Rubric Tables 3.5–3.11 follow [`thesis_scoring.md`](thesis_scoring.md#report-rubric-and-illustrative-conditions), not the older DOCX wording.
+The thesis methodology is the [reconciled Chapter 3](../docx/bab-3-reconciled-2026-10-29.docx), subject to the human-evaluator decision above. The earlier [derived Markdown](../completed/CHAPTER_3_REVISED_2026-10-28.md) contains superseded research-design proposals. Rubric Tables 3.5–3.11 follow [`thesis_scoring.md`](thesis_scoring.md#report-rubric-and-illustrative-conditions).
 
-The primary study now declares two blocks. The **selection** block uses `target_method=None` and keeps `linear_hybrid` and `akg_guided_hybrid` with `hybrid`; only `decision_origin=model` choices can support method-selection claims. The **forced** block assigns each registered method and measures per-method agent/payload coverage; it cannot establish model selection ability. Each coordinate requires at least three repeats, and the plan freezes config, ranking profile, oracles, token-price schedule, policy/prompt/schema versions, source hashes, fixture and protocol before execution. Any change starts a new epoch; historical runs and the frozen 108-coordinate `scoring_v4_matrix.py` are never rewritten.
+The primary study uses `target_method=None` with `linear_hybrid` and `akg_guided_hybrid`, both using `hybrid`; only model-origin choices support model-selection claims. Forced methods are diagnostic and are not a second thesis research block. Each coordinate has three repeats; the research configuration, reference profile, evidence sources, fixture, and protocol are frozen before execution. Historical runs and the separate frozen scoring matrix are not relabeled as the main study.
 
 Payload modes are `static_only`, `hybrid`, strict `llm_mutation_only`, and `llm_template` (TUI label **Template**). Strict modes never revive a static or chain-derived candidate after refusal, malformed output, provider failure, rejection, exhausted budget, revisit, or stale queue. Template uses a neutral registry and a closed-allowlist prompt/schema; it never receives working seeds, solved credentials, raw control results, or prior successes. Detection controls remain separate, versioned, bounded, and outside the exploit queue and model-success denominator. Candidate execution requires the candidate's own visit-bound exploit/bypass request; a matching probe string is not execution evidence.
 
-Readiness is fail-closed and records requested versus observed level, authentication, endpoints/token, fixture/protocol, session, reasons and restoration evidence. Endpoint discovery is not precondition proof; observations are append-only scoped facts with derived `true`/`false`/`unknown` status. Offline `--dry-run` validates config, graph, and per-mode payload contracts only; it does not prove DVWA or provider readiness. Runtime composites remain provisional `scoring.v2`; final `scoring.v4` receipts are separate Human/AI reviews. Research summaries group only compatible final receipts and report planned, failed, pending, unassessable, fallback, and unmatched counts without zero-filling. Matched Linear/AKG pairs require fixture-equivalence evidence; Wilcoxon signed-rank, rank-biserial effect size, bootstrap uncertainty, and Holm correction are predeclared, while Mann–Whitney remains exploratory.
+Readiness is fail-closed and records requested versus observed level, authentication, endpoints/token, fixture/protocol, session, reasons and restoration evidence. Endpoint discovery is not precondition proof; observations are append-only scoped facts with derived `true`/`false`/`unknown` status. Offline `--dry-run` validates config, graph, and per-mode payload contracts only; it does not prove DVWA or provider readiness. Runtime composites remain provisional `scoring.v2`; final `scoring.v4` receipts are separate Human/AI reviews. Research summaries group only compatible final receipts and report planned, failed, pending, unassessable, fallback, and unmatched counts without zero-filling. Matched Linear/AKG comparisons require fixture-equivalence evidence. Chapter 3 currently specifies Mann–Whitney as exploratory; any different analysis must be reconciled with the thesis methodology before reporting.
 
 ### Correction note (2026-10-28): status, counters, identity, aggregation
 
@@ -1776,4 +1787,4 @@ Readiness/quarantine outcomes are environment/control outcomes, not model failur
 
 Artifacts carry real source identity from the shared `chapter3-source-identity.v1` helper (`source_identity`, `source_hashes_sha256`, config hash); a missing identity is labelled provisional/unmatched, not a shared `unset` epoch. `http_request_counters` records actual contained-client physical requests, retries, redirect hops, failures, and phase/role/method totals; evidence-row counts are named separately and never relabelled as requests. `payload_generation_opportunities` is generation-only (role and receipt stage filtered) and deduplicated by `opportunity_id`; validation receipts are separate, and `payload_generation_opportunity_coverage` reports `generation_receipt_missing` instead of a measured zero when only validation rows exist. Oracle/verification HTTP is tagged `phase="verification"` with `candidate_verification`/`independent_control` roles in the same run-scoped counter. Fixture restoration/equivalence is an authorized operator attestation (`fixture-restoration.v1`) threaded from config/runner through recon/readiness; one raw document, a list, or a `by_level` envelope is accepted, plan provenance stays outside the document, absent or mismatched evidence stays `unknown` and pairs remain unmatched. No reset endpoint is invoked automatically.
 
-Runtime aggregates group by provider, model, surface, level, mode, condition, block, target, guardrail policy, fixture, protocol, policy versions, source hash, and frozen price-schedule hash. Empty groups expose null provisional means with reasons, and provider-only rollups plus overall totals are operational counts only with no pooled metric means. Artifacts persist a hash-pinned `recorded_payload_policy` (payload policy version plus the template-registry snapshot) for historical replay; a missing snapshot is unavailable and is never revalidated against today's mutable registry. A quarantined visit is terminal for the current run; authorized restoration evidence is required for any continuation and is never applied automatically. Final research scores still come exclusively from compatible final v4 receipts. The derived DOCX replaces only Tables 3.5–3.11; the revised Markdown is the full methodology and the DOCX visual layout remains unverified.
+Runtime aggregates group by provider, model, surface, level, mode, condition, block, target, guardrail policy, fixture, protocol, policy versions, source hash, and frozen price-schedule hash. Empty groups expose null provisional means with reasons, and provider-only rollups plus overall totals are operational counts only with no pooled metric means. Artifacts persist a hash-pinned `recorded_payload_policy` (payload policy version plus the template-registry snapshot) for historical replay; a missing snapshot is unavailable and is never revalidated against today's mutable registry. A quarantined visit is terminal for the current run; authorized restoration evidence is required for any continuation and is never applied automatically. Final research scores still come exclusively from compatible final v4 receipts. The current thesis DOCX and its hash-bound validation evidence take precedence over the earlier revision proposal.

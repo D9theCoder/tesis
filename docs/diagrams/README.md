@@ -40,6 +40,12 @@ is no verifier node in the LangGraph topology.
 
 ## Chapter 3 revised figures (2026-10-28)
 
+The thesis DOCX's current Figure 3.4 uses the readable-label
+[thesis figure source](./chapter3-figure-3-4-thesis.mmd). Its dashed links
+indicate potential steps that require the stated prerequisites and evidence;
+the administrator-session-to-UNION link is conceptual. The earlier diagrams
+below document the 2026-10-28 proposal and are not the current thesis protocol.
+
 - Figure 3.1 variables/outcomes: [chapter3-figure-3-1.mmd](./chapter3-figure-3-1.mmd)
 - Figure 3.2 study flow: [chapter3-research-flow.mmd](./chapter3-research-flow.mmd)
 - Figure 3.3 runtime/control flow: [chapter3-runtime-flow.mmd](./chapter3-runtime-flow.mmd)
@@ -50,8 +56,8 @@ They distinguish the selection block (`target_method=None`) from forced-method
 coverage, keep preflight/freeze/execution/review/analysis as separate stages,
 and separate runtime exploit candidates from detection, candidate-verification,
 and independent-oracle controls. A conceptual AKG edge without a runtime adapter
-remains infeasible; it is not drawn as a completed chain. Rendered SVGs may be
-added later; the sources are the normative figure revision.
+remains infeasible; it is not drawn as a completed chain. These sources describe
+the earlier proposal; the thesis figure source above is used in the current DOCX.
 
 One implementation detail matters when comparing this diagram with LangGraph's
 built-in `app.get_graph().draw_mermaid()`: the routing functions return `str` and

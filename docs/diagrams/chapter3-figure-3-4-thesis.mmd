@@ -1,0 +1,36 @@
+%% Diagram konseptual AKG, dengan istilah yang dapat dibaca dalam laporan.
+flowchart TD
+  START(["Awal pengujian"])
+  SQL["SQL Injection"]
+  AC["Access Control"]
+  BF["Brute Force"]
+  SM["UNION-based<br/>berbasis kesalahan<br/>boolean blind<br/>time-based blind"]
+  AM["IDOR<br/>peningkatan hak akses<br/>force browsing"]
+  BM["dictionary attack<br/>password spraying"]
+  SC["Konfirmasi metode<br/>SQL Injection"]
+  ACV["Konfirmasi metode<br/>Access Control"]
+  BC["Konfirmasi metode<br/>Brute Force"]
+  DATA["Akses data"]
+  CRED["Kredensial diperoleh"]
+  USER["Sesi pengguna"]
+  ADMIN["Sesi administrator<br/>(peningkatan hak terkonfirmasi)"]
+  NEXT["Contoh hubungan chain yang memerlukan bukti<br/>Kredensial → dictionary attack<br/>Sesi pengguna → IDOR atau force browsing<br/>Sesi administrator → UNION-based (konseptual)"]
+  START --> SQL & AC & BF
+  SQL --> SM --> SC --> DATA
+  AC --> AM --> ACV --> DATA
+  BF --> BM --> BC --> CRED
+  BC -.-> USER
+  AM -.-> ADMIN
+  CRED -.-> NEXT
+  USER -.-> NEXT
+  ADMIN -.-> NEXT
+  classDef entry fill:#f3f4f6,stroke:#777,color:#cc0000;
+  classDef surface fill:#eaf2ff,stroke:#5385c5,color:#cc0000;
+  classDef method fill:#fff4dd,stroke:#b8861b,color:#cc0000;
+  classDef confirm fill:#e9f5e8,stroke:#68945d,color:#cc0000;
+  classDef outcome fill:#fff0e1,stroke:#cf8731,color:#cc0000;
+  class START entry;
+  class SQL,AC,BF surface;
+  class SM,AM,BM method;
+  class SC,ACV,BC confirm;
+  class DATA,CRED,USER,ADMIN,NEXT outcome;

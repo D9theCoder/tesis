@@ -1,5 +1,16 @@
 # Technical Thesis Summary
 
+> **Ruang lingkup laporan tesis (keputusan pemilik, 2026-10-29):** Penelitian
+> utama membandingkan alur Linear dan AKG-guided dengan payload hybrid serta
+> metode yang dipilih model. Penilaian tesis dilakukan oleh manusia. Mode
+> Template dan penilai AI merupakan kemampuan perangkat lunak eksperimental
+> dan tidak dimasukkan sebagai metode maupun hasil tesis. Skor AI hanya boleh
+> mengisi tabel draf sebagai nilai sementara sampai penilaian manusia selesai,
+> dengan eksekusi, rubrik, dan bukti yang sesuai penelitian. Penjelasan
+> implementasi di bawah ini mendokumentasikan kemampuan perangkat lunak, bukan
+> perluasan protokol tesis. Keputusan ini menggantikan usulan terdahulu tentang
+> dua blok dan pilihan penilai manusia/AI/keduanya untuk tesis.
+
 
 ## 1. Fixed Scope
 
@@ -1085,10 +1096,9 @@ Srun = 0.20 Smethod + 0.20 Spayload + 0.30 Sexploit + 0.10 Schain + 0.20 Soutput
 | `Schain` | 0.10 | Hasil chain |
 | `Soutput` | 0.20 | Kualitas output LLM dan guardrail handling |
 
-Peluncuran penilaian tesis baru memakai [scoring.v4](thesis_scoring.md), dengan pilihan
-`human|ai|both` yang dibekukan untuk seluruh eksperimen. Kedua evaluator memakai
-satu artifact eksekusi yang tidak diubah dan signal/proof gate yang sama,
-tetapi menghasilkan receipt terpisah. `Spayload_final` adalah rata-rata
+Penilaian tesis dilakukan oleh manusia dengan [scoring.v4](thesis_scoring.md).
+Perangkat lunak juga mendukung penilaian AI eksperimental dengan receipt
+terpisah; kemampuan ini berada di luar metodologi tesis. `Spayload_final` adalah rata-rata
 aritmetika kandidat exploit/bypass valid yang telah dieksekusi, dihitung sekali
 per candidate_id dalam metode terakhir yang dipilih/dieksekusi. Kandidat ditolak,
 probe dan kandidat belum dieksekusi dikecualikan. Denominator kosong, bukti hilang
@@ -1807,13 +1817,13 @@ Cakupan projection membedakan rencana, artefak yang tersedia, completed, failed,
 
 ## Revisi alur eksperimen Bab III (2026-10-28)
 
-Metodologi yang direvisi adalah [dokumen Bab III turunan](../completed/CHAPTER_3_REVISED_2026-10-28.md). Dokumen tersebut adalah revisi turunan; `bab 3 only.docx` dipertahankan tanpa perubahan. Tabel rubrik 3.5–3.11 mengikuti [`thesis_scoring.md`](thesis_scoring.md#report-rubric-and-illustrative-conditions), bukan redaksi DOCX lama.
+Metodologi tesis mengacu pada [Bab III hasil rekonsiliasi](../docx/bab-3-reconciled-2026-10-29.docx) dengan keputusan penilai manusia di atas. [Markdown turunan terdahulu](../completed/CHAPTER_3_REVISED_2026-10-28.md) memuat usulan desain yang sudah digantikan. Tabel rubrik 3.5–3.11 mengikuti [`thesis_scoring.md`](thesis_scoring.md#report-rubric-and-illustrative-conditions).
 
-Studi utama kini menyatakan dua blok. Blok **selection** memakai `target_method=None` dan mempertahankan `linear_hybrid` serta `akg_guided_hybrid` dengan `hybrid`; hanya keputusan `decision_origin=model` yang mendukung klaim pemilihan metode. Blok **forced** menetapkan setiap metode terdaftar dan mengukur cakupan agen/payload per metode; blok ini tidak membuktikan kemampuan memilih model. Setiap koordinat memerlukan minimal tiga repetisi, dan rencana membekukan config, profil ranking, oracle, jadwal harga token, versi policy/prompt/schema, hash sumber, fixture, dan protokol sebelum eksekusi. Perubahan apa pun memulai epoch baru; run historis dan `scoring_v4_matrix.py` 108-koordinat yang beku tidak pernah ditulis ulang.
+Studi utama memakai `target_method=None`, kondisi `linear_hybrid` dan `akg_guided_hybrid`, serta payload `hybrid`; hanya keputusan yang berasal dari model mendukung klaim kemampuan memilih metode. Penetapan metode secara manual digunakan untuk diagnostik, bukan blok penelitian kedua dalam tesis. Setiap koordinat memiliki tiga repetisi; konfigurasi, profil acuan, sumber bukti, fixture, dan protokol dibekukan sebelum eksekusi. Run historis dan matriks penilaian terpisah tidak dilabeli ulang sebagai studi utama.
 
 Mode payload adalah `static_only`, `hybrid`, `llm_mutation_only` ketat, dan `llm_template` (label TUI **Template**). Mode ketat tidak pernah menghidupkan kandidat statis atau chain-derived setelah penolakan, output tidak valid, kegagalan provider, kandidat ditolak, anggaran habis, revisit, atau antrean basi. Template memakai registry netral dan prompt/schema allowlist tertutup; tidak menerima seed kerja, kredensial terpecahkan, hasil kontrol mentah, atau keberhasilan sebelumnya. Kontrol deteksi tetap terpisah, berversi, dibatasi, dan di luar antrean exploit serta denominator keberhasilan model. Eksekusi kandidat memerlukan request exploit/bypass milik kunjungan itu sendiri; string probe yang sama bukan bukti eksekusi.
 
-Readiness bersifat gagal-tertutup dan mencatat level diminta versus teramati, autentikasi, endpoint/token, fixture/protokol, sesi, alasan, dan bukti restorasi. Penemuan endpoint bukan bukti prasyarat; observasi disimpan sebagai fakta append-only dengan status turunan `true`/`false`/`unknown`. `--dry-run` offline hanya memvalidasi config, graph, dan kontrak payload per mode; ia tidak membuktikan kesiapan DVWA atau provider. Komposit runtime tetap provisional `scoring.v2`; receipt final `scoring.v4` merupakan review Human/AI terpisah. Ringkasan riset hanya menggabungkan receipt final yang kompatibel dan melaporkan jumlah planned, failed, pending, unassessable, fallback, dan unmatched tanpa mengisi nol. Pasangan Linear/AKG yang matched memerlukan bukti kesetaraan fixture; Wilcoxon signed-rank, effect size rank-biserial, ketidakpastian bootstrap, dan koreksi Holm dideklarasikan lebih dahulu, sedangkan Mann–Whitney tetap eksploratif.
+Readiness bersifat gagal-tertutup dan mencatat level diminta versus teramati, autentikasi, endpoint/token, fixture/protokol, sesi, alasan, dan bukti restorasi. Penemuan endpoint bukan bukti prasyarat; observasi disimpan sebagai fakta append-only dengan status turunan `true`/`false`/`unknown`. `--dry-run` offline hanya memvalidasi config, graph, dan kontrak payload per mode; ia tidak membuktikan kesiapan DVWA atau provider. Komposit runtime tetap provisional `scoring.v2`; receipt final `scoring.v4` merupakan review Human/AI terpisah. Ringkasan riset hanya menggabungkan receipt final yang kompatibel dan melaporkan jumlah planned, failed, pending, unassessable, fallback, dan unmatched tanpa mengisi nol. Perbandingan Linear/AKG yang berpasangan memerlukan bukti kesetaraan fixture. Bab III saat ini menetapkan Mann–Whitney sebagai analisis eksploratif; perubahan metode analisis harus diselaraskan dengan metodologi tesis sebelum dilaporkan.
 
 ### Catatan koreksi (2026-10-28): status, counter, identitas, agregasi
 
@@ -1821,4 +1831,4 @@ Hasil readiness/quarantine adalah hasil lingkungan/kontrol, bukan kegagalan mode
 
 Artefak memuat identitas sumber nyata dari helper bersama `chapter3-source-identity.v1` (`source_identity`, `source_hashes_sha256`, hash config); identitas yang hilang dilabeli provisional/unmatched, bukan bucket `unset` bersama. `http_request_counters` mencatat request fisik, retry, redirect hop, kegagalan, dan total per fase/peran/metode dari contained client; jumlah baris evidence dinamai terpisah dan tidak pernah disebut request. `payload_generation_opportunities` hanya berisi tahap generation, difilter berdasarkan role dan receipt stage, serta dideduplikasi berdasarkan `opportunity_id`; receipt validasi terpisah, dan `payload_generation_opportunity_coverage` melaporkan `generation_receipt_missing` alih-alih nol terukur bila hanya ada baris validasi. Request oracle/verifikasi ditandai `phase="verification"` dengan peran `candidate_verification`/`independent_control` dalam counter run yang sama. Restorasi/kesetaraan fixture adalah attestation operator terotorisasi (`fixture-restoration.v1`) yang diteruskan dari config/runner melalui recon/readiness; satu dokumen mentah, daftar, atau envelope `by_level` diterima, provenance plan berada di luar dokumen, dan evidence yang tidak ada/tidak cocok tetap `unknown` dan pasangan tetap unmatched. Tidak ada endpoint reset yang dipanggil otomatis.
 
-Agregat runtime dikelompokkan berdasarkan provider, model, surface, level, mode, kondisi, blok, target, kebijakan guardrail, fixture, protokol, versi policy, hash sumber, dan hash jadwal harga beku. Grup kosong menampilkan mean provisional null beserta alasan; rollup provider-only dan total agregat hanyalah hitungan operasional tanpa mean metrik gabungan. Artefak menyimpan `recorded_payload_policy` ber-hash (versi policy payload plus snapshot registry template dan manifest prompt) untuk replay historis; snapshot yang hilang berarti unavailable dan tidak pernah divalidasi ulang terhadap registry mutable saat ini. Kunjungan yang dikarantina bersifat terminal untuk run berjalan; bukti restorasi terotorisasi diperlukan untuk kelanjutan dan tidak pernah diterapkan otomatis. Skor riset final tetap hanya berasal dari receipt v4 final yang kompatibel. DOCX turunan hanya mengganti Tabel 3.5–3.11; Markdown revisi adalah metodologi lengkap dan tata letak visual DOCX belum diverifikasi.
+Agregat runtime dikelompokkan berdasarkan provider, model, surface, level, mode, kondisi, blok, target, kebijakan guardrail, fixture, protokol, versi policy, hash sumber, dan hash jadwal harga beku. Grup kosong menampilkan mean provisional null beserta alasan; rollup provider-only dan total agregat hanyalah hitungan operasional tanpa mean metrik gabungan. Artefak menyimpan `recorded_payload_policy` ber-hash (versi policy payload plus snapshot registry template dan manifest prompt) untuk replay historis; snapshot yang hilang berarti unavailable dan tidak pernah divalidasi ulang terhadap registry mutable saat ini. Kunjungan yang dikarantina bersifat terminal untuk run berjalan; bukti restorasi terotorisasi diperlukan untuk kelanjutan dan tidak pernah diterapkan otomatis. Skor riset final tetap hanya berasal dari receipt v4 final yang kompatibel. DOCX tesis terkini dan bukti validasi yang terikat pada hash mengungguli usulan revisi terdahulu.

@@ -1,5 +1,14 @@
 # Thesis scoring v4
 
+> **Thesis-report scope (owner decision, 2026-10-29):** Thesis assessment uses
+> a human evaluator. The AI scorer and Template payload mode are experimental
+> software capabilities; neither is a thesis method or result. An AI score may
+> appear as a clearly provisional table placeholder during drafting, provided
+> its run, rubric, and evidence match the thesis study. It does not constitute
+> human approval and cannot be presented as a final human assessment. The
+> implementation and receipt descriptions below preserve the software's actual
+> human/AI capabilities and do not expand the thesis protocol.
+
 New CLI/TUI launches select `scoring_rubric_version: scoring.v4`. Saved artifacts
 without that field retain the `scoring.v3` rules; runtime decisions and composites
 remain explicitly provisional `scoring.v2`. Review never rewrites execution
