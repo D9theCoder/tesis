@@ -444,10 +444,11 @@ def structured_contamination_reason(
     the session/security level, mutate rate-limit state outside the declared
     rate control, expose sensitive content, or prove the assessed exploit.
 
-    A session identity that changes *between* this control's own requests is a
-    control-driven change.  A single request is never compared against the
-    pre-login fingerprint of the session that opened the visit: that difference
-    is the visit's own login, not contamination.
+    Session fingerprints are compared with the post-login, pre-control baseline
+    captured by the probe, so even a change on the first request is detected.
+    The visit's pre-login fingerprint belongs to authentication evidence and is
+    not a control baseline. Legacy events without a baseline still reveal
+    changes between requests.
     """
     import re
 
@@ -465,6 +466,11 @@ def structured_contamination_reason(
         if module_name not in {"bf_dictionary", "bf_spray"} and payload.get("status_code") == 429:
             return "unexpected_rate_limit_change"
 
+    for payload in probes:
+        baseline = payload.get("pre_control_session_fingerprint")
+        current = payload.get("session_fingerprint")
+        if baseline and baseline != current:
+            return "unexpected_session_change"
     if len({str(payload.get("session_fingerprint") or "") for payload in probes} - {""}) > 1:
         return "unexpected_session_change"
     if len({str(payload.get("principal_id") or "") for payload in probes} - {""}) > 1:

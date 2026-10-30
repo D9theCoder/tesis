@@ -160,8 +160,7 @@ def _config_epoch_hash(path: Path) -> str:
         document = load_yaml_config(path)
     except Exception:
         return _file_hash(path)
-    if not isinstance(document, dict) or not any(
-            key in document for key in CONFIG_EPOCH_EXCLUDED_KEYS):
+    if not isinstance(document, dict):
         return _file_hash(path)
     projected = {key: value for key, value in document.items()
                  if key not in CONFIG_EPOCH_EXCLUDED_KEYS}

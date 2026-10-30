@@ -75,6 +75,7 @@ def _probe_preconditions(
     tried: list[str] = []
     events: list[dict] = []
     verifier = Verifier()
+    pre_control_fingerprint = session_fingerprint(session)
 
     sent_any = False
     responses: list[tuple[str, str, int]] = []  # (payload, text, length)
@@ -94,6 +95,7 @@ def _probe_preconditions(
                 control_id=getattr(payload, "control_id", None)))
             events[-1]["payload"].update(permission_evidence_fields(session, session._principal_id,
                 session._initial_session_fingerprint, object_id=user_object_id(test_id)))
+            events[-1]["payload"]["pre_control_session_fingerprint"] = pre_control_fingerprint
             if resp.status_code == 200:
                 responses.append((test_id, resp.text, len(resp.text)))
                 records_visible = bool(_parse_records(resp.text))

@@ -1214,6 +1214,7 @@ def _materialize_request_evidence(
             "principal_id": payload_copy.get("principal_id"),
             "session_fingerprint": payload_copy.get("session_fingerprint"),
             "initial_session_fingerprint": payload_copy.get("initial_session_fingerprint"),
+            "pre_control_session_fingerprint": payload_copy.get("pre_control_session_fingerprint"),
             "consumed_source_evidence_id": payload_copy.get("consumed_source_evidence_id"),
         }
         payload_copy["session_descriptor"] = {
@@ -1266,7 +1267,8 @@ def _materialize_request_evidence(
         for key in ("verified_grade", "verification_reason", "control_payload", "credentials", "consumed_source_evidence_id",
                     "response_sha256", "response_excerpt", "response_truncated", "oracle_ref",
                     "baseline_response_sha256", "baseline_control_id", "baseline_elapsed_ms", "delay_ms",
-                    "principal_id", "object_id", "action", "session_fingerprint", "initial_session_fingerprint"):
+                    "principal_id", "object_id", "action", "session_fingerprint", "initial_session_fingerprint",
+                    "pre_control_session_fingerprint"):
             if key in payload_copy:
                 evidence[key] = payload_copy[key]
         if payload_copy.get("candidate_id"):

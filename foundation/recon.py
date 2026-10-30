@@ -677,7 +677,7 @@ def _health_check_handler(
     endpoint_url: str,
     containment_events: list[dict] | None,
 ) -> bool:
-    """Confirm a declared handler responds; a containment failure rejects it."""
+    """Confirm a declared handler responds at its own path within scope."""
     try:
         result = session.http.get(endpoint_url)
     except ContainmentError as exc:
@@ -692,6 +692,11 @@ def _health_check_handler(
     if status >= 400:
         logger.info("recon: declared handler %s answered %s; not registered", endpoint_url, status)
         return False
+    final_url = getattr(result, "url", None)
+    if isinstance(final_url, str) and final_url:
+        if urlparse(final_url).path != urlparse(endpoint_url).path:
+            logger.info("recon: declared handler %s redirected to %s; not registered", endpoint_url, final_url)
+            return False
     return True
 
 

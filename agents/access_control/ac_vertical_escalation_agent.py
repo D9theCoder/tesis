@@ -65,6 +65,7 @@ def _probe_preconditions(
     tried: list[str] = []
     events: list[dict] = []
     verifier = Verifier()
+    pre_control_fingerprint = session_fingerprint(session)
 
     # Check if the authbypass endpoint responds differently for different users
     # In DVWA, userId=1 is admin. Accessing it as a regular user tests vertical escalation.
@@ -83,6 +84,7 @@ def _probe_preconditions(
                 control_id=getattr(payload, "control_id", None)))
             events[-1]["payload"].update(permission_evidence_fields(session, session._principal_id,
                 session._initial_session_fingerprint, object_id=user_object_id(test_id)))
+            events[-1]["payload"]["pre_control_session_fingerprint"] = pre_control_fingerprint
             if resp.status_code == 200:
                 try:
                     decoded = json.loads(resp.text)

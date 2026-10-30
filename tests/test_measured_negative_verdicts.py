@@ -22,6 +22,7 @@ def _control(control_id: str, **overrides) -> dict:
     row = {
         "control_id": control_id,
         "control_class": "detection",
+        "status": "sent",
         "establishes_exploit": False,
         "signal_detected": False,
         "policy_version": "detection-controls.v2",
@@ -30,10 +31,42 @@ def _control(control_id: str, **overrides) -> dict:
     return row
 
 
-def _ac_state(**overrides) -> dict:
+#: Probe facts are recorded under the account that ran the probe, which is not
+#: the run principal: an access-control probe executes as the low-privilege user.
+_PROBE_SCOPE = {
+    "fixture_id": "dvwa-test-fixture",
+    "protocol_version": "ranking-session-acceptance.v1",
+    "security_level": "high",
+    "principal_id": "gordonb",
+    "session_fingerprint": "probe-fingerprint",
+    "session_scope": "session",
+}
+
+
+def _fact(key: str, method: str, value: bool | None = True, **scope) -> dict:
+    return {
+        "key": key,
+        "value": value,
+        "method": method,
+        "scope": {**_PROBE_SCOPE, **scope},
+        "evidence_refs": [f"control:control:{method}:high:method_probe:0"],
+    }
+
+
+_AC_FACTS = [
+    _fact("object_ids_enumerable", "ac_idor", False),
+    _fact("role_based_access_present", "ac_vertical_escalation", False),
+    _fact("force_browse_endpoints_visible", "ac_force_browse", False),
+]
+
+
+def _ac_state(facts: list[dict] | None = None, **overrides) -> dict:
     state = {
         "current_surface": "access_control",
         "security_level": "high",
+        "fixture_id": "dvwa-test-fixture",
+        "protocol_version": "ranking-session-acceptance.v1",
+        "readiness": {"session": {"principal": "admin", "fingerprint": "run-fingerprint"}},
         "attempted_agents": [],
         "viable_methods": [],
         "precondition_status": {
@@ -46,6 +79,7 @@ def _ac_state(**overrides) -> dict:
             "response_diff_detectable": "unknown",
             "union_select_possible": "unknown",
         },
+        "observation_facts": _AC_FACTS if facts is None else facts,
         "control_events": [
             _control("control:ac_idor:high:method_probe:0"),
             _control("control:ac_idor:high:method_probe:1"),
@@ -88,8 +122,8 @@ def test_viable_method_blocks_the_negative_claim():
 
 
 def test_unknown_precondition_stays_undecided():
-    observed = dict(_ac_state()["precondition_status"], object_ids_enumerable="unknown")
-    state = _ac_state(precondition_status=observed)
+    # No fact for the method: the flattened view claiming "false" cannot decide it.
+    state = _ac_state(facts=[fact for fact in _AC_FACTS if fact["method"] != "ac_idor"])
     verdicts = measured_negative_verdicts(state)
     assert "ac_idor" not in verdicts
     summary = measured_negative_summary(state, verdicts)
@@ -132,6 +166,56 @@ def test_another_surface_is_not_judged_by_access_control_evidence():
     state = _ac_state(current_surface="brute_force")
     assert measured_negative_verdicts(state) == {}
     assert measured_negative_summary(state)["complete"] is False
+
+
+def test_another_methods_measurement_cannot_complete_a_shared_key():
+    # Both brute-force methods declare ``no_rate_limit``. Only the spray probe
+    # measured it, so the dictionary method stays undecided even though the
+    # flattened view carries the measurement.
+    state = {
+        "current_surface": "brute_force",
+        "security_level": "medium",
+        "fixture_id": "dvwa-test-fixture",
+        "protocol_version": "ranking-session-acceptance.v1",
+        "readiness": {"session": {"principal": "admin", "fingerprint": "run-fingerprint"}},
+        "attempted_agents": [],
+        "viable_methods": [],
+        "precondition_status": {"no_rate_limit": "false"},
+        "observation_facts": [_fact("no_rate_limit", "bf_spray", False, security_level="medium")],
+        "control_events": [
+            _control("control:bf_spray:medium:method_probe:0"),
+            _control("control:bf_dictionary:medium:method_probe:0"),
+        ],
+        "probe_controls": {},
+    }
+    verdicts = measured_negative_verdicts(state)
+    assert set(verdicts) == {"bf_spray"}
+    assert measured_negative_summary(state, verdicts)["complete"] is False
+
+
+def test_probe_evidence_from_another_security_level_is_not_used():
+    state = _ac_state(facts=[{**fact, "scope": {**_PROBE_SCOPE, "security_level": "medium"}}
+                             for fact in _AC_FACTS])
+    assert measured_negative_verdicts(state) == {}
+
+
+def test_state_without_append_only_facts_falls_back_to_the_flat_view():
+    state = _ac_state()
+    state.pop("observation_facts")
+    assert set(measured_negative_verdicts(state)) == {
+        "ac_idor", "ac_vertical_escalation", "ac_force_browse"}
+    # A shared key carries no method attribution, so it stays unknown.
+    shared = {
+        **state,
+        "current_surface": "brute_force",
+        "security_level": "medium",
+        "precondition_status": {"no_rate_limit": "false"},
+        "control_events": [
+            _control("control:bf_spray:medium:method_probe:0"),
+            _control("control:bf_dictionary:medium:method_probe:0"),
+        ],
+    }
+    assert measured_negative_verdicts(shared) == {}
 
 
 def test_run_scope_composite_counts_a_chain_visit():

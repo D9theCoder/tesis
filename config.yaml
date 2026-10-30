@@ -294,31 +294,29 @@ protocol_version: ranking-session-acceptance.v1
 fixture_restoration_evidence:
   by_level:
     high:
-      authorized_protocol: docs/active/HANDOFF_MAIN_STUDY_V4_REMEDIATION_2026-10-30.md §4.3 fixture integrity;
-        read-only inventory and bounded detection controls only
+      authorized_protocol: docs/active/HANDOFF_MAIN_STUDY_V4_REMEDIATION_2026-10-30.md §4.3 fixture integrity; read-only inventory
+        and bounded detection controls only
       details:
-        assembled_by: remediation agent, under the repository owner's explicit instruction of 2026-10-30
-          to produce the D8 attestation
+        assembled_by: remediation agent, under the repository owner's explicit instruction of 2026-10-30 to produce the D8
+          attestation
         assembly_inputs:
         - results/validation/2026-10-30-dvwa-module-census.json
         - results/validation/2026-10-30-fixture-no-mutation-check.json
-        equivalence_semantics: no fixture mutation occurred, so post-probe state is identical to the state
-          the census recorded; equivalence is asserted between pre-probe and post-probe state of the same
-          instance, not between separate instances
-        fixture_state_covers: &id001
+        equivalence_semantics: no fixture mutation occurred, so post-probe state is identical to the state the census recorded;
+          equivalence is asserted between pre-probe and post-probe state of the same instance, not between separate instances
+        fixture_state_covers:
           levels:
           - low
           - medium
           - high
           observed_response_digest: 470d7d43edd3aac5b213a68b9c6ce6a607c82507ac150b3a0d53d8c747b4dcec
           response_rows: 114
-        mutation_policy: read-only inventory, bounded detection controls, and the in-scope attack methods
-          the study itself executes
+        mutation_policy: read-only inventory, bounded detection controls, and the in-scope attack methods the study itself
+          executes
         no_mutation_reference: results/validation/2026-10-30-fixture-no-mutation-check.json
         no_mutation_verified: true
-        policy_vocabulary_gap: fixture-restoration.v1 offers 'reset' and 'isolated_equivalent' only; neither
-          names 'verified not mutated'. 'isolated_equivalent' is used because the run's inputs are byte-identical
-          to the attested capture
+        policy_vocabulary_gap: fixture-restoration.v1 offers 'reset' and 'isolated_equivalent' only; neither names 'verified
+          not mutated'. 'isolated_equivalent' is used because the run's inputs are byte-identical to the attested capture
         reset_needed: false
         reset_performed: false
       epoch_id: dvwa-fixture-epoch-2026-10-30
@@ -328,36 +326,40 @@ fixture_restoration_evidence:
       - results/validation/2026-10-30-fixture-no-mutation-check.json
       - results/validation/2026-10-30-ac-high-capability-check.json
       - results/validation/remediation-2026-10-30/acceptance-summary.json
-      evidence_sha256: 48aaaf83f2da3a203d22e77476c050b0e21361ff28ff423acaa411ba467cdb82
+      evidence_sha256: 62337938841cb5017df77d63c7975a31e68095be6acb8c25ad5426aeab6f46c0
       fixture_id: dvwa-source-fee264766667580e5352
       kind: operator_attestation
-      observed_at: '2026-10-30T10:38:53.998327+00:00'
+      observed_at: '2026-10-30T11:56:04.522862+00:00'
       operator: kevin <kevinpurnomo06@gmail.com>
       policy_version: fixture-restoration.v1
       protocol_version: ranking-session-acceptance.v1
       restoration: isolated_equivalent
       security_level: high
-      source_hashes_sha256: 1160191400a50d8e39cabd4ede767c594685f16f759b60877b4601ea9de0c4fe
+      source_hashes_sha256: b4909695d032310cc38a52afee81732321c3d8c6dd6a729951fd806781cc04aa
     low:
-      authorized_protocol: docs/active/HANDOFF_MAIN_STUDY_V4_REMEDIATION_2026-10-30.md §4.3 fixture integrity;
-        read-only inventory and bounded detection controls only
+      authorized_protocol: docs/active/HANDOFF_MAIN_STUDY_V4_REMEDIATION_2026-10-30.md §4.3 fixture integrity; read-only inventory
+        and bounded detection controls only
       details:
-        assembled_by: remediation agent, under the repository owner's explicit instruction of 2026-10-30
-          to produce the D8 attestation
+        assembled_by: remediation agent, under the repository owner's explicit instruction of 2026-10-30 to produce the D8
+          attestation
         assembly_inputs:
         - results/validation/2026-10-30-dvwa-module-census.json
         - results/validation/2026-10-30-fixture-no-mutation-check.json
-        equivalence_semantics: no fixture mutation occurred, so post-probe state is identical to the state
-          the census recorded; equivalence is asserted between pre-probe and post-probe state of the same
-          instance, not between separate instances
-        fixture_state_covers: *id001
-        mutation_policy: read-only inventory, bounded detection controls, and the in-scope attack methods
-          the study itself executes
+        equivalence_semantics: no fixture mutation occurred, so post-probe state is identical to the state the census recorded;
+          equivalence is asserted between pre-probe and post-probe state of the same instance, not between separate instances
+        fixture_state_covers:
+          levels:
+          - low
+          - medium
+          - high
+          observed_response_digest: 470d7d43edd3aac5b213a68b9c6ce6a607c82507ac150b3a0d53d8c747b4dcec
+          response_rows: 114
+        mutation_policy: read-only inventory, bounded detection controls, and the in-scope attack methods the study itself
+          executes
         no_mutation_reference: results/validation/2026-10-30-fixture-no-mutation-check.json
         no_mutation_verified: true
-        policy_vocabulary_gap: fixture-restoration.v1 offers 'reset' and 'isolated_equivalent' only; neither
-          names 'verified not mutated'. 'isolated_equivalent' is used because the run's inputs are byte-identical
-          to the attested capture
+        policy_vocabulary_gap: fixture-restoration.v1 offers 'reset' and 'isolated_equivalent' only; neither names 'verified
+          not mutated'. 'isolated_equivalent' is used because the run's inputs are byte-identical to the attested capture
         reset_needed: false
         reset_performed: false
       epoch_id: dvwa-fixture-epoch-2026-10-30
@@ -367,36 +369,40 @@ fixture_restoration_evidence:
       - results/validation/2026-10-30-fixture-no-mutation-check.json
       - results/validation/2026-10-30-ac-high-capability-check.json
       - results/validation/remediation-2026-10-30/acceptance-summary.json
-      evidence_sha256: ff80166cdfc144ae653a788e228afedf900e8d022584089efbc7349794b6b525
+      evidence_sha256: 9ed1f7ba247e70bf5ca34c2d4e1eb28301db4683e24542ae5b58cc2f5db88611
       fixture_id: dvwa-source-fee264766667580e5352
       kind: operator_attestation
-      observed_at: '2026-10-30T10:38:53.998327+00:00'
+      observed_at: '2026-10-30T11:56:04.522862+00:00'
       operator: kevin <kevinpurnomo06@gmail.com>
       policy_version: fixture-restoration.v1
       protocol_version: ranking-session-acceptance.v1
       restoration: isolated_equivalent
       security_level: low
-      source_hashes_sha256: 1160191400a50d8e39cabd4ede767c594685f16f759b60877b4601ea9de0c4fe
+      source_hashes_sha256: b4909695d032310cc38a52afee81732321c3d8c6dd6a729951fd806781cc04aa
     medium:
-      authorized_protocol: docs/active/HANDOFF_MAIN_STUDY_V4_REMEDIATION_2026-10-30.md §4.3 fixture integrity;
-        read-only inventory and bounded detection controls only
+      authorized_protocol: docs/active/HANDOFF_MAIN_STUDY_V4_REMEDIATION_2026-10-30.md §4.3 fixture integrity; read-only inventory
+        and bounded detection controls only
       details:
-        assembled_by: remediation agent, under the repository owner's explicit instruction of 2026-10-30
-          to produce the D8 attestation
+        assembled_by: remediation agent, under the repository owner's explicit instruction of 2026-10-30 to produce the D8
+          attestation
         assembly_inputs:
         - results/validation/2026-10-30-dvwa-module-census.json
         - results/validation/2026-10-30-fixture-no-mutation-check.json
-        equivalence_semantics: no fixture mutation occurred, so post-probe state is identical to the state
-          the census recorded; equivalence is asserted between pre-probe and post-probe state of the same
-          instance, not between separate instances
-        fixture_state_covers: *id001
-        mutation_policy: read-only inventory, bounded detection controls, and the in-scope attack methods
-          the study itself executes
+        equivalence_semantics: no fixture mutation occurred, so post-probe state is identical to the state the census recorded;
+          equivalence is asserted between pre-probe and post-probe state of the same instance, not between separate instances
+        fixture_state_covers:
+          levels:
+          - low
+          - medium
+          - high
+          observed_response_digest: 470d7d43edd3aac5b213a68b9c6ce6a607c82507ac150b3a0d53d8c747b4dcec
+          response_rows: 114
+        mutation_policy: read-only inventory, bounded detection controls, and the in-scope attack methods the study itself
+          executes
         no_mutation_reference: results/validation/2026-10-30-fixture-no-mutation-check.json
         no_mutation_verified: true
-        policy_vocabulary_gap: fixture-restoration.v1 offers 'reset' and 'isolated_equivalent' only; neither
-          names 'verified not mutated'. 'isolated_equivalent' is used because the run's inputs are byte-identical
-          to the attested capture
+        policy_vocabulary_gap: fixture-restoration.v1 offers 'reset' and 'isolated_equivalent' only; neither names 'verified
+          not mutated'. 'isolated_equivalent' is used because the run's inputs are byte-identical to the attested capture
         reset_needed: false
         reset_performed: false
       epoch_id: dvwa-fixture-epoch-2026-10-30
@@ -406,16 +412,16 @@ fixture_restoration_evidence:
       - results/validation/2026-10-30-fixture-no-mutation-check.json
       - results/validation/2026-10-30-ac-high-capability-check.json
       - results/validation/remediation-2026-10-30/acceptance-summary.json
-      evidence_sha256: 8f64bf961ff099f6372f075f5b9031e951ecef9420488e200b2c330d21c9962b
+      evidence_sha256: cb8cd51c040100397a870de6106847e04f49a0fcc94240d101a8e305de0afd93
       fixture_id: dvwa-source-fee264766667580e5352
       kind: operator_attestation
-      observed_at: '2026-10-30T10:38:53.998327+00:00'
+      observed_at: '2026-10-30T11:56:04.522862+00:00'
       operator: kevin <kevinpurnomo06@gmail.com>
       policy_version: fixture-restoration.v1
       protocol_version: ranking-session-acceptance.v1
       restoration: isolated_equivalent
       security_level: medium
-      source_hashes_sha256: 1160191400a50d8e39cabd4ede767c594685f16f759b60877b4601ea9de0c4fe
+      source_hashes_sha256: b4909695d032310cc38a52afee81732321c3d8c6dd6a729951fd806781cc04aa
   levels:
   - low
   - medium

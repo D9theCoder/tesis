@@ -293,6 +293,69 @@ def statuses_snapshot(state: Mapping[str, Any], method: str) -> dict[str, str]:
     return {key: str(derived.get(key, "unknown")) for key in precondition_keys_for_method(method)}
 
 
+def _flat_statuses(state: Mapping[str, Any], method: str, keys: list[str]) -> dict[str, str]:
+    """Read a method's status from the legacy flat views when no facts exist.
+
+    ``precondition_status`` carries no method attribution, so a key declared by
+    more than one method cannot be assigned to this one and stays unknown.
+    """
+    flat = state.get("precondition_status") if isinstance(state.get("precondition_status"), Mapping) else {}
+    statuses = statuses_snapshot(state, method)
+    for key in keys:
+        if statuses.get(key, "unknown") != "unknown" or key not in flat:
+            continue
+        if len(methods_for_precondition(key)) == 1:
+            statuses[key] = str(flat[key])
+    return statuses
+
+
+def method_statuses(state: Mapping[str, Any], method: str) -> dict[str, str]:
+    """Derive one method's status from the evidence recorded for that method.
+
+    Probe-phase facts are recorded under the principal that ran the probe, which
+    is deliberately not the run principal: an access-control probe executes as
+    the low-privilege account.  A run-scope filter therefore rejects the method's
+    own evidence and reports ``unknown`` once the visit has ended.  The scope is
+    resolved from the method's own facts instead, so the fixture, protocol,
+    security level and session are still checked against the identity that
+    produced the measurement rather than against an unrelated one.
+
+    Selecting by ``method`` also stops a shared key such as ``no_rate_limit``
+    from letting one method's measurement complete another method's status.
+    Conflicting identities across one method's facts make its status undecidable.
+
+    States that carry no append-only facts at all fall back to
+    :func:`statuses_snapshot` so legacy flat views stay readable.  A state that
+    does carry facts but none for ``method`` yields ``unknown`` instead of
+    borrowing a neighbour's measurement.
+    """
+    keys = precondition_keys_for_method(method)
+    facts = _facts(state)
+    if not facts:
+        return _flat_statuses(state, method, keys)
+    scopes = [fact.get("scope") if isinstance(fact.get("scope"), Mapping) else {}
+              for fact in facts if str(fact.get("method") or "") == method]
+    if not scopes:
+        return {key: "unknown" for key in keys}
+    principals = {str(scope.get("principal_id") or "") for scope in scopes} - {""}
+    fingerprints = {str(scope.get("session_fingerprint") or "") for scope in scopes} - {""}
+    if len(principals) > 1 or len(fingerprints) > 1:
+        return {key: "unknown" for key in keys}
+    view = {
+        **state,
+        "method_principals": {
+            **dict(state.get("method_principals") or {}),
+            **({method: principals.pop()} if principals else {}),
+        },
+        "method_session_fingerprints": {
+            **dict(state.get("method_session_fingerprints") or {}),
+            **({method: fingerprints.pop()} if fingerprints else {}),
+        },
+    }
+    derived = derive_precondition_status(view, keys=keys, method=method)
+    return {key: str(derived.get(key, "unknown")) for key in keys}
+
+
 def fact_references(state: Mapping[str, Any], keys: Iterable[str], *, method: str) -> list[str]:
     """Return evidence references from the latest applicable fact per key."""
     status_refs: list[str] = []

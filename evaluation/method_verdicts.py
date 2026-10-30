@@ -33,6 +33,7 @@ from typing import Any, Mapping
 
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.state import METHODS_BY_SURFACE
+from foundation.preconditions import method_statuses
 
 VERDICT_POLICY_VERSION = "measured-negative-verdicts.v1"
 VERDICT_NOT_VULNERABLE = "not_vulnerable"
@@ -70,12 +71,16 @@ def _surface(state: Mapping[str, Any]) -> str | None:
     return surface if isinstance(surface, str) and surface else None
 
 
-def _observed_status(state: Mapping[str, Any]) -> dict[str, Any]:
-    return dict(state.get("precondition_status") or {})
-
-
 def _control_rows(state: Mapping[str, Any]) -> list[dict]:
     return [dict(row) for row in (state.get("control_events") or []) if isinstance(row, Mapping)]
+
+
+def _is_sent_detection_control(row: Mapping[str, Any]) -> bool:
+    return (
+        row.get("control_class") == "detection"
+        and row.get("status") == "sent"
+        and not row.get("establishes_exploit")
+    )
 
 
 def _rows_for_method(rows: list[dict], method: str) -> list[dict]:
@@ -83,7 +88,7 @@ def _rows_for_method(rows: list[dict], method: str) -> list[dict]:
     return [
         row for row in rows
         if str(row.get("control_id") or "").startswith(prefix)
-        and not row.get("establishes_exploit")
+        and _is_sent_detection_control(row)
     ]
 
 
@@ -95,9 +100,9 @@ def sent_control_events(state: Mapping[str, Any], method: str) -> list[dict]:
     that lists no sent event yields nothing, which keeps an unmeasured method from
     looking decided.
     """
-    rows = _rows_for_method(_control_rows(state), method)
+    rows = _control_rows(state)
     if rows:
-        return rows
+        return _rows_for_method(rows, method)
     snapshot = (state.get("probe_controls") or {}).get(f"{_PROBE_CONTROL_PREFIX}{method}")
     if isinstance(snapshot, Mapping):
         return _rows_for_method(
@@ -111,7 +116,8 @@ def _evidence_refs(state: Mapping[str, Any], control_ids: set[str]) -> list[str]
     return [
         f"#/control_events/{index}"
         for index, row in enumerate(state.get("control_events") or [])
-        if isinstance(row, Mapping) and str(row.get("control_id") or "") in control_ids
+        if isinstance(row, Mapping) and _is_sent_detection_control(row)
+        and str(row.get("control_id") or "") in control_ids
     ]
 
 
@@ -137,12 +143,12 @@ def measured_negative_verdicts(state: Mapping[str, Any]) -> dict[str, dict]:
     methods = in_scope_methods(surface)
     if not methods:
         return {}
-    observed = _observed_status(state)
     verdicts: dict[str, dict] = {}
     for method in methods:
         required = required_preconditions(method)
         if not required:
             continue
+        observed = method_statuses(state, method)
         values = {key: observed.get(key) for key in required}
         if any(value != "false" for value in values.values()):
             continue

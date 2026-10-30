@@ -745,3 +745,21 @@ def test_visit_login_is_not_a_control_driven_session_change():
                          "session_fingerprint": "rotated-mid-control"}}
     assert structured_contamination_reason(
         "ac_idor", [changed, other]) == "unexpected_session_change"
+
+
+def test_single_request_control_is_compared_with_the_pre_control_baseline():
+    """A mutation on the first request is visible even for a one-request control."""
+    from foundation.control_catalog import structured_contamination_reason
+
+    stable = {"event": "agent.probe.sent",
+              "payload": {"status_code": 200, "principal_id": "gordonb",
+                          "pre_control_session_fingerprint": "baseline",
+                          "session_fingerprint": "baseline"}}
+    assert structured_contamination_reason("ac_force_browse", [stable]) is None
+
+    mutated = {"event": "agent.probe.sent",
+               "payload": {"status_code": 200, "principal_id": "gordonb",
+                           "pre_control_session_fingerprint": "baseline",
+                           "session_fingerprint": "rotated-by-the-control"}}
+    assert structured_contamination_reason(
+        "ac_force_browse", [mutated]) == "unexpected_session_change"

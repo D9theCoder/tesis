@@ -78,6 +78,7 @@ def _probe_preconditions(
     events: list[dict] = []
     verifier = Verifier()
     sent_any = False
+    pre_control_fingerprint = session_fingerprint(session)
 
     already_tried = {_normalize_probe_path(value) for value in already_tried}
     for payload in payloads:
@@ -95,6 +96,7 @@ def _probe_preconditions(
                 control_id=getattr(payload, "control_id", None)))
             events[-1]["payload"].update(permission_evidence_fields(session, session._principal_id,
                 session._initial_session_fingerprint, object_id=f"dvwa-path:/{path.lstrip('/')}"))
+            events[-1]["payload"]["pre_control_session_fingerprint"] = pre_control_fingerprint
             if resp.status_code == 200:
                 result = verifier.contains_any(resp.text, _ACCESSIBLE_SIGNALS)
                 if result.ok:
