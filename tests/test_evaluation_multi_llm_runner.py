@@ -226,6 +226,7 @@ def test_matrix_aggregate_counts_audit_events_from_every_status():
         "fallback_events": 2,
         "containment_events": 2,
         "containment_failures": 0,
+        "containment_navigation_discards": 0,
         "guardrail_activations": 4,
     }
     assert aggregate["audit_totals"] == expected

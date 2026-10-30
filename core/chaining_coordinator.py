@@ -3,6 +3,12 @@
 Chain preconditions are evaluated against both proved vulnerability nodes and
 proved enabling outcomes. Outcomes may unlock a later workflow, but they never
 stand in for confirmation of that later method's vulnerability node.
+
+Destination preconditions are measured with bounded controls before the source
+gate decides, and every edge records all applicable rejection reasons with the
+decisive stage named. The shared rule -- evidence is observed in this run, never
+inherited -- is stated in ``docs/reference/cross_surface_evidence.md`` and is the
+same rule the readiness gate follows.
 """
 
 from __future__ import annotations
@@ -121,14 +127,14 @@ def build_chain_assessment(
         for edge in _get_kg().get_next_actions(source):
             if not edge.get("is_chain") or not edge.get("target_agent"):
                 continue
-            infeasible = _chain_infeasibility(state, edge)
+            details = _chain_infeasibility_details(state, edge)
             route = next((row for row in reversed(_route_receipts(state))
                           if row.get("source") == source and row.get("target_agent") == edge.get("target_agent")), None)
             if route and route.get("status") in {"completed", "failed", "unverified", "executed"}:
                 edge_status = "confirmed" if route.get("status") == "completed" else "executed"
                 edge_reason = str(route.get("reason") or edge_status)
-            elif infeasible:
-                edge_status, edge_reason = "infeasible", infeasible
+            elif details:
+                edge_status, edge_reason = "infeasible", details["code"]
             else:
                 edge_status, edge_reason = "available", "route_available"
             edges.append({
@@ -137,6 +143,16 @@ def build_chain_assessment(
                 "target_agent": edge.get("target_agent"),
                 "status": edge_status,
                 "reason": edge_reason,
+                "decisive_stage": details["stage"] if details else None,
+                "reasons": details["reasons"] if details else [],
+                "destination_rejection": next(
+                    (row for row in (details or {}).get("reasons", [])
+                     if row.get("stage") == "destination"), None),
+                "source_rejection": next(
+                    (row for row in (details or {}).get("reasons", [])
+                     if row.get("stage") in {"source", "static"}), None),
+                "edge_supported": bool(edge.get("supported", True)),
+                "unsupported_reason": edge.get("unsupported_reason"),
                 "evidence_refs": list((route or {}).get("source_evidence_refs", [])),
                 "prerequisite_status": {
                     key: ("proved" if key in known else "unproved")
@@ -205,10 +221,11 @@ def evaluate_chain_route(state: dict) -> tuple[str, dict]:
     if state.get("experiment_condition", "linear_hybrid") == "akg_guided_hybrid":
         for edge in _chain_candidates(state):
             target_agent = edge.get("target_agent")
-            unavailable = _chain_infeasibility(state, edge)
-            if unavailable:
+            details = _chain_infeasibility_details(state, edge)
+            if details:
                 rejected_routes.append({"source": edge["source"], "target": edge["target"],
-                    "target_agent": target_agent, "reason": unavailable,
+                    "target_agent": target_agent, "reason": details["code"],
+                    "decisive_stage": details["stage"], "reasons": details["reasons"],
                     "preconditions": edge.get("preconditions", []), "status": "infeasible"})
                 continue
             return target_agent, {"node": "chaining_router", "iteration": iteration_count,
@@ -296,38 +313,143 @@ def _source_decisions(state: dict, source: str) -> list[dict]:
             | _derive_surface_confirmed(set(decision.get("confirmed_vulns", []))))]
 
 
-def _chain_infeasibility(state: dict, edge: dict, *, check_destination: bool = True) -> str | None:
-    """Only schedule dependencies supported by the current destination adapter."""
-    method, source = edge["target_agent"], edge["source"]
-    if check_destination:
-        from foundation.preconditions import statuses_snapshot
-        statuses = statuses_snapshot(state, method)
-        if any(value != "true" for value in statuses.values()):
-            return "destination_preconditions_not_proved"
-    if not ((source == "authenticated_session" and method in {"ac_idor", "ac_force_browse"})
-            or (source == "credentials_extracted" and method == "bf_dictionary")):
-        return "source_consumption_adapter_unavailable"
+# Declarative source-consumption adapters.
+#
+# ``source outcome -> {target agent: material the destination visit consumes}``.
+# Every ``is_chain`` KG edge must match a branch here or be declared
+# ``supported=False`` in the static AKG; ``chain_adapter_gaps`` is the check that
+# keeps the graph and this table from drifting apart.
+_SOURCE_CONSUMPTION_ADAPTERS: dict[str, dict[str, str]] = {
+    "authenticated_session": {"ac_idor": "session", "ac_force_browse": "session"},
+    # A confirmed brute force proves an authenticated session is obtainable, so
+    # the session-consuming AC methods may consume it (D4: this branch was
+    # missing while the KG already declared the edge).
+    "brute_force_confirmed": {"ac_idor": "session", "ac_force_browse": "session"},
+    "credentials_extracted": {"bf_dictionary": "credentials"},
+}
+
+SOURCE_CONSUMPTION_ADAPTER_UNAVAILABLE = "source_consumption_adapter_unavailable"
+DESTINATION_PRECONDITIONS_NOT_PROVED = "destination_preconditions_not_proved"
+
+
+def chain_adapter_gaps() -> list[dict]:
+    """Return static chain edges with neither an adapter branch nor an opt-out.
+
+    This is the static consistency check for D4: an edge that no adapter branch
+    supports must say so in the AKG, so it is never silently unreachable.
+    """
+    gaps: list[dict] = []
+    for source, target, meta in _get_kg().graph.edges(data=True):
+        if not meta.get("is_chain") or not meta.get("target_agent"):
+            continue
+        if not bool(meta.get("supported", True)):
+            continue
+        target_agent = str(meta["target_agent"])
+        if target_agent not in _SOURCE_CONSUMPTION_ADAPTERS.get(str(source), {}):
+            gaps.append({
+                "source": str(source),
+                "target": str(target),
+                "target_agent": target_agent,
+                "repair": ("add an adapter branch in _SOURCE_CONSUMPTION_ADAPTERS or declare "
+                           "supported=False with an unsupported_reason in the AKG"),
+            })
+    return sorted(gaps, key=lambda row: (row["source"], row["target"], row["target_agent"]))
+
+
+def _source_material_reasons(state: dict, source: str, material: str) -> list[dict]:
+    """Return the source-side rejection reasons for one adapter branch."""
     decisions = _source_decisions(state, source)
     refs = {ref for decision in decisions for ref in decision.get("evidence_refs", [])}
     rows = state.get("response_evidence", [])
     source_ids = {row.get("evidence_id") for i, row in enumerate(rows)
         if f"#/final_state/response_evidence/{i}" in refs and row.get("candidate_id") and row.get("evidence_id")}
     if not source_ids:
-        return "source_evidence_unavailable"
+        return [_rejection("source", "source_evidence_unavailable",
+                           "the proved source outcome has no candidate-bound response evidence")]
     credentials = [credential for credential in state.get("found_credentials", [])
         if credential.get("source_evidence_id") in source_ids and credential.get("source_candidate_id")
         and any(row.get("evidence_id") == credential["source_evidence_id"]
             and row.get("candidate_id") == credential["source_candidate_id"]
             and row.get("visit_id") and row["visit_id"] == credential.get("source_visit_id") for row in rows)
         and credential.get("username") and credential.get("password")]
-    if source == "credentials_extracted":
+    if material == "credentials":
         if not any(c.get("representation") == "plaintext" for c in credentials):
-            return "plaintext_source_credentials_unavailable"
-    elif not credentials:
-        return "route_bound_session_material_unavailable"
-    elif not any(c["username"].lower() != "admin" for c in credentials):
-        return "nonadmin_source_principal_unavailable"
-    return None
+            representations = sorted({str(c.get("representation")) for c in credentials})
+            return [_rejection(
+                "source", "plaintext_source_credentials_unavailable",
+                "the source surface yielded no plaintext credential"
+                + (f" (representations: {', '.join(representations)})" if representations else ""))]
+        return []
+    if not credentials:
+        return [_rejection("source", "route_bound_session_material_unavailable",
+                           "no source-bound credential pair is available for a session")]
+    if not any(c["username"].lower() != "admin" for c in credentials):
+        return [_rejection("source", "nonadmin_source_principal_unavailable",
+                           "every source-bound credential is the administrator identity")]
+    return []
+
+
+def _rejection(stage: str, code: str, detail: str = "") -> dict:
+    return {"stage": stage, "code": code, "detail": detail}
+
+
+def _chain_infeasibility_details(
+    state: dict,
+    edge: dict,
+    *,
+    check_destination: bool = True,
+) -> dict | None:
+    """Evaluate every applicable chain rejection and name the decisive one.
+
+    Both stages are always evaluated (no destination short-circuit), so a
+    recorded reason names the gate that must actually change rather than the
+    first gate the code happened to reach.  The decisive reason is the first
+    one in stage order ``static`` → ``source`` → ``destination``: a static or
+    source rejection still blocks after the destination is proved.
+    """
+    method, source = str(edge["target_agent"]), str(edge["source"])
+    reasons: list[dict] = []
+    destination = {"checked": bool(check_destination), "status": "not_checked", "keys": {}}
+    if not bool(edge.get("supported", True)):
+        reasons.append(_rejection(
+            "static", "chain_edge_declared_unsupported",
+            str(edge.get("unsupported_reason") or "the static AKG marks this edge unsupported")))
+    else:
+        material = _SOURCE_CONSUMPTION_ADAPTERS.get(source, {}).get(method)
+        if material is None:
+            reasons.append(_rejection(
+                "source", SOURCE_CONSUMPTION_ADAPTER_UNAVAILABLE,
+                f"no adapter consumes {source!r} for {method!r}"))
+        else:
+            reasons.extend(_source_material_reasons(state, source, material))
+    if check_destination:
+        from foundation.preconditions import statuses_snapshot
+        statuses = statuses_snapshot(state, method)
+        destination["keys"] = dict(statuses)
+        if any(value != "true" for value in statuses.values()):
+            destination["status"] = "not_proved"
+            unproved = sorted(key for key, value in statuses.items() if value != "true")
+            reasons.append(_rejection(
+                "destination", DESTINATION_PRECONDITIONS_NOT_PROVED,
+                "unproved destination preconditions: " + ", ".join(unproved)))
+        else:
+            destination["status"] = "proved"
+    if not reasons:
+        return None
+    decisive = reasons[0]
+    return {
+        "code": decisive["code"],
+        "stage": decisive["stage"],
+        "detail": decisive["detail"],
+        "reasons": reasons,
+        "destination": destination,
+    }
+
+
+def _chain_infeasibility(state: dict, edge: dict, *, check_destination: bool = True) -> str | None:
+    """Return the decisive rejection code for one chain edge, if any."""
+    details = _chain_infeasibility_details(state, edge, check_destination=check_destination)
+    return details["code"] if details else None
 
 
 def _complete_routed_visit(state: dict) -> dict:
@@ -440,36 +562,49 @@ def chaining_router_node(state: dict) -> dict:
         for edge in _chain_candidates(state):
             if _chain_infeasibility(state, edge) is None:
                 break
-            if _chain_infeasibility(state, edge, check_destination=False) is not None:
-                continue
             target_agent = str(edge["target_agent"])
             required_keys = precondition_keys_for_method(target_agent)
             statuses = statuses_snapshot(state, target_agent)
             if any(statuses.get(key) == "false" for key in required_keys):
                 # Measured negative evidence is a rejection, not a reason to probe.
                 continue
-            measured = {}
+            if all(statuses.get(key) == "true" for key in required_keys):
+                # Destination already proved; nothing left to measure here.
+                continue
+            # Cross-surface evidence rule (docs/reference/cross_surface_evidence.md):
+            # the destination is measured before the source gate decides, so the
+            # run learns whether the destination is reachable at all instead of
+            # only ever holding evidence for the surface it is currently on.
+            measured: dict = {}
             if target_agent == "bf_dictionary":
-                if all(statuses.get(key) == "true" for key in required_keys):
-                    continue
                 from foundation.recon import probe_brute_force_destination
                 measured = probe_brute_force_destination(state)
             elif target_agent in {"ac_idor", "ac_force_browse"}:
-                if all(statuses.get(key) == "true" for key in required_keys):
-                    continue
-                from foundation.recon import probe_access_control_destination
-                refs = {ref for decision in _source_decisions(state, edge["source"]) for ref in decision.get("evidence_refs", [])}
+                refs = {ref for decision in _source_decisions(state, edge["source"])
+                        for ref in decision.get("evidence_refs", [])}
                 source_ids = [row["evidence_id"] for i, row in enumerate(state.get("response_evidence", []))
                     if f"#/final_state/response_evidence/{i}" in refs and row.get("evidence_id")]
-                measured = probe_access_control_destination(state, target_agent, source_ids)
+                if source_ids:
+                    from foundation.recon import probe_access_control_destination
+                    measured = probe_access_control_destination(state, target_agent, source_ids)
+            if not measured:
+                # The bounded probe did not run for this edge (nothing to bind it
+                # to, or it already ran); that is not a measured limitation.
+                continue
             for key, value in measured.items():
-                if key == "observations":
-                    destination_update[key] = {**destination_update.get(key, {}), **value}
+                if key in {"preparation_failures", "telemetry_events", "containment_events",
+                           "control_events", "observation_facts", "quarantined_visits"}:
+                    destination_update[key] = [*destination_update.get(key, []), *value]
                 elif isinstance(value, dict):
                     destination_update[key] = {**destination_update.get(key, {}), **value}
                 else:
-                    destination_update[key] = [*destination_update.get(key, []), *value]
-            measured_state = {**state, **destination_update,
+                    destination_update[key] = value
+            measured_state = {**state, **{
+                key: value for key, value in destination_update.items() if key not in {
+                    "preparation_failures", "telemetry_events", "containment_events",
+                    "control_events", "observation_facts", "quarantined_visits"}},
+                "observation_facts": [*state.get("observation_facts", []),
+                                      *destination_update.get("observation_facts", [])],
                 "observations": {**state.get("observations", {}), **destination_update.get("observations", {})},
                 "precondition_status": {**state.get("precondition_status", {}), **destination_update.get("precondition_status", {})}}
             measured_statuses = statuses_snapshot(measured_state, target_agent)

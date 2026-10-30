@@ -19,6 +19,7 @@ from urllib.parse import urlsplit, urlunsplit
 from core.state import METHODS_BY_SURFACE
 from evaluation.reporter import write_json_report
 from evaluation.scoring_evidence import evidence_hash, validate_evidence_config
+from evaluation.thesis_scoring import EVALUATOR_MAX_TOKENS_CEILING
 from tesis.artifact_repository import new_execution_id
 from tesis.config_loader import load_and_resolve_config, load_yaml_config
 from tesis.runtime_events import redact_secrets
@@ -227,8 +228,14 @@ def _validate_config(config) -> dict:
     if any(role.model_profile not in (None, PROVIDER) for role in config.llm_runtime.roles.values()):
         raise ValueError("LLM role profiles must follow openai_compatible")
     evaluator = config.scoring_evaluator
-    if evaluator.get("adapter", evaluator.get("provider")) != PROVIDER or evaluator.get("model") != model.model_name:
-        raise ValueError("AI evaluator must use the pinned openai_compatible model")
+    # D10 (2026-10-30): the evaluator must be an openai_compatible profile that is
+    # OUTSIDE the evaluated model set.  The previous rule required the evaluator to
+    # equal the run model, which made the scorer grade its own runs.
+    if evaluator.get("adapter", evaluator.get("provider")) != PROVIDER:
+        raise ValueError("AI evaluator must use an openai_compatible profile")
+    if evaluator.get("model") == model.model_name:
+        raise ValueError("AI evaluator must be outside the evaluated model set; "
+                         "self-grading is not permitted")
 
     pending_references = [
         {"scenario": scenario, "method": method, "reason": entry.get("reference_reason")}
@@ -254,7 +261,9 @@ def _validate_config(config) -> dict:
                 "localhost", "127.0.0.1", "::1"} else None},
         "evaluator": {"provider": evaluator["provider"], "model": evaluator["model"],
             "max_attempts": evaluator["max_attempts"], "max_tokens": evaluator["max_tokens"],
-            "timeout": evaluator["timeout"]},
+            "timeout": evaluator["timeout"],
+            "reasoning_effort": evaluator.get("reasoning_effort"),
+            "outside_evaluated_set": evaluator.get("model") != model.model_name},
         "pending_ranking_references": pending_references,
         "cache_scope": config.llm_runtime.cache_scope,
         "llm_max_concurrency": config.llm_runtime.max_concurrency,
@@ -267,8 +276,9 @@ def _apply_evaluator_budget(config, requested_max_tokens: int | None) -> dict:
     if requested_max_tokens is not None:
         if (type(requested_max_tokens) is not int or
                 type(source_max_tokens) is not int or
-                not source_max_tokens < requested_max_tokens <= 8192):
-            raise ValueError("Evaluator token budget must exceed the source budget and be at most 8192")
+                not source_max_tokens < requested_max_tokens <= EVALUATOR_MAX_TOKENS_CEILING):
+            raise ValueError("Evaluator token budget must exceed the source budget and be at most "
+                             f"{EVALUATOR_MAX_TOKENS_CEILING}")
         config.scoring_evaluator = {
             **config.scoring_evaluator, "max_tokens": requested_max_tokens,
         }

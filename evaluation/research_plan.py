@@ -140,8 +140,32 @@ def source_tree_hashes(repository_root: Path) -> dict[str, str]:
             paths.add(path)
     result: dict[str, str] = {}
     for path in sorted(paths):
-        result[path.resolve().relative_to(repository_root.resolve()).as_posix()] = _file_hash(path)
+        relative = path.resolve().relative_to(repository_root.resolve()).as_posix()
+        result[relative] = (_config_epoch_hash(path) if relative == "config.yaml"
+                           else _file_hash(path))
     return result
+
+
+# Operator inputs that describe the fixture rather than the experiment's code or
+# frozen settings.  An attestation has to carry the source-hash epoch it is bound
+# to (fixture-restoration.v1), so hashing the attestation into that same epoch
+# would be circular: writing the attestation would change the value it must equal.
+CONFIG_EPOCH_EXCLUDED_KEYS = ("fixture_restoration_evidence",)
+
+
+def _config_epoch_hash(path: Path) -> str:
+    """Hash the experiment-relevant part of the config for the source epoch."""
+    try:
+        from tesis.config_loader import load_yaml_config
+        document = load_yaml_config(path)
+    except Exception:
+        return _file_hash(path)
+    if not isinstance(document, dict) or not any(
+            key in document for key in CONFIG_EPOCH_EXCLUDED_KEYS):
+        return _file_hash(path)
+    projected = {key: value for key, value in document.items()
+                 if key not in CONFIG_EPOCH_EXCLUDED_KEYS}
+    return _json_hash(projected)
 
 
 def _json_hash(value: Any) -> str:

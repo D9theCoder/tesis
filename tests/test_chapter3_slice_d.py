@@ -353,12 +353,28 @@ def test_fixture_restoration_evidence_is_validated_and_kept() -> None:
             fixture_id="fixture-1", protocol_version="protocol-1",
             fixture_restoration_evidence={**valid, "identity_sha256": "c" * 64},
         ))
-    with pytest.raises(ConfigError, match="outside this configuration"):
+    # A document for a level this invocation does not run is filtered out of the
+    # canonical envelope rather than rejected (D8: a fixture-wide attestation must
+    # stay usable by a single-level run), so the only remaining refusal is the
+    # level the run actually needs being unattested.
+    with pytest.raises(ConfigError, match="no attestation for level 'low'"):
         _validate_engagement_config(EngagementConfig(
             target_url="http://localhost/dvwa", provider="openai", level="low",
             fixture_id="fixture-1", protocol_version="protocol-1",
             fixture_restoration_evidence=[dict(valid, security_level="high")],
         ))
+    wide = EngagementConfig(
+        target_url="http://localhost/dvwa", provider="openai", level="low",
+        fixture_id="fixture-1", protocol_version="protocol-1",
+        fixture_restoration_evidence=[
+            valid,
+            dict(valid, security_level="medium", evidence_id="fixture-reset-2"),
+            dict(valid, security_level="high", evidence_id="fixture-reset-3"),
+        ],
+    )
+    _validate_engagement_config(wide)
+    assert list(wide.fixture_restoration_evidence["by_level"]) == ["low"]
+    assert wide.fixture_restoration_evidence["missing_levels"] == []
     invalid = dict(valid, evidence_refs=[])
     with pytest.raises(ConfigError):
         _validate_engagement_config(EngagementConfig(

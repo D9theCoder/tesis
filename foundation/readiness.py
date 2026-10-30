@@ -5,6 +5,11 @@ required endpoint, and any required form token are observed rather than
 assumed.  A failed or unknown required component blocks method selection and
 candidate execution; the requested coordinate is preserved instead of being
 relabeled as a different level.  Environment failures are never model failures.
+
+The cross-surface evidence rule this gate follows -- evidence is observed in
+this run, never inherited, and absence is a recorded limitation -- is stated in
+``docs/reference/cross_surface_evidence.md`` and shared with the chaining
+router's destination-precondition measurement.
 """
 
 from __future__ import annotations
@@ -223,8 +228,30 @@ def observed_endpoint_fragments(endpoints: Iterable[Mapping[str, Any]]) -> list[
     return paths
 
 
-def _token_required(surface: str, requested_level: str) -> bool:
-    return surface == "brute_force" and requested_level in {"medium", "high"}
+def _token_required(
+    surface: str,
+    requested_level: str,
+    endpoints: Iterable[Mapping[str, Any]] | None = None,
+) -> bool:
+    """Return whether the fixture itself demands a form token for this surface.
+
+    The requirement is observed, not assumed: the brute-force module carries
+    ``input[name=user_token]`` only at the level where DVWA renders it, so the
+    crawl's own form record decides.  A level table cannot be right about a
+    fixture it does not measure, and a surface whose page declares no token
+    field cannot be asked to prove one.
+    """
+    if surface != "brute_force":
+        return False
+    for endpoint in endpoints or ():
+        url = str(endpoint.get("url") or "")
+        if "/vulnerabilities/brute/" not in url.split("?", 1)[0].split("#", 1)[0]:
+            continue
+        if endpoint.get("csrf_token"):
+            return True
+        if "user_token" in {str(name) for name in endpoint.get("params") or ()}:
+            return True
+    return False
 
 
 def build_readiness(
@@ -244,6 +271,7 @@ def build_readiness(
 ) -> dict[str, Any]:
     """Assess one run's readiness from observed evidence only."""
     surface = str(state.get("current_surface") or "sqli")
+    endpoints = list(endpoints or ())
     required = required_endpoints_for_surface(surface)
     observed_paths = observed_endpoint_fragments(endpoints)
     missing = [fragment for fragment in required
@@ -285,7 +313,7 @@ def build_readiness(
         reasons.append(_reason(REASON_ENDPOINT_UNVERIFIED,
                                "Required endpoints could not be verified because the crawl was incomplete.",
                                evidence_refs=[f"endpoint:{fragment}" for fragment in missing]))
-    token_required = _token_required(surface, requested_level)
+    token_required = _token_required(surface, requested_level, endpoints)
     token: dict[str, Any] = {"required": token_required, "present": token_present,
              "evidence_refs": ["endpoint:/vulnerabilities/brute/"] if token_present is not None else []}
     if token_required and token_present is False:

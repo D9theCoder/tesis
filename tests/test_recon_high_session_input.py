@@ -89,14 +89,28 @@ def test_high_sqli_without_session_input_marker_does_not_register_endpoint():
     assert SESSION_INPUT_URL not in requested_urls
 
 @pytest.mark.parametrize("security_level", ["low", "medium"])
-def test_low_and_medium_sqli_do_not_probe_session_input(security_level: str):
-    """The high-only discovery path must not alter lower-level recon."""
+def test_low_and_medium_sqli_record_a_declared_handler_without_the_high_post_contract(
+        security_level: str):
+    """A declared handler is inventory at every level; the POST contract is high-only.
+
+    Recon records what the fetched page declares, so the popup reference is
+    inventoried at any level.  The high-only part is the POST handler contract
+    (``method="post"`` with an ``id`` parameter) that the SQLi agents rely on.
+    """
     update, session = _run_recon(
         "<form action='' method='get'><input name='id'></form>"
         "<script>popUp('session-input.php')</script>",
         security_level,
     )
 
-    assert all(endpoint["url"] != SESSION_INPUT_URL for endpoint in update["endpoints"])
-    requested_urls = [str(call.args[0]) for call in session.http.get.call_args_list]
-    assert SESSION_INPUT_URL not in requested_urls
+    declared = [endpoint for endpoint in update["endpoints"]
+                if endpoint["url"] == SESSION_INPUT_URL]
+    assert declared == [
+        {
+            "url": SESSION_INPUT_URL,
+            "method": "get",
+            "params": [],
+            "csrf_token": None,
+            "module_name": "sqli",
+        }
+    ]

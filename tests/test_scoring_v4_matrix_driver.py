@@ -157,8 +157,8 @@ def test_matrix_budget_override_is_explicit_bounded_and_keeps_source_settings():
 
     with pytest.raises(ValueError, match="exceed the source budget"):
         _apply_evaluator_budget(config, 1024)
-    with pytest.raises(ValueError, match="at most 8192"):
-        _apply_evaluator_budget(config, 8193)
+    with pytest.raises(ValueError, match="at most 16384"):
+        _apply_evaluator_budget(config, 16385)
     assert config.scoring_evaluator is source
 
     budget = _apply_evaluator_budget(config, 4096)

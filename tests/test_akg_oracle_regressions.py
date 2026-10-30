@@ -444,3 +444,94 @@ def test_dependency_material_matches_consumed_pair_among_multiple_extractions():
     state = dict(found_credentials=credentials)
     assert dependency_oracle._material(dict(payload_or_logic="gordonb:second"), state, source) == ("gordonb", "second")
     assert dependency_oracle._material(dict(payload_or_logic="gordonb:missing"), state, source) is None
+
+
+def test_every_chain_edge_has_an_adapter_or_an_explicit_opt_out():
+    """D4: static AKG chain edges and the source-consumption adapters cannot drift apart."""
+    from core.chaining_coordinator import chain_adapter_gaps
+
+    assert chain_adapter_gaps() == []
+
+
+def test_unsupported_chain_edges_carry_a_reason():
+    """An edge no adapter branch supports must say why it is unreachable."""
+    from core.knowledge_graph import get_attack_knowledge_graph
+
+    graph = get_attack_knowledge_graph().graph
+    unsupported = [(source, target, meta) for source, target, meta in graph.edges(data=True)
+                   if meta.get("is_chain") and not bool(meta.get("supported", True))]
+    assert unsupported
+    for source, target, meta in unsupported:
+        assert meta.get("unsupported_reason"), (source, target)
+
+
+def test_brute_force_confirmed_schedules_the_session_consuming_agent():
+    """D4: the declared brute-force edge now has an adapter branch."""
+    from core.chaining_coordinator import _chain_infeasibility_details
+
+    edge = {"source": "brute_force_confirmed", "target": "authenticated_session",
+            "target_agent": "ac_idor", "preconditions": ["brute_force_confirmed"],
+            "supported": True}
+    details = _chain_infeasibility_details(
+        {"observation_facts": [], "observations": {}, "found_credentials": [],
+         "response_evidence": [], "verifier_history": []},
+        edge, check_destination=False)
+    assert details is not None
+    assert details["stage"] == "source"
+    assert details["code"] == "source_evidence_unavailable"
+
+
+def test_chain_rejection_names_the_decisive_stage_not_the_first_gate():
+    """D3: destination and source rejections are both reported, source wins."""
+    from core.chaining_coordinator import _chain_infeasibility_details
+
+    state = {"observation_facts": [], "observations": {}, "found_credentials": [],
+             "response_evidence": [], "verifier_history": []}
+    edge = {"source": "credentials_extracted", "target": "bf_dictionary",
+            "target_agent": "bf_dictionary", "preconditions": ["credentials_extracted"],
+            "supported": True}
+    details = _chain_infeasibility_details(state, edge)
+    assert details["stage"] == "source"
+    assert details["code"] == "source_evidence_unavailable"
+    assert {row["stage"] for row in details["reasons"]} == {"source", "destination"}
+    assert details["destination"]["status"] == "not_proved"
+
+
+def test_anonymous_control_survives_an_unpersistable_security_level(monkeypatch):
+    """D: an anonymous client has no session to persist a level into (fixture bug).
+
+    Without this, ``collect_permission_oracles`` aborts before recording the
+    anonymous control, so every Access Control run reports
+    ``PERMISSION_ORACLE_UNAVAILABLE`` even when the candidate is confirmed.
+    """
+    class NoSessionLevel(FakeSession):
+        def set_security_level(self, level):
+            if self.principal is None:
+                raise RuntimeError("Requested DVWA security level was not verified server-side")
+            return None
+
+    class VisibleToCandidate(NoSessionLevel):
+        def get(self, path, params=None):
+            response = super().get(path, params)
+            if str(path).endswith("get_user_data.php") and self.principal == "gordonb":
+                response.text = '[{"user_id":"1","first_name":"admin"}]'
+                response.status_code = 200
+            return response
+
+    monkeypatch.setattr(permission_oracle, "DVWASession", VisibleToCandidate)
+    monkeypatch.setattr("foundation.session_manager.DVWASession", VisibleToCandidate)
+    artifact, _, _, _, row, _ = chain_artifact()
+    raw = deepcopy(artifact["final_state"])
+    row.pop("consumed_source_evidence_id")
+    raw["response_evidence"][1].pop("consumed_source_evidence_id")
+
+    result = permission_oracle.collect_permission_oracles(artifact, raw)
+
+    docs = [source["document"] for source in result["config"]["scoring_oracles"]
+            if source["document"].get("oracle_protocol", {}).get("kind")
+            == "dvwa_candidate_permission.v1" and source["document"].get("protocol_source_sha256")]
+    assert docs
+    assert all(doc.get("reason") != "RuntimeError" for doc in docs)
+    controls = [control for doc in docs for control in doc.get("controls") or []]
+    assert any(control.get("control") == "anonymous_denied" for control in controls)
+    assert any(control.get("security_level_persisted") is False for control in controls)

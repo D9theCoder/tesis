@@ -49,6 +49,13 @@ PROOF_TIERS = {
 }
 
 
+# D9 (2026-10-30): the frozen evaluator budget is 16K so an accepted review can
+# never have been produced under a smaller ceiling than the one recorded.  The
+# ceiling is shared by the freeze validator, the override validators, and the TUI
+# hint so the three cannot drift apart again.
+EVALUATOR_MAX_TOKENS_CEILING = 16384
+
+
 def validate_scoring_config(mode, evaluator):
     if mode not in SCORING_MODES:
         raise ValueError('scoring_mode must be human, ai, or both')
@@ -58,7 +65,9 @@ def validate_scoring_config(mode, evaluator):
         required = {'provider', 'model', 'max_attempts', 'max_tokens', 'timeout'}
         if not required <= evaluator.keys() or not evaluator['provider'] or not evaluator['model']:
             raise ValueError('Freeze evaluator provider, model, max_attempts, max_tokens, and timeout')
-        for key, ceiling in (('max_attempts', 3), ('max_tokens', 8192), ('timeout', 120)):
+        for key, ceiling in (('max_attempts', 3),
+                             ('max_tokens', EVALUATOR_MAX_TOKENS_CEILING),
+                             ('timeout', 120)):
             value = evaluator[key]
             if type(value) is not int or not 1 <= value <= ceiling:
                 raise ValueError(f'scoring_evaluator.{key} must be an integer in 1..{ceiling}')
@@ -808,8 +817,9 @@ def evaluate_queue(queue, evaluator, *, invoke=None, candidate_ids=None, expecte
         if selected_ids is None:
             raise ValueError('Token budget override requires a source-bound candidate retry')
         if (type(max_tokens_override) is not int or
-                not evaluator['max_tokens'] < max_tokens_override <= 8192):
-            raise ValueError('Token budget override must exceed the frozen budget and be at most 8192')
+                not evaluator['max_tokens'] < max_tokens_override <= EVALUATOR_MAX_TOKENS_CEILING):
+            raise ValueError('Token budget override must exceed the frozen budget and be at most '
+                             f'{EVALUATOR_MAX_TOKENS_CEILING}')
         runtime_evaluator['max_tokens'] = max_tokens_override
     result['evaluator_runtime'] = {
         'source_max_tokens': evaluator['max_tokens'],

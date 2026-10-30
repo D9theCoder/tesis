@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import logging
 import re
 from urllib.parse import urlparse
 
@@ -26,6 +27,8 @@ from foundation.verifier import fixture_attestation_valid
 _AC_METHODS = {"ac_idor", "ac_vertical_escalation", "ac_force_browse"}
 _USER_METHODS = {"ac_idor", "ac_vertical_escalation"}
 _ADMIN_ONLY_POLICY = "This page should only be accessible by the admin user"
+
+logger = logging.getLogger(__name__)
 
 
 def _body_hash(response) -> str:
@@ -250,10 +253,22 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
         sessions.append(anonymous)
         anonymous.get("login.php")
         anonymous_initial = session_fingerprint(anonymous)
-        anonymous.set_security_level(config.get("security_level", "low"))
+        # An unauthenticated client has no server-side session to persist a level
+        # into: DVWA redirects ``security.php`` to the login page, so the form
+        # cannot be verified.  The anonymous control asserts only that an
+        # unauthenticated client cannot read the object, which does not depend on
+        # the level, so the read proceeds with the level cookie already applied by
+        # the session and the limitation is recorded on the control.
+        security_level_persisted = True
+        try:
+            anonymous.set_security_level(config.get("security_level", "low"))
+        except (RuntimeError, ValueError) as exc:
+            security_level_persisted = False
+            logger.debug("anonymous control could not persist security level: %s", exc)
         denied_response, anonymous_allowed = _request(anonymous, method, descriptor, protocol)
-        controls.append(_control_record("anonymous_denied", "anonymous", "anonymous", anonymous,
-            anonymous_initial, object_id, action, False, anonymous_allowed, denied_response))
+        controls.append({**_control_record("anonymous_denied", "anonymous", "anonymous", anonymous,
+            anonymous_initial, object_id, action, False, anonymous_allowed, denied_response),
+            "security_level_persisted": security_level_persisted})
         scope_outcome = "broad_exposure" if anonymous_allowed else "candidate_specific"
         controls[-1]["expected_confirmed"] = anonymous_allowed
         controls = [{**control, "fixture_id": config["fixture_id"],
@@ -301,6 +316,9 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
         return document
     except Exception as exc:
         document["reason"] = type(exc).__name__
+        # Keep the message beside the type so a failing collection is diagnosable
+        # without a debugger; ``reason`` stays the stable machine-readable code.
+        document["reason_detail"] = str(exc)
         document["controls"] = controls
         return document
     finally:

@@ -21,6 +21,8 @@ class RawTransition(TypedDict, total=False):
     precondition: str | list[str]
     target_agent: str
     agent: str
+    supported: bool
+    unsupported_reason: str
     priority: int
 
 
@@ -33,6 +35,8 @@ class Transition:
     preconditions: tuple[str, ...]
     target_agent: str | None
     priority: int = 100
+    supported: bool = True
+    unsupported_reason: str | None = None
 
 
 class AKGValidationError(ValueError):
@@ -109,6 +113,9 @@ class AttackKnowledgeGraph:
             preconditions=preconditions,
             target_agent=str(target_agent_raw) if target_agent_raw is not None else None,
             priority=priority,
+            supported=bool(raw.get("supported", True)),
+            unsupported_reason=(str(raw["unsupported_reason"])
+                                if raw.get("unsupported_reason") else None),
         )
 
     def _payload_profile(
@@ -337,6 +344,10 @@ class AttackKnowledgeGraph:
                 "target_agent": "bf_dictionary",
                 "priority": 10,
             },
+            # Declared but not reachable: no method agent consumes a session as
+            # SQL-injection input, and no agent produces ``admin_session_obtained``.
+            # Declaring them unsupported keeps the static adapter check honest
+            # instead of leaving an edge that can never pass.
             {
                 "source": "ac_vertical_escalation_confirmed",
                 "target": "admin_session_obtained",
@@ -344,6 +355,11 @@ class AttackKnowledgeGraph:
                 "preconditions": ["ac_vertical_escalation_confirmed"],
                 "target_agent": "sqli_union",
                 "priority": 10,
+                "supported": False,
+                "unsupported_reason": (
+                    "sqli_union consumes query input, not session material: no adapter "
+                    "branch maps an escalated session onto SQL injection"
+                ),
             },
             {
                 "source": "admin_session_obtained",
@@ -352,6 +368,11 @@ class AttackKnowledgeGraph:
                 "preconditions": ["admin_session_obtained"],
                 "target_agent": "sqli_union",
                 "priority": 10,
+                "supported": False,
+                "unsupported_reason": (
+                    "no method agent produces the admin_session_obtained outcome, so the "
+                    "edge has no source that can ever be proved"
+                ),
             },
         ]
 
@@ -364,6 +385,8 @@ class AttackKnowledgeGraph:
                 preconditions=list(normalized.preconditions),
                 target_agent=normalized.target_agent,
                 priority=normalized.priority,
+                supported=normalized.supported,
+                unsupported_reason=normalized.unsupported_reason,
             )
 
     def _validate_graph(self) -> None:
@@ -545,6 +568,8 @@ class AttackKnowledgeGraph:
                     "preconditions": list(meta.get("preconditions", [])),
                     "target_agent": meta.get("target_agent"),
                     "priority": int(meta.get("priority", 100)),
+                    "supported": bool(meta.get("supported", True)),
+                    "unsupported_reason": meta.get("unsupported_reason"),
                 },
             ))
         ordered = sorted(actions, key=lambda item: (item[0], item[1]["target"], item[1]["target_agent"] or ""))

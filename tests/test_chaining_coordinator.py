@@ -72,15 +72,13 @@ def test_sqli_chain_measures_missing_destination_preconditions(monkeypatch, stat
         assert session.get.call_count == 2
 
 
-@pytest.mark.parametrize("case", ["known", "budget", "hash", "linear", "attempted"])
+@pytest.mark.parametrize("case", ["known", "budget", "linear", "attempted"])
 def test_destination_recon_does_not_run_without_a_pending_consumable_chain(monkeypatch, case):
     state = fresh_sqli_chain_state()
     if case == "known":
         state["observations"]["no_rate_limit"] = False
     elif case == "budget":
         state["max_iterations"] = 1
-    elif case == "hash":
-        state["found_credentials"][0]["representation"] = "password_hash"
     elif case == "linear":
         state["experiment_condition"] = "linear_hybrid"
     else:
@@ -92,6 +90,37 @@ def test_destination_recon_does_not_run_without_a_pending_consumable_chain(monke
 
     factory.assert_not_called()
     assert update["next_agent"] != "bf_dictionary"
+
+
+def test_destination_preconditions_are_measured_before_the_source_gate(monkeypatch):
+    """D6: a non-consumable source still yields a destination measurement.
+
+    The measured destination is what tells a later run whether the edge is
+    reachable at all; the route itself stays blocked by the source rejection.
+    """
+    state = fresh_sqli_chain_state()
+    state["found_credentials"][0]["representation"] = "password_hash"
+    session = MagicMock()
+    from types import SimpleNamespace
+    session.http = SimpleNamespace(cookies={"PHPSESSID": "destination-session"})
+    session._username = "admin"
+    session.login.return_value = True
+    session.get.return_value = MagicMock(status_code=200, text="Incorrect", headers={}, elapsed_ms=10.0)
+    monkeypatch.setattr(import_module("foundation.recon"), "DVWASession", lambda target: session)
+
+    update = chaining_router_node(state)
+
+    assert update["next_agent"] != "bf_dictionary"
+    assert update["observations"].get("no_rate_limit") is True
+    completed = [event for event in update["telemetry_events"]
+                 if event.get("event") == "recon.destination.completed"]
+    assert completed and completed[0]["payload"]["reason"] == "preconditions_measured"
+    rejection = next(row for row in update["chain_assessment"]["edges"]
+                     if row["target_agent"] == "bf_dictionary")
+    assert rejection["status"] == "infeasible"
+    assert rejection["decisive_stage"] == "source"
+    assert rejection["reason"] == "plaintext_source_credentials_unavailable"
+    assert rejection["destination_rejection"] is None
 
 
 def test_destination_recon_records_containment_failure_and_closes_session(monkeypatch):

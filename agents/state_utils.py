@@ -630,9 +630,9 @@ def probe_quarantine_reason(module_name: str, telemetry_events: list[dict]) -> s
     ):
         return "unexpected_probe_authentication"
     if module_name in {"ac_idor", "ac_vertical_escalation", "ac_force_browse"}:
+        from foundation.control_catalog import SENSITIVE_DISCLOSURE_MARKERS
         for excerpt in excerpts:
-            if ("database setup" in excerpt or "phpinfo()" in excerpt
-                    or "view source" in excerpt or "source code" in excerpt):
+            if any(marker in excerpt for marker in SENSITIVE_DISCLOSURE_MARKERS):
                 return "unexpected_sensitive_disclosure"
     for excerpt in excerpts:
         if __import__("re").search(r"\b(?:admin|gordonb|pablo|smithy)\b\s*:\s*[a-f0-9]{32}", excerpt):
@@ -1491,17 +1491,28 @@ def make_update(
             extracted.append({**credential, "source_visit_id": decision["visit_id"],
                 "source_candidate_id": row.get("candidate_id"), "source_evidence_id": row["evidence_id"]})
     if extracted:
-        update["found_credentials"] = extracted
+        # D5: a SQL injection dump yields password hashes, so the plaintext a chain
+        # can consume has to be derived.  Derivation is bounded, offline, and
+        # recorded on the credential itself; an underivable hash stays a hash.
+        from foundation.credential_derivation import derive_credentials
+        derived = derive_credentials(extracted)
+        update["found_credentials"] = [*extracted, *derived]
     route = state.get("active_chain_route") or {}
     if route.get("target_agent") == module_name:
         source_rows = {item.get("evidence_id"): item for item in state.get("response_evidence", [])
             if isinstance(item, dict)}
+        consumed_derivations = {
+            str(item.get("source_evidence_id")): (item.get("derivation") or {}).get("method")
+            for item in state.get("found_credentials", [])
+            if isinstance(item, dict) and isinstance(item.get("derivation"), dict)
+            and item.get("source_evidence_id")}
         update["chain_consumption"] = [{
             "route_id": route["route_id"], "visit_id": decision["visit_id"],
             "source_candidate_id": source_rows.get(row.get("consumed_source_evidence_id"), {}).get("candidate_id"),
             "source_visit_id": source_rows.get(row.get("consumed_source_evidence_id"), {}).get("visit_id"),
             "candidate_id": row.get("candidate_id"), "source_evidence_id": row["consumed_source_evidence_id"],
-            "destination_evidence_id": row["evidence_id"], "representation": "plaintext"}
+            "destination_evidence_id": row["evidence_id"], "representation": "plaintext",
+            "derivation_method": consumed_derivations.get(str(row["consumed_source_evidence_id"]))}
             for row in evidence if row.get("consumed_source_evidence_id")]
 
     # Track failure agents for fallback loop and adaptation metrics.

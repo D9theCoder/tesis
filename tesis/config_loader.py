@@ -880,7 +880,12 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
     if config.fixture_restoration_evidence:
         from foundation.readiness import validate_fixture_restoration_evidence
 
-        configured_levels = set(config.levels if config.matrix else [config.level])
+        # A matrix invocation validates the levels it runs; a single-level
+        # invocation validates only its own level.  The loader always sets
+        # ``config.levels``, but a directly constructed config may omit it, so this
+        # must never end up empty -- an empty set would filter the whole envelope
+        # away and then report the level as unattested.
+        configured_levels = (set(config.levels or ()) if config.matrix else set()) or {config.level}
         try:
             envelope = fixture_evidence_envelope(config.fixture_restoration_evidence)
         except (TypeError, ValueError) as exc:
@@ -888,10 +893,19 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
         documents = envelope.get("by_level") or {}
         outside = sorted(set(documents) - configured_levels)
         if outside:
-            raise ConfigError(
-                "fixture_restoration_evidence targets levels outside this configuration: "
-                + ", ".join(outside)
-            )
+            # A fixture attestation may cover more levels than one invocation runs.
+            # The run only ever consumes the document for its own level (validated
+            # below against that level's scope).  Extra documents are filtered out of
+            # the canonical envelope instead of being rejected; the configured file
+            # and the attestation artifact keep the full by-level record.  Keep the
+            # envelope untouched when this invocation runs none of the attested
+            # levels, so the missing-level error below still speaks for itself.
+            kept = {level: document for level, document in documents.items()
+                    if level in configured_levels}
+            if kept:
+                envelope["by_level"] = kept
+                envelope["levels"] = sorted(kept)
+                documents = kept
         if not config.matrix and config.level not in documents:
             raise ConfigError(
                 f"fixture_restoration_evidence has no attestation for level {config.level!r}"

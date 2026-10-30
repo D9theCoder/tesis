@@ -221,7 +221,17 @@ api_providers:
 # -----------------------------------------------------------------------------
 # API-key provider/model pairs above expand into models automatically.
 # Keep standalone profiles here for Gemini or openai_codex_auth.
-models: {}
+models:
+  # ChatGPT sign-in profile for the second evaluated model (gpt-6-luna), used by
+  # the coordinate you authorised on 2026-10-30. Reasoning effort is low per that
+  # authorisation, which is a documented deviation from the v4 study's 'max'.
+  openai_codex_auth:
+    provider: openai_codex_auth
+    model_name: gpt-6-luna
+    timeout: 60
+    reasoning_effort: low
+    extra:
+      account: default
   # To opt in, replace {} with the mapping below, sign in with
   # `.venv/bin/python -m tesis auth login --account default`, then select an
   # account model in Settings or `tesis auth models --account default`.
@@ -248,9 +258,13 @@ scoring_profile: {}
 scoring_oracles: config/oracles/dvwa-source-fee264766667580e5352.json
 scoring_evaluator:
   max_attempts: 2
-  max_tokens: 1024
+  # D9: frozen budget raised to 16K so no accepted review can have been produced
+  # under a different (smaller) ceiling than the one recorded here.
+  max_tokens: 16384
   timeout: 60
-  provider: river-ai__deepseek-ai-deepseek-v4-1-flash-1017_15efb2abf693
+  # D10: the evaluator is deliberately outside the evaluated model set.
+  provider: river-ai__zai-org-glm-5-3-flash_bc20d9347385
+  reasoning_effort: high
 # Exact model IDs. Provider catalog metadata takes precedence. Unknown models use the fallback picker and a support check.
 # GLM and DeepSeek catalogs supplied by the user. GPT catalogs: official model docs, checked 2026-10-26.
 # https://developers.openai.com/api/docs/models/gpt-6.1-sol
@@ -259,7 +273,7 @@ scoring_evaluator:
 # https://developers.openai.com/api/docs/models/gpt-5.4
 reasoning_catalog:
   zai-org/GLM-5.3-Flash: [low, high, xhigh]
-  deepseek-ai/DeepSeek-V4.1-Flash-1017: [off, low, high, xhigh]
+  deepseek-ai/DeepSeek-V4.1-Flash-1017: [off, low, high, max]
   gpt-6.1-terra: [none, low, medium, high, xhigh, max]
   gpt-6.1-sol: [low, medium, high, xhigh, max]
   gpt-6-astra: [low, medium, high, xhigh, max]
@@ -271,3 +285,138 @@ reasoning_catalog:
   gpt-5.6-luna: [none, low, medium, high, xhigh, max]
 fixture_id: dvwa-source-fee264766667580e5352
 protocol_version: ranking-session-acceptance.v1
+
+# D8: operator fixture-restoration attestation (fixture-restoration.v1).
+# Generated from measured evidence by
+# results/validation/remediation-2026-10-30/fixture_attestation.py.
+# The source epoch excludes this block (see evaluation/research_plan.py),
+# so the attestation can carry the epoch it is bound to.
+fixture_restoration_evidence:
+  by_level:
+    high:
+      authorized_protocol: docs/active/HANDOFF_MAIN_STUDY_V4_REMEDIATION_2026-10-30.md §4.3 fixture integrity;
+        read-only inventory and bounded detection controls only
+      details:
+        assembled_by: remediation agent, under the repository owner's explicit instruction of 2026-10-30
+          to produce the D8 attestation
+        assembly_inputs:
+        - results/validation/2026-10-30-dvwa-module-census.json
+        - results/validation/2026-10-30-fixture-no-mutation-check.json
+        equivalence_semantics: no fixture mutation occurred, so post-probe state is identical to the state
+          the census recorded; equivalence is asserted between pre-probe and post-probe state of the same
+          instance, not between separate instances
+        fixture_state_covers: &id001
+          levels:
+          - low
+          - medium
+          - high
+          observed_response_digest: 470d7d43edd3aac5b213a68b9c6ce6a607c82507ac150b3a0d53d8c747b4dcec
+          response_rows: 114
+        mutation_policy: read-only inventory, bounded detection controls, and the in-scope attack methods
+          the study itself executes
+        no_mutation_reference: results/validation/2026-10-30-fixture-no-mutation-check.json
+        no_mutation_verified: true
+        policy_vocabulary_gap: fixture-restoration.v1 offers 'reset' and 'isolated_equivalent' only; neither
+          names 'verified not mutated'. 'isolated_equivalent' is used because the run's inputs are byte-identical
+          to the attested capture
+        reset_needed: false
+        reset_performed: false
+      epoch_id: dvwa-fixture-epoch-2026-10-30
+      evidence_id: fixture-restoration:dvwa:high:2026-10-30
+      evidence_refs:
+      - results/validation/2026-10-30-dvwa-module-census.json
+      - results/validation/2026-10-30-fixture-no-mutation-check.json
+      - results/validation/2026-10-30-ac-high-capability-check.json
+      - results/validation/remediation-2026-10-30/acceptance-summary.json
+      evidence_sha256: 48aaaf83f2da3a203d22e77476c050b0e21361ff28ff423acaa411ba467cdb82
+      fixture_id: dvwa-source-fee264766667580e5352
+      kind: operator_attestation
+      observed_at: '2026-10-30T10:38:53.998327+00:00'
+      operator: kevin <kevinpurnomo06@gmail.com>
+      policy_version: fixture-restoration.v1
+      protocol_version: ranking-session-acceptance.v1
+      restoration: isolated_equivalent
+      security_level: high
+      source_hashes_sha256: 1160191400a50d8e39cabd4ede767c594685f16f759b60877b4601ea9de0c4fe
+    low:
+      authorized_protocol: docs/active/HANDOFF_MAIN_STUDY_V4_REMEDIATION_2026-10-30.md §4.3 fixture integrity;
+        read-only inventory and bounded detection controls only
+      details:
+        assembled_by: remediation agent, under the repository owner's explicit instruction of 2026-10-30
+          to produce the D8 attestation
+        assembly_inputs:
+        - results/validation/2026-10-30-dvwa-module-census.json
+        - results/validation/2026-10-30-fixture-no-mutation-check.json
+        equivalence_semantics: no fixture mutation occurred, so post-probe state is identical to the state
+          the census recorded; equivalence is asserted between pre-probe and post-probe state of the same
+          instance, not between separate instances
+        fixture_state_covers: *id001
+        mutation_policy: read-only inventory, bounded detection controls, and the in-scope attack methods
+          the study itself executes
+        no_mutation_reference: results/validation/2026-10-30-fixture-no-mutation-check.json
+        no_mutation_verified: true
+        policy_vocabulary_gap: fixture-restoration.v1 offers 'reset' and 'isolated_equivalent' only; neither
+          names 'verified not mutated'. 'isolated_equivalent' is used because the run's inputs are byte-identical
+          to the attested capture
+        reset_needed: false
+        reset_performed: false
+      epoch_id: dvwa-fixture-epoch-2026-10-30
+      evidence_id: fixture-restoration:dvwa:low:2026-10-30
+      evidence_refs:
+      - results/validation/2026-10-30-dvwa-module-census.json
+      - results/validation/2026-10-30-fixture-no-mutation-check.json
+      - results/validation/2026-10-30-ac-high-capability-check.json
+      - results/validation/remediation-2026-10-30/acceptance-summary.json
+      evidence_sha256: ff80166cdfc144ae653a788e228afedf900e8d022584089efbc7349794b6b525
+      fixture_id: dvwa-source-fee264766667580e5352
+      kind: operator_attestation
+      observed_at: '2026-10-30T10:38:53.998327+00:00'
+      operator: kevin <kevinpurnomo06@gmail.com>
+      policy_version: fixture-restoration.v1
+      protocol_version: ranking-session-acceptance.v1
+      restoration: isolated_equivalent
+      security_level: low
+      source_hashes_sha256: 1160191400a50d8e39cabd4ede767c594685f16f759b60877b4601ea9de0c4fe
+    medium:
+      authorized_protocol: docs/active/HANDOFF_MAIN_STUDY_V4_REMEDIATION_2026-10-30.md §4.3 fixture integrity;
+        read-only inventory and bounded detection controls only
+      details:
+        assembled_by: remediation agent, under the repository owner's explicit instruction of 2026-10-30
+          to produce the D8 attestation
+        assembly_inputs:
+        - results/validation/2026-10-30-dvwa-module-census.json
+        - results/validation/2026-10-30-fixture-no-mutation-check.json
+        equivalence_semantics: no fixture mutation occurred, so post-probe state is identical to the state
+          the census recorded; equivalence is asserted between pre-probe and post-probe state of the same
+          instance, not between separate instances
+        fixture_state_covers: *id001
+        mutation_policy: read-only inventory, bounded detection controls, and the in-scope attack methods
+          the study itself executes
+        no_mutation_reference: results/validation/2026-10-30-fixture-no-mutation-check.json
+        no_mutation_verified: true
+        policy_vocabulary_gap: fixture-restoration.v1 offers 'reset' and 'isolated_equivalent' only; neither
+          names 'verified not mutated'. 'isolated_equivalent' is used because the run's inputs are byte-identical
+          to the attested capture
+        reset_needed: false
+        reset_performed: false
+      epoch_id: dvwa-fixture-epoch-2026-10-30
+      evidence_id: fixture-restoration:dvwa:medium:2026-10-30
+      evidence_refs:
+      - results/validation/2026-10-30-dvwa-module-census.json
+      - results/validation/2026-10-30-fixture-no-mutation-check.json
+      - results/validation/2026-10-30-ac-high-capability-check.json
+      - results/validation/remediation-2026-10-30/acceptance-summary.json
+      evidence_sha256: 8f64bf961ff099f6372f075f5b9031e951ecef9420488e200b2c330d21c9962b
+      fixture_id: dvwa-source-fee264766667580e5352
+      kind: operator_attestation
+      observed_at: '2026-10-30T10:38:53.998327+00:00'
+      operator: kevin <kevinpurnomo06@gmail.com>
+      policy_version: fixture-restoration.v1
+      protocol_version: ranking-session-acceptance.v1
+      restoration: isolated_equivalent
+      security_level: medium
+      source_hashes_sha256: 1160191400a50d8e39cabd4ede767c594685f16f759b60877b4601ea9de0c4fe
+  levels:
+  - low
+  - medium
+  - high

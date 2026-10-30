@@ -46,7 +46,17 @@ from agents.state_utils import candidate_budget_receipt, validated_payload_candi
 from foundation.session_manager import dvwa_credentials
 from foundation.http_client import http_request_accounting, snapshot_http_request_counters
 from core.knowledge_graph import AttackKnowledgeGraph, get_attack_knowledge_graph
-from core.scorer import build_score_report
+from core.scorer import (
+    COMPOSITE_SCOPE,
+    build_score_report,
+    run_scope_composite,
+    run_scope_score_components,
+)
+from evaluation.method_verdicts import (
+    SCORE_UNAVAILABLE_REASON,
+    measured_negative_summary,
+    measured_negative_verdicts,
+)
 from core.state import (
     CHECKPOINT_SCHEMA_VERSION,
     STATE_SCHEMA_VERSION,
@@ -637,6 +647,42 @@ def _terminal_incomplete_reason(final_state: dict[str, Any]) -> str | None:
     if reason:
         return reason
     return None
+
+
+def _run_scope_scoring(final_state: dict, summary: dict) -> dict:
+    """Return the run-scope score fields one artifact records.
+
+    ``Schain`` is the run's best chain grade across every visit, so a completed
+    chain route stays visible at run level -- a chain visit is by definition a
+    method other than the selected one. A coordinate whose every in-scope
+    precondition was measured false by a sent bounded control is a decisive
+    negative, so its composite is undefined with a reason rather than zero, which
+    would be indistinguishable from a run that executed a method and scored
+    nothing.
+    """
+    components = run_scope_score_components(final_state)
+    composite = run_scope_composite(final_state)
+    selected_method = final_state.get("selected_method")
+    chain_score = components["Schain"] if components is not None else int(
+        dict(final_state.get("chain_scores") or {}).get(selected_method, 0) or 0)
+    verdicts = measured_negative_verdicts(final_state)
+    negative = measured_negative_summary(final_state, verdicts)
+    composite_score = composite if composite is not None else 0
+    availability = dict(summary.get("metric_availability") or {})
+    unavailable = dict(summary.get("metric_unavailable_reason") or {})
+    if negative["complete"]:
+        composite_score = None
+        availability["composite_score"] = False
+        unavailable["composite_score"] = SCORE_UNAVAILABLE_REASON
+    return {
+        "chain_score": chain_score,
+        "composite_score": composite_score,
+        "composite_components": components,
+        "method_verdicts": dict(verdicts),
+        "measured_negative": dict(negative),
+        "metric_availability": availability,
+        "metric_unavailable_reason": unavailable,
+    }
 
 
 def run_single_engagement(
@@ -1659,6 +1705,15 @@ def run_single_engagement(
     method_score = method_scores.get(selected_method, 0)
     exploitation_score = exploitation_scores.get(selected_method, 0)
     chain_score = chain_scores.get(selected_method, 0)
+    # Run-scope Srun and measured-negative verdicts; see _run_scope_scoring.
+    scoring = _run_scope_scoring(final_state, summary)
+    chain_score = scoring["chain_score"]
+    composite_score = scoring["composite_score"]
+    run_components = scoring["composite_components"]
+    method_verdicts = scoring["method_verdicts"]
+    measured_negative = scoring["measured_negative"]
+    metric_availability = scoring["metric_availability"]
+    metric_unavailable_reason = scoring["metric_unavailable_reason"]
     llm_activity = _llm_activity(runtime_events, restored_receipts)
     llm_performance = [dict(row) for row in call_context.records]
     llm_performance_summary = call_context.performance_summary()
@@ -1764,8 +1819,11 @@ def run_single_engagement(
         "payload_execution_success_rate": summary.get("payload_execution_success_rate", 0.0),
         "payload_improvement_rate": summary.get("payload_improvement_rate", 0.0),
         "consistency_score": summary.get("consistency_score"),
-        "metric_availability": summary.get("metric_availability", {}),
-        "metric_unavailable_reason": summary.get("metric_unavailable_reason", {}),
+        "metric_availability": metric_availability,
+        "metric_unavailable_reason": metric_unavailable_reason,
+        "method_verdicts": dict(method_verdicts),
+        "measured_negative": dict(measured_negative),
+        "composite_scope": dict(COMPOSITE_SCOPE),
         "guardrail_activations": list(final_state.get("guardrail_activations", [])),
         "guardrail_activation_count": len(final_state.get("guardrail_activations", [])),
         "payload_guardrail_activations": len(final_state.get("payload_guardrail_activations", [])),
@@ -1919,7 +1977,8 @@ def run_single_engagement(
         "method_execution_inputs": method_execution_inputs,
         "candidate_disposition_inputs": candidate_disposition_inputs,
         "output_score": dict(final_state.get("output_scores", {})).get(selected_method, 0),
-        "composite_score": dict(final_state.get("composite_scores", {})).get(selected_method, 0),
+        "composite_score": composite_score,
+        "composite_components": run_components,
         "error": error,
     }
     artifact["state_schema_version"] = STATE_SCHEMA_VERSION

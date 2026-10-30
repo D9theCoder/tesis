@@ -618,6 +618,208 @@ def _discover_sqli_session_input(
     )
 
 
+# ── Declared-handler discovery ──────────────────────────────────────────
+
+# DVWA renders several module handlers only as JavaScript references instead
+# of a ``<form action>``: ``popUp('cookie-input.php')`` on the high blind SQLi
+# page, and ``get_user_data.php`` / ``change_user_details.php`` fetched from
+# ``authbypass/authbypass.js``.  Form-only discovery therefore under-reports
+# the inventory even when the page itself was fetched successfully.
+#
+# Only pages belonging to a thesis surface are inventoried this way.  Reading a
+# page the crawl already fetched, plus the handlers that page declares, is
+# inventory; it authorises no request to an out-of-scope module.
+_DECLARED_HANDLER_MODULES = frozenset({"sqli", "sqli_blind", "brute", "idor"})
+_HANDLER_REFERENCE = re.compile(r"[A-Za-z0-9_./~-]+\.php")
+_POST_DECLARATION = re.compile(r"(?is)method\s*:\s*['\"]post['\"]|open\(\s*['\"]post['\"]")
+_CONTEXT_WINDOW = 160
+
+
+def _declared_references(text: str) -> list[tuple[str, str]]:
+    """Return ``(reference, surrounding context)`` for each PHP reference."""
+    references: list[tuple[str, str]] = []
+    for match in _HANDLER_REFERENCE.finditer(text or ""):
+        start = max(0, match.start() - _CONTEXT_WINDOW)
+        end = min(len(text), match.end() + _CONTEXT_WINDOW)
+        references.append((match.group(0), text[start:end]))
+    return references
+
+
+def _contained_handler_url(
+    reference: str,
+    base_url: str,
+    page_url: str,
+    containment_events: list[dict] | None,
+) -> str | None:
+    """Resolve one declared reference, applying recon's own containment filter."""
+    resolved = urljoin(base_url, reference).split("?", 1)[0].split("#", 1)[0]
+    if not _same_host(resolved, page_url):
+        logger.warning("recon: discarded out-of-scope declared handler %s", resolved)
+        if containment_events is not None:
+            containment_events.append(
+                _recon_containment_event(
+                    resolved,
+                    page_url,
+                    kind="endpoint",
+                    reason="declared handler outside allowed DVWA scope",
+                )
+            )
+        return None
+    if "/vulnerabilities/" not in urlparse(resolved).path.lower():
+        return None
+    if infer_module_name(resolved) not in _DECLARED_HANDLER_MODULES:
+        return None
+    return resolved
+
+
+def _health_check_handler(
+    session: DVWASession,
+    endpoint_url: str,
+    containment_events: list[dict] | None,
+) -> bool:
+    """Confirm a declared handler responds; a containment failure rejects it."""
+    try:
+        result = session.http.get(endpoint_url)
+    except ContainmentError as exc:
+        if containment_events is not None:
+            _append_containment_event(containment_events, exc)
+        logger.warning("recon: declared handler %s violated containment: %s", endpoint_url, exc)
+        return False
+    except (TransportError, RequestTimeoutError, RuntimeError) as exc:
+        logger.warning("recon: declared handler %s health check failed: %s", endpoint_url, exc)
+        return True
+    status = int(getattr(result, "status_code", 0) or 0)
+    if status >= 400:
+        logger.info("recon: declared handler %s answered %s; not registered", endpoint_url, status)
+        return False
+    return True
+
+
+def discover_declared_handlers(
+    session: DVWASession,
+    page_url: str,
+    page_body: str,
+    *,
+    known_urls: set[str] | None = None,
+    containment_events: list[dict] | None = None,
+) -> tuple[list[dict], bool]:
+    """Register module handlers a fetched page declares in its own markup.
+
+    The page markup is the observation: an inline ``popUp``/``fetch``/XHR
+    reference, an inline event attribute, or a reference inside a same-host
+    script the page itself loads.  Each reference resolves against the document
+    that declared it, passes recon's containment boundary, and is health-checked
+    with one contained GET before it is recorded.  A transport failure during
+    the health check does not erase what the page declared; a containment
+    failure does.
+
+    Args:
+        session: Authenticated, contained DVWA session.
+        page_url: URL of the fetched module page.
+        page_body: Raw HTML of that page.
+        known_urls: Endpoint URLs already recorded; matches are not duplicated.
+        containment_events: Collector for discarded out-of-scope references.
+
+    Returns:
+        ``(endpoints, declared)`` — the endpoint records registered for the
+        page, and whether the page declared any contained in-scope handler at
+        all.  ``declared`` stays true when every declared handler was already
+        known, so the caller can still prefer that evidence over the page URL.
+    """
+    if infer_module_name(page_url) not in _DECLARED_HANDLER_MODULES:
+        return [], False
+
+    soup = BeautifulSoup(page_body, "html.parser")
+    page_path = urlparse(page_url).path
+    already = {str(url).split("?", 1)[0].split("#", 1)[0] for url in (known_urls or set())}
+    base_url = str(getattr(getattr(session, "http", None), "base_url", "") or page_url)
+
+    candidates: list[tuple[str, str]] = []  # (reference, declaring context)
+    inline_scripts = " ".join(script.get_text(" ") for script in soup.select("script:not([src])"))
+    candidates.extend(_declared_references(inline_scripts))
+    event_attributes = " ".join(
+        str(value)
+        for tag in soup.select("[onclick], [onchange], [onsubmit]")
+        for value in (tag.get("onclick"), tag.get("onchange"), tag.get("onsubmit"))
+        if value
+    )
+    candidates.extend(_declared_references(event_attributes))
+
+    for script in soup.select("script[src]"):
+        script_url = urljoin(page_url, str(script.get("src") or ""))
+        if not _same_host(script_url, base_url):
+            logger.warning("recon: discarded out-of-scope scripted handler source %s", script_url)
+            if containment_events is not None:
+                containment_events.append(
+                    _recon_containment_event(
+                        script_url,
+                        page_url,
+                        kind="script",
+                        reason="scripted handler source outside allowed DVWA scope",
+                    )
+                )
+            continue
+        try:
+            script_body = session.http.get(script_url).text
+        except ContainmentError as exc:
+            if containment_events is not None:
+                _append_containment_event(containment_events, exc)
+            continue
+        except (TransportError, RequestTimeoutError, RuntimeError) as exc:
+            logger.debug("recon: declared-handler script %s unreadable: %s", script_url, exc)
+            continue
+        script_base = script_url.rsplit("/", 1)[0] + "/"
+        for reference, context in _declared_references(script_body):
+            candidates.append((urljoin(script_base, reference), context))
+
+    endpoints: list[dict] = []
+    declared = False
+    for reference, context in candidates:
+        resolved = _contained_handler_url(reference, page_url, page_url, containment_events)
+        if resolved is None or urlparse(resolved).path == page_path:
+            continue
+        declared = True
+        if resolved in already:
+            continue
+        method = "post" if _POST_DECLARATION.search(context) else "get"
+        if any(endpoint["url"] == resolved and endpoint["method"] == method for endpoint in endpoints):
+            continue
+        if not _health_check_handler(session, resolved, containment_events):
+            continue
+        already.add(resolved)
+        endpoints.append(EndpointRecord(
+            url=resolved,
+            method=method,
+            params=[],
+            module_name=infer_module_name(resolved),
+        ))
+    return endpoints, declared
+
+
+def _page_endpoint_record(module_url: str, result: Any, *, requested_path: str) -> dict | None:
+    """Record a fetched module page as path-based navigation evidence.
+
+    Used only when the page itself declared neither a form nor a handler, so
+    the more specific evidence always wins and endpoint attribution for the
+    method agents is unchanged.  A redirect away from the requested path (for
+    example to ``login.php``) or an error response is not evidence.
+    """
+    status = int(getattr(result, "status_code", 0) or 0)
+    if status >= 400:
+        return None
+    final_url = getattr(result, "url", None)
+    if isinstance(final_url, str) and final_url:
+        final_path = urlparse(final_url).path
+        if final_path != urlparse(requested_path).path:
+            return None
+    return EndpointRecord(
+        url=requested_path,
+        method="get",
+        params=[],
+        module_name=infer_module_name(requested_path),
+    )
+
+
 # ── Navigation link extraction ──────────────────────────────────────────
 
 def extract_nav_links(
@@ -882,6 +1084,27 @@ def recon(state: ExploitationState) -> dict[str, Any]:
                     )
                     if session_input_endpoint is not None:
                         all_endpoints.append(session_input_endpoint)
+
+                # Pages such as authbypass and the high blind SQLi module render
+                # no form at all, so form-only discovery under-reports the
+                # module inventory.  Register the handlers the fetched page
+                # itself declares, then fall back to recording the fetched page
+                # as path-based navigation evidence when the page declared
+                # nothing more specific.
+                known_urls = {str(endpoint.get("url") or "") for endpoint in all_endpoints}
+                declared_endpoints, declared_handlers = discover_declared_handlers(
+                    session,
+                    normalized_page_url,
+                    result.text,
+                    known_urls=known_urls,
+                    containment_events=containment_events,
+                )
+                all_endpoints.extend(declared_endpoints)
+                if not declared_handlers and not page_endpoints:
+                    page_endpoint = _page_endpoint_record(
+                        module_url, result, requested_path=normalized_page_url)
+                    if page_endpoint is not None:
+                        all_endpoints.append(page_endpoint)
             except ContainmentError as exc:
                 _append_containment_event(containment_events, exc)
                 logger.warning("recon: request for %s violated containment: %s", module_url, exc)

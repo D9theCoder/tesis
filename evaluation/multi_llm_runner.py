@@ -125,18 +125,19 @@ def _artifact_audit_counts(artifact: dict[str, Any]) -> dict[str, int]:
         [],
     )
     containment_rows = containment_value if isinstance(containment_value, list) else []
-    containment_failures = sum(
-        1
-        for event in containment_rows
-        if isinstance(event, dict)
-        and str(event.get("kind", "")).lower() in {"request", "redirect"}
-    )
+    from evaluation.containment import containment_summary
+    containment = containment_summary(containment_rows)
+    containment_failures = containment["attack_relevant"]
 
     return {
         "invalid_json_events": first_present("invalid_json_events", "invalid_outputs"),
         "fallback_events": first_present("fallback_events"),
         "containment_events": first_present("containment_events"),
+        # Attack-relevant violations only; navigation discards are reported on
+        # their own line so the two are never added together (D11).
         "containment_failures": containment_failures,
+        "containment_navigation_discards": containment["navigation_discards"],
+        "containment_summary": containment,
         "guardrail_activations": first_present(
             "guardrail_activations", "guardrail_activation_count"
         ),
@@ -357,7 +358,9 @@ def _build_matrix_aggregate(
                 summary["execution_status_counts"][status_fields["execution_status"]] += 1
                 summary["security_outcome_counts"][status_fields["security_outcome"]] += 1
             for key, count in audit_counts.items():
-                summary[key] += count
+                # Only scalar counts roll up; nested per-artifact summaries do not.
+                if isinstance(count, int):
+                    summary[key] = summary.get(key, 0) + count
         if status == "success":
             total_score = sum(int(item.get("score", 0)) for item in module_scores.values())
             chain_exploits = int(report_summary.get("chain_exploits_achieved", 0) or 0)
@@ -441,6 +444,7 @@ def _build_matrix_aggregate(
             "fallback_events",
             "containment_events",
             "containment_failures",
+            "containment_navigation_discards",
             "guardrail_activations",
         )
     }

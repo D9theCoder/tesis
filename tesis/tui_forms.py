@@ -862,7 +862,7 @@ class SettingsDrawer(BaseDrawer):
                         with Vertical(id="settings-evaluator-limits-card", classes="settings-card"):
                             for name, label, value, description in (
                                 ("attempts", "Review attempts", "2", "Maximum attempts per payload (1-3)."),
-                                ("tokens", "Output token limit", "1024", "Independent evaluator token budget (1-8192)."),
+                                ("tokens", "Output token limit", "1024", "Independent evaluator token budget (1-16384)."),
                                 ("timeout", "Request timeout", "60", "Seconds per evaluator request (1-120)."),
                             ):
                                 yield SettingField(label, Input(value=value, type="integer", id=f"settings-evaluator-{name}"), description, label_id=f"settings-evaluator-{name}-label")

@@ -142,6 +142,41 @@ def test_readiness_fails_closed_on_level_mismatch_and_preserves_coordinate():
     assert gate["code"] == "security_level_mismatch"
 
 
+def test_brute_force_token_requirement_is_observed_not_assumed():
+    """Only a level whose form declares ``user_token`` requires a token."""
+    medium = build_readiness(
+        state={"current_surface": "brute_force", "security_level": "medium"},
+        login_ok=True, requested_level="medium", observed_level="medium",
+        endpoints=[{"url": "http://x/vulnerabilities/brute/",
+                    "method": "get", "params": ["username", "password", "Login"]}],
+        requested_principal="admin", observed_principal="admin",
+        token_present=False, setup_state="authenticated_crawl")
+    assert medium["token"]["required"] is False
+    assert medium["status"] == "ready"
+
+    declared_but_absent = build_readiness(
+        state={"current_surface": "brute_force", "security_level": "high"},
+        login_ok=True, requested_level="high", observed_level="high",
+        endpoints=[{"url": "http://x/vulnerabilities/brute/",
+                    "method": "get", "params": ["username", "password", "user_token"],
+                    "csrf_token": "tok"}],
+        requested_principal="admin", observed_principal="admin",
+        token_present=False, setup_state="authenticated_crawl")
+    assert declared_but_absent["token"]["required"] is True
+    assert declared_but_absent["status"] == "failed"
+    assert readiness_gate(declared_but_absent)["code"] == "required_token_missing"
+
+    declared_and_present = build_readiness(
+        state={"current_surface": "brute_force", "security_level": "high"},
+        login_ok=True, requested_level="high", observed_level="high",
+        endpoints=[{"url": "http://x/vulnerabilities/brute/",
+                    "method": "get", "params": ["username", "password", "user_token"],
+                    "csrf_token": "tok"}],
+        requested_principal="admin", observed_principal="admin",
+        token_present=True, setup_state="authenticated_crawl")
+    assert declared_and_present["status"] == "ready"
+
+
 def test_cookie_value_is_not_security_level_proof():
     session = DVWASession("http://localhost/dvwa")
     response = MagicMock()
@@ -668,3 +703,45 @@ def test_unverified_security_level_is_a_setup_failure(monkeypatch):
             session.set_security_level("high")
     finally:
         session.close()
+
+
+def test_dvwa_view_source_affordance_is_not_sensitive_disclosure():
+    """The per-page 'view source' button must not quarantine an AC control."""
+    from foundation.control_catalog import structured_contamination_reason
+
+    page = (
+        '<input type="button" value="view source" class="popup_button" '
+        "id='source_button' data-source-url='../../vulnerabilities/view_source.php?id=authbypass'>"
+        "This page should only be accessible by the admin user."
+    )
+    event = {"event": "agent.probe.sent",
+             "payload": {"status_code": 200, "response_excerpt": page,
+                         "principal_id": "gordonb"}}
+    assert structured_contamination_reason("ac_force_browse", [event]) is None
+
+    disclosed = {"event": "agent.probe.sent",
+                 "payload": {"status_code": 200,
+                             "response_excerpt": "<?php $db = mysqli_connect(...); ",
+                             "principal_id": "gordonb"}}
+    assert structured_contamination_reason(
+        "ac_force_browse", [disclosed]) == "unexpected_sensitive_disclosure"
+
+
+def test_visit_login_is_not_a_control_driven_session_change():
+    """A control run inside the visit's own session must not be quarantined."""
+    from foundation.control_catalog import structured_contamination_reason
+
+    event = {"event": "agent.probe.sent",
+             "payload": {"status_code": 200, "principal_id": "gordonb",
+                         "initial_session_fingerprint": "pre-login",
+                         "session_fingerprint": "post-login"}}
+    assert structured_contamination_reason("ac_idor", [event]) is None
+
+    changed = {"event": "agent.probe.sent",
+               "payload": {"status_code": 200, "principal_id": "gordonb",
+                           "session_fingerprint": "post-login"}}
+    other = {"event": "agent.probe.sent",
+             "payload": {"status_code": 200, "principal_id": "gordonb",
+                         "session_fingerprint": "rotated-mid-control"}}
+    assert structured_contamination_reason(
+        "ac_idor", [changed, other]) == "unexpected_session_change"

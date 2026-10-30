@@ -30,6 +30,85 @@ from core.state import ALL_METHOD_AGENTS, SURFACES, METHODS_BY_SURFACE, SCORE_LA
 from core.state import score_decision
 from core.run_status import terminal_status
 
+#: The published ``Srun`` weights (see AGENTS.md: the formula is a research
+#: invariant, not a tunable). The per-method composite and the run-scope composite
+#: both read them from here so the two cannot drift apart.
+SCORE_WEIGHTS: dict[str, float] = {
+    "Smethod": 0.20,
+    "Spayload": 0.20,
+    "Sexploit": 0.30,
+    "Schain": 0.10,
+    "Soutput": 0.20,
+}
+
+#: What each component of the run-scope composite is scoped to, recorded in the
+#: artifact so a run-scope number is never mistaken for a per-method one.
+COMPOSITE_SCOPE = {
+    "scope": "run",
+    "Smethod": "selected_visit",
+    "Spayload": "selected_visit",
+    "Sexploit": "selected_visit",
+    "Schain": "run_max_over_visits",
+    "Soutput": "selected_visit",
+    "note": (
+        "Schain is run-scope on purpose: a completed chain route is by definition a "
+        "visit by a method other than the selected one, so grading the chain from the "
+        "selected visit records 0 for every run that chained successfully."
+    ),
+}
+
+
+def composite_from_components(components: dict[str, Any]) -> float:
+    """Return ``Srun`` for one component vector, using the published weights."""
+    return round(
+        sum(weight * float(components.get(dimension, 0) or 0)
+            for dimension, weight in SCORE_WEIGHTS.items()),
+        4,
+    )
+
+
+def best_payload_score(state: dict, method: str) -> int:
+    """Return the best executed-candidate payload grade attributed to ``method``."""
+    candidate_ids = {
+        str(candidate.get("candidate_id"))
+        for candidate in state.get("payload_candidates", {}).get(method, [])
+        if isinstance(candidate, dict) and candidate.get("candidate_id")
+    }
+    return max(
+        (int(score) for candidate_id, score in state.get("payload_scores", {}).items()
+         if candidate_id in candidate_ids),
+        default=0,
+    )
+
+
+def run_scope_score_components(state: dict) -> dict[str, int] | None:
+    """Return the run-scope ``Srun`` component vector, or None without a selection.
+
+    ``Smethod``/``Spayload``/``Sexploit``/``Soutput`` are attributed to the selected
+    visit, which is what their rubrics grade. ``Schain`` is the run's best chain
+    grade across every visit, so a completed chain route is visible at run level.
+    """
+    method = state.get("selected_method")
+    if not isinstance(method, str) or not method:
+        return None
+    chain_scores = {
+        str(key): int(value or 0)
+        for key, value in dict(state.get("chain_scores") or {}).items()
+    }
+    return {
+        "Smethod": int(state.get("method_scores", {}).get(method, 0) or 0),
+        "Spayload": best_payload_score(state, method),
+        "Sexploit": int(state.get("exploitation_scores", {}).get(method, 0) or 0),
+        "Schain": max(chain_scores.values(), default=0),
+        "Soutput": int(state.get("output_scores", {}).get(method, 0) or 0),
+    }
+
+
+def run_scope_composite(state: dict) -> float | None:
+    """Return the run-scope ``Srun``, or None when no method was selected."""
+    components = run_scope_score_components(state)
+    return None if components is None else composite_from_components(components)
+
 
 def output_grade(state: dict, method: str) -> tuple[int, str, list[str]]:
     """Grade method role outputs; unknown legacy scope is conservatively run-wide."""
@@ -299,25 +378,13 @@ def scorer(state: dict) -> dict:
             for candidate in state.get("payload_candidates", {}).get(method, [])
             if isinstance(candidate, dict) and candidate.get("candidate_id")
         }
-        payload_values = [
-            int(score)
-            for candidate_id, score in state.get("payload_scores", {}).items()
-            if candidate_id in candidate_ids
-        ]
-        payload_score = max(payload_values, default=0)
+        payload_score = best_payload_score(state, method)
         method_score = int(state.get("method_scores", {}).get(method, 0) or 0)
         exploit_score = int(state.get("exploitation_scores", {}).get(method, 0) or 0)
         chain_score = int(state.get("chain_scores", {}).get(method, 0) or 0)
-        composite_scores[method] = round(
-            0.20 * method_score
-            + 0.20 * payload_score
-            + 0.30 * exploit_score
-            + 0.10 * chain_score
-            + 0.20 * output_score,
-            4,
-        )
         components = dict(zip(("Smethod", "Spayload", "Sexploit", "Schain", "Soutput"),
             (method_score, payload_score, exploit_score, chain_score, output_score)))
+        composite_scores[method] = composite_from_components(components)
         decisions = [*state.get("scoring_decisions", []), *receipts]
         winning = []
         for dimension, grade in components.items():
@@ -330,6 +397,13 @@ def scorer(state: dict) -> dict:
     summary["output_scores"] = output_scores
     summary["composite_scores"] = composite_scores
     summary["scoring_context"] = "final_selected_or_last_executed_method"
+    run_components = run_scope_score_components(state)
+    summary["run_composite_components"] = run_components
+    summary["run_composite_score"] = (
+        None if run_components is None else composite_from_components(run_components))
+    summary["run_chain_score"] = (
+        None if run_components is None else run_components["Schain"])
+    summary["composite_scope"] = dict(COMPOSITE_SCOPE)
 
     existing_result = state.get("task_result")
     existing_reason = state.get("incomplete_reason")

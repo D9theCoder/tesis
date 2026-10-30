@@ -64,6 +64,20 @@ DVWA_USER_OBJECT_IDS = {
     "smithy": "5",
 }
 
+# Markers of genuinely disclosed sensitive state.  The "view source" affordance
+# DVWA renders on every module page is chrome, not disclosure, so the marker list
+# describes disclosed content (source text, phpinfo output, DB setup page, admin
+# area) instead of the button label that appears in ordinary page markup.
+SENSITIVE_DISCLOSURE_MARKERS: tuple[str, ...] = (
+    "database setup",
+    "phpinfo()",
+    "source code",
+    "welcome admin",
+    "administration",
+    "<?php",
+    "&lt;?php",
+)
+
 # Canonical probe rows that cannot serve as detection controls.  They are kept
 # for audit and for historical readers, but are never frozen or sent.
 _UNSAFE_CANONICAL = {
@@ -429,29 +443,38 @@ def structured_contamination_reason(
     Detection controls may prove a precondition but never authenticate, change
     the session/security level, mutate rate-limit state outside the declared
     rate control, expose sensitive content, or prove the assessed exploit.
+
+    A session identity that changes *between* this control's own requests is a
+    control-driven change.  A single request is never compared against the
+    pre-login fingerprint of the session that opened the visit: that difference
+    is the visit's own login, not contamination.
     """
     import re
+
+    probes: list[Mapping[str, Any]] = []
     for event in telemetry_events:
         if not isinstance(event, Mapping) or event.get("event") != "agent.probe.sent":
             continue
         payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
-        status = payload.get("status_code")
         excerpt = str(payload.get("response_excerpt") or "").lower()
+        if payload.get("status_code") is not None:
+            probes.append(payload)
         if module_name.startswith("bf_") and payload.get("signal_detected") is True and any(
                 marker in excerpt for marker in ("password protected area", "welcome")):
             return "unexpected_probe_authentication"
-        principal = payload.get("principal_id")
-        initial = payload.get("initial_session_fingerprint")
-        current = payload.get("session_fingerprint")
-        if principal and initial and current and str(initial) != str(current):
-            return "unexpected_session_change"
-        if module_name not in {"bf_dictionary", "bf_spray"} and status == 429:
+        if module_name not in {"bf_dictionary", "bf_spray"} and payload.get("status_code") == 429:
             return "unexpected_rate_limit_change"
-        if module_name in {"ac_idor", "ac_vertical_escalation", "ac_force_browse"}:
-            if any(marker in excerpt for marker in (
-                    "database setup", "phpinfo()", "view source", "source code",
-                    "welcome admin", "administration")):
-                return "unexpected_sensitive_disclosure"
+
+    if len({str(payload.get("session_fingerprint") or "") for payload in probes} - {""}) > 1:
+        return "unexpected_session_change"
+    if len({str(payload.get("principal_id") or "") for payload in probes} - {""}) > 1:
+        return "unexpected_session_change"
+
+    for payload in probes:
+        excerpt = str(payload.get("response_excerpt") or "").lower()
+        if module_name in {"ac_idor", "ac_vertical_escalation", "ac_force_browse"} and any(
+                marker in excerpt for marker in SENSITIVE_DISCLOSURE_MARKERS):
+            return "unexpected_sensitive_disclosure"
         if re.search(r"\b(?:admin|gordonb|pablo|smithy)\b\s*:\s*[a-f0-9]{32}", excerpt):
             return "control_proved_assessed_exploit"
     return None
