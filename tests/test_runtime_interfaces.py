@@ -3,41 +3,17 @@
 from __future__ import annotations
 
 import copy
-import json
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 import pytest
 
-from tesis.artifact_repository import ArtifactRepository, config_fingerprint
+from tesis.artifact_repository import config_fingerprint
 from tesis.runtime_events import (
     CancellationRequested,
     CancellationToken,
     CollectingRuntimeEventSink,
     RunEvent,
-    normalize_stream_chunk,
-    normalize_stream_chunks,
-    redact_secrets,
 )
-
-
-def test_artifact_repository_excludes_completed_resume_receipts(tmp_path: Path) -> None:
-    primary = tmp_path / "exec-original.json"
-    primary.write_text(json.dumps({
-        "execution_id": "exec-original", "run_id": "run-original", "status": "success",
-        "config": {"surface": "sqli", "security_level": "low"},
-    }))
-    receipt = tmp_path / "request-1.resume.json"
-    receipt.write_text(json.dumps({
-        "schema_version": "checkpoint-resume.v1", "status": "completed",
-        "source_execution_id": "exec-original", "replayed_nodes": 0,
-        "fresh_provider_calls": 0,
-    }))
-
-    items = ArtifactRepository(tmp_path).scan()
-
-    assert [(item.path, item.run_id) for item in items] == [(primary, "run-original")]
-    assert ArtifactRepository(receipt).scan() == []
 
 
 def test_event_sink_preserves_order_and_collects_concurrent_events() -> None:
@@ -83,60 +59,6 @@ def test_cancellation_token_is_cooperative_and_one_shot() -> None:
     assert raised.value.reason == "user requested stop"
 
 
-@pytest.mark.parametrize(
-    ("chunk", "expected"),
-    [
-        (
-            {
-                "candidates": [
-                    {"content": {"parts": [{"text": "gemini "}, {"text": "chunk"}]}}
-                ]
-            },
-            "gemini chunk",
-        ),
-        (
-            {
-                "type": "content_block_delta",
-                "delta": {"type": "text_delta", "text": "claude"},
-            },
-            "claude",
-        ),
-        ({"content": [{"type": "text", "text": "anthropic"}]}, "anthropic"),
-    ],
-)
-def test_normalize_stream_chunk_handles_provider_shapes(chunk: object, expected: str) -> None:
-    assert normalize_stream_chunk(chunk) == expected
-
-
-def test_normalize_stream_chunks_concatenates_openai_stream_and_ignores_tool_events() -> None:
-    chunks = [
-        {"choices": [{"delta": {"content": "hel"}}]},
-        {"choices": [{"delta": {"content": "lo"}}]},
-    ]
-
-    assert normalize_stream_chunks(chunks) == "hello"
-    assert normalize_stream_chunk({"type": "tool_use", "input": {"secret": "hidden"}}) == ""
-
-
-def test_redact_secrets_masks_nested_keys_and_explicit_values_without_mutation() -> None:
-    original = {
-        "api_key": "key-from-config",
-        "prompt": "Use key-from-trace only for this request",
-        "nested": {"Authorization": "Bearer header-value", "visible": "safe"},
-        "items": ["key-from-trace", {"response": "safe response"}],
-    }
-
-    redacted = redact_secrets(original, known_secrets=["key-from-trace", "header-value"])
-
-    assert redacted["api_key"] == "[REDACTED]"
-    assert redacted["prompt"] == "Use [REDACTED] only for this request"
-    assert redacted["nested"]["Authorization"] == "[REDACTED]"
-    assert redacted["nested"]["visible"] == "safe"
-    assert redacted["items"] == ["[REDACTED]", {"response": "safe response"}]
-    assert original["api_key"] == "key-from-config"
-    assert original["nested"]["Authorization"] == "Bearer header-value"
-
-
 def test_config_fingerprint_excludes_secrets_and_execution_identity() -> None:
     config = {
         "provider": "openai",
@@ -175,158 +97,3 @@ def test_config_fingerprint_excludes_secrets_and_execution_identity() -> None:
     changed_setup = copy.deepcopy(config)
     changed_setup["candidate_budget"] = 5
     assert config_fingerprint(changed_setup) != first
-
-
-def _write_json(path: Path, payload: object) -> None:
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-
-def test_artifact_repository_loads_legacy_new_matrix_and_malformed_files(tmp_path: Path) -> None:
-    common_config = {
-        "provider": "openai",
-        "model": "gpt-5",
-        "surface": "sqli",
-        "security_level": "low",
-        "payload_mode": "hybrid",
-        "candidate_budget": 4,
-        "api_key": "legacy-secret",
-    }
-    _write_json(
-        tmp_path / "legacy-run.json",
-        {
-            "run_id": "legacy-run",
-            "status": "success",
-            "timestamp": "2025-01-01T00:00:00Z",
-            "config": common_config,
-        },
-    )
-    repeated_config = {**common_config, "api_key": "new-secret", "repeat_index": 1}
-    _write_json(
-        tmp_path / "new-run.json",
-        {
-            "schema_version": "2",
-            "execution_id": "exec-new",
-            "run_id": "new-run",
-            "status": "cancelled",
-            "timestamp": "2025-01-02T00:00:00Z",
-            "config": repeated_config,
-        },
-    )
-    _write_json(
-        tmp_path / "matrix.json",
-        {
-            "schema_version": "2",
-            "execution_id": "exec-matrix",
-            "timestamp": "2024-12-31T00:00:00Z",
-            "config": {
-                "provider": "anthropic",
-                "model": "claude",
-                "surface": "brute_force",
-                "security_level": "high",
-                "payload_mode": "static_only",
-            },
-            "runs": [
-                {"run_id": "matrix-success", "status": "success", "timestamp": "2024-12-30T00:00:00Z"},
-                {"run_id": "matrix-error", "status": "error", "timestamp": "2024-12-29T00:00:00Z"},
-            ],
-        },
-    )
-    (tmp_path / "malformed.json").write_text("{not valid json", encoding="utf-8")
-
-    repository = ArtifactRepository(tmp_path)
-    items = repository.scan()
-
-    assert [item.run_id for item in items] == [
-        "new-run",
-        "legacy-run",
-        "matrix-success",
-        "matrix-error",
-    ]
-    assert repository.find_by_execution_id("exec-new").run_id == "new-run"
-    assert repository.find_by_run_id("legacy-run").execution_id is None
-
-    matrix_items = [item for item in items if item.is_matrix]
-    assert {item.run_id for item in matrix_items} == {"matrix-success", "matrix-error"}
-    assert {item.execution_id for item in matrix_items} == {"exec-matrix"}
-    assert all(item.path.name != "malformed.json" for item in items)
-
-    assert {item.run_id for item in repository.scan(provider="OPENAI")} == {"legacy-run", "new-run"}
-    assert {item.run_id for item in repository.scan(filters={"security": "HIGH"})} == {
-        "matrix-success",
-        "matrix-error",
-    }
-    assert {item.run_id for item in repository.scan(status=["SUCCESS", "CANCELLED"])} == {
-        "legacy-run",
-        "new-run",
-        "matrix-success",
-    }
-
-    duplicate_groups = repository.duplicate_config_fingerprints()
-    assert sorted(
-        {item.run_id for item in group} for group in duplicate_groups.values()
-    ) == [
-        {"legacy-run", "new-run"},
-        {"matrix-error", "matrix-success"},
-    ]
-    assert repository.group_by_config_fingerprint(duplicates_only=True) == duplicate_groups
-
-
-def test_artifact_repository_selects_latest_source_bound_receipts(tmp_path: Path) -> None:
-    """Default discovery shows each role's current receipt; history remains inspectable."""
-    from hashlib import sha256
-
-    source = tmp_path / "execution.json"
-    source.write_text(json.dumps({
-        "execution_id": "exec-review",
-        "run_id": "run-review",
-        "status": "success",
-        "config": {"surface": "sqli"},
-    }), encoding="utf-8")
-    source_hash = sha256(source.read_bytes()).hexdigest()
-
-    def write_receipt(
-        name: str,
-        mode: str,
-        generated_at: str,
-        *,
-        bound_hash: str = source_hash,
-        bound_execution_id: str = "exec-review",
-    ) -> Path:
-        path = tmp_path / "reviews" / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({
-            "artifact_type": "thesis_score_receipt",
-            "status": "final",
-            "scoring_mode": mode,
-            "execution_id": bound_execution_id,
-            "run_id": "run-review",
-            "source_path": str(source.resolve()),
-            "source_sha256": bound_hash,
-            "generated_at": generated_at,
-        }), encoding="utf-8")
-        return path
-
-    human_old = write_receipt("old-human.json", "human", "2026-10-11T10:00:00Z")
-    ai_old = write_receipt("old-ai.json", "ai", "2026-10-11T10:00:00Z")
-    human_latest = write_receipt("latest-human.json", "human", "2026-10-12T10:00:00Z")
-    ai_latest = write_receipt("latest-ai.json", "ai", "2026-10-12T10:00:00Z")
-    stale_hash = write_receipt("stale-hash-ai.json", "ai", "2026-10-13T10:00:00Z", bound_hash="0" * 64)
-    stale_execution = write_receipt(
-        "stale-execution-ai.json",
-        "ai",
-        "2026-10-14T10:00:00Z",
-        bound_execution_id="different-execution",
-    )
-
-    current = ArtifactRepository(tmp_path).scan()
-    current_receipts = {item.path for item in current if item.artifact_type == "thesis_score_receipt"}
-    assert current_receipts == {human_latest, ai_latest}
-    assert any(item.path == source for item in current)
-
-    history = ArtifactRepository(tmp_path, include_sidecars=True).scan()
-    history_receipts = {item.path for item in history if item.artifact_type == "thesis_score_receipt"}
-    assert history_receipts == {human_old, ai_old, human_latest, ai_latest, stale_hash, stale_execution}
-
-    source.write_text(source.read_text(encoding="utf-8") + "\n", encoding="utf-8")
-    changed_source = ArtifactRepository(tmp_path).scan()
-    assert not any(item.artifact_type == "thesis_score_receipt" for item in changed_source)

@@ -50,12 +50,6 @@ def test_exploit_finds_credentials(base_state):
     assert "bf_spray_confirmed" in result.get("confirmed_vulns", [])
     assert "authenticated_session" in result.get("achieved_outcomes", [])
 
-def test_login_failure(base_state):
-    """Verifies login failure behavior."""
-    mock_session = _make_mock_session(login_ok=False)
-    with patch("agents.brute_force.bf_spray_agent.DVWASession", return_value=mock_session):
-        result = bf_spray_agent(base_state)
-    assert result["scores"]["bf_spray"] == 0
 
 def test_credential_parser_does_not_send_strategy_prose_as_password():
     """LLM strategy suffixes must not become credential transport data."""

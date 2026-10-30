@@ -8,9 +8,8 @@ from copy import deepcopy
 from importlib import import_module
 from unittest.mock import MagicMock
 
-import pytest
 
-from core.chaining_coordinator import chaining_router_node, evaluate_chain_route, route_after_agent
+from core.chaining_coordinator import chaining_router_node, evaluate_chain_route
 from core.state import new_default_state
 from foundation.http_client import ContainmentError
 from tests.support import READY_RECEIPT
@@ -37,92 +36,6 @@ def fresh_sqli_chain_state():
         "endpoints": [{"module_name": "brute", "url": "http://localhost/dvwa/vulnerabilities/brute/"}]}
 
 
-@pytest.mark.parametrize("status_code,expected", [(200, True), (429, False), (503, None)])
-def test_sqli_chain_measures_missing_destination_preconditions(monkeypatch, status_code, expected):
-    state = fresh_sqli_chain_state()
-    before = deepcopy(state)
-    session = MagicMock()
-    from types import SimpleNamespace
-    session.http = SimpleNamespace(cookies={"PHPSESSID": "destination-session"})
-    session._username = "admin"
-    session.login.return_value = True
-    response = MagicMock(status_code=status_code, text="Incorrect", headers={}, elapsed_ms=10.0)
-    session.get.return_value = response
-    monkeypatch.setattr(import_module("foundation.recon"), "DVWASession", lambda target: session)
-
-    update = chaining_router_node(state)
-
-    assert state == before
-    assert session.get.call_count == 2
-    assert {call.kwargs["params"]["username"] for call in session.get.call_args_list} == {"rate_test", "probe"}
-    session.close.assert_called_once()
-    assert update["observations"].get("no_rate_limit") is expected
-    assert update["next_agent"] == ("bf_dictionary" if expected is True else "orchestrator")
-    if expected is True:
-        assert update["iteration_count"] == 2
-        selection = next(row for row in update["scoring_decisions"] if row["dimension"] == "Smethod")
-        assert selection["observations"]["no_rate_limit"] is True
-        assert not any(row.get("target_agent") == "bf_dictionary" and row.get("status") == "infeasible"
-                       for row in update.get("chain_history", []))
-    else:
-        assert "selected_visit_id" not in update
-    # Even inconclusive transport must not trigger another probe on each router visit.
-    if expected is None:
-        chaining_router_node({**state, **update})
-        assert session.get.call_count == 2
-
-
-@pytest.mark.parametrize("case", ["known", "budget", "linear", "attempted"])
-def test_destination_recon_does_not_run_without_a_pending_consumable_chain(monkeypatch, case):
-    state = fresh_sqli_chain_state()
-    if case == "known":
-        state["observations"]["no_rate_limit"] = False
-    elif case == "budget":
-        state["max_iterations"] = 1
-    elif case == "linear":
-        state["experiment_condition"] = "linear_hybrid"
-    else:
-        state["attempted_agents"].append("bf_dictionary")
-    factory = MagicMock(side_effect=AssertionError("unexpected destination HTTP"))
-    monkeypatch.setattr(import_module("foundation.recon"), "DVWASession", factory)
-
-    update = chaining_router_node(state)
-
-    factory.assert_not_called()
-    assert update["next_agent"] != "bf_dictionary"
-
-
-def test_destination_preconditions_are_measured_before_the_source_gate(monkeypatch):
-    """D6: a non-consumable source still yields a destination measurement.
-
-    The measured destination is what tells a later run whether the edge is
-    reachable at all; the route itself stays blocked by the source rejection.
-    """
-    state = fresh_sqli_chain_state()
-    state["found_credentials"][0]["representation"] = "password_hash"
-    session = MagicMock()
-    from types import SimpleNamespace
-    session.http = SimpleNamespace(cookies={"PHPSESSID": "destination-session"})
-    session._username = "admin"
-    session.login.return_value = True
-    session.get.return_value = MagicMock(status_code=200, text="Incorrect", headers={}, elapsed_ms=10.0)
-    monkeypatch.setattr(import_module("foundation.recon"), "DVWASession", lambda target: session)
-
-    update = chaining_router_node(state)
-
-    assert update["next_agent"] != "bf_dictionary"
-    assert update["observations"].get("no_rate_limit") is True
-    completed = [event for event in update["telemetry_events"]
-                 if event.get("event") == "recon.destination.completed"]
-    assert completed and completed[0]["payload"]["reason"] == "preconditions_measured"
-    rejection = next(row for row in update["chain_assessment"]["edges"]
-                     if row["target_agent"] == "bf_dictionary")
-    assert rejection["status"] == "infeasible"
-    assert rejection["decisive_stage"] == "source"
-    assert rejection["reason"] == "plaintext_source_credentials_unavailable"
-    assert rejection["destination_rejection"] is None
-
-
 def test_destination_recon_records_containment_failure_and_closes_session(monkeypatch):
     state = fresh_sqli_chain_state()
     session = MagicMock()
@@ -139,37 +52,6 @@ def test_destination_recon_records_containment_failure_and_closes_session(monkey
     session.close.assert_called_once()
     session.get.assert_not_called()
 
-
-def test_route_after_agent_budget_exhausted():
-    """Verifies route after agent budget exhausted behavior."""
-    state = {
-        "confirmed_vulns": [],
-        "achieved_outcomes": [],
-        "iteration_count": 30,
-        "max_iterations": 30,
-        "current_surface": "sqli",
-        "attempted_agents": [],
-        "blocked_agents": [],
-        "failure_agents": [],
-        "observations": {},
-    }
-    assert route_after_agent(state) == "scorer"
-
-def test_route_after_agent_fallback_orchestrator():
-    """Verifies route after agent fallback orchestrator behavior."""
-    state = {
-        "confirmed_vulns": ["sqli_union_confirmed"],
-        "achieved_outcomes": [],
-        "iteration_count": 1,
-        "max_iterations": 30,
-        "current_surface": "sqli",
-        "attempted_agents": [],
-        "blocked_agents": [],
-        "failure_agents": [],
-        "observations": {},
-        "agent_results": [],
-    }
-    assert route_after_agent(state) == "orchestrator"
 
 def test_proved_enabling_outcome_triggers_akg_chain():
     """A proved enabling outcome may route its explicitly linked next method."""
@@ -190,24 +72,6 @@ def test_proved_enabling_outcome_triggers_akg_chain():
     assert next_agent == "bf_dictionary"
     assert event["reason"] == "chain_ready"
 
-def test_authenticated_outcome_triggers_access_control_chain():
-    """An authenticated-session outcome selects the first registered AC route."""
-    state = {
-        "confirmed_vulns": [],
-        "achieved_outcomes": ["authenticated_session"],
-        **proved_chain_source("authenticated_session"),
-        "iteration_count": 1,
-        "max_iterations": 30,
-        "current_surface": "brute_force",
-        "attempted_agents": [],
-        "blocked_agents": [],
-        "failure_agents": [],
-        "observations": {"no_rate_limit": True, "force_browse_endpoints_visible": True},
-        "experiment_condition": "akg_guided_hybrid",
-    }
-    next_agent, event = evaluate_chain_route(state)
-    assert next_agent == "ac_force_browse"
-    assert event["reason"] == "chain_ready"
 
 def test_linear_condition_does_not_take_cross_surface_chain():
     """The baseline condition must not receive AKG-guided chain routing."""

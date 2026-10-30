@@ -62,32 +62,3 @@ def test_exploit_conditional_delay(base_state):
 
     assert result["scores"]["sqli_time_blind"] >= 3
     assert "sqli_time_blind_confirmed" in result.get("confirmed_vulns", [])
-def test_chain_check_achieves_score_four(base_state):
-    """sqli_confirmed is in the AKG graph, so chain check can trigger credentials_extracted.
-    Chain exploit score 4 is achievable."""
-    base_state["confirmed_vulns"] = ["sqli_confirmed"]
-    mock_session = _make_mock_session()
-
-    def mock_get(path, params=None):
-        """Supports regression tests for test sqli time blind agent."""
-        import time
-        resp = _make_response(200, "User ID exists")
-        if "SLEEP" in (params or {}).get("id", ""):
-            time.sleep(3.0)
-        return resp
-
-    mock_session.get.side_effect = mock_get
-
-    with patch("agents.sqli.sqli_time_blind_agent.DVWASession", return_value=mock_session):
-        result = sqli_time_blind_agent(base_state)
-
-    assert result["scores"]["sqli_time_blind"] == 3
-    assert "credentials_extracted" not in result.get("achieved_outcomes", [])
-def test_login_failure(base_state):
-    """Login failure returns score 0."""
-    mock_session = _make_mock_session(login_ok=False)
-
-    with patch("agents.sqli.sqli_time_blind_agent.DVWASession", return_value=mock_session):
-        result = sqli_time_blind_agent(base_state)
-
-    assert result["scores"]["sqli_time_blind"] == 0

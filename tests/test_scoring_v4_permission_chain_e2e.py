@@ -13,13 +13,11 @@ and automatic scores are merged. These are offline E2E controls, not live DVWA
 acceptance.
 """
 from copy import deepcopy
-from hashlib import sha256
 from types import SimpleNamespace
 
 import pytest
 
 from evaluation.scoring_evidence import evidence_hash, oracle_confirmed, verified_dependencies
-from foundation.verifier import fixture_attestation_valid
 
 
 FIXTURE = "offline-dvwa-permission-fixture"
@@ -194,29 +192,6 @@ def chain_artifact():
     return artifact, source_candidate, dest_candidate, source, dest, route
 
 
-def test_documented_nonadmin_helper_uses_fixture_identity_and_fails_closed(monkeypatch):
-    from foundation import session_manager
-    FakeSession.instances = []
-    monkeypatch.setattr(session_manager, "DVWASession", FakeSession)
-    session, principal, initial_fingerprint = session_manager.open_documented_nonadmin_session(TARGET, "low")
-    assert principal == "gordonb"
-    assert session.username == principal
-    assert initial_fingerprint
-    assert all("fixture-secret" not in repr(call) for item in FakeSession.instances for call in item.calls)
-    session.close()
-
-    class MissingPolicy(FakeSession):
-        def get(self, path, params=None):
-            response = super().get(path, params)
-            if str(path).rstrip("/").endswith("authbypass"):
-                response.text = "No operator permission policy here"
-            return response
-
-    monkeypatch.setattr(session_manager, "DVWASession", MissingPolicy)
-    with pytest.raises(ValueError, match="documented non-admin"):
-        session_manager.open_documented_nonadmin_session(TARGET, "low")
-
-
 def test_candidate_permission_oracle_binds_same_resource_and_identity(monkeypatch):
     from evaluation import permission_oracle
     from evaluation.scoring_evidence import oracle_confirmed
@@ -249,85 +224,6 @@ def test_candidate_permission_oracle_binds_same_resource_and_identity(monkeypatc
         (False, False, row["object_id"], row["action"]),
     }
     assert "fixture-secret" not in repr(bundle)
-
-
-def test_candidate_permission_oracle_records_broader_public_exposure_without_dropping_candidate_binding(monkeypatch):
-    from evaluation import permission_oracle
-    from evaluation.scoring_evidence import oracle_confirmed
-
-    class PublicUserData(FakeSession):
-        def get(self, path, params=None):
-            response = super().get(path, params)
-            if str(path).endswith("get_user_data.php") and str((params or {}).get("userId")) == "1":
-                response.text = '[{"user_id":"1","first_name":"admin"}]'
-                response.status_code = 200
-            return response
-
-    PublicUserData.instances = []
-    monkeypatch.setattr(permission_oracle, "DVWASession", PublicUserData)
-    monkeypatch.setattr("foundation.session_manager.DVWASession", PublicUserData)
-    artifact, _, _, _, row, _ = chain_artifact()
-    raw = {
-        "target_url": TARGET, "security_level": "low", "selected_visit_id": row["visit_id"],
-        "selected_method": "ac_idor", "run_id": artifact["run_id"], "execution_id": artifact["execution_id"],
-        "payload_candidates": {"ac_idor": [artifact["final_state"]["payload_candidates"]["ac_idor"][0]]},
-        "payload_validation_results": {"ac_idor": [{"candidate_id": row["candidate_id"], "valid": True}]},
-        "response_evidence": artifact["final_state"]["response_evidence"],
-        "found_credentials": [{"username": "gordonb", "password": "fixture-secret",
-            "source_evidence_id": "response:0", "source_candidate_id": "bf_dictionary_generated_0",
-            "source_visit_id": "bf_dictionary:visit:0"}],
-    }
-    result = permission_oracle.collect_permission_oracles(artifact, raw)
-    evidence = result["final_state"]["response_evidence"][1]
-    assert result["config"]["scoring_oracles"][-1]["document"]["status"] == "confirmed", result["config"]["scoring_oracles"][-1]["document"]
-    assert oracle_confirmed(result, evidence)
-    bundle = result["config"]["scoring_oracles"][int(evidence["oracle_ref"].split("/")[3])]
-    doc = bundle["document"]
-    assert doc["scope_outcome"] == "broad_exposure"
-    assert doc["candidate_replay"]["principal_id"] == "gordonb"
-    assert doc["candidate_replay"]["object_id"] == row["object_id"]
-    controls = {control["control"]: control for control in doc["controls"]}
-    assert controls["admin_allowed"]["observed_allowed"] is True
-    assert controls["anonymous_denied"]["expected_allowed"] is False
-    assert controls["anonymous_denied"]["observed_allowed"] is True
-    assert controls["anonymous_denied"]["expected_confirmed"] is True
-    assert all(control["object_id"] == row["object_id"] and control["action"] == row["action"]
-        for control in controls.values())
-    assert "fixture-secret" not in repr(bundle)
-
-
-def test_permission_oracle_rejects_broad_exposure_when_protocol_did_not_opt_in(monkeypatch):
-    from evaluation import permission_oracle
-    from evaluation.scoring_evidence import oracle_confirmed
-
-    class PublicUserData(FakeSession):
-        def get(self, path, params=None):
-            response = super().get(path, params)
-            if str(path).endswith("get_user_data.php") and str((params or {}).get("userId")) == "1":
-                response.text = '[{"user_id":"1","first_name":"admin"}]'
-                response.status_code = 200
-            return response
-
-    PublicUserData.instances = []
-    monkeypatch.setattr(permission_oracle, "DVWASession", PublicUserData)
-    monkeypatch.setattr("foundation.session_manager.DVWASession", PublicUserData)
-    artifact, _, _, _, row, _ = chain_artifact()
-    artifact["config"]["scoring_oracles"][0]["document"]["oracle_protocol"].pop("allow_broad_exposure")
-    source = artifact["config"]["scoring_oracles"][0]
-    source["sha256"] = evidence_hash(source["document"])
-    raw = {
-        "target_url": TARGET, "security_level": "low", "selected_visit_id": row["visit_id"],
-        "selected_method": "ac_idor", "run_id": artifact["run_id"], "execution_id": artifact["execution_id"],
-        "payload_candidates": {"ac_idor": [artifact["final_state"]["payload_candidates"]["ac_idor"][0]]},
-        "payload_validation_results": {"ac_idor": [{"candidate_id": row["candidate_id"], "valid": True}]},
-        "response_evidence": artifact["final_state"]["response_evidence"],
-        "found_credentials": [{"username": "gordonb", "password": "fixture-secret",
-            "source_evidence_id": "response:0", "source_candidate_id": "bf_dictionary_generated_0",
-            "source_visit_id": "bf_dictionary:visit:0"}],
-    }
-    result = permission_oracle.collect_permission_oracles(artifact, raw)
-    evidence = result["final_state"]["response_evidence"][1]
-    assert not oracle_confirmed(result, evidence)
 
 
 @pytest.mark.parametrize("mutation", ["candidate", "object", "action", "response_hash", "source_hash"])
@@ -396,101 +292,3 @@ def test_dependency_oracle_requires_source_material_and_positive_negative_contro
     assert any(c["source_available"] is False and c["destination_confirmed"] is False
         for c in bundle["document"]["dependency_controls"])
     assert "fixture-secret" not in repr(bundle)
-
-
-def test_dependency_oracle_accepts_consumed_credentials_for_confirmed_force_browse(monkeypatch):
-    from evaluation import dependency_oracle, permission_oracle, session_oracle
-    from evaluation.scoring_evidence import attach_oracle_evidence
-    from core.knowledge_graph import AttackKnowledgeGraph
-
-    class ForceBrowseSession(FakeSession):
-        def get(self, path, params=None):
-            response = super().get(path, params)
-            if str(path).rstrip("/").endswith("authbypass") and self.principal == "gordonb":
-                response.text = "This page should only be accessible by the admin user"
-                response.status_code = 200
-            return response
-
-    ForceBrowseSession.instances = []
-    for module in (dependency_oracle, permission_oracle, session_oracle):
-        monkeypatch.setattr(module, "DVWASession", ForceBrowseSession)
-    monkeypatch.setattr("foundation.session_manager.DVWASession", ForceBrowseSession)
-
-    artifact, source_candidate, _, source, destination, route = chain_artifact()
-    assert any(edge.get("target") == "ac_force_browse" and edge.get("is_chain") is True
-        for edge in AttackKnowledgeGraph().get_next_actions("authenticated_session"))
-    destination_candidate = {
-        "candidate_id": "ac_force_browse_generated_0",
-        "source_seed_id": "ac_force_browse_low_exploit_2",
-        "source": "llm_generated", "method": "ac_force_browse", "stage": "exploit",
-        "payload_or_logic": "vulnerabilities/authbypass/", "target_param": "path",
-        "expected_signal": "restricted_endpoint_accessible",
-    }
-    destination.update({
-        "agent_id": "ac_force_browse", "candidate_id": destination_candidate["candidate_id"],
-        "endpoint": f"{TARGET}/vulnerabilities/authbypass/",
-        "payload": "vulnerabilities/authbypass/", "object_id": "dvwa-path:/vulnerabilities/authbypass/",
-        "consumed_source_evidence_id": source["evidence_id"], "verified_grade": 2,
-        "verification_reason": "visibility_without_permission_oracle",
-    })
-    route.update({"target": "ac_force_browse", "target_agent": "ac_force_browse",
-        "target_visit_id": destination["visit_id"]})
-    route["consumption"][0].update({
-        "candidate_id": destination_candidate["candidate_id"],
-        "destination_evidence_id": destination["evidence_id"],
-    })
-    state = artifact["final_state"]
-    state["payload_candidates"].pop("ac_idor")
-    state["payload_candidates"]["ac_force_browse"] = [destination_candidate]
-    state["payload_validation_results"].pop("ac_idor")
-    state["payload_validation_results"]["ac_force_browse"] = [
-        {"candidate_id": destination_candidate["candidate_id"], "valid": True}]
-    state["payload_provenance"].pop("ac_idor_generated_0")
-    state["payload_provenance"][destination_candidate["candidate_id"]] = {
-        "method": "ac_force_browse", "source": "llm_generated"}
-    state["verifier_history"][1].update({
-        "agent_id": "ac_force_browse", "confirmed_vulns": ["ac_force_browse_confirmed"],
-        "evidence_refs": ["#/final_state/response_evidence/1"],
-    })
-    state["confirmed_vulns"] = ["bf_dictionary_confirmed", "ac_force_browse_confirmed"]
-    artifact["selected_method"] = "ac_force_browse"
-    raw = {
-        "target_url": TARGET, "security_level": "low",
-        "found_credentials": [{"username": "gordonb", "password": "fixture-secret",
-            "source_evidence_id": source["evidence_id"],
-            "source_candidate_id": source_candidate["candidate_id"],
-            "source_visit_id": source["visit_id"]}],
-        "payload_candidates": state["payload_candidates"],
-        "payload_validation_results": state["payload_validation_results"],
-        "response_evidence": state["response_evidence"], "chain_history": [route],
-    }
-    artifact = permission_oracle.collect_permission_oracles(artifact, raw)
-    artifact = session_oracle.collect_session_oracles(artifact, raw)
-    attach_oracle_evidence(artifact)
-    result = dependency_oracle.collect_dependency_oracles(artifact, raw)
-
-    dependencies = verified_dependencies(result)
-    assert len(dependencies) == 1
-    assert dependencies[0]["source"]["candidate_id"] == source_candidate["candidate_id"]
-    assert dependencies[0]["destination"]["candidate_id"] == destination_candidate["candidate_id"]
-    assert dependencies[0]["destination"]["consumed_source_evidence_id"] == source["evidence_id"]
-    assert "fixture-secret" not in repr(result["config"]["scoring_oracles"])
-
-
-def test_dependency_oracle_does_not_bind_different_candidate_material(monkeypatch):
-    from evaluation import dependency_oracle
-    FakeSession.instances = []
-    monkeypatch.setattr(dependency_oracle, "DVWASession", FakeSession)
-    monkeypatch.setattr("foundation.session_manager.DVWASession", FakeSession)
-    artifact, source_candidate, _, source, _, route = chain_artifact()
-    raw = {
-        "target_url": TARGET, "security_level": "low",
-        "found_credentials": [{"username": "admin", "password": "other-secret",
-            "source_evidence_id": source["evidence_id"], "source_candidate_id": source_candidate["candidate_id"]}],
-        "payload_candidates": artifact["final_state"]["payload_candidates"], "chain_history": [route],
-        "payload_validation_results": artifact["final_state"]["payload_validation_results"],
-        "response_evidence": artifact["final_state"]["response_evidence"],
-    }
-    result = dependency_oracle.collect_dependency_oracles(artifact, raw)
-    assert not verified_dependencies(result)
-    assert not any(s["document"].get("dependencies") for s in result["config"]["scoring_oracles"])

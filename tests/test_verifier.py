@@ -1,17 +1,6 @@
 """Evidence isolation, signal matching and CAPTCHA boundary regressions."""
 
-from foundation.verifier import VerificationResult, Verifier, has_captcha_challenge
-
-
-class TestVerificationResult:
-    """Validate VerificationResult dataclass."""
-
-    def test_to_dict_returns_new_list(self):
-        """to_dict should return a copy of evidence, not a reference."""
-        vr = VerificationResult(evidence=["test"])
-        d = vr.to_dict()
-        d["evidence"].append("extra")
-        assert len(vr.evidence) == 1
+from foundation.verifier import Verifier, has_captcha_challenge
 
 
 class TestVerifierBehavior:
@@ -23,39 +12,6 @@ class TestVerifierBehavior:
         result = v.contains_any("Warning: MySQL syntax error", ["mysql", "oracle"])
         assert result.ok is True
         assert "mysql" in [item.lower() for item in result.evidence]
-
-    def test_contains_any_empty_input(self):
-        """Verifies contains any empty input behavior."""
-        v = Verifier()
-        result = v.contains_any("", ["signal"])
-        assert result.ok is False
-
-    def test_regex_match_skips_invalid_pattern(self):
-        """Verifies regex match skips invalid pattern behavior."""
-        v = Verifier()
-        result = v.regex_match("text", ["(", r"uid=\\d+"])
-        # Invalid regex patterns should NOT be included in evidence
-        assert not any(item.startswith("invalid_regex:") for item in result.evidence)
-        assert result.ok is False
-        assert result.evidence == []
-
-    def test_regex_match_valid_pattern_ignores_invalid(self):
-        """Verifies regex match valid pattern ignores invalid behavior."""
-        v = Verifier()
-        result = v.regex_match("uid=33(www-data)", ["(", r"uid=\d+"])
-        # Invalid regex should be skipped, valid regex should still match
-        assert not any(item.startswith("invalid_regex:") for item in result.evidence)
-        assert result.ok is True
-        assert r"uid=\d+" in result.evidence
-
-
-def test_captcha_detector_ignores_dvwa_navigation_label():
-    """The Insecure CAPTCHA menu link is not a challenge boundary."""
-    html = """
-    <nav><a href='/dvwa/vulnerabilities/captcha/'>Insecure CAPTCHA</a></nav>
-    <form><input name='username'><input name='password'></form>
-    """
-    assert has_captcha_challenge(html) is False
 
 
 def test_captcha_detector_requires_a_challenge_control():

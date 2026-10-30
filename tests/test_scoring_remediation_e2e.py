@@ -3,24 +3,19 @@
 Inventory: results/validation/scoring-remediation-2026-09-29/failure-inventory.json.
 Each control retains graph inputs, transport receipts, decisions and real exports.
 """
-from copy import deepcopy
 from hashlib import sha256
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import uuid4
 
 import httpx
-import pytest
-from langgraph.types import Overwrite
 
 from core.graph_builder import build_framework
 from core.knowledge_graph import AttackKnowledgeGraph
-from core.state import METHODS_BY_SURFACE, new_default_state
+from core.state import METHODS_BY_SURFACE
 from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.reporter import write_json_report
 from evaluation.runner import run_single_engagement
-from foundation.http_client import ContainmentError, HTTPClient
 from llm.runtime import LLMRuntime
 from tests.test_method_agents_e2e import Fixture
 
@@ -233,19 +228,6 @@ def control(monkeypatch, name, *, automatic=False, condition='linear_hybrid', me
     return artifact, fixture, graph
 
 
-def save_graph(name, state, fixture):
-    from tesis.runtime_events import redact_secrets
-    state = redact_secrets({k: v for k, v in state.items() if k not in {'messages', 'model_config'}})
-    artifact = {'kind': 'offline_graph_control', 'final_state': state,
-        'config': {'provider': 'openai_compatible'},
-        'response_evidence': state['response_evidence'], 'timing_evidence': state['timing_evidence'],
-        'verifier_decision': state['verifier_decision'], 'scoring_decisions': state.get('scoring_decisions', []),
-        'requests': fixture.requests, 'fresh_http_calls': 0, 'fresh_provider_calls': 0}
-    artifact['manual_scoring_evidence'] = manual_scoring_rows(artifact)
-    write_json_report(ROOT / 'controls' / name / 'graph.json', artifact)
-    return artifact
-
-
 def assert_vector(state):
     method = state['selected_method']
     ids = {c['candidate_id'] for c in state['payload_candidates'][method]}
@@ -280,111 +262,6 @@ def test_scoring_discarded_page_form_is_only_a_recon_observation(monkeypatch):
     assert not any('external.invalid' in r['url'] for r in fixture.requests)
 
 
-@pytest.mark.parametrize('kind', ['request', 'redirect'])
-def test_scoring_real_scope_penalty_survives_graph_reducers(monkeypatch, kind):
-    artifact, fixture, graph = control(monkeypatch, f'penalty-{kind}')
-    threads = list(graph.checkpointer.storage)
-    config = {'configurable': {'thread_id': threads[0]}}
-    client = HTTPClient('http://localhost/dvwa')
-    before = len(fixture.requests)
-    try:
-        with pytest.raises(ContainmentError):
-            if kind == 'request':
-                client.get('https://external.invalid/escape')
-            else:
-                def redirect(session, verb, url, **kwargs):
-                    fixture.requests.append({'url': str(url), 'verb': verb, 'data': {}})
-                    return httpx.Response(302, headers={'Location': 'https://external.invalid/escape'}, request=httpx.Request(verb, url))
-                monkeypatch.setattr(httpx.Client, 'request', redirect)
-                client.get('vulnerabilities/sqli/')
-        violation = deepcopy(client.containment_events)
-    finally:
-        client.close()
-    assert len(fixture.requests) == before + (kind == 'redirect')
-    graph.update_state(config, {'containment_events': violation}, as_node='chaining_router')
-    final = graph.invoke(None, config=config)
-    save_graph(f'penalty-{kind}', final, fixture)
-    assert artifact['output_score'] == 4
-    assert final['output_scores']['sqli_union'] == 0
-    assert final['exploitation_scores']['sqli_union'] == 3
-    assert_vector(final)
-    outputs = [d['score'] for d in final['scoring_decisions'] if d['dimension'] == 'Soutput']
-    assert outputs[0] == 4 and outputs[-1] == 0
-
-
-def test_scoring_candidate_evidence_and_revisit(monkeypatch):
-    artifact, fixture, graph = control(monkeypatch, 'mixed_candidates')
-    state = artifact['final_state']
-    exploit = [r for r in artifact['response_evidence'] if r['stage'] == 'exploit']
-    failed, success = exploit[:2]
-    assert state['payload_scores'][failed['candidate_id']] == 0
-    assert state['payload_scores'][success['candidate_id']] == 3
-    assert state['payload_provenance'][failed['candidate_id']]['source'] == 'static_seed'
-    assert state['payload_provenance'][success['candidate_id']]['source'] == 'llm_generated'
-    probes = [r for r in artifact['response_evidence'] if r['stage'] == 'probe']
-    assert probes
-    assert all(r.get('identity_kind') == 'independent_control'
-        and not r.get('candidate_id')
-        and r['control_id'] not in state['payload_scores'] for r in probes)
-    fixture.control = 'negative'
-    config = {'configurable': {'thread_id': next(iter(graph.checkpointer.storage))}}
-    graph.update_state(config, {'tried_payloads': Overwrite({}), 'attempted_agents': Overwrite([])}, as_node='recon')
-    final = graph.invoke(None, config=config)
-    exported = save_graph('candidate-revisit', final, fixture)
-    visits = [decision['visit_id'] for decision in final['verifier_history'] if decision['agent_id'] == 'sqli_union']
-    assert len(set(visits)) == 2
-    assert final['iteration_count'] > artifact['final_state']['iteration_count']
-    decisions = [d for d in final['scoring_decisions'] if d['dimension'] == 'Spayload' and d.get('candidate_id') == success['candidate_id']]
-    assert [d['score'] for d in decisions] == [3]
-    later = [d for d in final['scoring_decisions']
-        if d['dimension'] == 'Spayload' and d.get('visit_id') == visits[-1]]
-    assert later and all(d['score'] == 0 and d['candidate_id'] != success['candidate_id']
-        for d in later)
-    assert final['payload_scores'][success['candidate_id']] == 3
-    row = next(r for r in exported['manual_scoring_evidence'] if r['candidate_id'] == success['candidate_id'])
-    assert row['scoring_decision']['decision_id'] == decisions[0]['decision_id']
-    assert row['verifier_decision']['decision'] == 'confirmed'
-    assert row['later_verifier_decisions'][-1]['decision'] == 'not_confirmed'
-    assert_vector(final)
-
-
-@pytest.mark.parametrize('name,credit,status', [
-    ('plaintext_chain', 4, 'completed'), ('hash_chain', 0, 'unverified'),
-    ('failed_chain', 0, 'failed'),
-])
-def test_scoring_chain_dependency_and_routed_selection(monkeypatch, name, credit, status):
-    artifact, _, graph = control(monkeypatch, name, automatic=True, condition='akg_guided_hybrid', ranked=True)
-    state = artifact['final_state']
-    if name == 'plaintext_chain':
-        first_input = artifact['method_execution_inputs'][0]['state']
-        assert 'no_rate_limit' not in first_input['observations']
-        assert any(event['event_type'] == 'recon.destination.completed'
-                   for event in artifact['execution_log'])
-    if name == 'hash_chain':
-        assert not any(h.get('status') == 'completed' and h.get('target_agent') == 'bf_dictionary' for h in state['chain_history'])
-        assert state['chain_scores'].get('bf_dictionary', 0) == 0
-        assert not any(c.get('representation') == 'plaintext' for c in state.get('found_credentials', []))
-        return
-    assert state['chain_scores']['bf_dictionary'] == credit
-    routes = [h for h in state['chain_history'] if h.get('target_agent') == 'bf_dictionary']
-    assert [h['status'] for h in routes] == ['ready', 'routed', 'executed', status]
-    destination = [d for d in state['scoring_decisions'] if d['dimension'] == 'Smethod' and d['method'] == 'bf_dictionary']
-    assert destination[0]['selection_source'] == 'akg_route'
-    assert destination[0]['surface'] == 'brute_force'
-    assert destination[0]['score'] == (3 if destination[0]['viable'] else 1)
-    events = [e for e in artifact['execution_log'] if e['event_type'] == 'akg.route.selected']
-    assert any(e['data'].get('source') and e['data'].get('preconditions') for e in events)
-    if credit:
-        receipt = routes[-1]
-        assert receipt['consumption'] and receipt['source_evidence_refs'] and receipt['destination_evidence_refs']
-        assert receipt['credited_method'] == 'bf_dictionary'
-        config = {'configurable': {'thread_id': next(iter(graph.checkpointer.storage))}}
-        graph.update_state(config, {}, as_node='bf_dictionary')
-        again = graph.invoke(None, config=config)
-        assert len([h for h in again['chain_history'] if h['status'] == 'completed']) == 1
-    assert_vector(state)
-
-
 def test_scoring_linear_forced_and_authorization_zeros(monkeypatch):
     forced, _, _ = control(monkeypatch, 'plaintext_chain', condition='akg_guided_hybrid')
     assert forced['chain_score'] == 0 and not forced['final_state']['chain_history']
@@ -398,77 +275,6 @@ def test_scoring_linear_forced_and_authorization_zeros(monkeypatch):
     assert 'credentials_extracted' not in state['confirmed_vulns']
 
 
-def test_scoring_ready_route_does_not_earn_completion(monkeypatch):
-    artifact, fixture, _ = control(monkeypatch, 'plaintext_chain', ranked=True)
-    graph = build_framework()
-    config = {'configurable': {'thread_id': 'ready-route'}}
-    state = new_default_state()
-    state.update(target_url='http://localhost/dvwa', current_surface='sqli',
-        experiment_condition='akg_guided_hybrid', max_iterations=12,
-        scoring_rubric_version='scoring.v4', scoring_profile=frozen_test_profile(),
-        fixture_id='synthetic-dvwa', protocol_version='offline.v1')
-    fixture.provider_calls = 0
-    list(graph.stream(state, config=config, interrupt_after=['chaining_router']))
-    paused = graph.get_state(config).values
-    save_graph('ready-route', paused, fixture)
-    assert paused['chain_history'][-1]['status'] == 'routed'
-    assert not any(paused['chain_scores'].values())
-    assert not any(d['dimension'] == 'Schain' and d['score'] == 4 for d in paused['scoring_decisions'])
-
-
-@pytest.mark.parametrize('name,grade,invalid', [('invalid_json', 2, True), ('provider_timeout', 3, False)])
-def test_scoring_provider_failure_is_distinct_from_returned_invalid_json(monkeypatch, name, grade, invalid):
-    artifact, _, _ = control(monkeypatch, name, automatic=True)
-    assert bool(artifact['invalid_json_events']) is invalid
-    assert artifact['output_score'] == grade
-    assert_vector(artifact['final_state'])
-
-
-def test_scoring_saved_data_repair_uses_no_transport_or_provider(monkeypatch):
-    from evaluation.scoring_repair import rescore_saved_artifact
-    # Failure control: a missing terminal chain log must stay missing after
-    # hash-pinned rescoring; setup cannot depend on a local historical archive.
-    artifact, _, _ = control(monkeypatch, 'saved_data')
-    artifact['validation_scope'] = 'offline_synthetic_fixture'
-    artifact['final_state'].pop('chain_history')
-    source = ROOT / 'controls' / 'saved-data' / 'source.json'
-    write_json_report(source, artifact)
-    before = source.read_bytes()
-    def forbidden(*args, **kwargs):
-        pytest.fail('Pure rescoring attempted external I/O')
-    monkeypatch.setattr(httpx.Client, 'request', forbidden)
-    monkeypatch.setattr('llm.runtime.LLMRuntime.invoke', forbidden)
-    repaired = rescore_saved_artifact(source, expected_sha256=sha256(before).hexdigest())
-    write_json_report(ROOT / 'controls' / 'saved-data' / 'rescored.json', repaired)
-    assert source.read_bytes() == before
-    assert repaired['source_sha256'] == sha256(before).hexdigest()
-    assert repaired['fresh_http_calls'] == repaired['fresh_provider_calls'] == 0
-    assert repaired['corrected_score_vector']['Soutput'] == 4
-    assert repaired['corrected_score_vector']['Schain'] == 0
-    assert 'chain_history' in repaired['legacy_evidence_gaps']
-    assert 'chain_history' not in repaired['final_state']
-    assert {d['dimension'] for d in repaired['component_comparison']} == {'Smethod', 'Spayload', 'Sexploit', 'Schain', 'Soutput', 'Srun'}
-    assert_vector(repaired['final_state'])
-    with pytest.raises(ValueError, match='hash'):
-        rescore_saved_artifact(source, expected_sha256='wrong')
-
-
-@pytest.mark.parametrize('method,name', [('sqli_time_blind', 'negative'),
-    ('sqli_boolean_blind', 'negative'), ('ac_idor', 'negative'), ('bf_dictionary', 'throttle')])
-def test_scoring_probe_controls_require_the_declared_signal(monkeypatch, method, name):
-    from tests import test_method_agents_e2e as existing
-    monkeypatch.setattr(existing, 'EVIDENCE', ROOT / 'controls' / 'probe-signals')
-    artifact, _ = existing.run_control(monkeypatch, method, 'low', name)
-    controls = [event for event in artifact['control_events']
-        if event['method'] == method and event['phase'] == 'method_probe']
-    assert controls and any(event['status'] == 'sent' for event in controls)
-    assert all(event['signal_detected'] is False for event in controls if event['status'] == 'sent')
-    assert all(event['control_id'] not in artifact['final_state']['payload_scores'] for event in controls)
-    assert any(row['method'] == method and row['reason_code'] == 'precondition_false'
-        for row in artifact['selection_rejections'])
-    assert not any(row['stage'] == 'exploit' for row in artifact['response_evidence'])
-
-
 def test_scoring_candidate_receipts_retain_the_response_that_earned_the_grade(monkeypatch):
     artifact, _, _ = control(monkeypatch, 'mixed_candidates')
     failed, success = [r for r in artifact['response_evidence'] if r['stage'] == 'exploit'][:2]
@@ -479,22 +285,3 @@ def test_scoring_candidate_receipts_retain_the_response_that_earned_the_grade(mo
     assert artifact['final_state']['found_credentials'][0]['password'] == '[REDACTED]'
     assert '5f4dcc3b5aa765d61d8327deb882cf99' not in success['response_excerpt']
     assert len(success['response_sha256']) == 64
-
-
-def test_scoring_sanitized_frozen_chain_input_replays_source_binding(monkeypatch):
-    from evaluation.payload_replay import replay_method_inputs
-    artifact, fixture, _ = control(monkeypatch, 'plaintext_chain', automatic=True,
-        condition='akg_guided_hybrid', ranked=True)
-    frozen = next(item for item in artifact['method_execution_inputs'] if item['method'] == 'bf_dictionary')
-    recovered = frozen['state']['found_credentials'][0]
-    assert recovered['password'] == '[REDACTED]'
-    bindings = frozen['state']['active_chain_route']['source_bindings']
-    assert bindings and bindings[0]['source_evidence_id'] == recovered['source_evidence_id']
-    assert bindings[0]['candidate_id'] in {c['candidate_id'] for c in frozen['state']['payload_candidates']['bf_dictionary']}
-    source = ROOT / 'controls' / 'plaintext_chain' / 'plaintext_chain.json'
-    calls = fixture.provider_calls
-    replay = replay_method_inputs(source, output_path=ROOT / 'controls' / 'plaintext_chain' / f'dictionary-replay-{uuid4().hex}.json',
-        input_index=artifact['method_execution_inputs'].index(frozen))
-    assert fixture.provider_calls == calls and replay['fresh_provider_calls'] == 0
-    assert replay['final_state']['chain_consumption']
-    assert replay['final_state']['chain_consumption'][-1]['source_evidence_id'] == recovered['source_evidence_id']

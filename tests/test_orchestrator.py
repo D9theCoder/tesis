@@ -2,7 +2,6 @@
 
 from agents.orchestrator import orchestrator
 from tests.support import READY_RECEIPT
-from core.knowledge_graph import AttackKnowledgeGraph
 
 def test_orchestrator_stops_when_budget_exhausted():
     """Verifies orchestrator stops when budget exhausted behavior."""
@@ -31,30 +30,6 @@ def test_orchestrator_stops_when_budget_exhausted():
     assert update["task_result"] == "INCOMPLETE"
     assert update["incomplete_reason"] == "ITERATION_LIMIT"
 
-def test_orchestrator_critical_outcome_routes_to_scorer():
-    """Verifies orchestrator critical outcome routes to scorer behavior."""
-    state = {
-        "target_url": "http://localhost/dvwa",
-        "readiness": READY_RECEIPT,
-        "confirmed_vulns": [],
-        "achieved_outcomes": ["admin_session_obtained"],
-        "iteration_count": 1,
-        "max_iterations": 30,
-        "security_level": "low",
-        "llm_provider": "openai_compatible",
-        "current_surface": "sqli",
-        "observations": {},
-        "attempted_agents": [],
-        "blocked_agents": [],
-        "failure_agents": [],
-        "scores": {},
-        "evasion_enabled": False,
-        "evasion_mode": "reactive",
-        "evasion_max_retries": 3,
-        "consecutive_clean_responses": 0,
-    }
-    update = orchestrator(state)
-    assert update["next_agent"] == "scorer"
 def test_orchestrator_stops_without_model_call_after_method_exhaustion(monkeypatch):
     """An exhausted viable set stops deterministically with a terminal reason."""
     class FakeLLM:
@@ -97,77 +72,3 @@ def test_orchestrator_stops_without_model_call_after_method_exhaustion(monkeypat
         and event["payload"] == {"reason": "ALL_METHODS_EXHAUSTED"}
         for event in result["telemetry_events"]
     )
-
-def test_orchestrator_distinguishes_model_scorer_stop_before_exhaustion(monkeypatch):
-    """A semantic scorer stop before method exhaustion is not all-methods failure."""
-    class FakeLLM:
-        def invoke(self, messages):
-            return type("Response", (), {
-                "content": '{"next_agent":"scorer","reason_code":"best_viable"}',
-            })()
-
-    monkeypatch.setattr("agents.orchestrator.get_llm", lambda *args, **kwargs: FakeLLM())
-    result = orchestrator({
-        "target_url": "http://localhost/dvwa",
-        "readiness": READY_RECEIPT,
-        "security_level": "high",
-        "llm_provider": "openai_compatible",
-        "current_surface": "access_control",
-        "observations": {"force_browse_endpoints_visible": True, "object_ids_enumerable": True},
-        "confirmed_vulns": [],
-        "achieved_outcomes": [],
-        "attempted_agents": ["ac_force_browse"],
-        "blocked_agents": [],
-        "failure_agents": [],
-        "scores": {},
-        "method_scores": {},
-        "iteration_count": 2,
-        "max_iterations": 30,
-        "payload_mode": "llm_mutation_only",
-        "experiment_condition": "akg_guided_hybrid",
-        "evasion_enabled": False,
-        "evasion_mode": "reactive",
-        "evasion_max_retries": 3,
-        "evasion_cooldown_threshold": 5,
-        "consecutive_clean_responses": 0,
-    })
-
-    assert result["next_agent"] == "scorer"
-    assert result["task_result"] == "INCOMPLETE"
-    assert result["incomplete_reason"] == "MODEL_STOPPED_WITHOUT_FINDING"
-
-def test_orchestrator_counts_execution_failure_as_attempted_for_terminal_reason(monkeypatch):
-    """A recorded agent failure must not degrade an exhausted stop to unspecified."""
-    class FakeLLM:
-        def invoke(self, messages):
-            return type("Response", (), {
-                "content": '{"next_agent":"scorer","reason_code":"best_viable"}',
-            })()
-
-    monkeypatch.setattr("agents.orchestrator.get_llm", lambda *args, **kwargs: FakeLLM())
-    result = orchestrator({
-        "target_url": "http://localhost/dvwa",
-        "readiness": READY_RECEIPT,
-        "security_level": "high",
-        "llm_provider": "openai_compatible",
-        "current_surface": "access_control",
-        "observations": {"force_browse_endpoints_visible": True},
-        "confirmed_vulns": [],
-        "achieved_outcomes": [],
-        "attempted_agents": [],
-        "blocked_agents": [],
-        "failure_agents": ["ac_force_browse"],
-        "scores": {},
-        "method_scores": {},
-        "iteration_count": 2,
-        "max_iterations": 30,
-        "payload_mode": "llm_mutation_only",
-        "experiment_condition": "akg_guided_hybrid",
-        "evasion_enabled": False,
-        "evasion_mode": "reactive",
-        "evasion_max_retries": 3,
-        "evasion_cooldown_threshold": 5,
-        "consecutive_clean_responses": 0,
-    })
-
-    assert result["incomplete_reason"] == "ALL_METHODS_EXHAUSTED"

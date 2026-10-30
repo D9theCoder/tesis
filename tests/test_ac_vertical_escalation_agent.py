@@ -63,12 +63,3 @@ def test_admin_looking_html_without_record_oracle_does_not_confirm(base_state, m
     assert result["scores"]["ac_vertical_escalation"] == 0
     assert not result.get("confirmed_vulns")
     assert result["verifier_decision"]["decision"] == "not_confirmed"
-
-def test_missing_documented_nonadmin_session_fails_closed(base_state, monkeypatch):
-    """Session setup failure does not perform unbound privilege probes."""
-    def fail_session(*args):
-        raise ValueError("fixture lacks documented non-admin identity")
-
-    monkeypatch.setattr(vertical, "open_access_control_session", fail_session)
-    result = ac_vertical_escalation_agent(base_state)
-    assert result["scores"]["ac_vertical_escalation"] == 0

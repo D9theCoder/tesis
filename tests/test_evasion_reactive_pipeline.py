@@ -3,7 +3,6 @@
 This module verifies current behavior for state handling, routing, payloads,
 LLM adapters, agents, evaluation, or CLI integration without changing runtime
 code."""
-import pytest
 from unittest.mock import MagicMock, patch
 from tests.support import READY_RECEIPT
 

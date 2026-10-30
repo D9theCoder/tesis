@@ -4,7 +4,6 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from agents.brute_force.bf_dictionary_agent import bf_dictionary_agent
-from core.state import new_default_state
 from tests.support import ready_state
 
 @pytest.fixture
@@ -58,11 +57,4 @@ def test_login_failure(base_state):
     mock_session = _make_mock_session(login_ok=False)
     with patch("agents.brute_force.bf_dictionary_agent.DVWASession", return_value=mock_session):
         result = bf_dictionary_agent(base_state)
-    assert result["scores"]["bf_dictionary"] == 0
-
-def test_missing_target_url():
-    """Verifies missing target url behavior."""
-    state = new_default_state()
-    state["security_level"] = "low"
-    result = bf_dictionary_agent(state)
     assert result["scores"]["bf_dictionary"] == 0

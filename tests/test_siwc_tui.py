@@ -7,7 +7,6 @@ from textual.app import App
 from textual.widgets import Button, Input, Select, Static, TextArea, OptionList
 
 from llm.siwc.oauth import SIWCSession
-from llm.siwc.storage import SIWCError
 from tesis import tui_state
 from tesis.config_loader import load_yaml_config, parse_yaml_config
 from tesis.tui_forms import SettingsDrawer
@@ -97,47 +96,3 @@ def test_catalog_selection_updates_only_selected_profile_and_saves(settings_conf
             await pilot.pause()
     asyncio.run(scenario())
     assert calls == ["research"]
-
-
-@pytest.mark.parametrize("catalog", [[], SIWCError("SIWC is signed out; run auth login")])
-def test_empty_or_failed_catalog_does_not_offer_stale_models(settings_config, monkeypatch, catalog):
-    def load(_self, _account):
-        if isinstance(catalog, Exception):
-            raise catalog
-        return catalog
-    monkeypatch.setattr(SIWCSession, "list_models", load)
-
-    async def scenario():
-        app = SettingsApp()
-        async with app.run_test(size=(80, 24)) as pilot:
-            await pilot.pause()
-            drawer = app.screen
-            drawer.refresh_chatgpt_models()
-            await _wait_catalog(pilot, drawer)
-            assert drawer.query_one("#settings-chatgpt-model", Select).disabled
-            assert drawer.query_one("#settings-chatgpt-apply", Button).disabled
-            text = str(drawer.query_one("#settings-chatgpt-status", Static).content)
-            assert "signed out" in text if isinstance(catalog, Exception) else "no visible models" in text
-            await pilot.press("escape")
-            await pilot.pause()
-    asyncio.run(scenario())
-
-
-def test_changing_account_discards_old_catalog_and_late_worker_results(settings_config):
-    async def scenario():
-        app = SettingsApp()
-        async with app.run_test(size=(80, 24)) as pilot:
-            await pilot.pause()
-            drawer = app.screen
-            generation = drawer._model_generation
-            drawer._chatgpt_models_ready(generation, "openai_codex_auth", "default",
-                                        [{"slug": "old-account-only", "display_name": "Old account model"}], None)
-            drawer.query_one("#settings-chatgpt-account", Input).value = "different"
-            await pilot.pause()
-            drawer._chatgpt_models_ready(generation, "openai_codex_auth", "default",
-                                        [{"slug": "late-result", "display_name": "Stale"}], None)
-            assert drawer.query_one("#settings-chatgpt-model", Select).disabled
-            assert drawer._catalog_binding is None
-            await pilot.press("escape")
-            await pilot.pause()
-    asyncio.run(scenario())

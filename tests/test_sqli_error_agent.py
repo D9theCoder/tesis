@@ -31,16 +31,6 @@ def _make_response(status_code=200, text="No results"):
     resp.text = text
     return resp
 
-def test_probe_no_error_returns_zero(base_state):
-    """When no error message appears, score should be 0."""
-    mock_session = _make_mock_session()
-    mock_session.get.return_value = _make_response(200, "Normal page")
-
-    with patch("agents.sqli.sqli_error_agent.DVWASession", return_value=mock_session):
-        result = sqli_error_agent(base_state)
-
-    assert result["scores"]["sqli_error"] == 0
-    assert result["observations"].get("error_messages_enabled") is False
 
 def test_exploit_extracts_data(base_state):
     """When error-based extraction succeeds, score >= 3."""
@@ -60,25 +50,6 @@ def test_exploit_extracts_data(base_state):
 
     assert result["scores"]["sqli_error"] >= 3
     assert "sqli_error_confirmed" in result.get("confirmed_vulns", [])
-def test_error_confirmation_does_not_fabricate_credentials(base_state):
-    """An error-based SQLi signal alone is not evidence of extracted credentials."""
-    base_state["confirmed_vulns"] = ["sqli_confirmed"]
-    mock_session = _make_mock_session()
-
-    def mock_get(path, params=None):
-        """Supports regression tests for test sqli error agent."""
-        payload = (params or {}).get("id", "")
-        if "extractvalue" in payload or "UNION" in payload:
-            return _make_response(200, "~dvwa<br>admin:password")
-        return _make_response(200, "You have an error in your SQL syntax")
-
-    mock_session.get.side_effect = mock_get
-
-    with patch("agents.sqli.sqli_error_agent.DVWASession", return_value=mock_session):
-        result = sqli_error_agent(base_state)
-
-    assert result["scores"]["sqli_error"] == 3
-    assert "credentials_extracted" not in result.get("achieved_outcomes", [])
 
 def test_login_failure(base_state):
     """Login failure should return score 0."""

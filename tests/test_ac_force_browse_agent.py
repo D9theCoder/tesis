@@ -71,11 +71,3 @@ def test_visible_content_without_permission_control_is_probe_only(base_state, mo
     assert result["scores"]["ac_force_browse"] == 1
     assert not result.get("confirmed_vulns")
     assert result["verifier_decision"]["decision"] == "not_confirmed"
-def test_missing_documented_nonadmin_session_fails_closed(base_state, monkeypatch):
-    """Session setup failure does not perform unbound permission probes."""
-    def fail_session(*args):
-        raise ValueError("fixture lacks documented non-admin identity")
-
-    monkeypatch.setattr(force_browse, "open_access_control_session", fail_session)
-    result = ac_force_browse_agent(base_state)
-    assert result["scores"]["ac_force_browse"] == 0

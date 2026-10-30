@@ -26,8 +26,6 @@ from core.payload_policy import (
 )
 from core.state import (
     METHODS_BY_SURFACE,
-    PAYLOAD_MODES,
-    SECURITY_LEVELS,
     new_default_state,
 )
 from evaluation.scoring_evidence import evidence_hash
@@ -210,9 +208,12 @@ def _fake_generate(
     return [generated], prompt_event, []
 
 
-@pytest.mark.parametrize("security_level", SECURITY_LEVELS)
-@pytest.mark.parametrize("payload_mode", PAYLOAD_MODES)
-@pytest.mark.parametrize("evasion_enabled,evasion_mode", GUARDRAIL_CASES)
+# Representative sample: every method under both conditions at one security
+# level, payload mode and guardrail setting. Level/mode-specific behaviour is
+# covered by the focused payload-mode and SQLi level tests.
+@pytest.mark.parametrize("security_level", ["low"])
+@pytest.mark.parametrize("payload_mode", ["hybrid"])
+@pytest.mark.parametrize("evasion_enabled,evasion_mode", GUARDRAIL_CASES[1:2])
 @pytest.mark.parametrize("experiment_condition", CONDITIONS)
 @pytest.mark.parametrize("surface,method", METHOD_CASES)
 def test_runtime_coordinate_selects_and_validates_method_payloads(

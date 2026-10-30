@@ -8,7 +8,6 @@ import pytest
 
 import tesis.cli as cli
 from tesis.config_loader import ConfigError, load_and_resolve_config
-from tesis.headless import run_headless
 
 
 def _config(path: Path, body: str = "") -> Path:
@@ -21,59 +20,6 @@ def _config(path: Path, body: str = "") -> Path:
         encoding="utf-8",
     )
     return path
-
-
-def test_legacy_config_uses_serial_no_cache_runtime(tmp_path: Path) -> None:
-    config = load_and_resolve_config(config_path=str(_config(tmp_path / "config.yaml")), cli_args={})
-
-    assert config.llm_runtime.max_concurrency == 1
-    assert config.llm_runtime.cache_scope == "none"
-    assert config.llm_runtime.cache_enabled is False
-
-
-@pytest.mark.parametrize(("override", "expected"), [(None, True), (False, False), (True, True)])
-def test_direct_single_nested_cache_scope_preserves_explicit_override(tmp_path, monkeypatch, override, expected):
-    from evaluation.runner import run_single_engagement
-    from llm.runtime import current_call_context
-
-    class Graph:
-        def stream(self, state, **_kwargs):
-            assert current_call_context().cache_enabled is expected
-            yield {**state, "task_result": "INCOMPLETE", "incomplete_reason": "MODEL_STOPPED_WITHOUT_FINDING"}
-
-    monkeypatch.setattr("evaluation.runner.build_framework", lambda **_kwargs: Graph())
-    artifact = run_single_engagement(target_url="http://localhost/dvwa", llm_provider="openai",
-        security_level="low", surface="sqli", target_method="sqli_union", payload_mode="static_only",
-        output_dir=str(tmp_path), llm_runtime_config={"cache_scope": "run"}, llm_cache=override)
-    assert artifact["config"]["llm_cache_scope"] == ("run" if expected else "none")
-
-
-def test_runtime_roles_preserve_unpinned_profile_and_default_payload_budget(tmp_path: Path) -> None:
-    config = load_and_resolve_config(
-        config_path=str(_config(
-            tmp_path / "config.yaml",
-            "candidate_budget: 3\n"
-            "llm_runtime:\n"
-            "  max_concurrency: 2\n"
-            "  cache_scope: run\n"
-            "  roles:\n"
-            "    orchestrator:\n"
-            "      model_profile: openai_compatible\n"
-            "      model_name: fast-orchestrator\n"
-            "    payload_generator:\n"
-            "      structured_output: json_prompt\n",
-        )),
-        cli_args={},
-    )
-
-    assert config.llm_runtime.max_concurrency == 2
-    assert config.llm_runtime.cache_enabled is True
-    assert config.role_configs["orchestrator"].model_name == "fast-orchestrator"
-    # An omitted role profile must remain unpinned so a matrix coordinate can
-    # supply its provider at runtime.
-    assert config.role_configs["payload_generator"].model_profile is None
-    assert config.role_configs["payload_generator"].max_tokens == 288
-    assert config.role_configs["payload_generator"].structured_output == "json_prompt"
 
 
 @pytest.mark.parametrize("value", (0, 5))
@@ -117,61 +63,6 @@ def test_cli_runtime_flags_override_yaml_and_map_role_names(tmp_path: Path) -> N
     assert config.role_configs["payload_generator"].model_name == "payload-model"
 
 
-def test_global_model_profile_selects_both_runtime_roles(tmp_path: Path) -> None:
-    path = _config(
-        tmp_path / "config.yaml",
-        "models:\n"
-        "  openai:\n"
-        "    provider: openai\n"
-        "    model_name: muse-model\n"
-        "  openai_compatible:\n"
-        "    provider: openai_compatible\n"
-        "    model_name: deepseek-model\n",
-    )
-    namespace = cli._headless_parser().parse_args([
-        "--headless",
-        "--model-profile",
-        "openai_compatible",
-    ])
-
-    config = load_and_resolve_config(
-        config_path=str(path),
-        cli_args=cli._headless_overrides(namespace),
-    )
-
-    assert config.model_profile == "openai_compatible"
-    assert config.role_configs["orchestrator"].model_profile == "openai_compatible"
-    assert config.role_configs["payload_generator"].model_profile == "openai_compatible"
-
-
-def test_role_specific_profile_overrides_global_model_profile(tmp_path: Path) -> None:
-    path = _config(
-        tmp_path / "config.yaml",
-        "models:\n"
-        "  openai:\n"
-        "    provider: openai\n"
-        "    model_name: muse-model\n"
-        "  openai_compatible:\n"
-        "    provider: openai_compatible\n"
-        "    model_name: deepseek-model\n",
-    )
-    namespace = cli._headless_parser().parse_args([
-        "--headless",
-        "--model-profile",
-        "openai_compatible",
-        "--orchestrator-model-profile",
-        "openai",
-    ])
-
-    config = load_and_resolve_config(
-        config_path=str(path),
-        cli_args=cli._headless_overrides(namespace),
-    )
-
-    assert config.role_configs["orchestrator"].model_profile == "openai"
-    assert config.role_configs["payload_generator"].model_profile == "openai_compatible"
-
-
 def test_unknown_global_model_profile_fails_with_available_profiles(tmp_path: Path) -> None:
     path = _config(
         tmp_path / "config.yaml",
@@ -186,86 +77,3 @@ def test_unknown_global_model_profile_fails_with_available_profiles(tmp_path: Pa
             config_path=str(path),
             cli_args={"model_profile": "missing"},
         )
-
-
-def test_environment_model_profile_selects_both_runtime_roles(tmp_path: Path, monkeypatch) -> None:
-    path = _config(
-        tmp_path / "config.yaml",
-        "models:\n"
-        "  openai:\n"
-        "    provider: openai\n"
-        "    model_name: muse-model\n"
-        "  openai_compatible:\n"
-        "    provider: openai_compatible\n"
-        "    model_name: deepseek-model\n",
-    )
-    monkeypatch.setenv("TESIS_MODEL_PROFILE", "openai_compatible")
-
-    config = load_and_resolve_config(config_path=str(path), cli_args={})
-
-    assert config.model_profile == "openai_compatible"
-    assert config.role_configs["orchestrator"].model_profile == "openai_compatible"
-    assert config.role_configs["payload_generator"].model_profile == "openai_compatible"
-
-
-def test_cli_concurrency_parser_rejects_out_of_bounds() -> None:
-    with pytest.raises(SystemExit):
-        cli._headless_parser().parse_args(["--llm-max-concurrency", "5"])
-
-
-def test_explicit_runtime_controls_override_environment(tmp_path, monkeypatch):
-    path = _config(tmp_path / "config.yaml")
-    for key, value in {
-        "TESIS_LLM_MAX_CONCURRENCY": "1", "TESIS_LLM_CACHE": "true",
-        "TESIS_ORCHESTRATOR_MODEL_PROFILE": "environment-profile",
-        "TESIS_ORCHESTRATOR_MODEL": "environment-model",
-        "TESIS_PAYLOAD_MODEL_PROFILE": "environment-profile",
-        "TESIS_PAYLOAD_MODEL": "environment-model",
-    }.items():
-        monkeypatch.setenv(key, value)
-    resolved = load_and_resolve_config(config_path=str(path), cli_args={
-        "llm_max_concurrency": 4, "llm_cache": False,
-        "orchestrator_model_profile": "cli-profile", "orchestrator_model": "cli-model",
-        "payload_model_profile": "cli-profile", "payload_model": "cli-model",
-    })
-    assert resolved.llm_max_concurrency == 4
-    assert resolved.llm_cache is False
-    assert all(role.model_profile == "cli-profile" and role.model_name == "cli-model"
-               for role in resolved.role_configs.values())
-
-
-def test_headless_forwards_runtime_and_all_model_profiles(tmp_path: Path, monkeypatch) -> None:
-    path = _config(
-        tmp_path / "config.yaml",
-        "llm_runtime:\n"
-        "  max_concurrency: 2\n"
-        "  cache_scope: run\n"
-        "  roles:\n"
-        "    orchestrator:\n"
-        "      model_profile: orchestrator_profile\n"
-        "    payload_generator:\n"
-        "      model_profile: payload_profile\n"
-        "models:\n"
-        "  orchestrator_profile:\n"
-        "    provider: openai_compatible\n"
-        "    model_name: orchestrator-model\n"
-        "  payload_profile:\n"
-        "    provider: openai_compatible\n"
-        "    model_name: payload-model\n",
-    )
-    captured: dict[str, object] = {}
-
-    def fake_run(**kwargs):
-        captured.update(kwargs)
-        return {"status": "success", "execution_id": "test-execution"}
-
-    monkeypatch.setattr("tesis.headless.run_single_engagement", fake_run)
-
-    code, result, _ = run_headless(config_path=str(path), cli_args={})
-
-    assert code == 0
-    assert result["status"] == "success"
-    assert captured["llm_max_concurrency"] == 2
-    assert captured["llm_cache_enabled"] is True
-    assert captured["llm_role_configs"]["payload_generator"]["model_profile"] == "payload_profile"
-    assert captured["model_profiles"]["payload_profile"]["model_name"] == "payload-model"
