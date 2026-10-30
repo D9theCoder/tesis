@@ -34,6 +34,78 @@ def _as_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
+_GRADED_COMPONENTS = ("Smethod", "Spayload", "Sexploit", "Schain", "Soutput")
+
+
+def format_graded_scores_table(data: Mapping[str, Any]) -> str | None:
+    """Render the graded thesis vector and its pending reasons when present.
+
+    Accepts an observer projection run (``graded_scores``) or a bare review
+    queue document (``components`` + ``component_pending_reasons``). Returns
+    ``None`` when the input carries no graded projection, so runtime-only data
+    is never presented as a graded score.
+    """
+    graded = data.get("graded_scores") if isinstance(data, Mapping) else None
+    if not isinstance(graded, Mapping):
+        if isinstance(data, Mapping) and isinstance(data.get("components"), Mapping) \
+                and isinstance(data.get("component_pending_reasons", {}), Mapping):
+            graded = data
+        else:
+            return None
+    components = graded.get("components")
+    if not isinstance(components, Mapping):
+        return (f"Graded thesis components ({graded.get('rubric_version') or 'scoring.v4'}): "
+                f"unavailable ({graded.get('reason') or 'missing_components'})")
+    pending = graded.get("component_pending_reasons")
+    pending = pending if isinstance(pending, Mapping) else {}
+    rows = []
+    for key in _GRADED_COMPONENTS:
+        value = components.get(key)
+        reason = pending.get(key)
+        rows.append([key, "N/A" if value is None else str(value),
+                     "" if value is not None else str(reason or "missing_evidence")])
+    lines = [f"Graded thesis components ({graded.get('rubric_version') or 'scoring.v4'}):",
+             _as_table(["Component", "Score", "Pending reason"], rows)]
+    workflows = graded.get("workflows")
+    if isinstance(workflows, Mapping):
+        # Human and AI workflows stay distinct; this never selects one.
+        for mode in ("human", "ai"):
+            workflow = workflows.get(mode)
+            if not isinstance(workflow, Mapping):
+                continue
+            if mode == "human":
+                label = "HUMAN workflow (human review required; provisional until final receipt)"
+            else:
+                label = "AI workflow (experimental/provisional; not final thesis human signoff)"
+            label = str(workflow.get("label") or label)
+            detail = f"{label}: {workflow.get('status') or 'missing'}"
+            if workflow.get("reason"):
+                detail += f" ({workflow['reason']})"
+            lines.append(detail)
+            workflow_components = workflow.get("components")
+            workflow_pending = workflow.get("component_pending_reasons")
+            workflow_pending = workflow_pending if isinstance(workflow_pending, Mapping) else {}
+            if isinstance(workflow_components, Mapping):
+                observed = []
+                for key in _GRADED_COMPONENTS:
+                    value = workflow_components.get(key)
+                    if value is None:
+                        observed.append(f"{key}=N/A ({workflow_pending.get(key) or 'missing_evidence'})")
+                    else:
+                        observed.append(f"{key}={value}")
+                lines.append("  components: " + ", ".join(observed))
+            elif workflow_pending:
+                lines.append("  pending components: " + ", ".join(
+                    f"{key}=N/A ({reason})" for key, reason in workflow_pending.items()))
+            mean = workflow.get("Spayload_final")
+            mean_text = "N/A" if mean is None else str(mean)
+            if mean is None and workflow.get("reason"):
+                mean_text += f" ({workflow['reason']})"
+            srun = workflow.get("Srun_final")
+            lines.append(f"  Spayload mean: {mean_text}; Srun final: {'N/A' if srun is None else srun}")
+    return "\n".join(lines)
+
+
 def format_module_scores_table(
     data: Mapping[str, Any],
     *,
@@ -56,10 +128,11 @@ def format_module_scores_table(
 
     run = runs[0]
     fields = terminal_status(run)
+    graded = format_graded_scores_table(run)
     report = run.get("report", {})
     module_scores = report.get("module_scores", {})
     if not isinstance(module_scores, Mapping) or not module_scores:
-        return "No module score data available."
+        return graded or "No module score data available."
 
     rows: list[list[str]] = []
     for module in sorted(module_scores.keys()):
@@ -78,9 +151,9 @@ def format_module_scores_table(
         rows.append(row)
 
     if not rows:
-        return "No modules matched the provided filters."
+        return graded or "No modules matched the provided filters."
 
-    headers = ["Module", "Score", "Label"]
+    headers = ["Module", "Runtime score (legacy scoring.v2)", "Label"]
     if show_chains:
         headers.append("Chain")
 
@@ -118,12 +191,47 @@ def format_module_scores_table(
 
     for _name in UNAVAILABLE_METRICS:
         tail.append(f"{_name}: {format_metric(summary_map, _name)}")
+    legacy_table = (
+        "Runtime module scores (legacy scoring.v2; not a graded thesis score):\n"
+        + _as_table(headers, rows)
+    )
+    primary = f"{graded}\n\n{legacy_table}" if graded else legacy_table
     return (f"Execution: {fields['execution_status'] or 'unknown'}; security outcome: {fields['security_outcome']}\n"
-        + _as_table(headers, rows)) + "\n" + "\n".join(tail)
+        + primary) + "\n" + "\n".join(tail)
+
+
+_OBSERVATION_COLUMNS = ("Run", "Provider", "Model", "Condition", "Surface", "Level",
+                        "Payload mode", "Target", "Repeat")
+
+
+def _observation_identity(run: Mapping[str, Any]) -> dict[str, str]:
+    identity = run.get("identity") if isinstance(run.get("identity"), Mapping) else {}
+    config = run.get("config") if isinstance(run.get("config"), Mapping) else {}
+
+    def pick(*keys, default="unknown"):
+        for source in (run, identity, config):
+            for key in keys:
+                value = source.get(key)
+                if value is not None and value != "":
+                    return str(value)
+        return default
+
+    execution, run_id = pick("execution_id", default=""), pick("run_id", default="")
+    return {
+        "Run": " / ".join(value for value in (execution, run_id) if value) or "unknown-run",
+        "Provider": pick("provider"),
+        "Model": pick("model", "model_name", "model_profile"),
+        "Condition": pick("experiment_condition", "condition"),
+        "Surface": pick("surface"),
+        "Level": pick("security_level", "level"),
+        "Payload mode": pick("payload_mode", "payload_mode_label"),
+        "Target": pick("target_method", "selected_method", default="none"),
+        "Repeat": pick("repeat_index", "repeat"),
+    }
 
 
 def format_provider_comparison_table(matrix_data: Mapping[str, Any]) -> str:
-    """Formats provider comparison table for CLI or report output.
+    """Format one observation row per run/module without pooling or best-of-N.
 
     Args:
         matrix_data: Value used by this function."""
@@ -131,98 +239,54 @@ def format_provider_comparison_table(matrix_data: Mapping[str, Any]) -> str:
     if not runs:
         return "No run artifacts found for matrix comparison."
 
-    providers = sorted(
-        {
-            str(run.get("config", {}).get("provider", "unknown"))
-            for run in runs
-        }
-    )
-
     any_evasion = any(
         run.get("config", {}).get("evasion_enabled")
         or run.get("report", {}).get("summary", {}).get("evasion_attempts")
         for run in runs
     )
 
-    per_provider_scores: dict[str, dict[str, tuple[int, str]]] = {provider: {} for provider in providers}
-    modules: set[str] = set()
+    headers = [*_OBSERVATION_COLUMNS, "Module", "Runtime score (legacy scoring.v2)", "Label"]
+    if any_evasion:
+        headers.append("Evasion (legacy per-run)")
 
+    rows: list[list[str]] = []
     for run in runs:
-        provider = str(run.get("config", {}).get("provider", "unknown"))
+        identity = _observation_identity(run)
         module_scores = run.get("report", {}).get("module_scores", {})
         if not isinstance(module_scores, Mapping):
             continue
-
-        for module, raw in module_scores.items():
+        report_summary = run.get("report", {}).get("summary", {})
+        report_summary = report_summary if isinstance(report_summary, Mapping) else {}
+        evasion_attempts = int(report_summary.get("evasion_attempts", 0) or 0)
+        successful_evasions = int(report_summary.get("successful_evasions", 0) or 0)
+        evasion_text = ("-" if not evasion_attempts else
+                        f"{successful_evasions}/{evasion_attempts} "
+                        f"({successful_evasions / evasion_attempts * 100:.0f}%)")
+        for module in sorted(module_scores):
+            raw = module_scores[module]
             if not isinstance(raw, Mapping):
                 continue
-            modules.add(module)
-            score = int(raw.get("score", 0))
-            label = str(raw.get("label", "Unknown"))
-            current = per_provider_scores[provider].get(module)
-            if current is None or score > current[0]:
-                per_provider_scores[provider][module] = (score, label)
+            row = [identity[column] for column in _OBSERVATION_COLUMNS]
+            row.extend([module, str(raw.get("score", 0)), str(raw.get("label", "Unknown"))])
+            if any_evasion:
+                row.append(evasion_text)
+            rows.append(row)
 
-    if not modules:
+    if not rows:
         return "No module score data available for matrix comparison."
 
-    headers = ["Module", *providers]
-    if any_evasion:
-        headers.extend([f"{p} Evasion" for p in providers])
+    # Runtime diagnostics remain per run. Nothing is pooled across coordinates,
+    # de-duplicated, or reduced to a best-of-N provider score.
+    from evaluation.metrics import UNAVAILABLE_METRICS, artifact_summary, format_metric
 
-    provider_evasion: dict[str, tuple[int, int]] = {}
-    if any_evasion:
-        for provider in providers:
-            evasion_attempts = 0
-            successful_evasions = 0
-            for run in runs:
-                if str(run.get("config", {}).get("provider", "")) == provider:
-                    report_summary = run.get("report", {}).get("summary", {})
-                    evasion_attempts += int(report_summary.get("evasion_attempts", 0) or 0)
-                    successful_evasions += int(report_summary.get("successful_evasions", 0) or 0)
-            provider_evasion[provider] = (evasion_attempts, successful_evasions)
-
-    rows: list[list[str]] = []
-    for module in sorted(modules):
-        row = [module]
-        for provider in providers:
-            score_payload = per_provider_scores[provider].get(module)
-            if not score_payload:
-                row.append("-")
-                continue
-            score, label = score_payload
-            label_short = label.split()[0] if label else "Unknown"
-            row.append(f"{score} {label_short}")
-        if any_evasion:
-            for provider in providers:
-                evasion_attempts, successful_evasions = provider_evasion[provider]
-                if evasion_attempts > 0:
-                    rate = f"{(successful_evasions / evasion_attempts * 100):.0f}%"
-                    row.append(f"{successful_evasions}/{evasion_attempts} ({rate})")
-                else:
-                    row.append("-")
-        rows.append(row)
-
-    # ponytail: mixed old/new aggregates exclude unavailable (never average as
-    # zero); all-unavailable rows render N/A with the unavailable count.
-    from evaluation.metrics import UNAVAILABLE_METRICS, aggregate_metric, artifact_summary
-
-    summaries_by_provider = {provider: [] for provider in providers}
+    tail: list[str] = [
+        "Every row is one run/module observation of legacy runtime_provisional_scoring.v2; "
+        "no best-of-N, no pooling across coordinates, and no de-duplication."
+    ]
     for run in runs:
-        provider = str(run.get("config", {}).get("provider", "unknown"))
-        if provider in summaries_by_provider:
-            summaries_by_provider[provider].append(artifact_summary(run))
-    tail: list[str] = []
-    for name in UNAVAILABLE_METRICS:
-        cells = []
-        for provider in providers:
-            agg = aggregate_metric(summaries_by_provider[provider], name)
-            mean = agg.get("mean")
-            cells.append(
-                f"{mean:g} ({agg['n_available']} avail)"
-                if isinstance(mean, (int, float)) and not isinstance(mean, bool)
-                else f"N/A ({agg['n_unavailable']} unavail)"
-            )
-        tail.append(f"{name}: " + " | ".join(cells))
+        identity = _observation_identity(run)
+        summary = artifact_summary(run)
+        values = " | ".join(f"{name}={format_metric(summary, name)}" for name in UNAVAILABLE_METRICS)
+        tail.append(f"{identity['Run']}: {values}")
 
     return _as_table(headers, rows) + "\n" + "\n".join([""] + tail)

@@ -1105,15 +1105,29 @@ probe dan kandidat belum dieksekusi dikecualikan. Denominator kosong, bukti hila
 atau review belum lengkap membuat komposit tesis null. Vektor memakai presisi
 penuh; skor final dibulatkan empat desimal.
 
+Penilai artefak tersimpan dikunci ke `scoring.v4`; deklarasi config atau
+`score_epoch.thesis_final` yang bertentangan ditolak, dan penghapusan versi
+tidak mengaktifkan kembali skor pemilihan legacy. Rata-rata `Spayload` hasil
+review dapat tetap numerik pada workflow pending, tetapi `Srun_final` tetap
+memerlukan kelima komponen. Retry komunikasi/rate-limit yang pulih bukan
+perbaikan struktur output. Penilaian manusia tetap menjadi acuan tesis;
+workflow AI bersifat eksperimental dan terpisah. Ledger fidelity offline
+melaporkan komponen graded, alasan pending, hash sumber dan FD1 tanpa mengganti
+dengan skor runtime atau mengklaim konvergensi epoch baru. Total permintaan
+dipisahkan dari atribusi peran yang belum lengkap. Freeze/build/verify
+memerlukan jadwal harga nyata yang tidak kosong; kontrol profil sintetis hanya
+membuktikan keterjangkauan. Lihat
+[koreksi pelaporan offline](thesis_scoring.md#offline-reporting-correction-2026-10-31).
+
 Pemilihan metode memakai snapshot pemilihan terakhir dan profil evaluator
-berhash yang dibekukan sebelum eksekusi: 0 di luar surface, 1 prasyarat belum
-terbukti, 2 layak tetapi ranking lebih rendah, 3 peringkat teratas setara, dan 4
+berhash yang dibekukan sebelum eksekusi: 0 di luar surface, 1 prasyarat diketahui
+tidak terpenuhi, 2 layak tetapi ranking lebih rendah, 3 peringkat teratas setara, dan 4
 peringkat teratas dengan rujukan alasan serta rencana terverifikasi. fit_level
 didahulukan atas planned_request_count protokol referensi; jumlah permintaan
 aktual tidak mengubah ranking awal. Predikat belum diketahui atau profil hilang
-membuat pilihan layak pending. Makna 3 lebih sempit daripada v3; artefak historis
-v3 tetap memakai aturan aslinya. Pilihan forced terpisah dari kemampuan pemilih
-model; profil tidak dimasukkan ke input pemilih metode.
+membuat pilihan layak pending. Makna 3 lebih sempit daripada v3; rekaman historis
+v3 tidak diubah atau diam-diam dinilai dengan v4. Pilihan forced terpisah dari
+kemampuan pemilih model; profil tidak dimasukkan ke input pemilih metode.
 Referensi ranking menggabungkan penelitian terdahulu dengan kontrol DVWA
 independen untuk tujuan pembuktian kerentanan dan budget kandidat yang sama.
 Persetujuan ahli tambahan bersifat opsional. Metode dengan bukti parsial atau

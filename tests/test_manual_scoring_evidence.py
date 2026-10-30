@@ -96,7 +96,6 @@ def test_manual_scoring_links_only_the_candidate_recorded_evidence():
     assert executed["response_evidence_ref"] == ["#/response_evidence/1"]
     assert executed["timing_evidence_ref"] == ["#/timing_evidence/0"]
     assert executed["verifier_decision"] == artifact["verifier_decision"]
-    assert executed["score_0_4"] == executed["payload_score_0_4"] == 3
     unused = rows["unused"]
     assert unused["validator_result"]["valid"] is True
     assert unused["execution_log_ref"] == unused["response_evidence_ref"] == unused["timing_evidence_ref"] == []

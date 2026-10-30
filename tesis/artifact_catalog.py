@@ -9,6 +9,13 @@ import re
 from typing import Any, Mapping
 
 
+SUPERSEDED_PREFIX = "_superseded"
+
+
+def _superseded(path: Path) -> bool:
+    return any(part.casefold().startswith(SUPERSEDED_PREFIX) for part in path.parts)
+
+
 @dataclass
 class CatalogEntry:
     path: Path
@@ -101,8 +108,15 @@ class ArtifactCatalog:
             if not root.exists():
                 self.diagnostic("missing_root", root, root_id=root_id)
                 continue
+            if _superseded(root):
+                # Superseded epochs stay on disk for audit but are not current
+                # discovery inputs, including when the root names one directly.
+                self.diagnostic("superseded_root_excluded", root, root_id=root_id)
+                continue
             candidates = [root] if root.is_file() else sorted(root.rglob("*.json"))
             for path in candidates:
+                if _superseded(path):
+                    continue
                 # Never follow a symlink outside the particular declared root.
                 try:
                     self.location(path, roots={root_id: root})

@@ -394,18 +394,24 @@ def _build_matrix_aggregate(
         for payload in provider_surfaces.values():
             for level_payload in payload.values():
                 successes = level_payload["statuses"]["success"]
-                level_payload["provisional_avg_score"] = round(level_payload["total_score"] / successes, 2) if successes else None
+                level_payload["legacy_runtime"] = {
+                    "score_epoch": "runtime_provisional_scoring.v2 (legacy)",
+                    "mean_module_score_sum": round(level_payload.pop("total_score") / successes, 2) if successes else None,
+                    "unavailable_reason": None if successes else "no_completed_runs",
+                }
+                level_payload.pop("total_score", None)
                 level_payload["provisional_avg_iterations"] = round(mean(level_payload["iterations"]), 2) if level_payload["iterations"] else None
-                level_payload["avg_score_reason"] = None if successes else "no_completed_runs"
-                level_payload["score_epoch"] = "runtime_provisional_scoring.v2"
 
     for provider_levels in by_provider_level.values():
         for level_payload in provider_levels.values():
             successes = level_payload["statuses"]["success"]
-            level_payload["provisional_avg_score"] = round(level_payload["total_score"] / successes, 2) if successes else None
+            level_payload["legacy_runtime"] = {
+                "score_epoch": "runtime_provisional_scoring.v2 (legacy)",
+                "mean_module_score_sum": round(level_payload.pop("total_score") / successes, 2) if successes else None,
+                "unavailable_reason": None if successes else "no_completed_runs",
+            }
+            level_payload.pop("total_score", None)
             level_payload["provisional_avg_iterations"] = round(mean(level_payload["iterations"]), 2) if level_payload["iterations"] else None
-            level_payload["avg_score_reason"] = None if successes else "no_completed_runs"
-            level_payload["score_epoch"] = "runtime_provisional_scoring.v2"
 
     for payload in by_provider.values():
         # Provider-only rollups are operational counts. Provisional runtime
@@ -578,7 +584,7 @@ def run_provider_matrix(
     experiment_id: str | None = None,
     scoring_mode: str = "human",
     scoring_evaluator: dict[str, Any] | None = None,
-    scoring_rubric_version: str = "scoring.v3",
+    scoring_rubric_version: str = "scoring.v4",
     scoring_profile: dict[str, Any] | None = None,
     scoring_oracles: list[dict[str, Any]] | None = None,
     scoring_policy_epoch: dict[str, Any] | None = None,
@@ -1041,20 +1047,26 @@ def run_provider_matrix(
             "incomplete_reason": incomplete_reason,
             "selected_method": None,
             **state_lists,
-            "method_score": 0,
+            "method_score": None,
             "payload_scores": {},
-            "exploitation_score": 0,
-            "chain_score": 0,
-            "payload_validity_rate": 0.0,
-            "payload_execution_success_rate": 0.0,
-            "payload_improvement_rate": 0.0,
+            "exploitation_score": None,
+            "chain_score": None,
+            "payload_validity_rate": None,
+            "payload_execution_success_rate": None,
+            "payload_improvement_rate": None,
             "consistency_score": None,
-            "metric_availability": {"consistency_score": False, "token_cost": False, "token_cost_per_success": False},
-            "metric_unavailable_reason": {"consistency_score": "not_computed", "token_cost": "not_computed", "token_cost_per_success": "not_computed"},
+            "metric_availability": dict.fromkeys((
+                "method_score", "exploitation_score", "chain_score", "output_score", "composite_score",
+                "payload_validity_rate", "payload_execution_success_rate", "payload_improvement_rate",
+                "attempts_to_success", "consistency_score", "token_cost", "token_cost_per_success"), False),
+            "metric_unavailable_reason": dict.fromkeys((
+                "method_score", "exploitation_score", "chain_score", "output_score", "composite_score",
+                "payload_validity_rate", "payload_execution_success_rate", "payload_improvement_rate",
+                "attempts_to_success", "consistency_score", "token_cost", "token_cost_per_success"), "not_run"),
             **audit_lists,
             "payload_guardrail_activations": 0,
             "guardrail_activation_count": 0,
-            "attempts_to_success": 0,
+            "attempts_to_success": None,
             "token_cost": None,
             "token_cost_per_success": None,
             "config": artifact_config,
@@ -1063,8 +1075,8 @@ def run_provider_matrix(
             **state_maps,
             "execution_log": execution_log,
             "verifier_decision": None,
-            "output_score": 0,
-            "composite_score": 0,
+            "output_score": None,
+            "composite_score": None,
             "report": report,
             "error": reason,
         }

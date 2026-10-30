@@ -193,23 +193,33 @@ def build_score_report(state: dict) -> ScorerReport:
     ]
     attempted_scores = {method: normalized[method] for method in attempted_methods}
     tried_payloads = state.get("tried_payloads", {})
-    method_selection = round(method_selection_accuracy(normalized, attempted), 4)
-    adaptation = round(adaptation_rate(normalized, attempted), 4)
-    mean_attempts = round(mean_attempts_to_success(tried_payloads, normalized), 4)
-    payload_improve = round(
-        payload_improvement_rate(
+    # Every report rate is availability-tracked: an empty denominator is null
+    # with a reason, never a fabricated 0.0. A measured non-event (for example
+    # zero valid rows out of a non-empty queue) stays a legitimate 0.0.
+    rate_readings = {
+        "method_selection_accuracy": method_selection_accuracy(normalized, attempted),
+        "adaptation_rate": adaptation_rate(normalized, attempted),
+        "mean_attempts_to_success": mean_attempts_to_success(tried_payloads, normalized),
+        "payload_validity_rate": payload_validity_rate(state.get("payload_validation_results", {})),
+        "payload_execution_success_rate": payload_execution_success_rate(state.get("payload_scores", {})),
+        "payload_improvement_rate": payload_improvement_rate(
             state.get("payload_scores", {}),
             state.get("payload_provenance", {}),
         ),
-        4,
-    )
-    guardrail_rate = round(
-        guardrail_activation_rate(
+        "guardrail_activation_rate": guardrail_activation_rate(
             state.get("guardrail_activations", []),
             int(state.get("iteration_count", 0) or 0),
         ),
-        4,
-    )
+    }
+    rate_values = {name: (round(value, 4) if value is not None else None)
+                   for name, (value, _reason) in rate_readings.items()}
+    metric_availability = {"consistency_score": False, "token_cost": False, "token_cost_per_success": False}
+    metric_unavailable_reason = {"consistency_score": "not_computed", "token_cost": "not_computed",
+                                 "token_cost_per_success": "not_computed"}
+    for name, (value, reason) in rate_readings.items():
+        metric_availability[name] = value is not None
+        if value is None:
+            metric_unavailable_reason[name] = str(reason or "no_denominator")
     module_scores = {
         agent_id: ModuleScoreResult(
             score=normalized[agent_id],
@@ -252,18 +262,18 @@ def build_score_report(state: dict) -> ScorerReport:
         evasion_attempts=_safe_int(state.get("evasion_attempts"), 0),
         successful_evasions=successful_evasions,
         evasion_strategy=str(state.get("evasion_mode") or "reactive").strip().lower(),
-        method_selection_accuracy=method_selection,
-        adaptation_rate=adaptation,
-        mean_attempts_to_success=mean_attempts,
-        payload_validity_rate=round(payload_validity_rate(state.get("payload_validation_results", {})), 4),
-        payload_execution_success_rate=round(payload_execution_success_rate(state.get("payload_scores", {})), 4),
-        payload_improvement_rate=payload_improve,
-        guardrail_activation_rate=guardrail_rate,
+        method_selection_accuracy=rate_values["method_selection_accuracy"],
+        adaptation_rate=rate_values["adaptation_rate"],
+        mean_attempts_to_success=rate_values["mean_attempts_to_success"],
+        payload_validity_rate=rate_values["payload_validity_rate"],
+        payload_execution_success_rate=rate_values["payload_execution_success_rate"],
+        payload_improvement_rate=rate_values["payload_improvement_rate"],
+        guardrail_activation_rate=rate_values["guardrail_activation_rate"],
         consistency_score=None,
         token_cost=None,
         token_cost_per_success=None,
-        metric_availability={"consistency_score": False, "token_cost": False, "token_cost_per_success": False},
-        metric_unavailable_reason={"consistency_score": "not_computed", "token_cost": "not_computed", "token_cost_per_success": "not_computed"},
+        metric_availability=metric_availability,
+        metric_unavailable_reason=metric_unavailable_reason,
     )
     return ScorerReport(module_scores=module_scores, summary=summary)
 

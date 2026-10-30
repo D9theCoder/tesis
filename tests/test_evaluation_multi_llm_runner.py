@@ -43,9 +43,9 @@ def test_run_provider_matrix_zero_success_avg_score_is_null(monkeypatch):
     )
 
     group = next(iter(aggregate["by_provider_surface_level"]["openai_compatible"]["sqli"].values()))
-    assert group["provisional_avg_score"] is None
+    assert group["legacy_runtime"]["mean_module_score_sum"] is None
     assert group["provisional_avg_iterations"] is None
-    assert group["avg_score_reason"] == "no_completed_runs"
+    assert group["legacy_runtime"]["unavailable_reason"] == "no_completed_runs"
     assert "avg_score" not in aggregate["by_provider"]["openai_compatible"]
     assert aggregate["by_provider"]["openai_compatible"]["score_aggregation"] == "not_computed_pooled_coordinates"
 

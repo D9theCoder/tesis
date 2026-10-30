@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from rich.console import Console
@@ -144,12 +145,48 @@ class EngagementProgressReporter:
         self.progress.update(self.task, completed=self.max_iterations, status="[green]Done[/green]")
         self.refresh()
         self.stop()
-        # Render final score table
+        # The graded vector is primary when the report carries it. Runtime
+        # module scores remain visible only under an explicit legacy label.
+        graded = report.get("graded_scores") if isinstance(report, dict) else None
+        components = graded.get("components") if isinstance(graded, Mapping) else None
+        if isinstance(graded, Mapping) and isinstance(components, Mapping):
+            table = Table(title=f"Final Graded Thesis Components ({graded.get('rubric_version') or 'scoring.v4'})")
+            table.add_column("Component", style="bold")
+            table.add_column("Score")
+            table.add_column("Pending reason")
+            pending = graded.get("component_pending_reasons")
+            pending = pending if isinstance(pending, Mapping) else {}
+            for component in ("Smethod", "Spayload", "Sexploit", "Schain", "Soutput"):
+                score = components.get(component)
+                reason = "" if score is not None else str(pending.get(component) or "missing_evidence")
+                table.add_row(component, "N/A" if score is None else str(score), reason)
+            self.console.print(table)
+            workflows = graded.get("workflows")
+            if isinstance(workflows, Mapping):
+                for mode in ("human", "ai"):
+                    workflow = workflows.get(mode)
+                    if not isinstance(workflow, Mapping):
+                        continue
+                    label = str(workflow.get("label") or mode.upper())
+                    mean = workflow.get("Spayload_final")
+                    srun = workflow.get("Srun_final")
+                    self.console.print(
+                        f"{label}: {workflow.get('status') or 'missing'}; "
+                        f"Spayload mean {'N/A' if mean is None else mean}; "
+                        f"Srun final {'N/A' if srun is None else srun}")
+                    workflow_components = workflow.get("components")
+                    if isinstance(workflow_components, Mapping):
+                        self.console.print("  " + ", ".join(
+                            f"{key}={'N/A' if workflow_components.get(key) is None else workflow_components.get(key)}"
+                            for key in ("Smethod", "Spayload", "Sexploit", "Schain", "Soutput")))
+        else:
+            reason = graded.get("reason") if isinstance(graded, Mapping) else "grading_not_run"
+            self.console.print(f"Graded thesis components unavailable: {reason or 'missing_components'}")
         module_scores = report.get("module_scores", {}) if isinstance(report, dict) else {}
         if module_scores:
-            table = Table(title="Final Module Scores")
+            table = Table(title="Final Runtime Module Scores (legacy scoring.v2)")
             table.add_column("Module", style="bold")
-            table.add_column("Score")
+            table.add_column("Runtime score (legacy)")
             table.add_column("Label")
             for module, payload in module_scores.items():
                 if isinstance(payload, dict):

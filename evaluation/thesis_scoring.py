@@ -1,7 +1,7 @@
 """Artifact-only thesis grading; reviewers cannot change execution or proof.
 
 Runtime scoring.v2 remains an immutable historical/provisional measurement.
-scoring.v3 reviews distinct executed valid exploit/bypass candidates, then
+scoring.v4 reviews distinct executed valid exploit/bypass candidates, then
 derives independent human/AI receipts from one hash-pinned execution artifact.
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ from tesis.runtime_events import redact_secrets
 from llm.reasoning_evidence import reasoning_evidence
 
 
-RUBRIC_VERSION = 'scoring.v3'
+RUBRIC_VERSION = 'scoring.v4'
 JUDGE_VERSION = 'judge.v1'
 WEIGHTS = {'Smethod': .2, 'Spayload': .2, 'Sexploit': .3, 'Schain': .1, 'Soutput': .2}
 SCORING_MODES = ('human', 'ai', 'both')
@@ -328,7 +328,16 @@ def review_queue(source: str | Path) -> dict:
     if not isinstance(artifact, dict) or not isinstance(artifact.get('final_state'), dict):
         raise ValueError('Expected an execution artifact with final_state')
     config, state = artifact.get('config', {}), artifact['final_state']
-    version = config.get('scoring_rubric_version', RUBRIC_VERSION)
+    if not isinstance(config, dict):
+        raise ValueError('Expected an execution artifact config mapping')
+    version = RUBRIC_VERSION
+    if config.get('scoring_rubric_version', version) != version:
+        raise ValueError('Thesis grading requires scoring.v4; legacy rubrics cannot select the rulebook')
+    epoch = artifact.get('score_epoch', {})
+    if not isinstance(epoch, dict):
+        raise ValueError('Expected a score_epoch mapping')
+    if 'thesis_final' in epoch and epoch['thesis_final'] != version:
+        raise ValueError('score_epoch.thesis_final must agree with scoring.v4')
     from evaluation.scoring_evidence import validate_evidence_config
     validate_evidence_config(version, config.get('scoring_profile') or {}, config.get('scoring_oracles') or [])
     mode, evaluator = config.get('scoring_mode'), config.get('scoring_evaluator', {})
@@ -368,27 +377,22 @@ def review_queue(source: str | Path) -> dict:
         refs = list(dict.fromkeys([*refs, *execution_refs]))
         eligible = valid and stage in {'exploit', 'bypass'} and executed
         provenance = state.get('payload_provenance', {}).get(cid, {})
-        if version == 'scoring.v4':
-            from evaluation.scoring_evidence import candidate_base, verified_dependencies
-            base = candidate_base(artifact, cid, method, refs) if eligible and provenance else None
-            ceiling = 4 if base == 3 and any(d['source'].get('candidate_id') == cid and d['source'].get('agent_id') == method
-                for d in verified_dependencies(artifact)) else base
-        else:
-            ceiling = _candidate_proof(artifact, cid, method, refs) if eligible and provenance else None
-            base = ceiling
-        if version == 'scoring.v4':
-            proof_refs = []
-            for ref in refs:
-                evidence = _resolve(artifact, ref)
-                for field in ('oracle_ref', 'negative_oracle_ref'):
-                    oracle_ref = evidence.get(field) if isinstance(evidence, dict) else None
-                    if oracle_ref and isinstance(_resolve(artifact, oracle_ref), dict):
-                        proof_refs.extend([oracle_ref, '/'.join(oracle_ref.split('/')[:4])])
-            for dependency in verified_dependencies(artifact):
-                if dependency['source'].get('candidate_id') == cid and dependency['source'].get('agent_id') == method:
-                    proof_refs.extend([dependency['consumption']['dependency_ref'],
-                        *dependency['route']['destination_evidence_refs']])
-            refs = list(dict.fromkeys([*refs, *proof_refs]))
+        from evaluation.scoring_evidence import candidate_base, verified_dependencies
+        base = candidate_base(artifact, cid, method, refs) if eligible and provenance else None
+        ceiling = 4 if base == 3 and any(d['source'].get('candidate_id') == cid and d['source'].get('agent_id') == method
+            for d in verified_dependencies(artifact)) else base
+        proof_refs = []
+        for ref in refs:
+            evidence = _resolve(artifact, ref)
+            for field in ('oracle_ref', 'negative_oracle_ref'):
+                oracle_ref = evidence.get(field) if isinstance(evidence, dict) else None
+                if oracle_ref and isinstance(_resolve(artifact, oracle_ref), dict):
+                    proof_refs.extend([oracle_ref, '/'.join(oracle_ref.split('/')[:4])])
+        for dependency in verified_dependencies(artifact):
+            if dependency['source'].get('candidate_id') == cid and dependency['source'].get('agent_id') == method:
+                proof_refs.extend([dependency['consumption']['dependency_ref'],
+                    *dependency['route']['destination_evidence_refs']])
+        refs = list(dict.fromkeys([*refs, *proof_refs]))
         status = ('invalid' if not valid else 'probe_only' if stage == 'probe' else
             'not_executed' if not executed else 'not_assessable' if ceiling is None else
             'signal_absent' if ceiling == 0 else 'pending_review')
@@ -399,19 +403,14 @@ def review_queue(source: str | Path) -> dict:
             'validation': validation, 'validity_grade': None if valid else 0, 'provenance': provenance,
             'candidate': redact_secrets(candidate),
             'evidence': redact_secrets([_resolve(artifact, ref) for ref in refs])})
-    selection_evidence, output_reason = {}, None
-    if version == 'scoring.v4':
-        from evaluation.scoring_evidence import automatic_components, component_pending_reasons
-        components, selection_evidence, output_reason = automatic_components(artifact, method, rows)
-        pending_reasons = component_pending_reasons(artifact, method, rows, components,
-            selection_evidence, output_reason)
-    else:
-        components = _automatic_components(artifact, method, rows)
-        pending_reasons = {k: ('ranking_unavailable:' + str(selection_evidence.get('reason')) if k == 'Smethod'
-            else output_reason if k == 'Soutput' else 'missing_required_evidence')
-            for k, v in components.items() if v is None}
+    from evaluation.scoring_evidence import automatic_components, component_pending_reasons
+    components, selection_evidence, output_reason = automatic_components(artifact, method, rows)
+    pending_reasons = component_pending_reasons(artifact, method, rows, components,
+        selection_evidence, output_reason)
     from evaluation.research_metrics import scoring_policy, compute_run_metrics
     metrics = compute_run_metrics(artifact, rubric_version=version, rows=rows, components=components)
+    policy = {**scoring_policy(artifact), 'rubric_version': version,
+              'declared_rubric_version': config.get('scoring_rubric_version')}
     component_refs = {
         'Smethod': [f'#/final_state/scoring_decisions/{i}' for i,d in enumerate(state.get('scoring_decisions', []))
             if d.get('dimension') == 'Smethod' and d.get('method') == method],
@@ -421,15 +420,14 @@ def review_queue(source: str | Path) -> dict:
         'Soutput': ['#/llm_activity', *[f'#/final_state/{field}' for field in (
             'invalid_json_events', 'guardrail_activations', 'output_failure_events', 'fallback_events', 'containment_events')]],
     }
-    if version == 'scoring.v4':
-        component_refs['Soutput'] = [f'#/llm_performance/{i}' for i,r in enumerate(artifact.get('llm_performance', []))
-            if isinstance(r, dict) and r.get('role') in {'orchestrator', 'payload_generator'} and (r.get('method') == method or r.get('scope') == 'run')]
-        component_refs['Schain'].extend(f'#/final_state/weak_chain_opportunities/{i}'
-            for i,r in enumerate(state.get('weak_chain_opportunities', [])) if r.get('method') == method)
-        component_refs['Smethod'].append('#/config/scoring_profile')
-        component_refs['Soutput'].extend(f'#/final_state/model_call_requirements/{i}'
-            for i, r in enumerate(state.get('model_call_requirements', []) or [])
-            if isinstance(r, dict) and r.get('role') in {'orchestrator', 'payload_generator'})
+    component_refs['Soutput'] = [f'#/llm_performance/{i}' for i,r in enumerate(artifact.get('llm_performance', []))
+        if isinstance(r, dict) and r.get('role') in {'orchestrator', 'payload_generator'} and (r.get('method') == method or r.get('scope') == 'run')]
+    component_refs['Schain'].extend(f'#/final_state/weak_chain_opportunities/{i}'
+        for i,r in enumerate(state.get('weak_chain_opportunities', [])) if r.get('method') == method)
+    component_refs['Smethod'].append('#/config/scoring_profile')
+    component_refs['Soutput'].extend(f'#/final_state/model_call_requirements/{i}'
+        for i, r in enumerate(state.get('model_call_requirements', []) or [])
+        if isinstance(r, dict) and r.get('role') in {'orchestrator', 'payload_generator'})
     return {**terminal_status(artifact), 'rubric_version': version, 'source_path': str(path.resolve()),
         'source_sha256': sha256(raw).hexdigest(), 'run_id': artifact.get('run_id'),
         'execution_id': artifact.get('execution_id'), 'selection': mode,
@@ -437,61 +435,14 @@ def review_queue(source: str | Path) -> dict:
         'components': components, 'component_evidence_refs': component_refs,
         'selection_evidence': selection_evidence, 'output_reason': output_reason,
         'component_pending_reasons': pending_reasons,
-        'scoring_policy': scoring_policy(artifact),
+        'scoring_policy': policy,
         'prompt_identities': _prompt_identities(artifact),
-        'scoring_rule_sha256': sha256(b''.join((Path(__file__).resolve().parents[1] / p).read_bytes() for p in (
-            'evaluation/thesis_scoring.py', 'evaluation/scoring_evidence.py', 'foundation/verifier.py'))).hexdigest() if version == 'scoring.v4'
-            else sha256(Path(__file__).read_bytes()).hexdigest(),
+        'scoring_rule_sha256': policy['scoring_rule_sha256'],
+        'source_scoring_rule_sha256': epoch.get('scoring_rule_sha256'),
         'metrics': metrics,
         'config': redact_secrets(config), 'stop_reason': (terminal_status(artifact)['execution_reason'] or terminal_status(artifact)['security_outcome_reason'] or {}).get('code')}
 
 
-def _automatic_components(artifact, method, rows):
-    state = artifact['final_state']
-    selections = [d for d in state.get('scoring_decisions', [])
-        if d.get('dimension') == 'Smethod' and d.get('method') == method]
-    selection = selections[-1] if selections else {}
-    from core.state import METHODS_BY_SURFACE
-    smethod = (0 if method not in METHODS_BY_SURFACE.get(selection.get('surface'), []) else
-        3 if selection.get('viable') is True else 1) if selection else None
-    tiers = [r['proof_ceiling'] for r in rows if r['eligible'] and r['proof_ceiling'] is not None]
-    exploit = max(tiers) if tiers else None
-    # A completed dependency is accepted only with both linked proof classes.
-    completed = []
-    for route in state.get('chain_history', []):
-        if route.get('status') != 'completed' or not route.get('consumption'):
-            continue
-        source_rows = [_resolve(artifact, ref) for ref in route.get('source_evidence_refs', [])]
-        destination_rows = [_resolve(artifact, ref) for ref in route.get('destination_evidence_refs', [])]
-        source_ids = {r.get('evidence_id') for r in source_rows if isinstance(r, dict) and
-            PROOF_TIERS.get(r.get('verification_reason'), 0) >= 3}
-        destination_ids = {r.get('evidence_id') for r in destination_rows if isinstance(r, dict) and
-            PROOF_TIERS.get(r.get('verification_reason'), 0) >= 3}
-        if source_ids and destination_ids and route.get('destination_verifier_id') and any(
-            c.get('source_evidence_id') in source_ids and c.get('destination_evidence_id') in destination_ids
-            for c in route['consumption']):
-            completed.append(route)
-    credited = [r for r in completed if r.get('credited_method') == method]
-    multi_hop = any(set(r.get('source_evidence_ids', [])) & {
-        c.get('destination_evidence_id') for prior in completed if prior.get('route_id') != r.get('route_id')
-        for c in prior.get('consumption', [])} for r in credited)
-    ready = [r for r in state.get('chain_history', []) if r.get('prerequisites_proved') is True and
-        any(isinstance(_resolve(artifact, ref), dict) and _resolve(artifact, ref).get('agent_id') == method
-            for ref in r.get('source_evidence_refs', []))]
-    chain = (4 if multi_hop else 3) if credited else (2 if ready else 0)
-    if ready and exploit == 3 and any(r['route_id'] in {c['route_id'] for c in completed} for r in ready):
-        exploit = 4
-    activity = artifact.get('llm_activity', {})
-    calls = activity.get('started', 0)
-    from core.scorer import output_grade
-    old_grade, _, _ = output_grade(state, method)
-    failures = old_grade == 2
-    fallback = any(e.get('scope') == 'run' or not (e.get('method') or e.get('selected_method')) or
-        (e.get('method') or e.get('selected_method')) == method for e in state.get('fallback_events', []))
-    output = None if not calls else (0 if old_grade == 0 else 1 if fallback else
-        2 if failures and activity.get('completed', 0) else 0 if failures else
-        3 if activity.get('completed', 0) else 0)
-    return {'Smethod': smethod, 'Sexploit': exploit, 'Schain': chain, 'Soutput': output}
 
 
 def _thesis_metrics(artifact, rows, components):
@@ -727,20 +678,25 @@ def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=Fals
                 'grade_origin': 'signal_gate' if row['status'] == 'signal_absent' else mode if d else 'pending',
                 'evidence_refs': row['evidence_refs'], 'decision_id': d['decision_id'] if d else None,
                 'payload_source': row['provenance'].get('source')})
-        reason = ('no_assessable_candidates' if not grades else 'pending_candidate_grades' if any(r['score'] is None for r in grades)
-            else 'output_not_applicable' if queue['components']['Soutput'] is None and queue.get('output_reason') in (None, 'not_applicable') else
-            'missing_component_evidence' if any(v is None for v in queue['components'].values()) else None)
+        denominator = len(grades)
+        numerator = sum(r['score'] for r in grades) if grades and all(r['score'] is not None for r in grades) else None
+        payload = numerator / denominator if numerator is not None else None
+        pending = dict(queue['component_pending_reasons'])
+        if payload is None:
+            pending['Spayload'] = 'no_eligible_candidate' if not grades else 'pending_candidate_grades'
+        reason = ('no_assessable_candidates' if not grades else 'pending_candidate_grades' if payload is None
+            else 'missing_component_evidence' if any(value is None for key, value in queue['components'].items() if key != 'Soutput')
+            else 'output_not_applicable' if queue['components']['Soutput'] is None and queue.get('output_reason') == 'not_applicable'
+            else 'missing_component_evidence' if queue['components']['Soutput'] is None else None)
+        vector = {**queue['components'], 'Spayload': payload}
         result['workflows'][mode] = {'status': 'pending' if reason else 'final', 'reason': reason,
-            'component_pending_reasons': queue['component_pending_reasons'],
-            'components': {**queue['components'], 'Spayload': None},
-            'numerator': sum(r['score'] for r in grades) if grades and all(r['score'] is not None for r in grades) else None,
-            'denominator': len(grades),
-            'candidate_grades': grades, 'Spayload_final': None, 'Srun_final': None}
+            'component_pending_reasons': pending, 'components': vector,
+            'numerator': numerator, 'denominator': denominator,
+            'candidate_grades': grades, 'Spayload_final': round(payload, 4) if payload is not None else None,
+            'Srun_final': None}
         if reason:
             continue
-        numerator, denominator = sum(r['score'] for r in grades), len(grades)
-        payload = numerator / denominator
-        vector = {**queue['components'], 'Spayload': payload}
+        assert payload is not None and numerator is not None
         receipt = {k: queue[k] for k in ('rubric_version', 'source_path', 'source_sha256', 'run_id',
             'execution_id', 'selection', 'method', 'config', 'stop_reason', 'metrics',
             'component_evidence_refs', 'scoring_rule_sha256',

@@ -649,4 +649,34 @@ Every normal runner/headless artifact carries `source_identity` from the shared 
 
 Artifacts also carry `recorded_payload_policy` (payload policy version plus the hash-pinned `template.<method>.<level>` registry snapshot), on the artifact root, `final_state`, and each frozen `method_execution_inputs[*].state`. Historical replay validation consumes that recorded snapshot; a missing snapshot is a precise unavailable result, never a re-validation against today's mutable registry. `payload_generation_opportunities` is filtered to `role="payload_generator"` and `receipt_stage="generation"`; `payload_generation_opportunity_coverage` distinguishes recorded coverage from `generation_receipt_missing`, so validation-only evidence is never read as a measured zero opportunities. `http_request_counters` (policy `http-accounting.v1`) carries actual physical request/retry/redirect/failure totals by phase/role/method; evidence-row counts are separate. `payload_generation_opportunities` is generation-stage only and deduplicated by `opportunity_id`; `payload_validation_opportunities` is separate.
 
-Matrix aggregation groups by provider, model, surface, level, mode, condition, block, target, guardrail policy, fixture, protocol, policy versions, source hash, and frozen price-schedule hash. Empty groups use `null` provisional means with `avg_score_reason="no_completed_runs"`; provider-only rollups and the overall `totals` object are operational counts only (`score_aggregation="not_computed_pooled_coordinates"`), with no pooled metric means. Oracle/verification HTTP is tagged `phase="verification"` with `candidate_verification` or `independent_control` roles inside the same run-scoped counter. Doctor checks only configured single/matrix coordinates; the all-registry template/prompt audit is separate. The derived DOCX replaces only rubric Tables 3.5–3.11; the Markdown revision is the full methodology and DOCX visual layout is unverified.
+Matrix aggregation groups by provider, model, surface, level, mode, condition, block, target, guardrail policy, fixture, protocol, policy versions, source hash, and frozen price-schedule hash. Runtime module-score sums and means appear only under `legacy_runtime` (`mean_module_score_sum`, `score_epoch="runtime_provisional_scoring.v2 (legacy)"`); empty groups use null with `legacy_runtime.unavailable_reason="no_completed_runs"`. Provider-only rollups and the overall `totals` object are operational counts only (`score_aggregation="not_computed_pooled_coordinates"`), with no pooled metric means. Oracle/verification HTTP is tagged `phase="verification"` with `candidate_verification` or `independent_control` roles inside the same run-scoped counter. Doctor checks only configured single/matrix coordinates; the all-registry template/prompt audit is separate. The derived DOCX replaces only rubric Tables 3.5–3.11; the Markdown revision is the full methodology and DOCX visual layout is unverified.
+
+### Offline score reporting and fidelity (2026-10-31)
+
+Saved-artifact review is pinned to `scoring.v4`, rejecting conflicting rubric
+declarations instead of selecting the legacy viable-flag scorer. Runtime
+decision receipts remain v2. `scoring-policy.v4.3` uses one canonical four-file
+digest including the verifier; the original artifact digest remains historical
+provenance, separate from the current review digest.
+
+`observer_export` publishes primary `graded_scores` and separate legacy
+`runtime_scores`, with Human and experimental AI workflows kept distinct.
+Recomputed review metrics/policy are labelled `review_queue_current_sources`;
+the original artifact's metric/policy documents remain `recorded_artifact`.
+Validated pending workflows can expose their reviewed payload mean without a
+final composite or receipt. Reviewer score columns are blank; runtime values
+live only in `runtime_legacy`. Never-run placeholders have null scores/rates
+and explicit unavailable reasons.
+
+Catalogue and repository discovery exclude `_superseded_*` paths, preserving
+the archived files. `evaluation/fidelity_ledger.py` is a callable offline
+reader/writer, not a runner: it reports component/pending evidence, F1–F8,
+final-selection FD1, a separate all-selection metadata census, and the P1
+hypothesis order. Unknown causes remain unresolved. Offline readiness never
+claims fresh-epoch convergence; synthetic B1–B3 controls never enter run tables.
+
+Request metric readers distinguish conserved physical counts from incomplete
+role attribution; the HTTP transport and its recorded capture status are not
+changed. Freeze/build/verify reject empty price schedules, and the frozen
+config embeds the resolved schedule rather than rebasing a source-relative
+JSON filename. This does not supply research ranking judgements or prices.

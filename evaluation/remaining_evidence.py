@@ -141,9 +141,15 @@ def _audit_workflow_receipt(reader, *, mode, queue, artifact, workflow,
 
     receipt_path = receipts.get(mode)
     if not receipt_path:
-        require(workflow['status'] == 'pending' and workflow['Spayload_final'] is None
-                and workflow['Srun_final'] is None,
+        require(workflow['status'] == 'pending' and workflow['Srun_final'] is None,
                 f'Missing {mode} receipt was treated as final')
+        numerator = sum(grade['score'] for grade in grades) if grades and all(grade['score'] is not None for grade in grades) else None
+        payload = numerator / len(grades) if numerator is not None else None
+        require(workflow['Spayload_final'] == (round(payload, 4) if payload is not None else None),
+                f'Partial {mode} payload arithmetic mismatch')
+        if 'components' in workflow:
+            require(workflow['components'] == {**queue['components'], 'Spayload': payload},
+                    f'Partial {mode} components mismatch')
         return None, None
 
     receipt = reader.read(receipt_path)
@@ -696,7 +702,9 @@ def main(argv=None):
         with (output / name).open('x', encoding='utf-8') as stream:
             json.dump(data, stream, indent=2, ensure_ascii=False)
             stream.write('\n')
-    print(json.dumps({'output_dir': str(output), 'retry_rows': 46, 'scoring_rows': 108,
+    print(json.dumps({'output_dir': str(output),
+                      'retry_rows': len(evidence['retry-attribution.json']),
+                      'scoring_rows': len(evidence['scoring-coverage.json']),
                       'fresh_provider_calls': 0, 'fresh_live_http_calls': 0}))
 
 

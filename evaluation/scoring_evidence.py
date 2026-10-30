@@ -490,8 +490,8 @@ def candidate_base(artifact, cid, method, refs):
                 tier = 0
             elif oracle:
                 tier = 3
-            elif tier is not None or row.get('signal_detected') is True:
-                tier = min(2 if tier is None else tier, 2)  # Session/permission labels cannot replace an independent oracle.
+            elif tier is not None:
+                tier = min(tier, 2)  # Session/permission labels cannot replace an independent oracle.
         if tier is not None:
             if verifier.get('decision') == 'not_confirmed' and tier >= 3 or verifier.get('decision') == 'unverified' and tier >= 3 and not oracle:
                 tier = 2
@@ -921,6 +921,94 @@ def _call_operational_failure(record):
     return False
 
 
+# Soutput level 2 requires recorded JSON/schema/structural repair of a prior
+# attempt. Recovered HTTP 429/transport retries are operational events, not
+# evidence of a model output defect: attempt ordinals and dispatch counts are
+# therefore insufficient by themselves.
+_STRUCTURAL_ATTEMPT_STATUSES = frozenset({
+    'invalid', 'schema_rejected', 'parse_error', 'validation_failed',
+    'validation_rejected', 'incomplete', 'truncated', 'output_truncated',
+})
+_STRUCTURAL_FAILURE_CLASSES = frozenset({'schema_rejected', 'output_truncated'})
+_TRANSPORT_ATTEMPT_STATUSES = frozenset({'provider_error', 'transport_error', 'timeout'})
+_TRANSPORT_FAILURE_CLASSES = frozenset({
+    'http_rejected', 'transport_error', 'transport_timeout', 'provider_error_unknown',
+})
+
+
+def _normalized(value):
+    return str(value or '').strip().lower()
+
+
+def _http_failure(record):
+    try:
+        return int(record.get('status_code') or record.get('http_status')) >= 400
+    except (TypeError, ValueError):
+        return False
+
+
+def _record_failure_class(record):
+    diagnostic = record.get('diagnostic') if isinstance(record.get('diagnostic'), dict) else {}
+    failure = record.get('failure') if isinstance(record.get('failure'), dict) else {}
+    return _normalized(record.get('failure_class') or diagnostic.get('failure_class')
+                       or failure.get('failure_class') or failure.get('kind') or failure.get('type'))
+
+
+def _attempt_structural_repair(attempt):
+    """Return whether one prior dispatch failed on output structure, not transport."""
+    if not isinstance(attempt, dict):
+        return False
+    diagnostic = attempt.get('diagnostic') if isinstance(attempt.get('diagnostic'), dict) else {}
+    failure_class = _record_failure_class(attempt)
+    status = _normalized(attempt.get('status'))
+    parse_status = _normalized(attempt.get('parse_status'))
+    validation_status = _normalized(attempt.get('validation_status'))
+    if _normalized(attempt.get('retry_reason')) == 'rate_limit':
+        return False
+    if failure_class in _STRUCTURAL_FAILURE_CLASSES:
+        return True
+    if _http_failure(attempt) or _http_failure(diagnostic):
+        return False
+    if (failure_class in _TRANSPORT_FAILURE_CLASSES
+            or status in _TRANSPORT_ATTEMPT_STATUSES
+            or parse_status in _TRANSPORT_ATTEMPT_STATUSES):
+        return False
+    return (status in _STRUCTURAL_ATTEMPT_STATUSES
+            or parse_status in _STRUCTURAL_ATTEMPT_STATUSES
+            or validation_status in {'invalid', 'schema_rejected'})
+
+
+def _receipt_structural_failure(record):
+    """Return whether one collapsed receipt records rejected/invalid output."""
+    if not isinstance(record, dict):
+        return False
+    if record.get('structured_output_fallback'):
+        return True
+    if _call_operational_failure(record):
+        return False
+    parse_status = _normalized(record.get('parse_status'))
+    failure_class = _record_failure_class(record)
+    if failure_class in _STRUCTURAL_FAILURE_CLASSES:
+        return True
+    if _http_failure(record):
+        return False
+    if failure_class in _TRANSPORT_FAILURE_CLASSES or parse_status in _TRANSPORT_ATTEMPT_STATUSES:
+        return False
+    if parse_status in _STRUCTURAL_ATTEMPT_STATUSES:
+        return True
+    return _normalized(record.get('validation_status')) in {'invalid', 'schema_rejected'}
+
+
+def _structural_output_repair(record):
+    """Return whether the same logical call records an earlier structural retry."""
+    if _receipt_structural_failure(record):
+        return True
+    attempts = record.get('attempt_records') if isinstance(record, dict) else None
+    if not isinstance(attempts, list) or len(attempts) < 2:
+        return False
+    return any(_attempt_structural_repair(attempt) for attempt in attempts[:-1])
+
+
 def _requirement_plan(artifact, method):
     state = artifact['final_state']
     requirements = state.get('model_call_requirements')
@@ -1033,8 +1121,7 @@ def output_grade(artifact, method):
         if not valid:
             grades.append(0)
             continue
-        if any(c.get('parse_status') != 'ok' or c.get('validation_status') != 'valid'
-               or c.get('attempt', 1) != 1 or c.get('structured_output_fallback') for c in group):
+        if any(_structural_output_repair(c) for c in group):
             grades.append(2)
         else:
             grades.append(4 if all(output_references_valid(c) for c in group) else 3)

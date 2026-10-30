@@ -20,11 +20,12 @@ from evaluation.reporter import write_json_report
 from tests.test_scoring_remediation_e2e import control
 
 
-ROOT = Path('results/validation/thesis-scoring-v3')
+ROOT = Path('results/validation/thesis-scoring-v4')
 
 
 def source(monkeypatch, selection='both', name='mixed_candidates'):
-    artifact, _, _ = control(monkeypatch, name)
+    artifact, _, _ = control(monkeypatch, name, ranked=True)
+    artifact['validation_scope'] = 'offline_synthetic_fixture'
     artifact['config']['scoring_mode'] = selection
     artifact['config']['scoring_evaluator'] = {'provider': 'offline', 'model': 'independent-judge',
         'max_attempts': 2, 'max_tokens': 512, 'timeout': 5}
@@ -38,7 +39,7 @@ def grades(queue, mode, value=2):
     return [{
         'decision_id': f'{mode}:{row["candidate_id"]}:1',
         'run_id': queue['run_id'], 'source_sha256': queue['source_sha256'],
-        'rubric_version': 'scoring.v3', 'scoring_mode': mode,
+        'rubric_version': queue['rubric_version'], 'scoring_mode': mode,
         'candidate_id': row['candidate_id'], 'score': min(value, row['proof_ceiling']),
         'reason': 'Reviewed candidate-linked execution evidence',
         'evidence_refs': row['evidence_refs'],

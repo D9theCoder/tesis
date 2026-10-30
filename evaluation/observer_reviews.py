@@ -44,6 +44,8 @@ def _binding_check(entry, document, queue, *, legacy=False):
     digest = document.get("scoring_rule_sha256")
     if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
         raise ValueError("missing_scoring_epoch")
+    if digest != queue["scoring_rule_sha256"]:
+        raise ValueError("scoring_rule_epoch_mismatch")
     policy = document.get("scoring_policy") or {}
     queue_policy = queue.get("scoring_policy") or {}
     if policy.get("policy_version") and queue_policy.get("policy_version") \
@@ -137,19 +139,26 @@ def _validated_status(catalog, entry, path, status, queue, source_hash_count):
                     raise ValueError("stale_pending_grade")
             elif not decision or decision["score"] != grade["score"] or decision["decision_id"] != grade["decision_id"]:
                 raise ValueError("ledger_binding_mismatch")
+        numerator = sum(grade["score"] for grade in grades) if grades and all(grade["score"] is not None for grade in grades) else None
+        payload = numerator / len(grades) if numerator is not None else None
         if workflow.get("status") == "pending":
-            if workflow.get("Spayload_final") is not None or workflow.get("Srun_final") is not None:
+            if workflow.get("Srun_final") is not None:
                 raise ValueError("pending_final_not_null")
             if not isinstance(workflow.get("reason"), str) or not workflow["reason"]:
                 raise ValueError("missing_pending_reason")
         elif workflow.get("status") != "final":
             raise ValueError("invalid_workflow_status")
+        expected_payload = round(payload, 4) if payload is not None else None
+        if isinstance(workflow.get("Spayload_final"), bool) or workflow.get("Spayload_final") != expected_payload:
+            raise ValueError("status_payload_arithmetic_mismatch")
         if "components" in workflow:
             vector = workflow["components"]
             if (not isinstance(vector, dict) or set(vector) != set(WEIGHTS)
                     or any(vector[key] != value for key, value in queue["components"].items())
-                    or (workflow["status"] == "pending" and vector["Spayload"] is not None)):
+                    or isinstance(vector["Spayload"], bool) or vector["Spayload"] != payload):
                 raise ValueError("status_component_mismatch")
+        if "numerator" in workflow and (isinstance(workflow["numerator"], bool) or workflow["numerator"] != numerator):
+            raise ValueError("status_numerator_mismatch")
         if "denominator" in workflow and (type(workflow["denominator"]) is not int or workflow["denominator"] != len(grades)):
             raise ValueError("status_denominator_mismatch")
     return catalog.binding(ledger_path)

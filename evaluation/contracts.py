@@ -8,6 +8,22 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+#: Every score-summary metric guarded by the availability contract. Rates with
+#: an empty denominator must be null here, never fabricated as 0.0.
+SUMMARY_METRICS = (
+    "method_selection_accuracy",
+    "adaptation_rate",
+    "mean_attempts_to_success",
+    "payload_validity_rate",
+    "payload_execution_success_rate",
+    "payload_improvement_rate",
+    "guardrail_activation_rate",
+    "consistency_score",
+    "token_cost",
+    "token_cost_per_success",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ModuleScoreResult:
     """Score contract for one evaluated module or vulnerability surface."""
@@ -34,14 +50,17 @@ class ScoreSummary:
     successful_evasions: int = 0
     evasion_strategy: str = "pipeline"
 
-    # Stage 6 — Method selection & adaptation metrics (computed by scorer)
-    method_selection_accuracy: float = 0.0
-    adaptation_rate: float = 0.0
-    mean_attempts_to_success: float = 0.0
-    payload_validity_rate: float = 0.0
-    payload_execution_success_rate: float = 0.0
-    payload_improvement_rate: float = 0.0
-    guardrail_activation_rate: float = 0.0
+    # Stage 6 — Method selection & adaptation metrics (computed by scorer).
+    # Availability contract for rates: a numerator over an empty denominator is
+    # null with a reason in the maps below, never a fabricated 0.0. A measured
+    # non-event (0 out of a non-empty denominator) stays a legitimate 0.0.
+    method_selection_accuracy: float | None = None
+    adaptation_rate: float | None = None
+    mean_attempts_to_success: float | None = None
+    payload_validity_rate: float | None = None
+    payload_execution_success_rate: float | None = None
+    payload_improvement_rate: float | None = None
+    guardrail_activation_rate: float | None = None
     payload_guardrail_activations: int = 0
     consistency_score: float | None = None
     token_cost: float | None = None
@@ -68,11 +87,13 @@ class ScoreSummary:
         # ponytail: fail closed — any non-None tracked metric needs explicit
         # availability=True; unavailable ones must stay null. Never persist
         # unknown as 0.0. (Legacy dict artifacts never construct this type.)
-        for name in ("consistency_score", "token_cost", "token_cost_per_success"):
+        for name in SUMMARY_METRICS:
             value = getattr(self, name)
             flag = self.metric_availability.get(name) if isinstance(self.metric_availability, dict) else None
             if value is not None and flag is not True:
                 raise ValueError(f"{name} carries {value!r} without explicit availability=True; use None or mark available")
+            if flag is True and value is None:
+                raise ValueError(f"{name} is marked available but carries null; record availability=False with a reason")
             if flag is True and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)):
                 raise ValueError(f"{name} is marked available but carries {value!r}; use a finite number")
 

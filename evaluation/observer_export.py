@@ -18,6 +18,7 @@ from evaluation.metrics import (
 )
 from evaluation.observer_reviews import discover_reviews
 from evaluation.reporter import write_json_report
+from evaluation.thesis_scoring import review_queue
 from tesis.artifact_catalog import ArtifactCatalog
 from tesis.artifact_repository import config_fingerprint
 from tesis.runtime_events import redact_secrets, _is_secret_key
@@ -53,6 +54,7 @@ def _identity(entry):
                                               if owner.get(key) is not None), None)
                                    for key in POLICY_FIELDS}
     identity["scoring_policy"] = record.get("scoring_policy")
+    identity["scoring_policy_origin"] = "recorded_artifact"
     identity.update(matrix_execution_id=entry.parent_id, coordinate_index=entry.coordinate_index,
                     coordinate_index_base=0,
                     config_fingerprint=record.get("config_fingerprint") or (config_fingerprint(config) if config else None))
@@ -66,6 +68,51 @@ def _statuses(catalog, entry):
         entry.diagnostics.append(catalog.diagnostic("invalid_status_schema", entry.path))
         return {"execution_status": None, "execution_reason": None,
                 "security_outcome": None, "security_outcome_reason": None}
+
+
+_NEVER_RUN_STATUSES = frozenset({"skipped", "not_run", "not-run", "pending", "queued"})
+
+
+def _execution_evidence(record):
+    """Whether selection or execution evidence shows a run actually happened."""
+    state = record.get("final_state")
+    state = state if isinstance(state, dict) else {}
+    for owner in (record, state):
+        if owner.get("selected_method"):
+            return True
+        for key in ("scoring_decisions", "response_evidence", "timing_evidence",
+                    "payload_candidates", "execution_log"):
+            value = owner.get(key)
+            if value:
+                return True
+    activity = state.get("llm_activity") or record.get("llm_activity")
+    return isinstance(activity, dict) and bool(activity.get("started"))
+
+
+def _produced_composite(record):
+    """Return a stored runtime total only when a real execution produced it.
+
+    Never-run/skipped empty artifacts are contract-complete records whose
+    ``composite_score`` placeholder is not a measured score. Cancelled fixtures
+    keep a partial runtime total only when selection/execution evidence exists;
+    an empty cancelled placeholder stays null. The raw value is always audited
+    separately as ``stored_composite``.
+    """
+    value = record.get("composite_score")
+    if value is None:
+        return None
+    status = str(record.get("status") or "").casefold()
+    if status in _NEVER_RUN_STATUSES:
+        return None
+    if status == "cancelled" and not _execution_evidence(record):
+        return None
+    try:
+        lifecycle = terminal_status(record).get("execution_status")
+    except (ValueError, TypeError, AttributeError, KeyError, IndexError):
+        lifecycle = None
+    if lifecycle is None and not _execution_evidence(record):
+        return None
+    return value
 
 
 def _scores(entry):
@@ -90,18 +137,126 @@ def _scores(entry):
     # maximum candidate score or compute a partial final composite.
     aliases = {"Smethod": "method_score", "Spayload": "payload_score", "Sexploit": "exploitation_score",
                "Schain": "chain_score", "Soutput": "output_score", "Srun": "composite_score"}
-    return {"components": {key: vector.get(key, summary.get(key, record.get(key, record.get(alias))))
-                           for key, alias in aliases.items()},
+    components = {key: vector.get(key, summary.get(key, record.get(key, record.get(alias))))
+                  for key, alias in aliases.items()}
+    stored_composite = record.get("composite_score")
+    produced_composite = _produced_composite(record)
+    if stored_composite is not None and produced_composite is None:
+        # A placeholder stored total never becomes an actual Srun.
+        components["Srun"] = None
+    else:
+        components["Srun"] = vector.get("Srun")
+        if components["Srun"] is None:
+            components["Srun"] = produced_composite
+    return {"legacy": True,
+            "legacy_label": "runtime_provisional_scoring.v2",
+            "components": components,
             "method_scores": record.get("method_scores", state.get("method_scores")),
             "payload_scores": record.get("payload_scores", state.get("payload_scores")),
-            "stored_composite": record.get("composite_score"),
+            "stored_composite": stored_composite,
+            "stored_composite_status": record.get("composite_score_status"),
             "rubric_version": record.get("runtime_scoring_rubric_version", "scoring.v2"),
             "status": record.get("composite_score_status", "historical_provisional_scoring.v2"),
             "provisional_label": "provisional_scoring.v2",
             "thesis_scoring_status": record.get("thesis_scoring_status"), "source": entry.source,
             "metrics_epoch": (record.get("metrics") or {}).get("metrics_epoch"),
             "research_metrics": record.get("metrics"),
+            "research_metrics_origin": "recorded_artifact",
             "final_receipt_status": record.get("thesis_scoring_status")}
+
+
+_GRADED_COMPONENTS = ("Smethod", "Spayload", "Sexploit", "Schain", "Soutput")
+
+
+def _spayload_pending_reason(queue):
+    eligible = [row for row in queue.get("candidates") or [] if isinstance(row, dict) and row.get("eligible")]
+    if not eligible:
+        return "no_eligible_candidate"
+    if all(row.get("status") == "signal_absent" for row in eligible):
+        return "graded_receipt_unavailable"
+    return "pending_candidate_grades"
+
+
+def _workflow_scores(workflows):
+    labels = {"human": "HUMAN workflow (human review required; provisional until final receipt)",
+              "ai": "AI workflow (experimental/provisional; not final thesis human signoff)"}
+    visible = {}
+    for mode in ("human", "ai"):
+        workflow = workflows.get(mode) if isinstance(workflows, dict) else None
+        if not isinstance(workflow, dict):
+            visible[mode] = {"label": labels[mode], "status": "missing", "reason": "missing_review",
+                             "components": None, "component_pending_reasons": {},
+                             "Spayload_final": None, "Srun_final": None}
+            continue
+        visible[mode] = {
+            "label": labels[mode],
+            "status": workflow.get("status"),
+            "reason": workflow.get("reason"),
+            "components": workflow.get("components"),
+            "component_pending_reasons": workflow.get("component_pending_reasons") or {},
+            "Spayload_final": workflow.get("Spayload_final"),
+            "Srun_final": workflow.get("Srun_final"),
+        }
+    return visible
+
+
+def _graded_scores(catalog, entry, workflows):
+    """Publish the thesis graded vector; runtime module scores stay separate.
+
+    The four automatic components come from the frozen review queue. Spayload
+    exists only inside a source-bound validated human or ai workflow, so the
+    base vector keeps it null with an explicit pending reason and never picks a
+    flattering workflow on the caller's behalf.
+    """
+    visible = _workflow_scores(workflows)
+    unavailable = {"status": "unavailable", "reason": None, "automatic_status": None,
+                   "rubric_version": None, "selected_method": None, "components": None,
+                   "component_pending_reasons": {}, "component_evidence_refs": None,
+                   "scoring_rule_sha256": None, "source_scoring_rule_sha256": None,
+                   "source_sha256": None, "selection": None,
+                   "metrics": None, "metrics_origin": None,
+                   "scoring_policy": None, "scoring_policy_origin": None,
+                   "workflows": visible}
+    if entry.source.get("pointer"):
+        return {**unavailable, "reason": "embedded_artifact_requires_standalone_source"}
+    if entry.ambiguous:
+        return {**unavailable, "reason": "ambiguous_source"}
+    try:
+        queue = review_queue(entry.path)
+        if queue["source_sha256"] != entry.source["sha256"]:
+            raise ValueError("source_changed")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
+        reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+        entry.diagnostics.append(catalog.diagnostic("graded_source_incompatible", entry.path, reason=reason))
+        return {**unavailable, "reason": reason}
+    components = {key: (queue.get("components") or {}).get(key) for key in _GRADED_COMPONENTS}
+    components["Spayload"] = None
+    pending = dict(queue.get("component_pending_reasons") or {})
+    if "Spayload" not in pending:
+        pending["Spayload"] = _spayload_pending_reason(queue)
+    return {"status": "pending",
+            "reason": None,
+            "automatic_status": ("complete" if all(components[key] is not None
+                                                   for key in ("Smethod", "Sexploit", "Schain", "Soutput"))
+                                 else "pending_component_evidence"),
+            "rubric_version": queue.get("rubric_version"),
+            "selected_method": queue.get("method"),
+            "components": components,
+            "component_pending_reasons": pending,
+            "component_evidence_refs": queue.get("component_evidence_refs"),
+            "scoring_rule_sha256": queue.get("scoring_rule_sha256"),
+            "source_scoring_rule_sha256": queue.get("source_scoring_rule_sha256"),
+            "source_sha256": queue.get("source_sha256"),
+            "selection": queue.get("selection"),
+            # Current review-queue recomputation from the present source files.
+            # Recorded artifact metrics/policies stay untouched below in
+            # ``metrics.research``/``metrics.scoring_policy`` and are labelled
+            # ``recorded_artifact``.
+            "metrics": queue.get("metrics"),
+            "metrics_origin": "review_queue_current_sources",
+            "scoring_policy": queue.get("scoring_policy"),
+            "scoring_policy_origin": "review_queue_current_sources",
+            "workflows": visible}
 
 
 def _details(entry):
@@ -185,6 +340,7 @@ def build_projection(catalog: ArtifactCatalog, *, historical_analysis=()):
                 "denominator": (source_metrics.get("denominators") or {}).get(name),
             }
         metrics["research"] = {
+            "origin": "recorded_artifact",
             "schema_version": source_metrics.get("schema_version"),
             "metrics_epoch": source_metrics.get("metrics_epoch"),
             "rubric_version": source_metrics.get("rubric_version"),
@@ -192,12 +348,14 @@ def build_projection(catalog: ArtifactCatalog, *, historical_analysis=()):
             "note": None if research else "no_research_metrics_recorded_for_this_epoch",
         }
         metrics["scoring_policy"] = entry.record.get("scoring_policy")
+        metrics["scoring_policy_origin"] = "recorded_artifact"
         workflows = discover_reviews(catalog, entry)
         runs.append({"identity": _identity(entry), "source": entry.source,
             "execution": {"status": fields["execution_status"], "reason": fields["execution_reason"],
                           "observer": entry.detail.get("observer")},
             "security": {"outcome": fields["security_outcome"], "reason": fields["security_outcome_reason"],
                          "historical_analysis": history.get((entry.record.get("execution_id"), entry.source["sha256"]))},
+            "graded_scores": _graded_scores(catalog, entry, workflows),
             "runtime_scores": _scores(entry), "thesis_review": workflows, "metrics": metrics,
             "workflow": entry.record.get("workflow", summary.get("workflow")),
             "detail": _details(entry), "diagnostics": entry.diagnostics, "ambiguous": entry.ambiguous})

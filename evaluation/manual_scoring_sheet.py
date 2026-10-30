@@ -1,4 +1,8 @@
-"""Manual scoring sheet export helpers for payload evidence review."""
+"""Manual scoring sheet export helpers for payload evidence review.
+
+Reviewer score columns stay blank; recorded runtime v2 scores are evidence and
+appear only under the explicitly labelled ``runtime_legacy`` block.
+"""
 
 from __future__ import annotations
 
@@ -172,10 +176,20 @@ def manual_scoring_rows(artifact: dict[str, Any]) -> list[dict[str, Any]]:
             "mutation_type": details.get("mutation_type"),
             "target_param": details.get("target_param"),
             "expected_signal": details.get("expected_signal"),
-            "payload_score_0_4": score,
-            "method_score_0_4": final_state.get("method_scores", {}).get(details.get("method")),
-            "exploitation_score_0_4": final_state.get("exploitation_scores", {}).get(details.get("method")),
-            "chain_score_0_4": final_state.get("chain_scores", {}).get(details.get("method")),
+            # Reviewer fields stay blank: runtime v2 scores are evidence, not
+            # a pre-filled human/AI grade.
+            "payload_score_0_4": None,
+            "method_score_0_4": None,
+            "exploitation_score_0_4": None,
+            "chain_score_0_4": None,
+            "runtime_legacy": {
+                "score_epoch": "runtime_provisional_scoring.v2",
+                "payload_score_0_4": score,
+                "method_score_0_4": final_state.get("method_scores", {}).get(details.get("method")),
+                "exploitation_score_0_4": final_state.get("exploitation_scores", {}).get(details.get("method")),
+                "chain_score_0_4": final_state.get("chain_scores", {}).get(details.get("method")),
+                "scoring_reason": earning.get("reason", "") if earning else "",
+            },
             "validator_result": validation,
             **links,
             "legacy_payload_alias_refs": {field: refs for field, refs in
@@ -191,7 +205,7 @@ def manual_scoring_rows(artifact: dict[str, Any]) -> list[dict[str, Any]]:
             "scoring_decision_ref": f"#/scoring_decisions/{decisions.index(earning)}" if earning and artifact.get("scoring_decisions") is not None
                 else (f"#/final_state/scoring_decisions/{decisions.index(earning)}" if earning else None),
             "later_verifier_decisions": later,
-            "score_0_4": score,
-            "scoring_reason": earning.get("reason", "") if earning else "",
+            "score_0_4": None,
+            "scoring_reason": "",
         })
     return rows

@@ -208,7 +208,15 @@ _SIDECAR_SUFFIXES: Final[tuple[str, ...]] = (
     "evaluator-telemetry.json",
 )
 
+_SUPERSEDED_PREFIX: Final[str] = "_superseded"
+
 _MISSING: Final[object] = object()
+
+
+def _superseded(path: Path) -> bool:
+    """Superseded epochs remain on disk but are never current discovery input."""
+
+    return any(part.casefold().startswith(_SUPERSEDED_PREFIX) for part in path.parts)
 
 
 def _normalise_key(value: object) -> str:
@@ -964,6 +972,8 @@ class ArtifactRepository:
     def _json_paths(self) -> list[Path]:
         """Return readable candidates without failing on missing directories."""
 
+        if _superseded(self.root):
+            return []
         try:
             is_file = self.root.is_file()
             is_dir = self.root.is_dir()
@@ -980,7 +990,13 @@ class ArtifactRepository:
                 LOGGER.debug("Ignoring artifact directory: %s", error)
 
             try:
-                for directory, _, filenames in os.walk(self.root, onerror=_ignore_walk_error):
+                for directory, dirnames, filenames in os.walk(self.root, onerror=_ignore_walk_error):
+                    # Preserve superseded epochs on disk but never discover them
+                    # as current artifacts or descend into their trees.
+                    dirnames[:] = [
+                        name for name in dirnames
+                        if not name.casefold().startswith(_SUPERSEDED_PREFIX)
+                    ]
                     for filename in filenames:
                         if filename.casefold().endswith(".json"):
                             candidates.append(Path(directory) / filename)
@@ -991,6 +1007,8 @@ class ArtifactRepository:
 
         unique: dict[str, Path] = {}
         for path in candidates:
+            if _superseded(path):
+                continue
             if not self.include_sidecars and path.name.casefold().endswith(_SIDECAR_SUFFIXES):
                 continue
             try:

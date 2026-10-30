@@ -1077,14 +1077,27 @@ probe and unexecuted candidates are excluded; empty denominators, missing proof
 and incomplete reviews leave the thesis composite null. Full precision is kept
 in the stored vector and final scores are rounded to four decimals.
 
+The saved-artifact reviewer is pinned to `scoring.v4`; a conflicting config or
+`score_epoch.thesis_final` is refused, and deleting a version field cannot
+restore the legacy selection score. Reviewed `Spayload` can remain numeric in
+a pending workflow, but `Srun_final` still requires all five components.
+Recovered transport/rate-limit retries are not structural output repair.
+Human assessment remains authoritative; AI workflows are experimental and
+separate. The offline fidelity ledger reports graded components, pending
+reasons, source hashes and FD1 without substituting runtime scores or claiming
+fresh-epoch convergence. Request totals and incomplete role attribution are
+reported separately. Freeze/build/verify require a real non-empty price
+schedule; synthetic profile controls prove reachability only. See
+[offline reporting correction](thesis_scoring.md#offline-reporting-correction-2026-10-31).
+
 Method selection uses a preregistered hash-pinned evaluator profile for the
-last selection snapshot: 0 outside surface, 1 unproved prerequisites, 2 eligible
+last selection snapshot: 0 outside surface, 1 known-false prerequisites, 2 eligible
 but lower-ranked, 3 tied top rank, 4 tied top rank with verified references and
 plan. Fit level ranks before reference protocol request count; actual requests
 never determine initial rank. Unknown predicates or absent profiles leave
 eligible selection pending. This narrows the v3 meaning of grade 3; historical
-v3 artifacts retain their own rules. Forced choices are recorded separately
-from model selection. Profiles stay outside the selector's input.
+v3 records remain unchanged and are not silently reviewed under v4. Forced
+choices are recorded separately from model selection. Profiles stay outside the selector's input.
 The ranking reference combines prior research with independent DVWA controls
 for the same vulnerability-confirmation goal and candidate budget. Additional
 expert approval is optional. A method with only partial or unmatched proof

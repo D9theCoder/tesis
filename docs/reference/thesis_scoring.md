@@ -9,12 +9,75 @@
 > implementation and receipt descriptions below preserve the software's actual
 > human/AI capabilities and do not expand the thesis protocol.
 
-New CLI/TUI launches select `scoring_rubric_version: scoring.v4`. Saved artifacts
-without that field retain the `scoring.v3` rules; runtime decisions and composites
-remain explicitly provisional `scoring.v2`. Review never rewrites execution
-artifacts or performs DVWA requests. Human and AI review share validation and
+New CLI/TUI and runner API launches select `scoring_rubric_version: scoring.v4`.
+The saved-artifact reviewer is hard-pinned to v4: an explicit non-v4 config
+declaration or disagreeing `score_epoch.thesis_final` is refused. An omitted
+config version cannot select the legacy viable-flag scorer. Historical v3
+records remain unchanged; they are not silently regraded or relabelled.
+Runtime decisions and composites remain explicitly provisional `scoring.v2`.
+Review never rewrites execution artifacts or performs DVWA requests. Human and AI review share validation and
 proof ceilings, but emit separate vectors and `Srun_final` receipts from one
 execution. The evaluator role is excluded from experiment-model `Soutput`.
+
+## Offline reporting correction (2026-10-31)
+
+The authoritative rubric is Tabel 3.5–3.11 in
+`docs/docx/bab-3-reconciled-2026-10-29.docx`. Final-method attribution, the
+distinct executed-candidate arithmetic mean, all five weights, and pending versus
+not-applicable statuses are unchanged. A recovered transport or HTTP 429 retry
+does not establish structural output repair; `Soutput` level 2 requires recorded
+JSON/schema repair evidence. A bare agent `signal_detected` boolean cannot create
+an Access Control or Brute Force proof tier without a recognized evidence class.
+
+`finalize_reviews` retains an independently reviewed `Spayload` mean even when
+another component leaves the workflow pending. `Srun_final` and final receipts
+still require every mandatory component. Observer discovery validates this
+partial arithmetic against the source-bound decision ledger. Reviewer score
+columns are blank, not prefilled from the runtime grades; those historical
+values appear only under `runtime_legacy`.
+
+`scoring-policy.v4.3` names the corrected digest construction: SHA-256 of the
+ordered per-file SHA-256 strings for `thesis_scoring.py`, `scoring_evidence.py`,
+`research_metrics.py`, and `foundation/verifier.py`. Queue, policy and receipt
+digests agree. The original artifact digest is retained separately as
+`source_scoring_rule_sha256` / `recorded_scoring_rule_sha256`; it is not compared
+as if its historical digest construction were identical.
+
+Observer exports place `graded_scores` before the explicitly legacy
+`runtime_scores`. Current review metrics/policy are labelled
+`review_queue_current_sources`; recorded metrics/policy retain
+`recorded_artifact` provenance. A captured physical total can be available while
+role attribution remains partial: conserved nonnegative counter totals do not
+invent role attribution. Missing, unknown or inconsistent capture remains
+unavailable. Never-run coordinates retain null scores and rates, not zero.
+
+The callable offline ledger has no experiment runner or new CLI:
+
+```python
+from evaluation.fidelity_ledger import build_ledger
+
+ledger = build_ledger(
+    {"baseline": "results/validation/remediation-2026-10-30/full-2026-10-30"},
+    output="results/validation/fidelity-ledger.json",
+)
+```
+
+It records all five graded components and pending reasons, source hashes,
+F1–F8, FD1, and separately cited all-selection metadata mismatches. Optional
+`receipts`, `attributions` and `hypotheses` supply validated human reviews,
+closed-cause evidence decisions and the lexicographic P1 queue. It never
+invents missing grades or causes. FD1 is diagnostic only, not `Smethod` or
+`Srun`; its AKG freeze-provenance caveat remains explicit.
+`offline_fidelity_ready` is not full convergence: phase B, frozen invariants
+and fresh-epoch acceptance are not established by saved-artifact analysis.
+
+Freeze/build/verify boundaries reject an empty or malformed
+`token_price_schedule`; freezing embeds the validated resolved schedule so
+relocating the frozen config does not rebase an old relative JSON path.
+Synthetic B1–B3 controls prove profile/selection/review reachability, not
+acceptance of a research profile or a real epoch. The 2026-10-30 artifacts still
+have no pre-execution ranking profile and no final human payload reviews;
+their `Smethod`/`Srun` stay unavailable.
 
 ## Evidence and final-method rules
 

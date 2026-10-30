@@ -54,6 +54,31 @@ REQUIRED_FROZEN_INPUTS = (
     "scoring_profile", "scoring_oracles", "scoring_policy_epoch",
     "token_price_schedule", "fixture_id", "protocol_version", "candidate_budget",
 )
+PRICE_SCHEDULE_REQUIRED = "token_price_schedule_required"
+
+
+def require_frozen_token_price_schedule(config: Any) -> dict[str, Any]:
+    """Reject an absent, empty, or malformed frozen price schedule.
+
+    The schedule is an operator input: planning never invents prices, and an
+    epoch that cannot price its own calls cannot freeze a cost-bearing research
+    plan.  The global config loader still accepts ``{}`` for offline readers and
+    shipped defaults; only these new-epoch boundaries are strict.
+    """
+    schedule = getattr(config, "token_price_schedule", None)
+    if not schedule:
+        raise ValueError(
+            f"{PRICE_SCHEDULE_REQUIRED}: the frozen epoch requires a non-empty "
+            "operator-supplied token_price_schedule; prices are never guessed"
+        )
+    try:
+        from evaluation.research_metrics import validate_token_price_schedule
+
+        return dict(validate_token_price_schedule(dict(schedule)))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{PRICE_SCHEDULE_REQUIRED}: token_price_schedule invalid: {exc}"
+        ) from exc
 
 
 def load_research_config(path: str | Path) -> dict[str, Any]:
@@ -354,6 +379,7 @@ def freeze_ranking_profile(
     if repeats < MIN_REPEATS:
         raise ValueError(f"Chapter 3 requires at least {MIN_REPEATS} repeats")
     config = load_and_resolve_config(config_path=config_path, cli_args={})
+    token_price_schedule = require_frozen_token_price_schedule(config)
     candidate_path = Path(candidate_profile_path)
     candidate = json.loads(candidate_path.read_bytes())
     validate_profile(candidate)
@@ -409,6 +435,10 @@ def freeze_ranking_profile(
     raw["scoring_profile"] = profile_path.name
     raw["scoring_oracles"] = config.scoring_oracles
     raw["scoring_policy_epoch"] = policy_epoch
+    # Persist the resolved, validated mapping rather than a source-relative path:
+    # the frozen config lives in a different epoch directory and must remain
+    # price-complete without the original file.
+    raw["token_price_schedule"] = token_price_schedule
     raw["fixture_id"] = config.fixture_id
     raw["protocol_version"] = config.protocol_version
     raw["candidate_budget"] = config.candidate_budget
@@ -467,6 +497,7 @@ def build_research_plan(
         if declaration["payload_mode"] != PRIMARY_PAYLOAD_MODE:
             raise ValueError("the declared research config payload mode is not supported")
     config = load_and_resolve_config(config_path=str(resolved_config), cli_args={})
+    require_frozen_token_price_schedule(config)
     if repeats < MIN_REPEATS:
         raise ValueError(f"Chapter 3 requires at least {MIN_REPEATS} repeats per coordinate")
     if config.payload_mode != PRIMARY_PAYLOAD_MODE:
@@ -677,6 +708,7 @@ def verify_plan(plan_path: str | Path) -> dict[str, Any]:
     if source_tree_hashes(_repository_root(config_path)) != plan["source_hashes"]:
         raise ValueError("runtime source tree changed after the plan was frozen")
     config = load_and_resolve_config(config_path=str(config_path), cli_args={})
+    require_frozen_token_price_schedule(config)
     validate_evidence_config(config.scoring_rubric_version, config.scoring_profile, config.scoring_oracles)
     constraints = plan["constraints"]
     research_config = plan.get("research_config")

@@ -18,6 +18,7 @@ import math
 
 from evaluation.scoring_evidence import (
     STATIC_ORIGIN_KINDS,
+    candidate_execution_evidence,
     candidate_execution_rows,
     candidate_lifecycle_status,
     origin_kind as _origin_kind,
@@ -33,7 +34,10 @@ from core.state import ALL_METHOD_AGENTS
 
 
 METRIC_SCHEMA_VERSION = 'research-metrics.v2'
-SCORING_POLICY_VERSION = 'scoring-policy.v4.2'
+# v4.3 changes only the scoring-rule digest construction to the canonical
+# four-file function; the metric definitions themselves are unchanged. Stored
+# v4.2 documents and recorded epoch digests remain historical identity.
+SCORING_POLICY_VERSION = 'scoring-policy.v4.3'
 EXPERIMENT_ROLES = frozenset({'orchestrator', 'payload_generator'})
 CONTROL_IDENTITY_KINDS = frozenset({'probe_candidate', 'derived_control', 'independent_control', 'unresolved'})
 RATE_DEFINITION_VERSION = 'event-rates.v2'
@@ -43,6 +47,11 @@ SCORING_SOURCE_FILES = (
     'evaluation/research_metrics.py',
     'foundation/verifier.py',
 )
+#: The canonical digest hashes every scoring source file, verifier included.
+#: The definition is recorded so a stored digest can never be mistaken for one
+#: produced under a different construction; recorded artifact epochs stay
+#: untouched and are returned separately as historical identity.
+SCORING_RULE_DIGEST_DEFINITION = 'sha256(concat(per-file sha256 hexdigest for SCORING_SOURCE_FILES))'
 PROVISIONAL_LABEL = 'provisional_scoring.v2'
 
 DEFINITIONS = {
@@ -121,21 +130,38 @@ def scoring_source_hashes():
     return {path: sha256((root / path).read_bytes()).hexdigest() for path in SCORING_SOURCE_FILES}
 
 
+def _rule_hash(source_hashes):
+    return sha256(''.join(source_hashes.values()).encode()).hexdigest()
+
+
 def scoring_rule_hash():
-    return sha256(''.join(scoring_source_hashes().values()).encode()).hexdigest()
+    return _rule_hash(scoring_source_hashes())
 
 
 def scoring_policy(artifact=None):
-    """Identify the scoring/metric policy epoch without relabeling history."""
-    from pathlib import Path
-    root = Path(__file__).resolve().parents[1]
+    """Identify the scoring/metric policy epoch without relabeling history.
+
+    ``scoring_rule_sha256`` is the canonical :func:`scoring_rule_hash` over every
+    file in ``SCORING_SOURCE_FILES`` (verifier included). ``digest_definition``
+    records how that value was constructed so a stored digest is never compared
+    against a different definition. A recorded artifact epoch digest is echoed
+    as ``recorded_scoring_rule_sha256``; it is historical identity, never
+    rewritten to the canonical value.
+    """
+    artifact = artifact if isinstance(artifact, dict) else {}
+    epoch = artifact.get('score_epoch')
+    epoch = epoch if isinstance(epoch, dict) else {}
+    source_hashes = scoring_source_hashes()
     return {
         'policy_version': SCORING_POLICY_VERSION,
         'metrics_epoch': METRIC_SCHEMA_VERSION,
         'rate_definition_version': RATE_DEFINITION_VERSION,
-        'rubric_version': ((artifact or {}).get('config') or {}).get('scoring_rubric_version'),
-        'scoring_rule_sha256': sha256(b''.join((root / path).read_bytes() for path in SCORING_SOURCE_FILES[:3])).hexdigest(),
-        'source_hashes': scoring_source_hashes(),
+        'rubric_version': (artifact.get('config') or {}).get('scoring_rubric_version'),
+        'scoring_rule_sha256': _rule_hash(source_hashes),
+        'digest_definition': SCORING_RULE_DIGEST_DEFINITION,
+        'source_files': list(SCORING_SOURCE_FILES),
+        'source_hashes': source_hashes,
+        'recorded_scoring_rule_sha256': epoch.get('scoring_rule_sha256'),
     }
 
 
@@ -359,8 +385,22 @@ def _provenance(artifact, method):
     return provenance if isinstance(provenance, dict) else {}
 
 
+def _execution_evidence_refs(artifact, execution):
+    """Reference the exact execution rows the shared identity contract returned."""
+    state = _state(artifact)
+    container = '#/final_state/response_evidence' if isinstance(state.get('response_evidence'), list) \
+        else '#/response_evidence'
+    return [f'{container}/{index}' for index, _row in execution]
+
+
 def _candidate_view(artifact, method, rows=None):
-    """One view per candidate queue row with execution/proof evidence."""
+    """One view per candidate queue row with execution/proof evidence.
+
+    Frozen review rows are passed through unchanged. Without them the view is
+    derived from the same ``scoring_evidence`` proof API the review queue uses;
+    runtime ``payload_scores`` are never read, and every unavailable assessment
+    keeps a precise per-candidate reason.
+    """
     if rows is not None:
         return [{'candidate_id': row.get('candidate_id'), 'valid': (row.get('validation') or {}).get('valid') is True,
                  'stage': row.get('stage'), 'executed': bool(row.get('eligible')),
@@ -368,18 +408,39 @@ def _candidate_view(artifact, method, rows=None):
                  'proof': row.get('proof_ceiling'), 'provenance': row.get('provenance') or {},
                  'evidence_refs': list(row.get('evidence_refs') or [])}
                 for row in rows if isinstance(row, dict) and row.get('candidate_id')]
-    state = _state(artifact)
     provenance = _provenance(artifact, method)
     valid_ids = {str(row['candidate_id']) for row in _validation_rows(artifact, method) if row.get('valid') is True}
     rows_out = []
     for candidate in _candidate_queue(artifact, method):
         cid = candidate['candidate_id']
-        execution = _execution_rows(artifact, cid, method)
-        evidence_refs = [f'#/final_state/response_evidence/{index}' for index, _row in execution]
-        rows_out.append({'candidate_id': cid, 'valid': str(cid) in valid_ids,
-                         'stage': candidate.get('stage'),
-                         'executed': bool(execution), 'assessed': False, 'proof': None,
-                         'provenance': provenance.get(cid, {}), 'evidence_refs': evidence_refs})
+        execution = candidate_execution_evidence(artifact, cid, method)
+        refs = _execution_evidence_refs(artifact, execution)
+        row = {'candidate_id': cid, 'valid': str(cid) in valid_ids,
+               'stage': candidate.get('stage'), 'executed': bool(execution),
+               'assessed': False, 'proof': None,
+               'provenance': provenance.get(cid, {}), 'evidence_refs': refs}
+        # Revoking execution here keeps this view identical to the queue's
+        # lifecycle/visit binding; proof is never assessed for an unbound row.
+        bound = _visit_bound_execution(artifact, row, method)
+        row['executed'] = bound
+        if not execution:
+            reason = 'candidate_not_executed'
+        elif not bound:
+            reason = f"candidate_{candidate_lifecycle_status(artifact, cid, method) or 'execution_unbound'}"
+        elif not row['valid']:
+            reason = 'candidate_validation_unavailable'
+        elif row['stage'] not in {'exploit', 'bypass'}:
+            reason = 'candidate_stage_not_exploit_or_bypass'
+        elif not provenance.get(cid):
+            reason = 'candidate_provenance_unavailable'
+        else:
+            from evaluation.scoring_evidence import candidate_base
+            proof = candidate_base(artifact, cid, method, refs)
+            row['assessed'] = proof is not None
+            row['proof'] = proof
+            reason = None if proof is not None else 'candidate_proof_evidence_unavailable'
+        row['assessment_reason'] = reason
+        rows_out.append(row)
     return rows_out
 
 
@@ -805,9 +866,13 @@ def _payload_metrics(metrics, artifact, method, view, calls):
         reason = 'no_executed_candidate'
     elif len(assessed) != len(executed):
         reason = 'unassessable_executed_candidate'
+    unassessed = [{'candidate_id': row['candidate_id'],
+                   'reason': row.get('assessment_reason') or 'candidate_proof_evidence_unavailable'}
+                  for row in executed if not row['assessed']]
     metrics.put('payload_execution_success_rate', success_rate if reason is None else None,
                 numerator=len(confirmed), denominator=len(valid), population='valid_exploit_bypass_candidates',
-                origin='all', method=method, reason=reason, coverage=_rate(len(assessed), len(executed)))
+                origin='all', method=method, reason=reason, coverage=_rate(len(assessed), len(executed)),
+                detail={'unassessed_candidates': unassessed} if unassessed else None)
     metrics.put('assessable_executed_confirmation_rate', _rate(len(confirmed), len(assessed)),
                 numerator=len(confirmed), denominator=len(assessed),
                 population='assessable_executed_candidates', origin='all', method=method,
@@ -1058,14 +1123,17 @@ def _alignment_metric(metrics, artifact, method, executed):
 def _exploit_flags(metrics, components, method, artifact):
     exploit = components.get('Sexploit') if isinstance(components, dict) else None
     chain = components.get('Schain') if isinstance(components, dict) else None
+    graded = bool(components)
     metrics.put('full_exploit_flag', None if exploit is None else float(int(exploit >= 3)),
                 numerator=None if exploit is None else int(exploit >= 3), denominator=1,
                 population='final_method_exploit_component', method=method,
-                reason='exploit_evidence_unavailable')
+                reason=None if exploit is not None else (
+                    'exploit_evidence_unavailable' if graded else 'graded_component_evidence_unavailable'))
     metrics.put('chain_enabled_exploit_flag', None if chain is None else float(int(chain >= 3)),
                 numerator=None if chain is None else int(chain >= 3), denominator=1,
                 population='final_method_chain_component', method=method,
-                reason='chain_evidence_unavailable')
+                reason=None if chain is not None else (
+                    'chain_evidence_unavailable' if graded else 'graded_component_evidence_unavailable'))
     from evaluation.scoring_evidence import verified_dependencies
     assessment, _routes = _chain_context(artifact)
     try:
@@ -1075,6 +1143,70 @@ def _exploit_flags(metrics, components, method, artifact):
         route_count, reason = None, 'chain_dependency_evidence_unavailable'
     metrics.count('chain_route_count', route_count, population='verified_completed_routes',
                   method=method, reason=reason)
+
+
+def _nonnegative_int(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _captured_physical_totals(counters):
+    """Return ``(total, phase_sum, reason)`` for provably captured run totals.
+
+    A counter proves its physical totals only when its capture receipt says
+    ``complete`` or ``partial``, the run total is a valid non-negative integer,
+    every phase (and, when recorded, role) bucket is a valid non-negative
+    integer, and the phase buckets sum to the total. ``partial`` attribution is
+    deliberately accepted: an unattributed dispatch still counts toward the
+    captured total, but it never makes attribution complete. Missing, unknown,
+    invalid or non-conserving counters keep the totals unavailable rather than
+    guessed.
+    """
+    if not isinstance(counters, dict) or not counters:
+        return None, None, 'http_request_counters_unavailable'
+    status = str(counters.get('capture_status') or '')
+    if status not in {'complete', 'partial'}:
+        # Only an actual capture receipt may prove totals. A missing/unknown
+        # status is not a capture, and an explicitly unavailable one stays named.
+        reason = 'http_request_capture_unavailable' if status == 'unavailable' \
+            else 'http_request_capture_status_unknown'
+        return None, None, reason
+    total = _nonnegative_int(counters.get('total_requests'))
+    if total is None:
+        return None, None, 'http_counter_total_invalid'
+    by_phase = counters.get('by_phase')
+    if not isinstance(by_phase, dict) or not by_phase:
+        return None, None, 'http_counter_phase_totals_invalid'
+    buckets = [_nonnegative_int(value) for value in by_phase.values()]
+    if any(value is None for value in buckets):
+        return None, None, 'http_counter_phase_totals_invalid'
+    phase_sum = sum(value for value in buckets if value is not None)
+    if phase_sum != total:
+        return None, phase_sum, 'http_counter_conservation_mismatch'
+    by_role = counters.get('by_role')
+    if by_role is not None:
+        # A recorded role split must agree with the captured total. Missing
+        # role buckets are old schema, not proof of loss; contradictory ones
+        # mean the capture receipt cannot be trusted.
+        if not isinstance(by_role, dict):
+            return None, phase_sum, 'http_counter_role_totals_invalid'
+        if by_role:
+            role_buckets = [_nonnegative_int(value) for value in by_role.values()]
+            if any(value is None for value in role_buckets):
+                return None, phase_sum, 'http_counter_role_totals_invalid'
+            if sum(value for value in role_buckets if value is not None) != total:
+                return None, phase_sum, 'http_counter_role_conservation_mismatch'
+    return total, phase_sum, None
+
+
+def _counter_reading(counters, key, *, missing_reason, invalid_reason, totals_available, totals_reason):
+    """Read one independent physical counter only when run totals are proven."""
+    if not totals_available:
+        return None, totals_reason or 'http_request_counters_unavailable'
+    raw = counters.get(key) if isinstance(counters, dict) else None
+    value = _nonnegative_int(raw)
+    if value is not None:
+        return value, None
+    return None, missing_reason if raw is None else invalid_reason
 
 
 def _attempt_metrics(metrics, artifact, method, executed):
@@ -1118,8 +1250,6 @@ def _attempt_metrics(metrics, artifact, method, executed):
     counters = counters if isinstance(counters, dict) else None
     counter_status = str((counters or {}).get('capture_status') or '')
     counter_complete = bool(counters) and (counters.get('complete') is True or counter_status == 'complete')
-    counters_reason = None if counter_complete else (
-        'http_request_counters_unavailable' if not counters else f'http_request_capture_{counter_status or "partial"}')
     by_phase = counters.get('by_phase') if isinstance((counters or {}).get('by_phase'), dict) else {}
     per_method_map = (counters or {}).get('per_method')
     per_method = per_method_map.get(method) if isinstance(per_method_map, dict) else None
@@ -1171,19 +1301,32 @@ def _attempt_metrics(metrics, artifact, method, executed):
                   detail={'repeat_index': _config(artifact).get('repeat_index')})
     metrics.count('evidence_requests_total', total_rows, population='method_evidence_rows',
                   method=method, detail={'note': 'row count, not physical requests'})
-    physical_total = _as_int((counters or {}).get('total_requests')) if counter_complete else None
-    physical_retries = _as_int((counters or {}).get('retries')) if counter_complete else None
-    physical_redirects = _as_int((counters or {}).get('redirect_hops')) if counter_complete else None
-    physical_failures = _as_int((counters or {}).get('failed_requests')) if counter_complete else None
-    total_reason = counters_reason or ('http_counter_total_missing' if physical_total is None else None)
-    retry_reason = counters_reason or ('http_counter_retries_missing' if physical_retries is None else None)
-    redirect_reason = counters_reason or ('http_counter_redirects_missing' if physical_redirects is None else None)
-    failure_reason = counters_reason or ('http_counter_failures_missing' if physical_failures is None else None)
+    physical_total, phase_sum, totals_reason = _captured_physical_totals(counters)
+    totals_available = physical_total is not None
+    physical_retries, retry_reason = _counter_reading(
+        counters, 'retries', missing_reason='http_counter_retries_missing',
+        invalid_reason='http_counter_retries_invalid', totals_available=totals_available,
+        totals_reason=totals_reason)
+    physical_redirects, redirect_reason = _counter_reading(
+        counters, 'redirect_hops', missing_reason='http_counter_redirects_missing',
+        invalid_reason='http_counter_redirects_invalid', totals_available=totals_available,
+        totals_reason=totals_reason)
+    physical_failures, failure_reason = _counter_reading(
+        counters, 'failed_requests', missing_reason='http_counter_failures_missing',
+        invalid_reason='http_counter_failures_invalid', totals_available=totals_available,
+        totals_reason=totals_reason)
+    attribution_reason = None if counter_complete else (
+        'http_request_counters_unavailable' if not counters else f'http_request_capture_{counter_status or "partial"}')
     metrics.count('physical_requests_total', physical_total,
-                  population='run_physical_http_requests', method=method, reason=total_reason,
+                  population='run_physical_http_requests', method=method, reason=totals_reason,
                   detail={'counter_policy_version': (counters or {}).get('policy_version'),
                           'capture_status': counter_status or None,
-                          'observed_total_requests': _as_int((counters or {}).get('total_requests')),
+                          'attribution_complete': counter_complete,
+                          'attribution_reason': attribution_reason,
+                          'run_totals_available': totals_available,
+                          'phase_total_requests': phase_sum,
+                          'unattributed_requests': _nonnegative_int((counters or {}).get('unattributed_requests')),
+                          'observed_total_requests': _nonnegative_int((counters or {}).get('total_requests')),
                           'repeat_index': _config(artifact).get('repeat_index')})
     metrics.count('request_retries', physical_retries,
                   population='run_physical_http_requests', method=method, reason=retry_reason)
@@ -1356,8 +1499,81 @@ def build_research_metrics(source):
     raise ValueError('research metrics require an execution artifact, review queue, or receipt')
 
 
+def _view_component_rows(view, method):
+    """Minimal graded rows from a derived candidate view.
+
+    Eligibility mirrors the queue contract (valid, executed, exploit/bypass);
+    the proof itself is already the ``candidate_base`` result, never a runtime
+    score. Unassessable rows stay ``base_proof=None`` so the central graded API
+    keeps the component unavailable instead of zero.
+    """
+    rows = []
+    for row in view:
+        if not isinstance(row, dict) or not row.get('candidate_id'):
+            continue
+        eligible = bool(row.get('valid') and row.get('executed')
+                        and row.get('stage') in {'exploit', 'bypass'})
+        rows.append({'candidate_id': row['candidate_id'], 'method': method,
+                     'eligible': eligible, 'base_proof': row.get('proof') if eligible else None})
+    return rows
+
+
+def _derive_component_evidence(artifact, method, rows, view=None):
+    """Derive graded components via the central ``automatic_components`` API.
+
+    Queue-schema rows (``eligible`` and ``base_proof``) are passed through.
+    Otherwise the derived candidate view is converted to the same minimal row
+    contract, so the proof is still the graded ``candidate_base`` result.
+    Runtime ``composite_components`` are never an input.
+    """
+    graded_rows = rows
+    if graded_rows is None or not all(
+            isinstance(row, dict) and 'eligible' in row and 'base_proof' in row for row in graded_rows):
+        graded_rows = _view_component_rows(view, method) if view is not None else None
+    if graded_rows is None:
+        return None
+    from evaluation.scoring_evidence import automatic_components
+    return automatic_components(artifact, method, graded_rows)[0]
+
+
+def _legacy_runtime_components(artifact):
+    """Explicitly labeled runtime scoring.v2 vector; never graded evidence."""
+    report = artifact.get('report') if isinstance(artifact.get('report'), dict) else {}
+    summary = report.get('summary') if isinstance(report.get('summary'), dict) else {}
+    components = artifact.get('composite_components')
+    source = 'artifact.composite_components'
+    if not isinstance(components, dict):
+        components = summary.get('run_composite_components')
+        source = 'report.summary.run_composite_components'
+    if not isinstance(components, dict) or not components:
+        return None
+    numeric = {key: value for key, value in components.items()
+               if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)}
+    if not numeric:
+        return None
+    return {
+        'label': PROVISIONAL_LABEL,
+        'score_epoch': 'runtime_provisional_scoring.v2',
+        'source': source,
+        'note': ('Runtime scoring.v2 components are provisional; they are never '
+                 'graded v4 evidence and never substitute for a final component.'),
+        'components': numeric,
+        'flags': {
+            'full_exploit_flag_legacy': float(int(numeric['Sexploit'] >= 3)) if 'Sexploit' in numeric else None,
+            'chain_enabled_exploit_flag_legacy': float(int(numeric['Schain'] >= 3)) if 'Schain' in numeric else None,
+        },
+    }
+
+
 def compute_run_metrics(artifact, *, rubric_version=None, rows=None, components=None):
-    """Compute every metric family with explicit availability and denominators."""
+    """Compute every metric family with explicit availability and denominators.
+
+    Graded flags come only from caller-supplied graded components or from the
+    central ``automatic_components`` API over queue-schema rows or the derived
+    candidate view. Runtime ``composite_components`` are never graded; when the
+    caller supplies no components they are attached separately under
+    ``legacy_runtime_components`` for audit only.
+    """
     if not isinstance(artifact, dict):
         raise ValueError('artifact must be a mapping')
     rubric = rubric_version or (_config(artifact).get('scoring_rubric_version') or 'scoring.v3')
@@ -1367,11 +1583,19 @@ def compute_run_metrics(artifact, *, rubric_version=None, rows=None, components=
     metrics = MetricSet()
     view = _candidate_view(artifact, method, rows)
     calls = _method_calls(artifact, method)
+    derived_components = components is None
+    component_evidence = components if components is not None else _derive_component_evidence(
+        artifact, method, rows, view)
     _first_choice_metric(metrics, artifact, method)
     _adaptation_metric(metrics, artifact, method)
-    _akg_metrics(metrics, artifact, method, components)
+    _akg_metrics(metrics, artifact, method, component_evidence)
     _payload_metrics(metrics, artifact, method, view, calls)
-    _exploit_flags(metrics, components or {}, method, artifact)
+    _exploit_flags(metrics, component_evidence or {}, method, artifact)
     _attempt_metrics(metrics, artifact, method, view)
     _telemetry_metrics(metrics, artifact, calls, method, view)
-    return metrics.document(rubric, _provisional(artifact))
+    document = metrics.document(rubric, _provisional(artifact))
+    if derived_components:
+        legacy = _legacy_runtime_components(artifact)
+        if legacy is not None:
+            document['legacy_runtime_components'] = legacy
+    return document

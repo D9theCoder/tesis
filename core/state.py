@@ -332,7 +332,7 @@ def _default_state_template() -> dict[str, Any]:
         "execution_id": "",
         "fixture_id": None,
         "protocol_version": None,
-        "scoring_rubric_version": "scoring.v3",
+        "scoring_rubric_version": "scoring.v4",
         "scoring_profile": {},
         "scoring_oracles": [],
         "endpoints": [],

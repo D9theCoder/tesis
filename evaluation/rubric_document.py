@@ -1,12 +1,28 @@
 """Apply the approved seven-table handoff to DOCX without changing embedded math.
 
-Uses only the standard library. XML/package checks do not establish visual layout.
+DOCX manipulation uses only the standard library. XML/package checks do not
+establish visual layout.
 """
 from hashlib import sha256
 import re
 from pathlib import Path
 from xml.dom import minidom
 from zipfile import ZipFile
+
+
+ACCEPTANCE_GUIDANCE = (
+    'Status penerimaan scoring.v4 bersifat khusus per artefak: penerimaan hanya berlaku bila didukung oleh '
+    'profil, oracle, dan bukti eksekusi yang terekam dan dapat dirujuk. Ketiadaan bukti tidak boleh '
+    'ditafsirkan sebagai penerimaan. Contoh kondisi pada tabel bersifat ilustratif. Implementasi dan kontrol '
+    'offline tercatat pada docs/completed/HANDOFF_SCORING_EVIDENCE_AND_RUBRIC_COMPLETION_2026-10-01.md. '
+    'Penerimaan aktual harus merujuk pada artefak dan receipt yang dapat diverifikasi; hasil offline tidak '
+    'dinyatakan sebagai penerimaan eksperimen live.'
+)
+
+
+def _pinned_rubric_version():
+    from evaluation.thesis_scoring import RUBRIC_VERSION
+    return RUBRIC_VERSION
 
 
 def rubric_tables(source):
@@ -165,11 +181,7 @@ def update_document(source, handoff, output):
             'Perhitungan memakai presisi penuh dan pembulatan final empat desimal. Contoh (4,4,4,4,4) = 4.0000; '
             '(4,3,3,0,4) = 3.1000; (3,2,2,1,3) = 2.3000. Penilaian wajib yang belum lengkap menghasilkan null. '
             'Receipt human-verified dan ai-verified tetap terpisah dari satu sumber berhash.',
-            'Batas penerimaan scoring.v4: profil penelitian dan oracle DVWA aktual belum tersedia. Bukti tingkat tinggi pada '
-            'fixture aktual belum diverifikasi. Contoh kondisi pada tabel bersifat ilustratif. '
-            'Implementasi dan kontrol offline tercatat pada docs/completed/HANDOFF_SCORING_EVIDENCE_AND_RUBRIC_COMPLETION_2026-10-01.md. '
-            'Profil, oracle dan penerimaan aktual dicatat pada docs/completed/HANDOFF_SCORING_V4_RANKING_ORACLE_ACCEPTANCE_2026-10-10.md; '
-            'hasil offline tidak dinyatakan sebagai penerimaan eksperimen live.'
+            ACCEPTANCE_GUIDANCE
         ]
         template = next(p for p in reversed(paragraphs) if p.getElementsByTagName('w:t') and not p.getElementsByTagName('m:oMath'))
         section = next((n for n in body.childNodes if n.nodeName == 'w:sectPr'), None)
@@ -203,7 +215,8 @@ def update_document(source, handoff, output):
         assert unchanged and derived.testzip() is None
     return {'source': str(source), 'source_sha256': sha256(source.read_bytes()).hexdigest(),
         'output': str(output), 'output_sha256': sha256(output.read_bytes()).hexdigest(), 'tables': 7, 'examples': 35,
-        'rubric_version': 'scoring.v4', 'math_preserved': True, 'other_package_parts_preserved': unchanged,
+        'rubric_version': _pinned_rubric_version(), 'math_preserved': True,
+        'other_package_parts_preserved': unchanged,
         'visual_layout': 'unverified'}
 
 

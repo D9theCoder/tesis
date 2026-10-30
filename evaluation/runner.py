@@ -726,7 +726,7 @@ def run_single_engagement(
     experiment_id: str | None = None,
     scoring_mode: str = "human",
     scoring_evaluator: dict[str, Any] | None = None,
-    scoring_rubric_version: str = "scoring.v3",
+    scoring_rubric_version: str = "scoring.v4",
     scoring_profile: dict[str, Any] | None = None,
     scoring_oracles: list[dict[str, Any]] | None = None,
     scoring_policy_epoch: dict[str, Any] | None = None,
@@ -1714,6 +1714,12 @@ def run_single_engagement(
     measured_negative = scoring["measured_negative"]
     metric_availability = scoring["metric_availability"]
     metric_unavailable_reason = scoring["metric_unavailable_reason"]
+    attempts_mean = summary.get("mean_attempts_to_success")
+    metric_availability["attempts_to_success"] = attempts_mean is not None
+    if attempts_mean is None:
+        metric_unavailable_reason["attempts_to_success"] = (
+            metric_unavailable_reason.get("mean_attempts_to_success") or "no_confirmed_success"
+        )
     llm_activity = _llm_activity(runtime_events, restored_receipts)
     llm_performance = [dict(row) for row in call_context.records]
     llm_performance_summary = call_context.performance_summary()
@@ -1815,9 +1821,9 @@ def run_single_engagement(
         "payload_scores": payload_scores,
         "exploitation_score": exploitation_score,
         "chain_score": chain_score,
-        "payload_validity_rate": summary.get("payload_validity_rate", 0.0),
-        "payload_execution_success_rate": summary.get("payload_execution_success_rate", 0.0),
-        "payload_improvement_rate": summary.get("payload_improvement_rate", 0.0),
+        "payload_validity_rate": summary.get("payload_validity_rate"),
+        "payload_execution_success_rate": summary.get("payload_execution_success_rate"),
+        "payload_improvement_rate": summary.get("payload_improvement_rate"),
         "consistency_score": summary.get("consistency_score"),
         "metric_availability": metric_availability,
         "metric_unavailable_reason": metric_unavailable_reason,
@@ -1827,7 +1833,7 @@ def run_single_engagement(
         "guardrail_activations": list(final_state.get("guardrail_activations", [])),
         "guardrail_activation_count": len(final_state.get("guardrail_activations", [])),
         "payload_guardrail_activations": len(final_state.get("payload_guardrail_activations", [])),
-        "attempts_to_success": int(round(summary.get("mean_attempts_to_success", 0.0) or 0.0)),
+        "attempts_to_success": int(round(attempts_mean)) if attempts_mean is not None else None,
         "token_cost": summary.get("token_cost"),
         "token_cost_per_success": summary.get("token_cost_per_success"),
         "config": {
