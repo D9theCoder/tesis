@@ -3,10 +3,11 @@
 Inventory: results/validation/scoring-remediation-2026-09-29/failure-inventory.json.
 Each control retains graph inputs, transport receipts, decisions and real exports.
 """
-from hashlib import sha256
 import json
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import httpx
 
@@ -62,7 +63,12 @@ class ScoringFixture(Fixture):
             self.generation = 'generated_valid'
         self.union_exploits = []
         from foundation.payload_library import PayloadLibrary
-        self.failed_union = next(c['payload_or_logic'] for c in PayloadLibrary().load_seed_candidates(method, 'low') if c['stage'] == 'exploit')
+        static_union = next(c['payload_or_logic'] for c in PayloadLibrary().load_seed_candidates(method, 'low') if c['stage'] == 'exploit')
+        # The fixture's generated_valid mutation uppercases UNION. Under the
+        # frozen generated-first order it executes first, so it is the genuine
+        # verified negative and the static seed behind it is the fallback that
+        # succeeds.
+        self.failed_union = static_union.replace('UNION', 'UnIoN')
 
     def invoke(self, messages, **kwargs):
         if self.scoring_control == 'invalid_json':
@@ -96,7 +102,10 @@ class ScoringFixture(Fixture):
             if self.control == 'negative':
                 return ('No extraction evidence', 200, .01)
             if self.scoring_control == 'mixed_candidates' and value == self.failed_union:
-                return ('You have an error in your SQL syntax', 200, .01)
+                # A genuine verified-negative candidate: neutral page, no SQL
+                # error/extraction signal. The agent's generic exploit receipt
+                # records HTTP completion separately from signal_detected.
+                return ('No extraction evidence', 200, .01)
             if self.scoring_control in {'plaintext_chain', 'failed_chain'}:
                 return ('First name: admin<br>Surname: password', 200, .01)
         return result
@@ -204,15 +213,33 @@ def control(monkeypatch, name, *, automatic=False, condition='linear_hybrid', me
     graph = build_framework()
     monkeypatch.setattr('evaluation.runner.build_framework', lambda **kwargs: graph)
     runtime = FixtureRuntime(fixture)
-    config = dict(target_url='http://localhost/dvwa', security_level='low',
+    config: dict[str, Any] = dict(target_url='http://localhost/dvwa', security_level='low',
         llm_provider='openai_compatible', surface='sqli', payload_mode='hybrid' if name == 'mixed_candidates' else 'static_only',
         target_method=None if automatic else method, experiment_condition=condition,
         max_iterations=12, execution_id=name, output_dir=str(ROOT / 'controls' / name),
         llm_runtime=runtime,
         llm_role_configs={r: {'structured_output': 'off'} for r in ('orchestrator', 'payload_generator')})
     if ranked:
+        profile: dict[str, Any] = frozen_test_profile()
         config.update(scoring_mode='human', scoring_rubric_version='scoring.v4',
-            scoring_profile=frozen_test_profile(), fixture_id='synthetic-dwva', protocol_version='offline.v1')
+            scoring_profile=profile, fixture_id='synthetic-dvwa', protocol_version='offline.v1')
+        if name == 'mixed_candidates':
+            # The synthetic positive SQLi target exposes every predicate in the
+            # frozen ranking scenario. Seed those fixture observations before
+            # the forced union run so its selection snapshot is complete; the
+            # rubric still computes Smethod from the recorded snapshot.
+            entries: dict[str, Any] = profile['scenarios']['sqli:low']
+            keys = {key for entry in entries.values() for key in entry['preconditions']}
+            keys |= {predicate['key'] for entry in entries.values() for predicate in entry['fit_predicates']}
+            # Leave the forced method's own predicate to the run; seed only the
+            # comparison methods this forced control never probes.
+            keys -= set(AttackKnowledgeGraph.METHOD_PRECONDITIONS.get(method, ()))
+            from core.state import new_default_state
+            def _state_with_fixture_observations():
+                state = new_default_state()
+                state['observations'] = {**state.get('observations', {}), **{key: True for key in keys}}
+                return state
+            monkeypatch.setattr('evaluation.runner.new_default_state', _state_with_fixture_observations)
     try:
         artifact = run_single_engagement(**config)
     finally:
@@ -278,8 +305,16 @@ def test_scoring_linear_forced_and_authorization_zeros(monkeypatch):
 def test_scoring_candidate_receipts_retain_the_response_that_earned_the_grade(monkeypatch):
     artifact, _, _ = control(monkeypatch, 'mixed_candidates')
     failed, success = [r for r in artifact['response_evidence'] if r['stage'] == 'exploit'][:2]
-    assert failed['response_sha256'] == sha256(b'You have an error in your SQL syntax').hexdigest()
-    assert 'SQL syntax' in failed['response_excerpt']
+    # The generated candidate executes first under the frozen order and is a
+    # genuine verified negative (neutral page, no SQL signal), so its retained
+    # receipt must not claim a positive signal; the static seed fallback then
+    # succeeds.
+    assert failed['response_sha256'] == sha256(b'No extraction evidence').hexdigest()
+    assert 'No extraction evidence' in failed['response_excerpt']
+    assert failed['success'] is True  # HTTP completion is not a signal.
+    assert failed['signal_detected'] is False
+    assert failed['verified_grade'] == 0
+    assert failed['verification_reason'] == 'no_verified_exploit_signal'
     assert 'First name: admin' in success['response_excerpt']
     assert success['credentials'] == '[REDACTED]'
     assert artifact['final_state']['found_credentials'][0]['password'] == '[REDACTED]'

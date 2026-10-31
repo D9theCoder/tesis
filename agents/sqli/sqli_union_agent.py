@@ -123,6 +123,9 @@ def _attempt_exploit(
         try:
             resp = _request(session, security_level, payload)
             events.append(exploit_event(AGENT_ID, payload, resp.status_code, True, response=resp))
+            # ``success`` above is HTTP completion, not a SQL signal. Only the
+            # recognized full/partial branches below set ``signal_detected``.
+            events[-1]["payload"]["signal_detected"] = False
             if resp.status_code == 200:
                 body = resp.text.lower()
                 # Full exploit: credentials appear in response
@@ -133,7 +136,7 @@ def _attempt_exploit(
                 if verifier.regex_match(data, [
                     r"first name\s*:\s*(?:admin|gordonb|pablo|smithy|1337)\s+surname\s*:\s*(?:[a-f0-9]{32}|password)\b",
                 ]).ok:
-                    events[-1]["payload"].update(verified_grade=3, verification_reason="verified_account_extraction")
+                    events[-1]["payload"].update(signal_detected=True, verified_grade=3, verification_reason="verified_account_extraction")
                     events[-1]["payload"]["credentials"] = [
                         {"username": match.group(1), "password": match.group(2),
                          "representation": "password_hash" if len(match.group(2)) == 32 else "plaintext"}
@@ -144,7 +147,7 @@ def _attempt_exploit(
                     break
                 # Partial: page renders with data but no clear credential extraction
                 if "first name" in body or "surname" in body:
-                    events[-1]["payload"].update(verified_grade=2, verification_reason="partial_union_data")
+                    events[-1]["payload"].update(signal_detected=True, verified_grade=2, verification_reason="partial_union_data")
                     score = max(score, 2)
         except Exception as exc:
             logger.warning("[%s] EXPLOIT request failed: %s", AGENT_ID, exc)

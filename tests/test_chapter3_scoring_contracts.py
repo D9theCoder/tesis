@@ -227,3 +227,198 @@ def test_output_references_require_prompt_visible_seeds(monkeypatch):
     assert review_queue(export(artifact, 'hidden-seed'))['components']['Soutput'] == 3
     artifact['llm_performance'] = [artifact['llm_performance'][0], call_for('seed-visible')]
     assert review_queue(export(artifact, 'visible-seed'))['components']['Soutput'] == 4
+
+
+# --- Cost accounting basis and run-scope attribution ------------------------
+# These are pure in-process controls: a synthetic artifact and price schedule,
+# no file export, DVWA, provider or matrix run.
+
+def price_schedule(**overrides):
+    schedule = {
+        'schedule_id': 'synthetic-price', 'version': 'prices.v1', 'currency': 'USD',
+        'effective_at': '2026-09-01T00:00:00+00:00',
+        'prices': {'openai/gpt-6-luna': {
+            'input_per_million': 0.1, 'cache_read_per_million': 0.01,
+            'output_per_million': 0.5, 'cache_write_per_million': 0.125}},
+    }
+    schedule.update(deepcopy(overrides))
+    return schedule
+
+
+def luna_call(**overrides):
+    call = {
+        'call_id': 'luna:1', 'role': 'orchestrator', 'provider': 'openai',
+        'model': 'gpt-6-luna',
+        'provider_usage': {'input_tokens': 1_000_000, 'output_tokens': 100_000,
+                           'total_tokens': 1_100_000,
+                           'input_token_details': {'cache_read': 0, 'cache_write': 0}},
+    }
+    call.update(overrides)
+    return call
+
+
+def synthetic_artifact(schedule, calls, **overrides):
+    artifact = {'config': {'token_price_schedule': schedule},
+                'llm_performance': calls, 'final_state': {}}
+    artifact.update(overrides)
+    return artifact
+
+
+def cost_metrics(artifact, method=None):
+    """Run only the telemetry family; the candidate view is supplied empty."""
+    from evaluation.research_metrics import MetricSet, _method_calls, _telemetry_metrics
+    metrics = MetricSet()
+    _telemetry_metrics(metrics, artifact, _method_calls(artifact, method), method,
+                       [{'assessed': False, 'proof': None}])
+    return metrics
+
+
+def test_cost_details_carry_accounting_basis_not_a_billed_claim():
+    billed = price_schedule(accounting_basis='billed', billing_route='openai_api_key')
+    metrics = cost_metrics(synthetic_artifact(billed, [luna_call()]))
+    detail = metrics.denominators['token_cost']
+    assert metrics.values['token_cost'] == pytest.approx(0.15)
+    assert detail['accounting_basis'] == 'billed'
+    assert detail['billing_route'] == 'openai_api_key'
+    assert detail['cost_scope'] == 'run'
+    assert detail['cost_call_count'] == 1
+
+    # An OAuth profile priced at published API rates is only an estimate; the
+    # route is mapped explicitly and the label says so.
+    estimated = price_schedule(accounting_basis='api_equivalent_estimate',
+                               billing_route='openai_codex_auth',
+                               price_routes={'openai_codex_auth/gpt-6-luna': 'openai/gpt-6-luna'})
+    metrics = cost_metrics(synthetic_artifact(estimated, [luna_call(provider='openai_codex_auth')]))
+    detail = metrics.denominators['token_cost']
+    assert metrics.values['token_cost'] == pytest.approx(0.15)
+    assert detail['accounting_basis'] == 'api_equivalent_estimate'
+    assert detail['billing_route'] == 'openai_codex_auth'
+    assert detail['price_routes_used'] == {'openai_codex_auth/gpt-6-luna': 'openai/gpt-6-luna'}
+
+    # A row keyed by provider/profile_id is the same explicit mapping expressed
+    # as a price-row key; the row's own label decides the basis.
+    profile_row = price_schedule(prices={'openai_codex_auth/gpt-6-luna': {
+        'input_per_million': 0.1, 'output_per_million': 0.5,
+        'accounting_basis': 'api_equivalent_estimate',
+        'billing_route': 'openai_codex_auth'}})
+    metrics = cost_metrics(synthetic_artifact(profile_row, [luna_call(
+        provider='openai_codex_auth', model_profile='openai_codex_auth')]))
+    detail = metrics.denominators['token_cost']
+    assert metrics.values['token_cost'] == pytest.approx(0.15)
+    assert detail['accounting_basis'] == 'api_equivalent_estimate'
+    assert detail['accounting_basis_by_price_key'] == {
+        'openai_codex_auth/gpt-6-luna': 'api_equivalent_estimate'}
+    assert 'price_routes_used' not in detail
+
+    # A mapped route may never be reported as billed.
+    mislabelled = price_schedule(accounting_basis='billed',
+                                 price_routes={'openai_codex_auth/gpt-6-luna': 'openai/gpt-6-luna'})
+    metrics = cost_metrics(synthetic_artifact(mislabelled, [luna_call(provider='openai_codex_auth')]))
+    assert metrics.values['token_cost'] is None
+    assert metrics.reasons['token_cost'] == 'price_route_requires_api_equivalent_basis'
+    assert metrics.denominators['token_cost']['accounting_basis'] == 'billed'
+
+    # A schedule may mix a billed route with an API-equivalent estimate; the
+    # detail names both rather than choosing the flattering label.
+    mixed = price_schedule(accounting_basis='billed', billing_route='river_api_key',
+                           price_routes={'openai_codex_auth/gpt-6-luna': 'openai/gpt-6-luna'})
+    mixed['prices']['openai/gpt-6-luna'].update(
+        accounting_basis='api_equivalent_estimate', billing_route='openai_codex_auth')
+    mixed['prices']['river-ai/deepseek-v4.1-flash'] = {
+        'input_per_million': 0.12, 'cache_read_per_million': 0.0024, 'output_per_million': 0.48}
+    calls = [luna_call(provider='openai_codex_auth'),
+             luna_call(call_id='river:1', provider='river-ai', model='deepseek-v4.1-flash',
+                       provider_usage={'input_tokens': 1_000_000, 'output_tokens': 0,
+                                       'total_tokens': 1_000_000,
+                                       'input_token_details': {'cache_read': 0, 'cache_write': 0}})]
+    metrics = cost_metrics(synthetic_artifact(mixed, calls))
+    detail = metrics.denominators['token_cost']
+    assert metrics.values['token_cost'] == pytest.approx(0.15 + 0.12)
+    assert detail['accounting_basis'] == 'mixed'
+    assert detail['accounting_basis_by_price_key'] == {
+        'openai/gpt-6-luna': 'api_equivalent_estimate',
+        'river-ai/deepseek-v4.1-flash': 'billed'}
+    assert detail['billing_route_by_price_key'] == {
+        'openai/gpt-6-luna': 'openai_codex_auth',
+        'river-ai/deepseek-v4.1-flash': 'river_api_key'}
+    assert detail['billing_route'] is None
+
+
+def test_unselected_method_yields_run_scope_cost_not_zero():
+    schedule = price_schedule(accounting_basis='billed', billing_route='openai_api_key')
+    # The call record carries no scope tag and the run selected no method.
+    artifact = synthetic_artifact(schedule, [luna_call()])
+    assert 'selected_method' not in artifact
+    metrics = cost_metrics(artifact)
+    detail = metrics.denominators['token_cost']
+    assert metrics.values['token_cost'] == pytest.approx(0.15)
+    assert detail['cost_scope'] == 'run'
+    assert detail['cost_call_count'] == 1
+
+    # A genuinely selected method keeps its method-scope attribution.
+    artifact = synthetic_artifact(schedule, [luna_call(method='sqli_union')])
+    metrics = cost_metrics(artifact, 'sqli_union')
+    assert metrics.values['token_cost'] == pytest.approx(0.15)
+    assert metrics.denominators['token_cost']['cost_scope'] == 'method'
+
+    # A selected method with no attributable call is an attribution failure,
+    # never a zero cost.
+    artifact = synthetic_artifact(schedule, [luna_call(method='sqli_union')],
+                                  selected_method='sqli_error')
+    metrics = cost_metrics(artifact, 'sqli_error')
+    assert metrics.values['token_cost'] is None
+    assert metrics.reasons['token_cost'] == 'cost_call_attribution_unavailable'
+
+
+def test_missing_accounting_basis_defaults_to_unspecified():
+    from evaluation.research_metrics import validate_token_price_schedule
+    schedule = price_schedule()
+    validate_token_price_schedule(schedule)
+    metrics = cost_metrics(synthetic_artifact(schedule, [luna_call()]))
+    detail = metrics.denominators['token_cost']
+    assert metrics.values['token_cost'] == pytest.approx(0.15)
+    assert detail['accounting_basis'] == 'unspecified'
+    assert detail['billing_route'] is None
+    assert detail['undocumented_price_rows'] == ['openai/gpt-6-luna']
+    # Optional fields stay optional; an invalid value is still rejected.
+    with pytest.raises(ValueError):
+        validate_token_price_schedule(price_schedule(accounting_basis='billed_guess'))
+    with pytest.raises(ValueError):
+        validate_token_price_schedule(price_schedule(
+            price_routes={'openai_codex_auth/gpt-6-luna': 'openai/missing'}))
+    with pytest.raises(ValueError):
+        validate_token_price_schedule(price_schedule(schedule_id=''))
+
+
+def test_long_context_modifier_is_used_only_when_recorded_and_declared():
+    prices = {'openai/gpt-6-luna': {
+        'input_per_million': 0.1, 'cache_read_per_million': 0.01,
+        'output_per_million': 0.5, 'cache_write_per_million': 0.125,
+        'long_context': {'above_input_tokens': 272_000, 'input_multiplier': 2.0,
+                         'output_multiplier': 1.5}}}
+    schedule = price_schedule(accounting_basis='api_equivalent_estimate',
+                              billing_route='openai_codex_auth', prices=prices)
+    long_call = luna_call(provider_usage={
+        'input_tokens': 300_000, 'output_tokens': 100_000, 'total_tokens': 400_000,
+        'input_token_details': {'cache_read': 0, 'cache_write': 0}})
+    metrics = cost_metrics(synthetic_artifact(schedule, [long_call]))
+    assert metrics.values['token_cost'] == pytest.approx(
+        (300_000 * 0.2 + 100_000 * 0.75) / 1_000_000)
+
+    # Base rates still apply below the declared threshold.
+    short_call = luna_call(provider_usage={
+        'input_tokens': 300_000, 'output_tokens': 100_000, 'total_tokens': 400_000,
+        'input_token_details': {'cache_read': 0, 'cache_write': 0}})
+    short_call['provider_usage']['input_tokens'] = 200_000
+    short_call['provider_usage']['total_tokens'] = 300_000
+    metrics = cost_metrics(synthetic_artifact(schedule, [short_call]))
+    assert metrics.values['token_cost'] == pytest.approx(
+        (200_000 * 0.1 + 100_000 * 0.5) / 1_000_000)
+
+    # The regime triggered but the cache-read multiplier was never stated.
+    cached_call = luna_call(provider_usage={
+        'input_tokens': 300_000, 'output_tokens': 100_000, 'total_tokens': 400_000,
+        'input_token_details': {'cache_read': 10_000, 'cache_write': 0}})
+    metrics = cost_metrics(synthetic_artifact(schedule, [cached_call]))
+    assert metrics.values['token_cost'] is None
+    assert metrics.reasons['token_cost'] == 'price_modifier_unavailable:cache_read'

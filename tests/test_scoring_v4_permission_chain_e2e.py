@@ -291,4 +291,69 @@ def test_dependency_oracle_requires_source_material_and_positive_negative_contro
         for c in bundle["document"]["dependency_controls"])
     assert any(c["source_available"] is False and c["destination_confirmed"] is False
         for c in bundle["document"]["dependency_controls"])
+    assert [control["control"] for control in bundle["document"]["dependency_controls"]] == [
+        "candidate_material_positive", "wrong_credential_negative"]
+    assert [control["control"] for control in bundle["document"]["dependencies"][0]["controls"]] == [
+        "candidate_material_positive", "wrong_credential_negative"]
     assert "fixture-secret" not in repr(bundle)
+
+
+def test_dependency_control_failure_records_control_stage_and_error(monkeypatch):
+    """A failed control stays auditable without leaking credential material."""
+    from evaluation import dependency_oracle
+
+    class ExplodingSession(FakeSession):
+        def get(self, path, params=None):
+            if str(path).endswith("login.php"):
+                raise RuntimeError("fixture control failed for gordonb:fixture-secret")
+            return super().get(path, params)
+
+    ExplodingSession.instances = []
+    monkeypatch.setattr(dependency_oracle, "DVWASession", ExplodingSession)
+
+    row = dependency_oracle._dependency_control(
+        TARGET, "low", "ac_idor", None, "gordonb", "fixture-secret", False, {},
+        "wrong_credential_negative")
+
+    assert row["control"] == "wrong_credential_negative"
+    assert row["stage"] == "initial_visit"
+    assert row["failure"] == "RuntimeError"
+    assert "<redacted>" in row["error"]
+    assert "gordonb" not in row["error"]
+    assert "fixture-secret" not in row["error"]
+    assert row["source_available"] is False
+    assert row["destination_confirmed"] is False
+
+
+def test_bf_dependency_controls_skip_security_level(monkeypatch):
+    """bf_* confirms login identity only; AC controls still set the level."""
+    from evaluation import dependency_oracle
+    FakeSession.instances = []
+    monkeypatch.setattr(dependency_oracle, "DVWASession", FakeSession)
+    monkeypatch.setattr("foundation.session_manager.DVWASession", FakeSession)
+
+    positive = dependency_oracle._dependency_control(
+        TARGET, "low", "bf_dictionary", None, "gordonb", "fixture-secret", True, {},
+        "candidate_material_positive")
+    negative = dependency_oracle._dependency_control(
+        TARGET, "low", "bf_dictionary", None, "gordonb", "fixture-secret", False, {},
+        "wrong_credential_negative")
+
+    assert positive["control"] == "candidate_material_positive"
+    assert positive["source_available"] is True
+    assert positive["destination_confirmed"] is True
+    assert negative["control"] == "wrong_credential_negative"
+    assert negative["source_available"] is False
+    assert negative["destination_confirmed"] is False
+    assert not any(call[0] == "security"
+        for session in FakeSession.instances for call in session.calls)
+
+    descriptor = ("/vulnerabilities/authbypass/get_user_data.php",
+                  {"userId": "1"}, "dvwa-user:1", "read")
+    protocol = permission_protocol()["document"]["oracle_protocol"]
+    ac_negative = dependency_oracle._dependency_control(
+        TARGET, "low", "ac_idor", descriptor, "gordonb", "fixture-secret", False,
+        protocol, "wrong_credential_negative")
+
+    assert ac_negative["control"] == "wrong_credential_negative"
+    assert ("security", "low") in FakeSession.instances[-1].calls

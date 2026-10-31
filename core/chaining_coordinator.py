@@ -660,9 +660,11 @@ def chaining_router_node(state: dict) -> dict:
         updates["output_scores"] = output["output_scores"]
         updates["scoring_decisions"] = [*updates.get("scoring_decisions", []), *output["scoring_decisions"]]
     if next_agent in {method for methods in METHODS_BY_SURFACE.values() for method in methods}:
+        # AKG edge prerequisites gate the route; they are not the destination
+        # method's own required precondition keys (G16).  Let selection grade
+        # the destination against METHOD_PRECONDITIONS.
         selection = method_selection_update(routing_state, next_agent,
-            "akg_route" if event.get("reason") == "chain_ready" else "deterministic_fallback",
-            preconditions=event.get("preconditions", []))
+            "akg_route" if event.get("reason") == "chain_ready" else "deterministic_fallback")
         updates["scoring_decisions"] = [*updates.get("scoring_decisions", []), *selection.pop("scoring_decisions")]
         updates.update(selection)
     if event.get("reason") == "chain_ready":
@@ -693,7 +695,11 @@ def chaining_router_node(state: dict) -> dict:
             "target": target,
             "target_agent": next_agent,
             "target_visit_id": updates["selected_visit_id"],
+            # AKG edge prerequisites govern route eligibility.  Keep them in a
+            # route-scoped key so they are never read back as the destination
+            # method's required precondition keys.
             "preconditions": list(event.get("preconditions", [])),
+            "route_preconditions": list(event.get("preconditions", [])),
             "prerequisites_proved": True,
             "source_verifier_ids": [d["verifier_id"] for d in source_decisions],
             "source_evidence_refs": source_refs,

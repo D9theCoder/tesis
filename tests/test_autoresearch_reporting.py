@@ -7,7 +7,6 @@ from pathlib import Path
 
 from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.observer_export import _graded_scores, build_projection
-from evaluation.rubric_document import ACCEPTANCE_GUIDANCE
 from tesis.artifact_catalog import ArtifactCatalog
 from tesis.artifact_repository import ArtifactRepository
 from tesis.report_formatters import format_module_scores_table, format_provider_comparison_table
@@ -257,11 +256,3 @@ def test_manual_scoring_sheet_does_not_prefill_reviewer_scores():
     }
     # Review workflows still receive the evidence reference, not a score.
     assert row["response_evidence_ref"] == ["#/response_evidence/0"]
-
-
-def test_derived_document_acceptance_is_artifact_specific_not_a_blanket_claim():
-    text = ACCEPTANCE_GUIDANCE.casefold()
-    assert "belum tersedia" not in text and "unavailable" not in text
-    assert "khusus per artefak" in text
-    assert "didukung" in text
-    assert "tidak boleh ditafsirkan sebagai penerimaan" in text

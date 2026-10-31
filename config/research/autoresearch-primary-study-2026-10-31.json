@@ -1,0 +1,75 @@
+{
+  "research_config_version": "chapter3-research-config.v1",
+  "epoch_id": "autoresearch-primary-2026-10-31",
+  "primary_conditions": [
+    "linear_hybrid",
+    "akg_guided_hybrid"
+  ],
+  "payload_mode": "hybrid",
+  "blocks": {
+    "selection": {
+      "target_method": null,
+      "unit": "model_generated_method_choice_and_bounded_adaptation"
+    }
+  },
+  "repeats": 3,
+  "levels": [
+    "low",
+    "medium",
+    "high"
+  ],
+  "surfaces": [
+    "sqli",
+    "access_control",
+    "brute_force"
+  ],
+  "model_profiles": [
+    {
+      "profile_id": "river-ai__deepseek-ai-deepseek-v4-1-flash-1017_15efb2abf693",
+      "provider": "openai_compatible",
+      "model_name": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+      "reasoning_effort": "max"
+    },
+    {
+      "profile_id": "openai_codex_auth",
+      "provider": "openai_codex_auth",
+      "model_name": "gpt-6-luna",
+      "reasoning_effort": "max"
+    }
+  ],
+  "output_root": "results/runs/autoresearch-primary-2026-10-31",
+  "design": {
+    "comparison": "combined workflow effect of linear_hybrid versus akg_guided_hybrid, model-selected methods only",
+    "expected_coordinates": 108,
+    "pairing": "same block, model/profile, surface, level, target_method, payload_mode, repeat_index, fixture_id, protocol_version, policy epoch, rubric, scoring-rule hash, metrics epoch and grader mode",
+    "pairing_excludes": "repeat identity is a pairing axis and is never a compatibility boundary; pairs are pooled across repeats for the test",
+    "estimand": "median paired difference of final v4 components and Srun_final, linear_hybrid minus akg_guided_hybrid",
+    "paired_test": "two-sided Wilcoxon signed-rank (exact for n<=25)",
+    "effect_size": "matched-pairs rank-biserial correlation",
+    "uncertainty": "bootstrap percentile 95% CI of the median paired difference, 2000 resamples, fixed seed",
+    "multiple_comparisons": "Holm-Bonferroni within the paired metric family",
+    "independence": "Mann-Whitney U is exploratory/supplementary only; paired coordinates do not establish independence",
+    "exclusions": "planned, missing, failed, incomplete, unassessable, pending-review and fallback runs stay counted with reasons and are never replaced by zero",
+    "pooling": "no pooling across block, condition, target, model, level, surface, fixture, protocol, epoch, rubric or grader",
+    "forced_block": "not declared: this study executes only model-selected coordinates"
+  },
+  "scoring": {
+    "rubric_version": "scoring.v4",
+    "runtime_provisional": "scoring.v2",
+    "final_source": "thesis_score_receipt only"
+  },
+  "frozen_inputs_required": [
+    "scoring_profile",
+    "scoring_oracles",
+    "scoring_policy_epoch",
+    "token_price_schedule",
+    "fixture_id",
+    "protocol_version",
+    "candidate_budget"
+  ],
+  "fixture_restoration": [
+    "../../results/epochs/autoresearch-primary-2026-10-31/fixture-restoration-low.json",
+    "../../results/epochs/autoresearch-primary-2026-10-31/fixture-restoration-medium.json",
+    "../../results/epochs/autoresearch-primary-2026-10-31/fixture-restoration-high.json"
+  ]
+}

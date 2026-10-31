@@ -641,6 +641,18 @@ Offline validation is limited to configuration, graph/AKG compilation, payload-m
 
 The two-block study is declared by `config/research/chapter3_study.json` and operated by `evaluation/research_plan.py` (`freeze-profile`, `plan`, `run`) with `evaluation/research_analysis.py` (`chapter3-analysis.v3`, `compare_receipts` grouping, paired statistics). The same commands are exposed as `python -m tesis study …`. Plans freeze config/profile/oracle/price/policy/source/fixture/protocol identities, refuse drift, and never modify `evaluation/scoring_v4_matrix.py` or historical artifacts.
 
+The 2026-10-31 primary-study declaration
+`config/research/autoresearch-primary-study-2026-10-31.json` declares only the
+selection block: two explicitly pinned max-reasoning models, all surfaces and
+levels, both hybrid conditions and three repeats (108 planned coordinates).
+`research_plan` accepts selection-only build/verify while retaining the default
+two-block declaration. Missing frozen profiles, prices and other inputs still
+block plan creation; preparing a declaration does not freeze them.
+Selection-only execution is explicitly unsupported by this preparation path.
+`experiment_readiness`, `ranking_draft` and `baseline_audit` read local evidence
+and emit derived validation reports, never experimental run artifacts. The
+owner's execution hold remains in force after all preparation gates pass.
+
 ### Correction release fields (2026-10-28)
 
 `READINESS_NOT_READY` and `RUN_QUARANTINED` are explicit no-call terminal reasons; they retain `execution_status=failed`/`security_outcome=fixture_limited` and are never rewritten to `LLM_NOT_CALLED`. A target-request failure is scoped to the final visit's own candidate exploit/bypass evidence; unrelated controls and earlier visits remain independent limitations. Hybrid provider-generation failures stay operational model-component failures, with the independent security outcome preserved.

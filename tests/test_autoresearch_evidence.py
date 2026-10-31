@@ -203,3 +203,18 @@ def test_oracle_path_still_grants_a_base_without_a_proof_class(monkeypatch):
     )
     monkeypatch.setattr('evaluation.scoring_evidence.oracle_confirmed', lambda *_: True)
     assert candidate_base(artifact, candidate_id, method, refs) == 3
+
+
+@pytest.mark.parametrize(('verification_reason', 'signal_detected', 'expected'), [
+    ('no_verified_exploit_signal', False, 0),
+    ('no_verified_exploit_signal', True, None),
+    ('timing_not_verified', False, 0),
+    ('timing_not_verified', True, None),
+])
+def test_measured_negative_requires_a_consistent_negative_signal(
+        verification_reason: str, signal_detected: bool, expected: int | None):
+    artifact, candidate_id, method, refs = _candidate_fixture(
+        'sqli_time_blind', verification_reason=verification_reason,
+        signal_detected=signal_detected,
+    )
+    assert candidate_base(artifact, candidate_id, method, refs) == expected

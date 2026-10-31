@@ -256,6 +256,52 @@ scoring_mode: ai
 scoring_rubric_version: scoring.v4
 scoring_profile: {}
 scoring_oracles: config/oracles/dvwa-source-fee264766667580e5352.json
+# Frozen cost accounting for the requested epoch. DeepSeek is billed through
+# the River API; GPT-6 Luna uses an OAuth-authenticated route whose published
+# API rates are recorded as an API-equivalent estimate, never as a verified
+# OAuth invoice. Prices are USD per million tokens, observed 2026-10-31.
+token_price_schedule:
+  schedule_id: autoresearch-primary-2026-10-31-prices
+  version: token-price-schedule.v1
+  effective_at: '2026-10-31T00:00:00+00:00'
+  currency: USD
+  accounting_basis: api_equivalent_estimate
+  billing_route: >-
+    DeepSeek via the River API at published API rates; GPT-6 Luna via the
+    existing OAuth account, normalized to published API list rates for
+    API-equivalent accounting only. Not a verified billed OAuth invoice.
+  epoch_id: autoresearch-primary-2026-10-31
+  sources:
+    - url: https://console.river.ai/api/public/pricing
+      observed_at: '2026-10-31T00:00:00+00:00'
+      categories: [input, cached_input, output]
+      note: DeepSeek cache write is not supplied; a run reporting cache-write tokens keeps cost unavailable.
+    - url: https://developers.openai.com/api/docs/models/gpt-6-luna
+      observed_at: '2026-10-31T00:00:00+00:00'
+      categories: [input, cached_input, output, cache_write]
+      note: >-
+        Above 272K input tokens the published input/cache rates double and
+        output is multiplied by 1.5; Fast is 2x, Flex/Batch 0.5x. The primary
+        study uses the standard tier and records if a context modifier applies.
+  prices:
+    openai_compatible/deepseek-ai/DeepSeek-V4.1-Flash-1017:
+      input_per_million: 0.12
+      cache_read_per_million: 0.0024
+      output_per_million: 0.48
+      accounting_basis: billed
+      billing_route: River API usage-based billing at published rates
+    openai_codex_auth/gpt-6-luna:
+      input_per_million: 0.10
+      cache_read_per_million: 0.01
+      cache_write_per_million: 0.125
+      output_per_million: 0.50
+      accounting_basis: api_equivalent_estimate
+      billing_route: ChatGPT OAuth subscription; normalized to published API list rates
+      long_context:
+        above_input_tokens: 272000
+        input_multiplier: 2
+        cache_read_multiplier: 2
+        output_multiplier: 1.5
 scoring_evaluator:
   max_attempts: 2
   # D9: frozen budget raised to 16K so no accepted review can have been produced

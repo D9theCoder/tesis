@@ -10,6 +10,8 @@ What lives here:
 * policy/prompt/schema version strings recorded in new artifacts;
 * the payload-mode registry and the mode -> trusted-origin matrix;
 * the single per-visit exploit-candidate budget rule;
+* the frozen hybrid candidate order (valid generated candidates first, static
+  seeds after them as the exhaustion fallback);
 * append-only candidate-lifecycle and generation-opportunity fact builders;
 * the closed observation allowlist for Template prompts;
 * event names shared by the generator, validator, runner, and scoring readers.
@@ -57,6 +59,17 @@ MODEL_PAYLOAD_MODES = frozenset({"hybrid", "llm_mutation_only", "llm_template"})
 # candidate, or a chain-derived substitute at any layer.
 STRICT_PAYLOAD_MODES = frozenset({"llm_mutation_only", "llm_template"})
 TEMPLATE_PAYLOAD_MODES = frozenset({"llm_template"})
+
+# Frozen hybrid candidate-order policy (owner decision).  Trigger: a hybrid
+# visit whose generation call produced at least one valid model-generated
+# exploit/bypass candidate.  Effect: those generated candidates are queued
+# ahead of the static seed candidates; the static seeds stay queued behind them
+# as the exhaustion fallback and remain the whole queue when generation produced
+# no valid candidate.  ``static_only`` and the strict modes are unchanged: a
+# strict mode never gains static fallback, and ``static_only`` never generates.
+CANDIDATE_ORDER_POLICY_VERSION = "candidate-order.v1"
+CANDIDATE_ORDER_POLICY = "validated_generated_first_static_fallback"
+CANDIDATE_ORDER_TRIGGER = "hybrid_valid_generated_candidate"
 
 ORIGIN_KINDS = frozenset(
     {
@@ -275,6 +288,25 @@ def allows_chain_derived(value: Any) -> bool:
     return normalize_payload_mode(value) in {"static_only", "hybrid"}
 
 
+def candidate_order_metadata(
+    mode: Any, *, generated_count: int = 0, static_count: int = 0
+) -> dict[str, Any]:
+    """Return the frozen candidate-order decision for one built queue.
+
+    The trigger is recorded even when it did not fire, so a static-only or
+    strict queue states that the generated-first ordering was not applicable.
+    """
+    normalized = normalize_payload_mode(mode)
+    return {
+        "policy_version": CANDIDATE_ORDER_POLICY_VERSION,
+        "candidate_order_policy": CANDIDATE_ORDER_POLICY,
+        "trigger": CANDIDATE_ORDER_TRIGGER,
+        "triggered": normalized == "hybrid" and int(generated_count) > 0,
+        "generated_count": max(0, int(generated_count)),
+        "static_count": max(0, int(static_count)),
+    }
+
+
 def expected_origin_kind(value: Any) -> str | None:
     """Return the trusted model origin kind a mode generates, if any."""
     mode = normalize_payload_mode(value)
@@ -482,6 +514,9 @@ __all__ = [
     "BUDGET_EXCLUSION_REASON",
     "BUDGET_POLICY_VERSION",
     "CANDIDATE_LIFECYCLE_STATUSES",
+    "CANDIDATE_ORDER_POLICY",
+    "CANDIDATE_ORDER_POLICY_VERSION",
+    "CANDIDATE_ORDER_TRIGGER",
     "CANDIDATE_QUEUE_ORIGIN_KINDS",
     "CANDIDATE_STAGES",
     "CANDIDATE_STATUSES",
@@ -543,6 +578,7 @@ __all__ = [
     "TEMPLATE_REGISTRY_VERSION",
     "allows_chain_derived",
     "allows_static_candidates",
+    "candidate_order_metadata",
     "canonical_sha256",
     "coerce_budget",
     "coerce_payload_mode",

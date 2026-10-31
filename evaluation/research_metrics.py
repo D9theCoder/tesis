@@ -91,8 +91,8 @@ DEFINITIONS = {
     'token_usage_input': 'Summed provider-reported input tokens for experiment-model calls.',
     'token_usage_output': 'Summed provider-reported output tokens for experiment-model calls.',
     'token_usage_total': 'Summed provider-reported total tokens for experiment-model calls.',
-    'token_cost': 'Run cost from retained usage and a frozen timestamped price schedule applicable to the provider/model.',
-    'token_cost_per_success': 'Run cost divided by confirmed candidate successes; unavailable without cost or a confirmed success.',
+    'token_cost': 'Cost from retained usage and a frozen timestamped price schedule applicable to the provider/model, always reported with its accounting_basis: an api_equivalent_estimate is a list-price estimate, not a billed charge.',
+    'token_cost_per_success': 'Run cost divided by confirmed candidate successes, carrying the same accounting_basis; unavailable without cost or a confirmed success.',
     'provider_cache_read_rate': 'Token-weighted provider input-cache read rate; distinct from saved response reuse.',
     'response_cache_hit_rate': 'Share of logical experiment-model calls served from the runtime response cache.',
     'wall_time_ms': 'Elapsed wall time of the whole run.',
@@ -187,6 +187,95 @@ PRICE_CATEGORY_KEYS = {
     'cache_write': ('cache_write_per_million', 'cache_write'),
 }
 
+# A schedule (or a single price row) may declare what its prices measure.  An
+# ``api_equivalent_estimate`` is a list-price estimate for a route whose actual
+# charge is not established (for example a subscription/OAuth profile); it must
+# never be reported as a billed charge.  A missing declaration is
+# ``unspecified``, never silently upgraded to ``billed``.
+ACCOUNTING_BASES = ('api_equivalent_estimate', 'billed', 'unspecified')
+DEFAULT_ACCOUNTING_BASIS = 'unspecified'
+
+# Optional per-row multipliers for a documented long-context price regime.  The
+# schedule must state the multiplier; the code never infers one.
+LONG_CONTEXT_MULTIPLIERS = {
+    'input': 'input_multiplier',
+    'output': 'output_multiplier',
+    'cache_read': 'cache_read_multiplier',
+    'cache_write': 'cache_write_multiplier',
+}
+
+PRICE_ROUTE_FIELD = 'price_routes'
+
+
+def accounting_label(container, price_key=None):
+    """Return the accounting label declared by a schedule or one price row.
+
+    ``accounting_basis`` defaults to ``unspecified`` when absent.  A price row
+    may override the schedule-level ``accounting_basis``/``billing_route``/
+    ``notes`` because one schedule can mix a billed route and an API-equivalent
+    estimate for an OAuth profile.  Undeclared values inherit the schedule.
+    """
+    label = {'accounting_basis': DEFAULT_ACCOUNTING_BASIS,
+             'billing_route': None, 'notes': None}
+    if not isinstance(container, dict):
+        return label
+    basis = container.get('accounting_basis')
+    if isinstance(basis, str) and basis in ACCOUNTING_BASES:
+        label['accounting_basis'] = basis
+    route = container.get('billing_route')
+    if isinstance(route, str) and route.strip():
+        label['billing_route'] = route.strip()
+    notes = container.get('notes')
+    if isinstance(notes, str) and notes.strip():
+        label['notes'] = notes
+    prices = container.get('prices')
+    if price_key is not None and isinstance(prices, dict):
+        row = prices.get(price_key)
+        if isinstance(row, dict):
+            row_basis = row.get('accounting_basis')
+            if isinstance(row_basis, str) and row_basis in ACCOUNTING_BASES:
+                label['accounting_basis'] = row_basis
+            row_route = row.get('billing_route')
+            if isinstance(row_route, str) and row_route.strip():
+                label['billing_route'] = row_route.strip()
+            row_notes = row.get('notes')
+            if isinstance(row_notes, str) and row_notes.strip():
+                label['notes'] = row_notes
+    return label
+
+
+def _validate_accounting_fields(container, path):
+    """Validate optional accounting label fields without requiring them."""
+    basis = container.get('accounting_basis')
+    if basis is not None and (not isinstance(basis, str) or basis not in ACCOUNTING_BASES):
+        raise ValueError(f'{path}.accounting_basis must be one of {", ".join(ACCOUNTING_BASES)}')
+    route = container.get('billing_route')
+    if route is not None and (not isinstance(route, str) or not route.strip()):
+        raise ValueError(f'{path}.billing_route must be a non-empty string')
+    notes = container.get('notes')
+    if notes is not None and not isinstance(notes, str):
+        raise ValueError(f'{path}.notes must be a string')
+
+
+def _validate_long_context(row, path):
+    """Validate the optional documented long-context multipliers of one row."""
+    long_context = row.get('long_context')
+    if long_context is None:
+        return
+    if not isinstance(long_context, dict) or not long_context:
+        raise ValueError(f'{path}.long_context must be a non-empty mapping')
+    threshold = long_context.get('above_input_tokens')
+    if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 0:
+        raise ValueError(f'{path}.long_context.above_input_tokens must be a non-negative integer')
+    multipliers = {key: value for key, value in long_context.items() if key != 'above_input_tokens'}
+    if not multipliers:
+        raise ValueError(f'{path}.long_context requires at least one multiplier')
+    for key, value in multipliers.items():
+        if key not in LONG_CONTEXT_MULTIPLIERS.values():
+            raise ValueError(f'{path}.long_context.{key} is not a supported multiplier')
+        if not _price(value):
+            raise ValueError(f'{path}.long_context.{key} must be a non-negative number')
+
 
 def validate_token_price_schedule(schedule):
     """Validate the frozen price schedule shape without inferring any price.
@@ -194,6 +283,25 @@ def validate_token_price_schedule(schedule):
     Shape is owned by tesis.config_loader: schedule_id, version, effective_at,
     currency and prices{provider/model: {input_per_million, output_per_million,
     optional cache categories}}. Prices are per million tokens.
+
+    Optional top-level fields are never required, so existing frozen schedules
+    stay valid:
+
+    ``accounting_basis``
+        ``api_equivalent_estimate``, ``billed`` or ``unspecified``.
+    ``billing_route``
+        Non-empty string naming the route actually charged (for example a
+        subscription/OAuth profile).
+    ``notes``
+        Free-text provenance for the accounting label.
+    ``price_routes``
+        ``{runtime_route_key: price_row_key}`` explicit API-equivalent mapping.
+        It must reference an existing price row; a mapped route is never priced
+        from a different row.
+
+    A price row may repeat ``accounting_basis``/``billing_route``/``notes`` to
+    override the schedule label for that row, and may declare a documented
+    ``long_context`` multiplier regime.  No price or modifier is inferred.
     """
     if not isinstance(schedule, dict) or not schedule:
         raise ValueError('token price schedule must be a non-empty mapping')
@@ -218,23 +326,66 @@ def validate_token_price_schedule(schedule):
             for key in keys:
                 if key in row and not _price(row[key]):
                     raise ValueError(f'token price schedule prices.{model_key}.{key} must be non-negative')
+        _validate_accounting_fields(row, f'token price schedule prices.{model_key}')
+        _validate_long_context(row, f'token price schedule prices.{model_key}')
+    _validate_accounting_fields(schedule, 'token price schedule')
+    routes = schedule.get(PRICE_ROUTE_FIELD)
+    if routes is not None:
+        if not isinstance(routes, dict) or not routes:
+            raise ValueError(f'token price schedule {PRICE_ROUTE_FIELD} must be a non-empty mapping')
+        for route_key, target in routes.items():
+            if not isinstance(route_key, str) or not route_key.strip():
+                raise ValueError(f'token price schedule {PRICE_ROUTE_FIELD} keys must be non-empty')
+            if not isinstance(target, str) or not target.strip():
+                raise ValueError(
+                    f'token price schedule {PRICE_ROUTE_FIELD}.{route_key} must name a price row')
+            if target not in prices:
+                raise ValueError(
+                    f'token price schedule {PRICE_ROUTE_FIELD}.{route_key} references unknown '
+                    f'price row {target}')
     return schedule
 
 
-def price_entry(schedule, provider, model, model_profile=None):
-    """Return normalized per-million prices applicable to the provider/model."""
-    validate_token_price_schedule(schedule)
-    candidates = [f'{provider}/{model}', f'{provider}/{model_profile}', model] if model_profile else \
-        [f'{provider}/{model}', model]
-    row = next((schedule['prices'][key] for key in candidates if key in schedule['prices']), None)
-    if row is None:
-        raise KeyError('price_schedule_model_unavailable')
+def _normalized_price_row(row):
     normalized = {}
     for category, keys in PRICE_CATEGORY_KEYS.items():
         value = next((row[key] for key in keys if key in row), None)
         if value is not None:
             normalized[category] = value
     return normalized
+
+
+def resolve_price_entry(schedule, provider, model, model_profile=None, route=None):
+    """Return ``(per-million prices, resolution)`` for a provider/model call.
+
+    ``route`` is an explicit runtime route identity (a configured profile id or
+    ``provider/profile`` key).  An explicit ``price_routes`` mapping wins over a
+    directly keyed row: the mapping states that the row is the accounting rate
+    chosen for that route, so the billed route is never silently substituted.
+    A mapped route resolves only the mapped row; it never falls back.
+    """
+    validate_token_price_schedule(schedule)
+    routes = schedule.get(PRICE_ROUTE_FIELD) or {}
+    identity = [route] if isinstance(route, str) and route.strip() else []
+    identity.append(f'{provider}/{model}')
+    if model_profile:
+        identity.append(f'{provider}/{model_profile}')
+    identity.append(model)
+    for key in identity:
+        if isinstance(key, str) and key in routes:
+            target = routes[key]
+            return _normalized_price_row(schedule['prices'][target]), {
+                'price_key': target, 'matched_route': key, 'mapped': True}
+    price_key = next((key for key in identity if isinstance(key, str) and key in schedule['prices']), None)
+    if price_key is None:
+        raise KeyError('price_schedule_model_unavailable')
+    return _normalized_price_row(schedule['prices'][price_key]), {
+        'price_key': price_key, 'matched_route': price_key, 'mapped': False}
+
+
+def price_entry(schedule, provider, model, model_profile=None, route=None):
+    """Return normalized per-million prices applicable to the provider/model."""
+    return resolve_price_entry(schedule, provider, model, model_profile, route)[0]
 
 
 class MetricSet:
@@ -324,9 +475,18 @@ def _experiment_calls(artifact):
 
 
 def _method_calls(artifact, method):
+    """Experiment calls whose usage/cost belongs to ``method`` or the run.
+
+    Call records do not always carry ``scope``.  When no final method is
+    selected, the run scope is the whole experiment call set: filtering on a
+    ``scope`` tag that was never written would price zero calls and report a
+    false ``0.0`` cost.  When a method is selected, its calls and run-scope
+    calls are kept; an empty selection over a run that recorded experiment
+    calls is reported by ``_cost`` as an attribution failure, not as zero.
+    """
     calls = _experiment_calls(artifact)
     if method is None:
-        return [row for row in calls if row.get('scope') == 'run']
+        return calls
     return [row for row in calls if row.get('method') == method or row.get('scope') == 'run']
 
 
@@ -607,53 +767,162 @@ def _cache_tokens(usage, raw_usage):
     return cached, cache_write
 
 
+def _price_schedule(artifact):
+    """Return the run's price schedule mapping (config first, then artifact)."""
+    schedule = _config(artifact).get('token_price_schedule') or artifact.get('token_price_schedule')
+    return schedule if isinstance(schedule, dict) else {}
+
+
+def _cost_scope(method, calls):
+    """Whether the priced calls are method-attributed or the whole run.
+
+    ``run`` means the cost covers the run: no final method was selected, so
+    every experiment call is priced as run scope, or the selected method has no
+    call of its own in the priced set.  ``method`` means the priced set carries
+    calls attributed to the selected method (call records written by the
+    runtime carry ``method``; they do not always carry a ``scope`` tag).
+    """
+    if method is None:
+        return 'run'
+    return 'method' if any(row.get('method') == method for row in calls) else 'run'
+
+
+def _cost_detail(schedule, used):
+    """Describe what a cost value measures, never inflating an estimate.
+
+    ``accounting_basis`` is ``unspecified`` when nothing was declared, the one
+    declared basis when every priced row agrees, and ``mixed`` when a run
+    combines a billed route with an API-equivalent estimate.
+    """
+    schedule_label = accounting_label(schedule)
+    bases = {key: label['accounting_basis'] for key, label in used.items()}
+    routes = {key: label['billing_route'] for key, label in used.items() if label['billing_route']}
+    distinct = sorted(set(bases.values()))
+    if not distinct:
+        basis = schedule_label['accounting_basis']
+        billing_route = schedule_label['billing_route']
+    elif len(distinct) == 1:
+        basis = distinct[0]
+        row_routes = {label['billing_route'] for label in used.values() if label['billing_route']}
+        billing_route = row_routes.pop() if len(row_routes) == 1 else (
+            schedule_label['billing_route'] if not row_routes else None)
+    else:
+        basis, billing_route = 'mixed', None
+    detail = {'accounting_basis': basis, 'billing_route': billing_route,
+              'accounting_basis_by_price_key': bases}
+    if routes:
+        detail['billing_route_by_price_key'] = routes
+    if schedule_label['notes']:
+        detail['accounting_notes'] = schedule_label['notes']
+    return detail
+
+
+def _long_context_prices(entry, row, totals):
+    """Apply only the row's declared long-context multipliers; never infer one."""
+    long_context = row.get('long_context') if isinstance(row, dict) else None
+    if not isinstance(long_context, dict):
+        return entry, None
+    if totals['input'] <= long_context['above_input_tokens']:
+        return entry, None
+    quantities = {'input': totals['input'] - totals['cache_read'] - totals['cache_write'],
+                  'output': totals['output'], 'cache_read': totals['cache_read'],
+                  'cache_write': totals['cache_write']}
+    adjusted = dict(entry)
+    for category, multiplier_key in LONG_CONTEXT_MULTIPLIERS.items():
+        if not quantities.get(category):
+            continue
+        multiplier = long_context.get(multiplier_key)
+        if multiplier is None:
+            # The regime triggered but the schedule never stated this category.
+            return entry, f'price_modifier_unavailable:{category}'
+        if category in adjusted:
+            adjusted[category] = adjusted[category] * multiplier
+    return adjusted, None
+
+
 def _cost(artifact, calls):
-    config = _config(artifact)
-    schedule = config.get('token_price_schedule') or artifact.get('token_price_schedule')
+    """Return ``(cost, schedule_id, reason, usage, detail)`` for the call set.
+
+    ``detail`` always carries ``accounting_basis`` (default ``unspecified``)
+    and ``billing_route`` so an API-equivalent estimate is never presented as a
+    billed charge.  Cost is never a fabricated zero: an empty selection over a
+    run that did record experiment calls is an attribution failure.
+    """
+    schedule = _price_schedule(artifact)
     usage = _usage_summary(calls)
-    if not isinstance(schedule, dict) or not schedule:
-        return None, None, 'token_price_schedule_missing', usage
+    used = {}
+    mapped_routes = {}
+    undocumented = []
+
+    def result(cost=None, schedule_id=None, reason=None):
+        detail = _cost_detail(schedule, used)
+        if mapped_routes:
+            detail['price_routes_used'] = dict(mapped_routes)
+        if undocumented:
+            detail['undocumented_price_rows'] = sorted(set(undocumented))
+        return cost, schedule_id, reason, usage, detail
+
+    if not schedule:
+        return result(reason='token_price_schedule_missing')
     try:
         validate_token_price_schedule(schedule)
     except (ValueError, TypeError) as exc:
-        return None, None, f'token_price_schedule_invalid:{exc}', usage
+        return result(reason=f'token_price_schedule_invalid:{exc}')
     if not usage['complete']:
-        return None, None, 'incomplete_token_usage', usage
+        return result(reason='incomplete_token_usage')
     started = (artifact.get('timing') or {}).get('started_at')
     try:
         if started and _timestamp(schedule['effective_at']) > _timestamp(started):
-            return None, None, 'schedule_not_effective_at_run', usage
+            return result(reason='schedule_not_effective_at_run')
     except (ValueError, TypeError):
-        return None, None, 'schedule_timestamp_invalid', usage
+        return result(reason='schedule_timestamp_invalid')
+    if not calls and _experiment_calls(artifact):
+        return result(reason='cost_call_attribution_unavailable')
     cost = 0.0
     for call in calls:
         if call.get('cache_hit'):
             continue
         provider, model = call.get('provider'), call.get('model')
         if not isinstance(provider, str) or not isinstance(model, str):
-            return None, None, 'call_model_identity_unavailable', usage
+            return result(reason='call_model_identity_unavailable')
         try:
-            entry = price_entry(schedule, provider, model, call.get('model_profile'))
+            entry, resolution = resolve_price_entry(
+                schedule, provider, model, call.get('model_profile'))
         except KeyError:
-            return None, None, 'price_schedule_model_unavailable', usage
+            return result(reason='price_schedule_model_unavailable')
+        label = accounting_label(schedule, resolution['price_key'])
+        if resolution['mapped'] and label['accounting_basis'] != 'api_equivalent_estimate':
+            # A mapped route is a proxy for the charged route; labelling it as
+            # billed (or leaving it unspecified) would misreport the estimate.
+            return result(reason='price_route_requires_api_equivalent_basis')
+        used[resolution['price_key']] = label
+        if resolution['mapped']:
+            mapped_routes[resolution['matched_route']] = resolution['price_key']
+        if 'accounting_basis' not in schedule and \
+                'accounting_basis' not in schedule['prices'][resolution['price_key']]:
+            undocumented.append(resolution['price_key'])
         if 'input' not in entry or 'output' not in entry:
-            return None, None, 'price_category_unavailable:input_or_output', usage
+            return result(reason='price_category_unavailable:input_or_output')
         totals = _usage_summary((call,))['totals']
         cache_read, cache_write = totals['cache_read'], totals['cache_write']
         uncached_input = totals['input'] - cache_read - cache_write
         if uncached_input < 0:
-            return None, None, 'inconsistent_usage_details', usage
+            return result(reason='inconsistent_usage_details')
         if cache_read and 'cache_read' not in entry:
-            return None, None, 'price_category_unavailable:cache_read', usage
+            return result(reason='price_category_unavailable:cache_read')
         if cache_write and 'cache_write' not in entry:
-            return None, None, 'price_category_unavailable:cache_write', usage
+            return result(reason='price_category_unavailable:cache_write')
+        entry, modifier_reason = _long_context_prices(
+            entry, schedule['prices'][resolution['price_key']], totals)
+        if modifier_reason:
+            return result(reason=modifier_reason)
         cost += (
             uncached_input * entry['input']
             + cache_read * entry.get('cache_read', 0)
             + cache_write * entry.get('cache_write', 0)
             + totals['output'] * entry['output']
         ) / 1_000_000
-    return round(cost, 8), schedule.get('schedule_id'), None, usage
+    return result(round(cost, 8), schedule.get('schedule_id'))
 
 
 def _chain_context(artifact):
@@ -1358,7 +1627,7 @@ def _telemetry_metrics(metrics, artifact, calls, method, view):
                     population='unique_experiment_model_calls', method=method,
                     reason='no_experiment_calls', detail={'raw_events': entry['raw_events'],
                         'unbound_events': entry['unbound_events'], 'rate_definition_version': RATE_DEFINITION_VERSION})
-    cost, schedule_id, cost_reason, usage = _cost(artifact, calls)
+    cost, schedule_id, cost_reason, usage, cost_detail = _cost(artifact, calls)
     totals = usage['totals']
     usage_complete = usage['complete']
     usage_reason = None if usage_complete else 'incomplete_token_usage'
@@ -1370,14 +1639,16 @@ def _telemetry_metrics(metrics, artifact, calls, method, view):
     confirmed = sum(1 for row in view if row['assessed'] and (row['proof'] or 0) >= 3)
     confirmed += 0 if view else sum(1 for row in _candidate_view(artifact, method)
                                      if row['assessed'] and (row['proof'] or 0) >= 3)
-    schedule = _config(artifact).get('token_price_schedule') or {}
-    schedule = schedule if isinstance(schedule, dict) else {}
+    schedule = _price_schedule(artifact)
     metrics.put('token_cost', cost, numerator=None, denominator=None,
                 population='experiment_model_calls', method=method, reason=cost_reason,
                 detail={'price_schedule_id': schedule_id,
                         'price_schedule_version': schedule.get('version'),
                         'price_schedule_sha256': _digest(schedule) if schedule else None,
-                        'currency': schedule.get('currency')})
+                        'currency': schedule.get('currency'),
+                        'cost_scope': _cost_scope(method, calls),
+                        'cost_call_count': sum(1 for row in calls if not row.get('cache_hit')),
+                        **cost_detail})
     per_success_reason = cost_reason if cost is None else (
         'no_confirmed_success' if not confirmed else None)
     metrics.put('token_cost_per_success', round(cost / confirmed, 8) if cost is not None and confirmed else None,
@@ -1385,7 +1656,12 @@ def _telemetry_metrics(metrics, artifact, calls, method, view):
                 denominator=confirmed, population='confirmed_candidates',
                 method=method, reason=per_success_reason,
                 detail={'cost_available': cost is not None, 'currency': schedule.get('currency'),
-                        'confirmed_candidates': confirmed})
+                        'confirmed_candidates': confirmed,
+                        'cost_scope': _cost_scope(method, calls),
+                        'accounting_basis': cost_detail['accounting_basis'],
+                        'billing_route': cost_detail['billing_route'],
+                        'accounting_bases_by_price_key':
+                            cost_detail['accounting_basis_by_price_key']})
     from llm.cache_metrics import cache_performance_summary
     summary = cache_performance_summary(calls)
     provider_rate = summary.get('cache_hit_rate')

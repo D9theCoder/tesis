@@ -54,29 +54,59 @@ def _material(candidate: dict, raw_state: dict, source: dict) -> tuple[str, str]
     return credential["username"], credential["password"]
 
 
+CONTROL_POSITIVE = "candidate_material_positive"
+CONTROL_NEGATIVE = "wrong_credential_negative"
+
+
+def _control_error(exc: Exception, *secrets: str) -> str:
+    """Return the exception message with credential material removed."""
+    message = str(exc)
+    for secret in secrets:
+        if secret:
+            message = message.replace(str(secret), "<redacted>")
+    return message[:500]
+
+
 def _dependency_control(target: str, level: str, method: str, descriptor: tuple | None,
                         username: str, password: str, expected_available: bool,
-                        protocol: dict) -> dict:
+                        protocol: dict, control: str) -> dict:
+    """Run one dependency control, returning an auditable failure row on error.
+
+    ``bf_*`` destinations are confirmed by login identity alone, so they never
+    set a DVWA security level; Access Control destinations still do because the
+    frozen request protocol is level-scoped.
+    """
     session = None
+    stage = "open_session"
+    identity_only = method.startswith("bf_")
     try:
         if expected_available:
-            session, principal, initial = open_verified_principal_session(target, username, password, level)
+            session, principal, initial = open_verified_principal_session(
+                target, username, password, None if identity_only else level)
             login_valid = principal == username
         else:
             session = DVWASession(target)
+            stage = "initial_visit"
             session.get("login.php")
             initial = session_fingerprint(session)
+            stage = "login"
             login_valid = session.login(username, "tesis-oracle-invalid-credential")
             principal = username if login_valid else "anonymous"
-            session.set_security_level(level)
-        if method.startswith("bf_"):
+            if not identity_only:
+                stage = "security_level"
+                session.set_security_level(level)
+        if identity_only:
             from evaluation.session_oracle import _identity
+            stage = "identity_check"
             response = session.get("index.php")
             destination_confirmed = bool(login_valid and _identity(response) == username)
         else:
+            stage = "destination_request"
             response, destination_confirmed = _request(session, method, descriptor, protocol)
+        stage = "observation"
         source_available = bool(login_valid)
         return {
+            "control": control,
             "source_available": source_available,
             "destination_confirmed": destination_confirmed,
             "principal_id": principal if login_valid else "anonymous",
@@ -86,6 +116,15 @@ def _dependency_control(target: str, level: str, method: str, descriptor: tuple 
             "response_sha256": sha256(str(response.text).encode()).hexdigest(),
             "expected_source_available": expected_available,
             "expected_destination_confirmed": expected_available,
+        }
+    except Exception as exc:
+        return {
+            "control": control,
+            "stage": stage,
+            "failure": type(exc).__name__,
+            "error": _control_error(exc, username, password),
+            "source_available": False,
+            "destination_confirmed": False,
         }
     finally:
         if session is not None:
@@ -192,23 +231,22 @@ def collect_dependency_oracles(artifact: dict, raw_state: dict) -> dict:
             }.items()):
                 continue
 
-            controls = []
-            try:
-                positive = _dependency_control(config["target_url"], config.get("security_level", "low"),
-                    destination["agent_id"], descriptor, username, password, True, permission_protocol)
-                negative = _dependency_control(config["target_url"], config.get("security_level", "low"),
-                    destination["agent_id"], descriptor, username, password, False, permission_protocol)
-                controls = [positive, negative]
-            except Exception as exc:
-                controls = [{"failure": type(exc).__name__, "source_available": False,
-                    "destination_confirmed": False}]
+            controls = [
+                _dependency_control(config["target_url"], config.get("security_level", "low"),
+                    destination["agent_id"], descriptor, username, password, True,
+                    permission_protocol, CONTROL_POSITIVE),
+                _dependency_control(config["target_url"], config.get("security_level", "low"),
+                    destination["agent_id"], descriptor, username, password, False,
+                    permission_protocol, CONTROL_NEGATIVE),
+            ]
             document["dependency_controls"] = controls
-            if not (len(controls) == 2 and controls[0].get("source_available") is True
+            controls_clean = len(controls) == 2 and not any(item.get("failure") for item in controls)
+            if not (controls_clean and controls[0].get("source_available") is True
                     and controls[0].get("destination_confirmed") is True
                     and controls[1].get("source_available") is False
                     and controls[1].get("destination_confirmed") is False):
                 document["reason"] = "dependency_controls_not_confirmed"
-                if len(controls) == 2 and controls[1].get("source_available") is False and controls[1].get("destination_confirmed") is True:
+                if controls_clean and controls[1].get("source_available") is False and controls[1].get("destination_confirmed") is True:
                     document.update(status="not_dependent", reason="destination_available_without_source")
                 continue
             attestation = {
@@ -224,7 +262,8 @@ def collect_dependency_oracles(artifact: dict, raw_state: dict) -> dict:
                 "verified_at": datetime.now(timezone.utc).isoformat(),
                 "material_fingerprint": sha256(f"{username}\0{password}".encode()).hexdigest(),
                 "depends_on_source": True, "controls": [
-                    {"source_available": item["source_available"],
+                    {"control": item.get("control"),
+                     "source_available": item["source_available"],
                      "destination_confirmed": item["destination_confirmed"],
                      "response_sha256": item["response_sha256"], "status_code": item["status_code"]}
                     for item in controls],

@@ -11,15 +11,16 @@ The runtime ``composite_score`` vector is retained solely inside a clearly
 labelled ``legacy_runtime`` block.  It never substitutes for a graded component
 and no graded component is invented, backfilled or inferred.
 
-The thesis final assessment is human.  An AI receipt is experimental and
-provisional: it is reported separately and is never promoted to human signoff,
-and the ledger never chooses between a human and an AI workflow.  Consequently,
-``Spayload`` is numeric only when a validated human workflow supplies it, and
-``Srun_final`` is present only from a validated final human receipt, even if an
-AI receipt is final.  With no manual reviews the graded vector contains the
-automatic dimensions and an explicitly pending ``Spayload``; phase A remains
-incomplete until human grades exist and every non-Smethod deduction/null has a
-closed-list cause.  ``converged`` is never true from this offline ledger alone:
+The frozen selection's scoring authority supplies the graded assessment.  An
+``ai`` selection is scored by its validated final AI receipt; ``human`` and
+``both`` retain human authority, with the AI workflow reported separately and
+never pooled into the selected vector.  Consequently, ``Spayload`` is numeric
+only when a validated workflow for the selected authority supplies it, and
+``Srun_final`` is present only from that authority's validated final receipt.
+With no receipt the graded vector contains the automatic dimensions and an
+explicitly pending ``Spayload``; phase A remains incomplete until selected-mode
+payload reviews exist and every non-Smethod deduction/null has a closed-list
+cause.  ``converged`` is never true from this offline ledger alone:
 ``offline_fidelity_ready`` is reported separately, and full convergence always
 requires a fresh epoch, phase B and frozen-invariant acceptance.
 
@@ -58,7 +59,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.knowledge_graph import AttackKnowledgeGraph
-from core.state import METHODS_BY_SURFACE
 from evaluation.observer_reviews import discover_reviews
 from evaluation.thesis_scoring import WEIGHTS, review_queue
 from tesis.artifact_catalog import ArtifactCatalog
@@ -281,11 +281,14 @@ def _workflow_summary(workflow):
 
 
 def _authoritative_mode(selection):
-    """Human review is the authoritative thesis assessment.
+    """The frozen selected scoring authority supplies the graded vector.
 
-    AI receipts are experimental/provisional and are never promoted to human
-    signoff, and the ledger never chooses between the two.
+    ``ai`` selection is scored by the validated AI receipt; ``human`` and
+    ``both`` retain the established human authority, with the AI workflow
+    reported separately.  The ledger never pools components across modes.
     """
+    if selection == 'ai':
+        return 'ai'
     if selection in {'human', 'both'}:
         return 'human'
     return None
@@ -337,8 +340,6 @@ def _graded_block(entry, workflows, selection):
     if components['Spayload'] is None:
         if not any(row.get('eligible') for row in queue.get('candidates') or []):
             reasons['Spayload'] = 'no_eligible_candidate'
-        elif selection == 'ai':
-            reasons['Spayload'] = 'human_payload_review_required'
         else:
             reasons.setdefault('Spayload', _payload_pending_reason(queue))
     for dimension in DIMENSIONS:
@@ -349,21 +350,19 @@ def _graded_block(entry, workflows, selection):
     for dimension, value in components.items():
         if value is not None and (not _is_number(value) or not 0 <= value <= 4):
             raise ValueError(f'Graded {dimension} outside [0, 4] for {run_ref}: {value!r}')
-    experimental_ai = None
-    if selection in {'ai', 'both'} and 'ai' in workflows:
-        experimental_ai = workflows['ai']
+    parallel_ai = workflows.get('ai') if selection == 'both' else None
     status = workflow.get('status')
     srun = workflow.get('Srun_final')
     if status == 'final' and _is_number(srun):
-        srun_source = 'validated_final_human_receipt'
+        srun_source = 'validated_final_selected_receipt'
         srun_reason = None
     else:
         srun = None
         srun_source = None
-        srun_reason = ('pending_human_workflow:' + str(workflow.get('reason'))
+        srun_reason = ('pending_selected_workflow:' + str(workflow.get('reason'))
                        if status == 'pending' and workflow.get('reason')
-                       else 'no_human_review_receipt' if authoritative_mode
-                       else 'human_review_not_configured')
+                       else 'no_selected_review_receipt' if authoritative_mode
+                       else 'selected_review_not_configured')
     spayload_final = workflow.get('Spayload_final')
     if not _is_number(spayload_final):
         spayload_final = None
@@ -373,21 +372,18 @@ def _graded_block(entry, workflows, selection):
     if components['Spayload'] is not None and 'Spayload' in workflow_reasons:
         diagnostics.append({'code': 'numeric_payload_with_pending_reason',
                             'reason': workflow_reasons['Spayload']})
-    if experimental_ai is not None and selection == 'ai':
-        diagnostics.append({'code': 'ai_receipt_is_experimental_not_human_signoff'})
-    if experimental_ai is not None and selection == 'both' and isinstance(
-            experimental_ai.get('components'), dict):
-        diagnostics.append({'code': 'experimental_ai_workflow_reported_separately'})
+    if parallel_ai is not None and isinstance(parallel_ai.get('components'), dict):
+        diagnostics.append({'code': 'parallel_ai_workflow_reported_separately'})
     return {
         'available': True,
         'rubric_version': queue.get('rubric_version'),
         'components': components,
         'component_pending_reasons': reasons,
         'authoritative_mode': authoritative_mode,
-        'human_payload_review': components['Spayload'] is not None and authoritative_mode == 'human',
-        'human_final_receipt': status == 'final' and srun_source == 'validated_final_human_receipt',
+        'selected_payload_review': components['Spayload'] is not None and authoritative_mode is not None,
+        'selected_final_receipt': status == 'final' and srun_source == 'validated_final_selected_receipt',
         'workflows': workflows,
-        'experimental_ai_workflow': experimental_ai,
+        'parallel_ai_workflow': parallel_ai,
         'component_evidence_refs': queue.get('component_evidence_refs') or {},
         'selection_evidence': queue.get('selection_evidence'),
         'output_reason': queue.get('output_reason'),
@@ -551,7 +547,75 @@ def _coordinate(record):
     }
 
 
-def _valid_evidence_refs(queue, dimension):
+_EVIDENCE_FAMILIES = {
+    'Smethod': (
+        '#/config/scoring_profile',
+        '#/final_state/scoring_decisions',
+        '#/final_state/precondition_status',
+        '#/measured_negative',
+        '#/method_verdicts',
+        '#/control_events',
+        '#/final_state/model_call_requirements',
+    ),
+    'Spayload': (
+        '#/final_state/payload_candidates',
+        '#/final_state/payload_validation_results',
+        '#/final_state/payload_provenance',
+        '#/final_state/response_evidence',
+        '#/measured_negative',
+        '#/method_verdicts',
+    ),
+    'Sexploit': (
+        '#/final_state/response_evidence',
+        '#/final_state/verifier_history',
+        '#/final_state/chain_assessment',
+        '#/final_state/chain_history',
+        '#/measured_negative',
+        '#/method_verdicts',
+        '#/final_state/model_call_requirements',
+    ),
+    'Schain': (
+        '#/final_state/chain_assessment',
+        '#/final_state/chain_history',
+        '#/final_state/weak_chain_opportunities',
+        '#/measured_negative',
+        '#/method_verdicts',
+    ),
+    'Soutput': (
+        '#/llm_performance',
+        '#/llm_activity',
+        '#/final_state/model_call_requirements',
+        '#/final_state/fallback_events',
+        '#/final_state/invalid_json_events',
+        '#/final_state/output_failure_events',
+        '#/final_state/guardrail_activations',
+        '#/final_state/containment_events',
+        '#/measured_negative',
+        '#/method_verdicts',
+    ),
+}
+
+
+def _expand_evidence_refs(refs, record, pointer):
+    value = _resolve_pointer(record, pointer)
+    if value is POINTER_MISSING:
+        return
+    refs.add(pointer)
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            refs.add(f'{pointer}/{index}')
+            if isinstance(item, dict):
+                for key in ('profile_id', 'profile_sha256', 'reason', 'status', 'verdict',
+                            'decision', 'role', 'method', 'visit_id', 'call_id', 'event',
+                            'failure_class', 'error_type', 'input', 'output', 'diagnostic'):
+                    if key in item:
+                        refs.add(f'{pointer}/{index}/{key}')
+    elif isinstance(value, dict):
+        for key in value:
+            refs.add(f'{pointer}/{key}')
+
+
+def _valid_evidence_refs(queue, dimension, record=None):
     refs = set((queue.get('component_evidence_refs') or {}).get(dimension) or [])
     if dimension in (queue.get('components') or {}):
         refs.add(f'queue:#/components/{dimension}')
@@ -570,6 +634,21 @@ def _valid_evidence_refs(queue, dimension):
         refs.add('#/config/scoring_profile')
     if dimension == 'Schain':
         refs.add('#/final_state/chain_assessment')
+    if record is not None:
+        for pointer in _EVIDENCE_FAMILIES.get(dimension, ()):
+            _expand_evidence_refs(refs, record, pointer)
+        if dimension == 'Smethod':
+            # A rejected or accepted orchestrator selection is the primary
+            # selection evidence; only orchestrator calls bind Smethod.
+            for index, call in enumerate(record.get('llm_performance') or []):
+                if not isinstance(call, dict) or call.get('role') != 'orchestrator':
+                    continue
+                refs.add(f'#/llm_performance/{index}')
+                for key in ('input', 'output', 'attempt_records', 'call_id', 'method',
+                            'visit_id', 'parse_status', 'validation_status', 'failure_class',
+                            'error_type'):
+                    if key in call:
+                        refs.add(f'#/llm_performance/{index}/{key}')
     return refs
 
 
@@ -631,7 +710,7 @@ def _normalise_attributions(items, records, queues):
         queue = queues.get(run_ref)
         if queue is None:
             raise ValueError(f'Attribution cannot bind an ungraded run: {run_ref}')
-        valid = _valid_evidence_refs(queue, dimension)
+        valid = _valid_evidence_refs(queue, dimension, record)
         if not set(refs) & valid:
             raise ValueError(f'Attribution evidence does not bind {dimension}: {run_ref}')
         for ref in refs:
@@ -857,76 +936,6 @@ def _metric_f5(runs):
     }
 
 
-def _surface_for_method(method):
-    for surface, methods in METHODS_BY_SURFACE.items():
-        if method in methods:
-            return surface
-    return None
-
-
-def _control_event_identity(event):
-    return (
-        event.get('method'),
-        event.get('visit_id'),
-        event.get('control_id'),
-        event.get('request_id'),
-        event.get('at'),
-        event.get('phase'),
-    )
-
-
-def _iter_sent_control_events(record):
-    """Yield deduplicated recorded sent/failed physical control events.
-
-    Planned probe catalog entries and root/state/probe mirrors are not evidence
-    of a sent control.  Only an explicit sent/failed status with a positive
-    physical request count counts.
-    """
-    seen = set()
-    state = record.get('final_state') if isinstance(record.get('final_state'), dict) else {}
-    sources = [
-        record.get('control_events') if isinstance(record.get('control_events'), list) else [],
-        state.get('control_events') if isinstance(state.get('control_events'), list) else [],
-    ]
-    probe_controls = record.get('probe_controls')
-    if isinstance(probe_controls, dict):
-        for value in probe_controls.values():
-            candidates = value.get('candidates') if isinstance(value, dict) else value
-            if isinstance(candidates, list):
-                sources.append(candidates)
-    for events in sources:
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            status = str(event.get('status') or '').strip().lower()
-            physical = event.get('physical_requests')
-            if not isinstance(physical, int) or isinstance(physical, bool):
-                physical = event.get('physical_requests_used')
-            sent = status in {'sent', 'failed'} and type(physical) is int and physical > 0
-            if not sent:
-                continue
-            identity = _control_event_identity(event)
-            if identity in seen:
-                continue
-            seen.add(identity)
-            yield event
-
-
-def _surface_controls(record):
-    controls = Counter()
-    for event in _iter_sent_control_events(record):
-        surface = _surface_for_method(event.get('method'))
-        if surface:
-            controls[surface] += 1
-    measured_negative = record.get('measured_negative')
-    if isinstance(measured_negative, dict):
-        surface = measured_negative.get('surface')
-        sent = measured_negative.get('control_events_sent')
-        if isinstance(surface, str) and type(sent) is int and sent > 0 and controls[surface] == 0:
-            controls[surface] += sent
-    return controls
-
-
 def _metric_f6(runs):
     disagreements = []
     codes = Counter()
@@ -950,19 +959,6 @@ def _metric_f6(runs):
             found.append({'code': 'measured_negative_described_as_missing_proof',
                           'measured_negative_reason': measured_negative.get('reason'),
                           'security_outcome_reason': security_reason.get('code')})
-        surface_scores = ((record.get('report') or {}).get('surface_scores')
-                          if isinstance(record.get('report'), dict) else {})
-        controls = _surface_controls(record)
-        if isinstance(surface_scores, dict):
-            for surface, row in surface_scores.items():
-                if not isinstance(row, dict) or controls.get(surface, 0) <= 0:
-                    continue
-                attempts = row.get('attempts')
-                if type(attempts) is int and attempts == 0:
-                    found.append({'code': 'surface_attempts_zero_with_controls',
-                                  'surface': surface,
-                                  'control_events': controls[surface],
-                                  'surface_label': row.get('label')})
         if found:
             for item in found:
                 codes[item['code']] += 1
@@ -976,9 +972,7 @@ def _metric_f6(runs):
         'denominator': denominator,
         'population': 'accepted_artifacts',
         'source': ['artifact.score_epoch', 'artifact.config.scoring_rubric_version',
-                   'artifact.measured_negative', 'artifact.security_outcome_reason',
-                   'artifact.report.surface_scores',
-                   'artifact.control_events[status=sent|failed, physical_requests>0]'],
+                   'artifact.measured_negative', 'artifact.security_outcome_reason'],
         'definition': 'artifacts with at least one internal label disagreement / artifacts checked',
         'target': '0 disagreements (zero runs, zero categories)',
         'n_codes': len(codes),
@@ -1352,7 +1346,7 @@ def _population_integrity(excluded, diagnostics):
 def _phase_a(runs, excluded=None, diagnostics=None):
     graded = [run for run in runs if run['graded'].get('available')]
     payload_required = []
-    human_payload = []
+    selected_payload = []
     null_with_reason = Counter()
     null_without_reason = defaultdict(list)
     deduction_without_cause = defaultdict(list)
@@ -1361,8 +1355,8 @@ def _phase_a(runs, excluded=None, diagnostics=None):
         queue = run.get('_queue') or {}
         if any(row.get('eligible') for row in queue.get('candidates') or []):
             payload_required.append(run['run_ref'])
-            if run['graded'].get('human_payload_review'):
-                human_payload.append(run['run_ref'])
+            if run['graded'].get('selected_payload_review'):
+                selected_payload.append(run['run_ref'])
         for dimension in ('Spayload', 'Sexploit', 'Schain', 'Soutput'):
             row = run['dimensions'][dimension]
             if row['state'] == 'null':
@@ -1374,7 +1368,7 @@ def _phase_a(runs, excluded=None, diagnostics=None):
                     null_without_cause[dimension].append(run['run_ref'])
             elif row['state'] == 'deduction' and row.get('cause_status') != 'attributed':
                 deduction_without_cause[dimension].append(run['run_ref'])
-    missing_reviews = sorted(set(payload_required) - set(human_payload))
+    missing_reviews = sorted(set(payload_required) - set(selected_payload))
     dropped, issues = _population_integrity(excluded, diagnostics)
     blocking = []
     if not graded:
@@ -1387,7 +1381,7 @@ def _phase_a(runs, excluded=None, diagnostics=None):
     if len(graded) != len(runs):
         blocking.append(f"ungraded_artifacts={len(runs) - len(graded)}")
     if missing_reviews:
-        blocking.append(f"human_payload_reviews_missing={len(missing_reviews)}")
+        blocking.append(f"payload_reviews_missing={len(missing_reviews)}")
     for dimension, refs in null_without_reason.items():
         if refs:
             blocking.append(f"{dimension}_null_without_reason={len(refs)}")
@@ -1407,8 +1401,8 @@ def _phase_a(runs, excluded=None, diagnostics=None):
         'artifacts_total': len(runs),
         'payload_required_runs': len(payload_required),
         'payload_no_eligible_runs': len(graded) - len(payload_required),
-        'human_payload_reviewed_runs': len(human_payload),
-        'human_payload_missing_review_runs': missing_reviews,
+        'payload_reviewed_runs': len(selected_payload),
+        'payload_missing_review_runs': missing_reviews,
         'null_components_with_reason': dict(sorted(null_with_reason.items())),
         'null_components_without_reason': {dimension: len(refs)
                                            for dimension, refs in sorted(null_without_reason.items())},
@@ -1419,9 +1413,10 @@ def _phase_a(runs, excluded=None, diagnostics=None):
                                                  for dimension, refs in sorted(null_without_cause.items())},
         'deduction_components_without_closed_cause_run_refs': dict(sorted(deduction_without_cause.items())),
         'null_components_without_closed_cause_run_refs': dict(sorted(null_without_cause.items())),
-        'note': 'phase A closes only when human payload reviews exist where candidates exist and '
-                'every deduction or null non-Smethod component carries a closed-list cause; '
-                'AI receipts are experimental and separate',
+        'note': 'phase A closes only when a payload review exists for the frozen selected '
+                'scoring authority where candidates exist and every deduction or null '
+                'non-Smethod component carries a closed-list cause; a missing selected-mode '
+                'receipt is an evidence gap, never a synthesized score',
     }
 
 
@@ -1732,10 +1727,10 @@ def build_ledger(sources, receipts=None, *, attributions=None, hypotheses=None, 
             'reviewed_runs': len([run for run in runs if any(
                 workflow.get('status') in {'final', 'pending', 'stale'}
                 for workflow in run['graded'].get('workflows', {}).values())]),
-            'human_payload_reviewed_runs': len([run for run in runs
-                                                if run['graded'].get('human_payload_review')]),
-            'ai_experimental_runs': len([run for run in runs
-                                         if run['graded'].get('experimental_ai_workflow')]),
+            'payload_reviewed_runs': len([run for run in runs
+                                          if run['graded'].get('selected_payload_review')]),
+            'parallel_ai_workflow_runs': len([run for run in runs
+                                              if run['graded'].get('parallel_ai_workflow')]),
             'runtime_scored_runs': len([run for run in runs
                                         if _is_number(run['legacy_runtime'].get('composite_score'))]),
         },

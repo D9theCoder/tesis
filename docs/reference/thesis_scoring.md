@@ -1,13 +1,22 @@
 # Thesis scoring v4
 
-> **Thesis-report scope (owner decision, 2026-10-29):** Thesis assessment uses
-> a human evaluator. The AI scorer and Template payload mode are experimental
-> software capabilities; neither is a thesis method or result. An AI score may
-> appear as a clearly provisional table placeholder during drafting, provided
-> its run, rubric, and evidence match the thesis study. It does not constitute
-> human approval and cannot be presented as a final human assessment. The
-> implementation and receipt descriptions below preserve the software's actual
-> human/AI capabilities and do not expand the thesis protocol.
+> **Thesis-report scope (owner decision, 2026-10-31, superseding the 2026-10-29
+> human-evaluator decision):** The current study selects the AI scorer
+> (`scoring_mode: ai`) under `scoring.v4`. Selecting the AI scorer requires no
+> human scorer, human verifier or manual artifact signoff: the frozen evaluator's
+> decisions are accepted only after the machine checks below, and a complete
+> validated AI workflow finalizes the run's thesis receipt. A preliminary vector
+> — runtime `scoring.v2` components, or the frozen review-queue components before
+> candidate decisions exist — is not a thesis score; only a validated final
+> receipt is. Human (`human`) and dual (`both`) workflows remain supported
+> options that emit their own separate receipts, and Template payload mode
+> remains an experimental capability. Independent machine evidence controls
+> still bound every claim: missing, contradictory or capped evidence stays
+> unavailable or partial, and no human review requirement is created to repair
+> it. Administrative ranking-profile approval and launch authorization remain
+> owner decisions. Research scope, rubric (Tabel 3.5–3.11), weights and frozen
+> configurations are unchanged, and the implementation and receipt descriptions
+> below document the software's actual capabilities.
 
 New CLI/TUI and runner API launches select `scoring_rubric_version: scoring.v4`.
 The saved-artifact reviewer is hard-pinned to v4: an explicit non-v4 config
@@ -17,14 +26,18 @@ records remain unchanged; they are not silently regraded or relabelled.
 Runtime decisions and composites remain explicitly provisional `scoring.v2`.
 Review never rewrites execution artifacts or performs DVWA requests. Human and AI review share validation and
 proof ceilings, but emit separate vectors and `Srun_final` receipts from one
-execution. The evaluator role is excluded from experiment-model `Soutput`.
+execution. Either selected mode finalizes independently; an AI receipt never
+waits on a human workflow and a human workflow is never required to complete it.
+The evaluator role is excluded from experiment-model `Soutput`.
 
 ## Offline reporting correction (2026-10-31)
 
 The authoritative rubric is Tabel 3.5–3.11 in
-`docs/docx/bab-3-reconciled-2026-10-29.docx`. Final-method attribution, the
-distinct executed-candidate arithmetic mean, all five weights, and pending versus
-not-applicable statuses are unchanged. A recovered transport or HTTP 429 retry
+`docs/docx/bab-3-reconciled-2026-10-29.docx`. Final-method attribution for
+`Smethod`, `Spayload`, `Sexploit` and `Soutput`, the distinct executed-candidate
+arithmetic mean, all five weights, and pending versus not-applicable statuses
+remain in force. `Schain` uses the run-scope interpretation described below.
+A recovered transport or HTTP 429 retry
 does not establish structural output repair; `Soutput` level 2 requires recorded
 JSON/schema repair evidence. A bare agent `signal_detected` boolean cannot create
 an Access Control or Brute Force proof tier without a recognized evidence class.
@@ -64,20 +77,32 @@ ledger = build_ledger(
 
 It records all five graded components and pending reasons, source hashes,
 F1–F8, FD1, and separately cited all-selection metadata mismatches. Optional
-`receipts`, `attributions` and `hypotheses` supply validated human reviews,
-closed-cause evidence decisions and the lexicographic P1 queue. It never
-invents missing grades or causes. FD1 is diagnostic only, not `Smethod` or
-`Srun`; its AKG freeze-provenance caveat remains explicit.
+`receipts`, `attributions` and `hypotheses` supply validated review decisions
+(human or AI, per the run's recorded selection), closed-cause evidence decisions
+and the lexicographic P1 queue. It never invents missing grades or causes. FD1
+is diagnostic only, not `Smethod` or `Srun`; its AKG freeze-provenance caveat
+remains explicit.
 `offline_fidelity_ready` is not full convergence: phase B, frozen invariants
 and fresh-epoch acceptance are not established by saved-artifact analysis.
+The frozen selection's scoring authority supplies the graded vector:
+`scoring_mode: ai` consumes its validated final AI receipt with no human
+workflow, `human` and `both` keep the established human authority, and `both`
+reports the parallel AI workflow separately without pooling components.
+`Srun_final_source` is `validated_final_selected_receipt`; the mode-neutral
+`selected_payload_review` / `selected_final_receipt` flags and phase-A
+`payload_reviewed_runs`, `payload_missing_review_runs` and
+`payload_reviews_missing` closure follow that selection. An absent selected-mode
+receipt is the `missing_selected_authority_receipt` evidence gap, never a
+synthesized score, and retained historical receipts are restated rather than
+created by this ledger.
 
 Freeze/build/verify boundaries reject an empty or malformed
 `token_price_schedule`; freezing embeds the validated resolved schedule so
 relocating the frozen config does not rebase an old relative JSON path.
 Synthetic B1–B3 controls prove profile/selection/review reachability, not
 acceptance of a research profile or a real epoch. The 2026-10-30 artifacts still
-have no pre-execution ranking profile and no final human payload reviews;
-their `Smethod`/`Srun` stay unavailable.
+have no pre-execution ranking profile and no final payload review receipts
+(human or AI); their `Smethod`/`Srun` stay unavailable.
 
 ## Evidence and final-method rules
 
@@ -184,6 +209,21 @@ hops share the intermediate evidence identity; unrelated successes do not form
 hop 2. Passive `weak_chain_opportunities` bind partial source evidence to a valid
 edge, missing material and explicit prerequisite statuses; they never confirm
 nodes or open routes. Missing opportunity logs stay unavailable.
+
+`Schain` is run-scope: Tabel 3.10 grades a connected chain rather than repeating
+the explicit final-method clauses for payload and output quality. This reading
+also matches the existing runtime `run_max_over_visits` contract; it does not
+change the DOCX tables or authorize new routes. Level 2 requires both proved
+source material and every route prerequisite. Level 1 binds the partial evidence
+to the weak opportunity's own candidate, method and visit; a stronger row from
+another context cannot substitute for that row. Levels 3/4 retain the independent
+dependency requirements above. This exception never promotes another method's
+payload or exploit result into the final-method components.
+
+A valid executed candidate with adequate verified negative evidence may receive
+0. A negative reason paired with `signal_detected=true` is contradictory and
+remains unavailable. Method-level detection controls do not create an executed
+payload denominator, even when their measured-negative verdict is complete.
 
 `Soutput` reads every required experiment-model call in the final method context,
 plus run-wide events, and takes the lowest supported grade. Calls record ID,
@@ -307,6 +347,20 @@ append-only JSON list. Each decision has `decision_id`, `run_id`,
 `source_sha256`, `rubric_version: scoring.v4` (or the source historical `scoring.v3`), `scoring_mode: human|ai`,
 `candidate_id`, integer `score`, `reason`, candidate `evidence_refs`,
 `reviewer_id`, `review_version`, and timezone-aware ISO `timestamp`.
+
+`finalize_reviews` accepts only decisions whose `scoring_mode` belongs to the
+frozen selection: `ai` needs no human decision, while `both` writes separate
+human and AI receipts and refuses a decision from an unselected mode. An AI
+decision must cite the candidate's own `evidence_refs`, stay within its frozen
+proof ceiling, and match the frozen evaluator's `provider/model` reviewer
+identity and judge version; corrections supersede the current decision for that
+candidate. The resulting `EXECUTION_ID.ai-verified.json` is the validated final
+receipt: status `final`, complete component vector, eligible candidate
+denominator, recorded formula and four-decimal rounding. The review-queue
+components before those decisions, and the runtime `scoring.v2` vector, remain
+preliminary and are never a thesis score. Missing or capped machine evidence
+leaves the workflow pending or the component unavailable; it is not resolved by
+requesting a human review.
 
 CLI and TUI finalization share `SOURCE_PARENT/reviews/SOURCE_STEM.decisions.json`,
 including when receipts use a custom output directory. Imports merge unchanged
@@ -534,4 +588,4 @@ Grouping for research summaries must use the public `receipt_compatibility_key` 
 
 Physical request metrics consume `artifact["http_request_counters"]` (`http-accounting.v1`: actual requests/retries/redirect hops/failures by phase/role/method). Each actual dispatch, including oracle/verification traffic tagged `phase="verification"` with `candidate_verification` or `independent_control` roles, is counted once; redirect hops are a separate counter. Evidence-row counts are named separately as `evidence_requests_total`; a missing/incomplete counter is unavailable, never inferred from rows. `payload_generation_opportunities` is role+generation-stage-unique evidence; validation receipts are joined separately, so one refusal/provider failure is not two opportunities, and `payload_generation_opportunity_coverage` reports `generation_receipt_missing` rather than a measured zero when only validation rows survive. `recorded_payload_policy` (payload policy version + hash-pinned template registry/prompt manifests) is persisted on the artifact, `final_state`, and frozen method inputs; historical replay validates against that recorded snapshot, and a missing snapshot is unavailable rather than today's-registry revalidation. Matrix `totals` and provider rollups are operational counts only, with no pooled metric means across coordinates. Fixture restoration/equivalence comes only from an authorized `fixture-restoration.v1` operator attestation threaded through readiness; absent/mismatched evidence leaves paired analysis unmatched, and no reset endpoint is invoked. `compare_receipts` derives incomplete/unassessable/pending counts from task/pending reasons and canonical statuses, not a nonexistent `execution_status="incomplete"`. Candidate baselines require `candidate_verification` (or a documented explicit baseline purpose); ambiguous historical multi-visit execution stays unavailable.
 
-Matched Linear/AKG pairs require a ready readiness receipt on both sides with matching requested/observed level, fixture/protocol, and attested fixture restoration. Unmatched pairs are counted, not silently dropped. The predeclared paired analysis is a two-sided Wilcoxon signed-rank test with matched-pairs rank-biserial effect size, bootstrap percentile CI for the median paired difference, and Holm–Bonferroni correction within the metric family. Mann–Whitney U is exploratory only because paired coordinates violate independence. `Srun_final` still requires every component, an eligible candidate denominator, and a complete review workflow; no provisional v2 component or invented zero may fill a pending final.
+Matched Linear/AKG pairs require a ready readiness receipt on both sides with matching requested/observed level, fixture/protocol, and attested fixture restoration. Unmatched pairs are counted, not silently dropped. The predeclared paired analysis is a two-sided Wilcoxon signed-rank test with matched-pairs rank-biserial effect size, bootstrap percentile CI for the median paired difference, and Holm–Bonferroni correction within the metric family. Mann–Whitney U is exploratory only because paired coordinates violate independence. `Srun_final` still requires every component, an eligible candidate denominator, and a complete review workflow for the selected mode (human, AI, or both in parallel); no provisional v2 component or invented zero may fill a pending final.

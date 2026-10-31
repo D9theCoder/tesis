@@ -157,11 +157,14 @@ def _attempt_exploit(
                 validation_relation="candidate_baseline" if candidate_id else None))
             resp = _request(session, security_level, payload)
             events.append(exploit_event(AGENT_ID, payload, resp.status_code, True, response=resp))
+            # ``success`` above is HTTP completion, not an error signal. Only
+            # the recognized branches below set ``signal_detected``.
+            events[-1]["payload"]["signal_detected"] = False
             if resp.status_code == 200:
                 # Keep truncated XPath data, but reject bare tildes and prose.
                 result = verifier.regex_match(resp.text, _EXPLOIT_PATTERNS)
                 if result.ok:
-                    events[-1]["payload"].update(verified_grade=3, verification_reason="verified_error_extraction")
+                    events[-1]["payload"].update(signal_detected=True, verified_grade=3, verification_reason="verified_error_extraction")
                     score = max(score, 3)
                     confirmed.append(MODULE_TO_KG_NODE[AGENT_ID])
                     break

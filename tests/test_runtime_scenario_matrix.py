@@ -311,8 +311,17 @@ def test_runtime_coordinate_selects_and_validates_method_payloads(
         assert not built["generation_prompts"]
         assert not generated
     elif payload_mode == "hybrid":
-        assert "static_seed" in origins
         assert generated, "hybrid must attempt one model candidate"
+        # Frozen order: a valid generated candidate is considered first; static
+        # seeds are the fallback behind it and may be budget-excluded.
+        if accepted:
+            assert accepted[0]["origin_kind"] != "static_seed"
+        seen_static = False
+        for candidate in accepted:
+            if candidate["origin_kind"] == "static_seed":
+                seen_static = True
+            elif seen_static:
+                raise AssertionError("generated candidate ranked after a static fallback")
     elif payload_mode == "llm_mutation_only":
         assert origins == {"seed_mutation"}
     else:

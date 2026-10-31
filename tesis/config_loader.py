@@ -1007,10 +1007,17 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any],
         config_path: Value used by this function.
         cli_args: Value used by this function."""
     # Load secrets from the .env file colocated with config.yaml before model
-    # defaults and ${VAR} references are resolved. Existing process variables
-    # retain precedence so CI/shell overrides remain deterministic.
+    # defaults and ${VAR} references are resolved.  An epoch-local frozen config
+    # lives outside the repository root, so the repository .env is also loaded
+    # (never copied into the epoch) to keep credentials out of retained inputs.
+    # Existing process variables retain precedence so CI/shell overrides stay
+    # deterministic.
     config_file = Path(config_path)
     load_dotenv(dotenv_path=config_file.with_name(".env"), override=False)
+    for parent in config_file.resolve().parents:
+        if (parent / "core" / "payload_policy.py").is_file() and (parent / ".env").is_file():
+            load_dotenv(dotenv_path=parent / ".env", override=False)
+            break
 
     yaml_cfg = _normalize_runtime_overrides(resolve_env_references(
         load_yaml_config(config_file), secret_overrides=secret_overrides,

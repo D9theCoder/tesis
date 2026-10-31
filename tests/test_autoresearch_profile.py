@@ -12,6 +12,7 @@ here.
 """
 from __future__ import annotations
 
+import copy
 import json
 from hashlib import sha256
 from pathlib import Path
@@ -21,7 +22,7 @@ import pytest
 
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.state import METHODS_BY_SURFACE
-from evaluation import research_plan
+from evaluation import ranking_draft, research_plan
 from evaluation.research_plan import (
     PRICE_SCHEDULE_REQUIRED,
     RESEARCH_PLAN_VERSION,
@@ -376,3 +377,125 @@ def test_f7_valid_schedule_freezes_and_embeds_resolved_prices(monkeypatch, tmp_p
     prices_path.unlink()
     relocated = load_yaml_config(relocated_path)
     assert relocated["token_price_schedule"] == _valid_schedule()
+
+
+# --- Owner-review ranking draft (coverage != freeze readiness) -----------------
+DRAFT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "config/research/autoresearch-ranking-draft-2026-10-31.json"
+)
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _draft() -> dict:
+    return copy.deepcopy(ranking_draft.load_draft(DRAFT_PATH))
+
+
+def test_ranking_draft_covers_registry_and_is_not_a_scoring_profile():
+    draft = _draft()
+    report = ranking_draft.assess_draft(draft, root=REPOSITORY_ROOT)
+
+    assert report["coverage"]["complete"] is True
+    assert report["coverage"]["scenario_count"] == 9
+    assert report["coverage"]["entry_count"] == 27
+    assert report["coverage"]["confirmed_entries"] == 23
+    assert report["coverage"]["pending_entries"] == 0
+    assert report["coverage"]["deferred_entries"] == 4
+    assert report["freeze_readiness"]["ready"] is True
+    assert "owner_approval_missing" not in report["freeze_readiness"]["blockers"]
+
+    assert draft["status"] == "draft_approved_unfrozen"
+    assert draft["not_a_scoring_profile"] is True
+    assert draft["runtime_selector_eligible"] is False
+    for forbidden in ("frozen_at", "profile_id", "version", "sha256"):
+        assert forbidden not in draft
+
+    for coordinate, entries in draft["scenarios"].items():
+        surface = coordinate.split(":", 1)[0]
+        assert set(entries) == set(METHODS_BY_SURFACE[surface])
+        for method, entry in entries.items():
+            assert entry["preconditions"] == AttackKnowledgeGraph.METHOD_PRECONDITIONS[method]
+            assert entry["reference_reason"].strip()
+
+
+def test_ranking_draft_evidence_pins_resolve_and_pending_reasons_are_explicit():
+    draft = _draft()
+    sources = {source["source_id"]: source for source in draft["sources"]}
+    report = ranking_draft.assess_draft(draft, root=REPOSITORY_ROOT)
+
+    assert all(source["origin"] == "operator_fixture" for source in sources.values())
+    assert not any(
+        marker in str(source.get("path") or "")
+        for source in sources.values()
+        for marker in ("results/runs/", "remediation-2026-10-30", "full-2026-10-30")
+    )
+    for coordinate, entries in draft["scenarios"].items():
+        for method, entry in entries.items():
+            assert entry["evidence_refs"]
+            for ref in entry["evidence_refs"]:
+                resolved = ranking_draft.resolve_pointer(
+                    sources[ref["source_id"]]["document"], ref["pointer"],
+                )
+                for key, expected in ref["expect"].items():
+                    assert resolved[key] == expected
+
+    for deferred in report["coverage"]["deferred"]:
+        entry = draft["scenarios"][deferred["scenario"]][deferred["method"]]
+        assert entry["reference_status"] == "pending"
+        assert entry["reference_fit"] is None
+        assert entry["reference_reason"].strip()
+        assert entry.get("proposed_reference_fit") == 3
+    assert {item["scenario"] for item in report["coverage"]["deferred"]} == {
+        "access_control:low",
+        "access_control:medium",
+    }
+
+
+def test_ranking_draft_missing_count_stays_pending_and_never_claims_freeze_readiness():
+    draft = _draft()
+    entry = draft["scenarios"]["sqli:low"]["sqli_union"]
+    entry["reference_status"] = "pending"
+    entry["reference_fit"] = None
+    entry["planned_request_count"] = None
+    entry["reference_reason"] = (
+        "Independent fixture request count is not available for this scenario; "
+        "keep pending rather than inventing a positive count for the runtime validator."
+    )
+    entry["evidence_refs"] = [
+        ref for ref in entry["evidence_refs"] if "count" not in ref.get("roles", [])
+    ]
+    draft["draft_sha256"] = ranking_draft.draft_hash(draft)
+
+    report = ranking_draft.assess_draft(draft, root=REPOSITORY_ROOT)
+
+    assert report["coverage"]["complete"] is True
+    assert report["coverage"]["pending_entries"] == 1
+    assert any(
+        item["scenario"] == "sqli:low" and item["method"] == "sqli_union"
+        for item in report["coverage"]["pending"]
+    )
+    assert report["freeze_readiness"]["ready"] is False
+    assert "pending_evidence:1" in report["freeze_readiness"]["blockers"]
+
+
+def test_ranking_draft_invented_count_fails_evidence_cross_check():
+    draft = _draft()
+    entry = draft["scenarios"]["sqli:low"]["sqli_union"]
+    entry["planned_request_count"] += 1
+    draft["draft_sha256"] = ranking_draft.draft_hash(draft)
+
+    with pytest.raises(ranking_draft.DraftValidationError, match="count claim does not match"):
+        ranking_draft.assess_draft(draft, root=REPOSITORY_ROOT)
+
+
+def test_ranking_draft_synthetic_source_cannot_confirm_a_reference():
+    draft = _draft()
+    source = next(
+        item for item in draft["sources"]
+        if item["source_id"] == "ranking-calibration-cells-2026-10-11"
+    )
+    source["origin"] = "offline_control"
+    draft["draft_sha256"] = ranking_draft.draft_hash(draft)
+
+    with pytest.raises(ranking_draft.DraftValidationError, match="cannot confirm"):
+        ranking_draft.assess_draft(draft, root=REPOSITORY_ROOT)

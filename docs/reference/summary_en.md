@@ -1,15 +1,19 @@
 # Technical Thesis Summary
 
-> **Thesis-report scope (owner decision, 2026-10-29):** The primary thesis
-> compares Linear and AKG-guided workflows using hybrid payloads and
-> model-selected methods, assessed by a human evaluator. Template mode and the
-> AI scorer are experimental software capabilities and must not be described
-> as thesis methods or findings. AI-generated scores may be used only as
-> clearly provisional drafting placeholders until a human review is complete.
-> Their execution, rubric, and evidence must match the thesis study. The
-> implementation details below document software capabilities, not additions
-> to the thesis protocol. This decision supersedes earlier two-block and
-> human/AI/both proposals for the thesis.
+> **Thesis-report scope (owner decision, 2026-10-31, superseding the 2026-10-29
+> human-evaluator decision):** The primary thesis compares Linear and
+> AKG-guided workflows using hybrid payloads and model-selected methods, and
+> scores them with the AI scorer under `scoring.v4` (`scoring_mode: ai`).
+> Selecting the AI scorer requires no human scorer, human verifier or manual
+> artifact signoff: the frozen evaluator's decisions are accepted only after the
+> documented machine validation and evidence ceilings, and a complete validated
+> AI workflow finalizes the thesis receipt. Human and dual modes remain
+> supported options that emit their own separate receipts. Template mode remains
+> an experimental software capability and is not a thesis method or finding. A
+> preliminary vector is not a score; only the validated final receipt is. The
+> implementation details below document software capabilities, not additions to
+> the thesis protocol, and they do not change its scope, rubric, weights or
+> frozen configurations.
 
 ## 1. Fixed Scope
 
@@ -25,7 +29,7 @@
 | Payload         | Hybrid: validated static seeds plus AKG-constrained LLM variants                                       |
 | Main experiment | Linear LLM plus hybrid payloads vs AKG-guided LLM plus hybrid payloads                                 |
 | Model           | At least one commercial SOTA model and one open-source or open-weight model                            |
-| Scoring         | 0 to 4 rubric, separated by evaluation dimension                                                       |
+| Scoring         | 0 to 4 rubric, separated by evaluation dimension; AI scorer selected, human/both optional              |
 
 Other DVWA modules such as Command Injection, File Upload, LFI, CSRF, XSS, Weak Session IDs, Insecure CAPTCHA, JavaScript Attacks, and Open HTTP Redirect are outside the scope.
 
@@ -708,7 +712,7 @@ It does not:
 * execute unvalidated payloads;
 * run simultaneous timing-sensitive DVWA requests against one instance;
 * alter the `linear_hybrid` versus `akg_guided_hybrid` condition definition;
-* alter the scoring dimensions or manual-scoring evidence requirements.
+* alter the scoring dimensions or the evidence each dimension requires.
 
 The implementation therefore changes the runtime envelope around the thesis
 workflow while keeping the experiment’s causal factors and evidence rules
@@ -1068,9 +1072,10 @@ Srun = 0.20 Smethod + 0.20 Spayload + 0.30 Sexploit + 0.10 Schain + 0.20 Soutput
 | `Schain`   |   0.10 | Chain outcome                             |
 | `Soutput`  |   0.20 | LLM output quality and guardrail handling |
 
-The thesis uses human assessment under [scoring.v4](thesis_scoring.md).
-The software also supports experimental AI review and separate receipts; that
-capability is outside the thesis methodology.
+The current study scores with the AI scorer under [scoring.v4](thesis_scoring.md);
+human (`human`) and dual (`both`) workflows remain available and emit their own
+separate receipts. A run recorded with `scoring_mode: ai` never requires the
+human workflow.
 `Spayload_final` is the arithmetic mean over distinct executed validated
 exploit/bypass candidates in the final selected/last executed method. Rejected,
 probe and unexecuted candidates are excluded; empty denominators, missing proof
@@ -1082,13 +1087,37 @@ The saved-artifact reviewer is pinned to `scoring.v4`; a conflicting config or
 restore the legacy selection score. Reviewed `Spayload` can remain numeric in
 a pending workflow, but `Srun_final` still requires all five components.
 Recovered transport/rate-limit retries are not structural output repair.
-Human assessment remains authoritative; AI workflows are experimental and
-separate. The offline fidelity ledger reports graded components, pending
-reasons, source hashes and FD1 without substituting runtime scores or claiming
-fresh-epoch convergence. Request totals and incomplete role attribution are
-reported separately. Freeze/build/verify require a real non-empty price
-schedule; synthetic profile controls prove reachability only. See
+The selected workflow is authoritative: an AI receipt needs no human review or
+signoff, while `both` keeps the two receipts separate and never merges them.
+Machine evidence controls, not a person, decide what a claim may support; a
+missing or capped dimension stays unavailable or partial. The offline fidelity
+ledger reports graded components, pending reasons, source hashes and FD1 without
+substituting runtime scores or claiming fresh-epoch convergence; there the
+frozen selection's authority supplies the graded vector, so an `ai` run consumes
+its validated AI receipt without a human workflow, `human`/`both` keep human
+authority, `both` reports the parallel AI workflow separately without pooling,
+and a missing selected-mode receipt is an evidence gap rather than a synthesized
+score. Request totals and
+incomplete role attribution are reported separately. Freeze/build/verify require
+a real non-empty price schedule; synthetic profile controls prove reachability
+only. See
 [offline reporting correction](thesis_scoring.md#offline-reporting-correction-2026-10-31).
+
+The non-execution preparation includes a 27-entry owner-review ranking draft,
+an exact 108-coordinate study declaration and offline readiness/audit tools.
+Coverage is not approval or freeze readiness. The primary selection-only study
+can be built and verified offline; its execution remains unsupported by this
+preparation path. The existing two-block study remains separate. See the
+[active handoff](../active/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md).
+
+Offline analysis retains all planned repeat identities and explicit missing,
+failed and pending outcomes. `outcome_spread` reports descriptive sample variance
+and inclusive-quartile IQR; `model_contrasts` keeps model, condition, fixture,
+epoch and grader strata separate and labels rank-sum comparisons exploratory.
+The existing matched condition analysis remains paired. Empty-epoch and synthetic
+fixtures validate mechanics only; they are not a D12 recalibration on new data.
+Oracle preregistration drafts pin protocol sources but do not authenticate an
+approver or manufacture independent attestations.
 
 Method selection uses a preregistered hash-pinned evaluator profile for the
 last selection snapshot: 0 outside surface, 1 known-false prerequisites, 2 eligible
@@ -1117,10 +1146,12 @@ confirmed. Full Access Control and Brute Force require operator fixture oracles,
 identity/object/session bindings, source hashes and independent controls;
 visibility/login markers alone cap at 2. Candidate tier 4 needs independently
 verified downstream use. Exploit 4 separately requires confirmed source-method
-material and that same proved use, never the candidate ceiling alone. Passive
-weak chain evidence earns 1 without opening routes; fully proved prerequisites
-without destination confirmation earn 2; one verified dependency earns 3 and
-two causally linked dependencies earn 4. Missing required logs stay pending.
+material and that same proved use, never the candidate ceiling alone. `Schain`
+is run-scope under Tabel 3.10; the payload/output final-method rules are not
+applied to a connected chain. Passive weak evidence earns 1 without opening
+routes; proved source material plus every proved route prerequisite without
+destination confirmation earns 2; one verified dependency earns 3 and two
+causally linked dependencies earn 4. Missing required logs stay pending.
 Final-method denominators never import source-method candidates, and target
 stops are preserved. Live full-credit reachability remains unverified.
 
@@ -1175,7 +1206,11 @@ cannot establish an unauthorized permission decision.
 The evaluator is the configured `openai_compatible/deepseek-v4.1-flash` model in
 a fresh, separate judging role, with two attempts, 1,024 output tokens and a
 60-second timeout. This is not an independent-model comparison. Failed judge
-responses stay pending; a human result cannot fill an AI receipt. Corrections
+responses stay pending; a human result cannot fill an AI receipt. The AI
+receipt is final only after its decisions cite candidate evidence, stay within
+the frozen proof ceilings and match the frozen evaluator identity; the queue or
+runtime `scoring.v2` vector before that is a preliminary vector, not a thesis
+score. Corrections
 are append-only and receipts retain the source hash, candidate citations,
 reviewer identity, versions, denominator, component vector and formula.
 CLI and TUI use one validated source-local review ledger. Repeated evaluation
@@ -1543,7 +1578,7 @@ finite controls do not establish a universal zero false-positive rate.
 
 Validation also retains a `candidate_budget_exceeded` receipt for otherwise
 valid candidates excluded by profile ranking. They remain unexecuted with null
-manual scores; budget exclusion does not establish poor generated-input quality.
+scores; budget exclusion does not establish poor generated-input quality.
 
 The current access-control agents authenticate as admin and supply no independent
 permission control. Their content-only results are capped at score 2 and recorded
@@ -1786,7 +1821,7 @@ Projection coverage separates planned, represented, completed, failed, interrupt
 
 ## 17. Chapter 3 experiment flow revision (2026-10-28)
 
-The thesis methodology is the [reconciled Chapter 3](../docx/bab-3-reconciled-2026-10-29.docx), subject to the human-evaluator decision above. The earlier [derived Markdown](../completed/CHAPTER_3_REVISED_2026-10-28.md) contains superseded research-design proposals. Rubric Tables 3.5–3.11 follow [`thesis_scoring.md`](thesis_scoring.md#report-rubric-and-illustrative-conditions).
+The thesis methodology is the [reconciled Chapter 3](../docx/bab-3-reconciled-2026-10-29.docx), subject to the owner scoring decision above (AI scorer selected, with human and dual modes as optional alternatives that never gate an AI receipt). The earlier [derived Markdown](../completed/CHAPTER_3_REVISED_2026-10-28.md) contains superseded research-design proposals. Rubric Tables 3.5–3.11 follow [`thesis_scoring.md`](thesis_scoring.md#report-rubric-and-illustrative-conditions).
 
 The primary study uses `target_method=None` with `linear_hybrid` and `akg_guided_hybrid`, both using `hybrid`; only model-origin choices support model-selection claims. Forced methods are diagnostic and are not a second thesis research block. Each coordinate has three repeats; the research configuration, reference profile, evidence sources, fixture, and protocol are frozen before execution. Historical runs and the separate frozen scoring matrix are not relabeled as the main study.
 

@@ -31,4 +31,4 @@ Recovered transport retries do **not** reduce the baseline output grades. FD1 is
 **110 focused offline checks passed:** [JUnit](../../results/validation/autoresearch-2026-10-31/focused-junit.xml).
 The [saved-artifact smoke](../../results/validation/autoresearch-2026-10-31/offline-1814d68ac6/) blocked HTTP/provider access, preserved source hashes, generated the ledger/projection, rendered reports at 60/80 columns, and checked diagnostic counts with a synthetic 2/5 fixture—not a full historical audit.
 
-No full suite, offline/live E2E, target replay or provider-backed epoch was run. No improved-harness or full-convergence claim is made. The owner-directed 108-run epoch is authorized only after the current discussion and technical/scope gates; it has not been launched.
+No full suite, offline/live E2E, target replay or provider-backed epoch was run for this completed slice. No improved-harness or full-convergence claim is made. **Later owner clarification (2026-10-31): matrix execution is on hold**, including after readiness gates pass; a later launch instruction is required. Follow the active handoff for subsequent verification and preparation.

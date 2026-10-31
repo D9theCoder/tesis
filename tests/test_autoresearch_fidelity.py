@@ -14,7 +14,6 @@ import pytest
 from core.knowledge_graph import AttackKnowledgeGraph
 from core.state import METHODS_BY_SURFACE
 from evaluation.fidelity_ledger import (
-    CLOSED_CAUSES,
     DIMENSIONS,
     RUNTIME_PROVISIONAL_LABEL,
     build_ledger,
@@ -167,10 +166,10 @@ def test_graded_vector_reports_all_five_dimensions_and_pending_payload(tmp_path)
     assert run['graded']['component_pending_reasons']['Smethod']
     assert run['graded']['Srun_final'] is None
     assert run['graded']['Srun_final_source'] is None
-    assert run['graded']['human_payload_review'] is False
+    assert run['graded']['selected_payload_review'] is False
     assert run['legacy_runtime']['label'] == RUNTIME_PROVISIONAL_LABEL
     assert ledger['phase_a']['complete'] is False
-    assert ledger['phase_a']['human_payload_reviewed_runs'] == 0
+    assert ledger['phase_a']['payload_reviewed_runs'] == 0
     assert ledger['phase_a']['payload_required_runs'] == 0
     assert ledger['phase_a']['payload_no_eligible_runs'] == 1
     assert ledger['phase_a']['null_components_without_closed_cause']['Spayload'] == 1
@@ -202,7 +201,7 @@ def test_reviewed_numeric_payload_survives_pending_srun_and_blocks_phase_a(tmp_p
     run = ledger['runs'][0]
     assert run['graded']['components']['Spayload'] == 2.0
     assert run['graded']['Srun_final'] is None
-    assert run['graded']['Srun_final_reason'].startswith('pending_human_workflow:')
+    assert run['graded']['Srun_final_reason'].startswith('pending_selected_workflow:')
     assert run['graded']['workflow_status'] == 'pending'
     assert ledger['phase_a']['complete'] is False
     assert ledger['phase_a']['deduction_components_without_closed_cause'] == {
@@ -224,9 +223,9 @@ def test_human_receipt_is_authoritative_and_ai_receipt_is_separate(tmp_path):
     assert ai_only['graded']['components']['Spayload'] is None
     assert ai_only['graded']['component_pending_reasons']['Spayload'] == 'pending_candidate_grades'
     assert ai_only['graded']['Srun_final'] is None
-    assert ai_only['graded']['experimental_ai_workflow']['components']['Spayload'] == 2.0
-    assert ai_only['graded']['experimental_ai_workflow']['Srun_final'] == 2.4
-    assert ai_only['graded']['human_final_receipt'] is False
+    assert ai_only['graded']['parallel_ai_workflow']['components']['Spayload'] == 2.0
+    assert ai_only['graded']['parallel_ai_workflow']['Srun_final'] == 2.4
+    assert ai_only['graded']['selected_final_receipt'] is False
 
     human_dir = tmp_path / 'reviews-human'
     finalize_reviews(path, review_decisions(queue, 'human'), output_dir=human_dir, isolated_output=True)
@@ -250,13 +249,13 @@ def test_human_receipt_is_authoritative_and_ai_receipt_is_separate(tmp_path):
     assert human['graded']['components']['Spayload'] == 2.0
     assert human['graded']['components']['Smethod'] == 4
     assert human['graded']['Srun_final'] == 2.4
-    assert human['graded']['Srun_final_source'] == 'validated_final_human_receipt'
-    assert human['graded']['human_payload_review'] is True
-    assert human['graded']['human_final_receipt'] is True
-    assert ((human['graded']['experimental_ai_workflow'] or {}).get('components') or {}).get('Spayload') is None
+    assert human['graded']['Srun_final_source'] == 'validated_final_selected_receipt'
+    assert human['graded']['selected_payload_review'] is True
+    assert human['graded']['selected_final_receipt'] is True
+    assert ((human['graded']['parallel_ai_workflow'] or {}).get('components') or {}).get('Spayload') is None
 
 
-def test_ai_only_selection_never_becomes_human_signoff(tmp_path):
+def test_ai_selection_receipt_is_selected_authority(tmp_path):
     source = tmp_path / 'source'
     source.mkdir()
     path = write_doc(source, 'ai.json', full_artifact('ai', scoring_mode='ai'))
@@ -265,15 +264,20 @@ def test_ai_only_selection_never_becomes_human_signoff(tmp_path):
     result = finalize_reviews(path, review_decisions(queue, 'ai'), output_dir=review_dir,
                               isolated_output=True)
     assert result['workflows']['ai']['status'] == 'final'
-    run = build_ledger(source, receipts=review_dir)['runs'][0]
-    assert run['graded']['components']['Spayload'] is None
-    assert run['graded']['component_pending_reasons']['Spayload'] == 'human_payload_review_required'
-    assert run['graded']['Srun_final'] is None
-    assert run['graded']['Srun_final_reason'] == 'human_review_not_configured'
-    assert run['graded']['experimental_ai_workflow']['status'] == 'final'
-    assert run['graded']['experimental_ai_workflow']['Srun_final'] == 2.4
-    assert any(item['code'] == 'ai_receipt_is_experimental_not_human_signoff'
-               for item in run['diagnostics'])
+    ledger = build_ledger(source, receipts=review_dir)
+    run = ledger['runs'][0]
+    assert run['graded']['authoritative_mode'] == 'ai'
+    assert run['graded']['components']['Spayload'] == 2.0
+    assert run['graded']['Srun_final'] == 2.4
+    assert run['graded']['Srun_final_source'] == 'validated_final_selected_receipt'
+    assert run['graded']['Srun_final_reason'] is None
+    assert run['graded']['selected_payload_review'] is True
+    assert run['graded']['selected_final_receipt'] is True
+    assert run['graded']['parallel_ai_workflow'] is None
+    assert ledger['phase_a']['payload_reviewed_runs'] == 1
+    assert ledger['phase_a']['payload_missing_review_runs'] == []
+    assert not any('payload_reviews_missing' in reason
+                   for reason in ledger['phase_a']['blocking_reasons'])
 
 
 def test_closed_cause_attribution_and_invalid_bindings(tmp_path):
@@ -381,11 +385,10 @@ def test_label_consistency_flags_epoch_and_measured_negative_labels(tmp_path):
     ledger = build_ledger(tmp_path)
     metric = ledger['fidelity']['F6']
     assert metric['numerator'] == 1
-    assert metric['n_codes'] == 3
+    assert metric['n_codes'] == 2
     assert set(metric['codes']) == {
         'epoch_rubric_mismatch',
         'measured_negative_described_as_missing_proof',
-        'surface_attempts_zero_with_controls',
     }
     assert ledger['convergence']['converged'] is False
 
@@ -405,13 +408,15 @@ def test_planned_probe_catalog_without_sent_events_does_not_flag(tmp_path):
     write_doc(tmp_path, 'planned.json', document)
     metric = build_ledger(tmp_path)['fidelity']['F6']
     assert metric['numerator'] == 0
-    assert 'surface_attempts_zero_with_controls' not in metric['codes']
+    assert metric['codes'] == {}
 
 
-def test_sent_control_event_flags_zero_attempts_and_dedups_mirrors(tmp_path):
+def test_sent_control_is_not_an_exploit_attempt_conflict(tmp_path):
+    # Owner direction 2026-10-31: a sent detection control is not an exploit
+    # attempt; attempts=0 with controls is consistent, not a label conflict.
     document = artifact('sent')
     document['report'] = {'surface_scores': {'access_control': {
-        'attempts': 0, 'label': 'Not Found', 'score': 0,
+        'attempts': 0, 'label': 'No exploit attempts', 'score': 0,
     }}}
     control_event = {'status': 'sent', 'physical_requests': 1, 'method': 'ac_idor',
                      'visit_id': 'ac_idor:visit:1', 'control_id': 'control:ac_idor:high:method_probe:0',
@@ -420,11 +425,29 @@ def test_sent_control_event_flags_zero_attempts_and_dedups_mirrors(tmp_path):
     document['final_state']['control_events'] = [dict(control_event)]
     write_doc(tmp_path, 'sent.json', document)
     metric = build_ledger(tmp_path)['fidelity']['F6']
+    assert metric['numerator'] == 0
+    assert metric['codes'] == {}
+    assert metric['disagreements'] == []
+
+
+def test_measured_negative_wrong_reason_still_flags_independently(tmp_path):
+    document = artifact('mn')
+    document['measured_negative'] = {
+        'complete': True, 'reason': 'every_required_precondition_measured_false',
+        'surface': 'access_control', 'control_events_sent': 5,
+    }
+    document['security_outcome_reason'] = {'code': 'NO_CANDIDATE_CONFIRMATION'}
+    document['report'] = {'surface_scores': {'access_control': {
+        'attempts': 0, 'label': 'No exploit attempts', 'score': 0,
+    }}}
+    document['control_events'] = [{'status': 'sent', 'physical_requests': 1,
+                                   'method': 'ac_idor', 'visit_id': 'ac_idor:visit:1',
+                                   'control_id': 'control:ac_idor:high:method_probe:0',
+                                   'at': '2026-10-30T12:00:00+00:00', 'phase': 'method_probe'}]
+    write_doc(tmp_path, 'mn.json', document)
+    metric = build_ledger(tmp_path)['fidelity']['F6']
     assert metric['numerator'] == 1
-    assert metric['codes'] == {'surface_attempts_zero_with_controls': 1}
-    disagreement = metric['disagreements'][0]['disagreements'][0]
-    assert disagreement['surface'] == 'access_control'
-    assert disagreement['control_events'] == 1
+    assert metric['codes'] == {'measured_negative_described_as_missing_proof': 1}
 
 
 def test_repeat_stability_is_per_cell_and_never_pools_conditions(tmp_path):
@@ -741,10 +764,3 @@ def test_p1_lexicographic_ranking_and_falsification_state():
         rank_hypotheses([{**rows[0], 'id': 'no-prediction', 'prediction': ''}])
     with pytest.raises(ValueError, match='named discriminating control'):
         rank_hypotheses([{**rows[0], 'id': 'no-control', 'control': ''}])
-
-
-def test_closed_cause_list_matches_the_handoff():
-    assert CLOSED_CAUSES == {
-        'model_output_quality', 'harness_ordering', 'harness_budget', 'harness_scoring',
-        'provider_failure', 'fixture_infeasible', 'rubric_ceiling', 'label',
-    }

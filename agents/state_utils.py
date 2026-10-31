@@ -193,7 +193,13 @@ def method_selection_update(state: dict, method: str, source: str, *, preconditi
                             candidate_set_source: str | None = None,
                             decision_origin: str | None = None,
                             first_choice: bool | None = None) -> dict:
-    """Grade every selection at its boundary, before execution changes viability."""
+    """Grade every selection at its boundary, before execution changes viability.
+
+    ``preconditions`` are the selected method's own required precondition keys;
+    omitted (``None``) means ``precondition_keys_for_method(method)``.  AKG edge
+    prerequisites that merely authorized the route belong on the route record,
+    never here: they are not the destination method's METHOD_PRECONDITIONS.
+    """
     from foundation.preconditions import (
         derived_selector_observations,
         precondition_keys_for_method,
@@ -211,7 +217,8 @@ def method_selection_update(state: dict, method: str, source: str, *, preconditi
     for s, methods in METHODS_BY_SURFACE.items():
         if any(f"{m}_confirmed" in known for m in methods):
             known.add(f"{s}_confirmed")
-    requirements = list(preconditions or precondition_keys_for_method(method))
+    requirements = (list(precondition_keys_for_method(method)) if preconditions is None
+                    else list(preconditions))
     all_proved = all(status.get(key) == "true" for key in requirements) if requirements else True
     is_viable = method in viable and all_proved
     grade = 3 if is_viable else 1

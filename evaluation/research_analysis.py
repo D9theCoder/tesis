@@ -24,8 +24,10 @@ import argparse
 import json
 import math
 import random
+import statistics
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
+from itertools import combinations
 from pathlib import Path
 from statistics import median
 from typing import Any
@@ -69,6 +71,25 @@ RECEIPT_AXES = ("scoring_mode", "rubric_version", "scoring_rule_sha256", "metric
 OBSERVATION_STATES = (
     "final", "pending_review", "unassessable", "error", "interrupted", "missing",
     "epoch_mismatch", "identity_incomplete", "ambiguous_match",
+)
+
+# One descriptive row per planned model × surface × level × method/condition
+# coordinate. Repeats are listed individually and are never collapsed into a
+# best-of-N value.
+SPREAD_AXES = (
+    "block", "policy_epoch_id", "fixture_id", "protocol_version",
+    "candidate_budget", "provider", "model", "surface", "security_level",
+    "experiment_condition", "target_method", "payload_mode",
+    "guardrail_retry_enabled", "guardrail_handling",
+)
+
+# Model contrasts compare separate executions, so provider/model are excluded
+# from the stratum key. Provider and model are not pairing axes: repeat indices
+# are design-aligned only and never form a matched pair.
+MODEL_STRATUM_AXES = (
+    "block", "policy_epoch_id", "fixture_id", "protocol_version",
+    "candidate_budget", "surface", "security_level", "target_method",
+    "payload_mode", "guardrail_retry_enabled", "guardrail_handling",
 )
 
 
@@ -302,8 +323,13 @@ def _holm(p_values: list[float | None]) -> list[float | None]:
     return adjusted
 
 
-def _mann_whitney_exploratory(left: list[float], right: list[float]) -> dict[str, Any]:
-    """Exploratory rank-sum comparison; paired data does not establish independence."""
+def _mann_whitney_exploratory(
+    left: list[float],
+    right: list[float],
+    *,
+    reason: str = "paired coordinates survive; rank-sum is supplementary only",
+) -> dict[str, Any]:
+    """Exploratory rank-sum comparison; independence is not established."""
     if not left or not right:
         return {"status": "unavailable", "reason": "empty_group", "independent": False}
     combined = [(value, 0) for value in left] + [(value, 1) for value in right]
@@ -316,10 +342,283 @@ def _mann_whitney_exploratory(left: list[float], right: list[float]) -> dict[str
     p_value = min(1.0, math.erfc(abs((u_value - mean - 0.5) / math.sqrt(variance)) / math.sqrt(2))) if variance else None
     return {
         "status": "exploratory", "independent": False,
-        "reason": "paired coordinates survive; rank-sum is supplementary only",
+        "reason": reason,
         "n_left": n1, "n_right": n2, "u": u_value, "p_value": p_value,
         "effect_size": round(2 * u_value / (n1 * n2) - 1, 4) if n1 and n2 else None,
         "effect_size_name": "rank_biserial_exploratory",
+    }
+
+
+def _unavailable_distribution(reason: str, *, n: int = 0) -> dict[str, Any]:
+    """Return an explicit unavailable descriptive summary, never a zero fill."""
+    return {
+        "n": n, "mean": None, "median": None, "minimum": None, "maximum": None,
+        "range": None, "stdev": None, "variance": None, "iqr": None,
+        "all_equal": None,
+        "spread_available": False, "spread_reason": reason,
+        "availability": False, "unavailable_reason": reason,
+        "method": "descriptive",
+    }
+
+
+def _outcome_distribution(values: Iterable[float]) -> dict[str, Any]:
+    """Describe one outcome distribution across independently planned repeats.
+
+    Spread statistics use the observed final values only. A single final repeat
+    still has an observed value but no sample variance; that distinction is
+    reported instead of materialising a zero.
+    """
+    ordered = sorted(float(value) for value in values)
+    n = len(ordered)
+    if n == 0:
+        return _unavailable_distribution("no_final_receipts")
+    summary: dict[str, Any] = {
+        "n": n,
+        "mean": round(statistics.mean(ordered), 4),
+        "median": round(median(ordered), 4),
+        "minimum": round(ordered[0], 4),
+        "maximum": round(ordered[-1], 4),
+        "range": round(ordered[-1] - ordered[0], 4),
+        "stdev": None,
+        "variance": None,
+        "iqr": None,
+        "all_equal": ordered[0] == ordered[-1] if n >= 2 else None,
+        "spread_available": n >= 2,
+        "spread_reason": None if n >= 2 else "fewer_than_two_final_repeats",
+        "availability": True,
+        "unavailable_reason": None,
+        "method": "descriptive; sample variance/stdev (n-1), inclusive-quartile IQR",
+    }
+    if n >= 2:
+        quartiles = statistics.quantiles(ordered, n=4, method="inclusive")
+        summary["stdev"] = round(statistics.stdev(ordered), 4)
+        summary["variance"] = round(statistics.variance(ordered), 4)
+        summary["iqr"] = round(quartiles[2] - quartiles[0], 4)
+    return summary
+
+
+def _receipt_values(document: Mapping[str, Any]) -> dict[str, float | None]:
+    """Read the six graded outcomes from one final receipt without imputation."""
+    raw_components = document.get("components")
+    components: Mapping[str, Any] = raw_components if isinstance(raw_components, Mapping) else {}
+    values: dict[str, float | None] = {}
+    for name in COMPONENT_NAMES:
+        raw = document.get("Srun_final") if name == "Srun_final" else components.get(name)
+        values[name] = (
+            float(raw)
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool) and math.isfinite(float(raw))
+            else None
+        )
+    return values
+
+
+def _cell_identity(coordinate: Mapping[str, Any]) -> dict[str, Any]:
+    return {name: coordinate.get(name) for name in SPREAD_AXES}
+
+
+def _mode_spread(mode: str, planned_pairs: list[tuple[Mapping[str, Any], Mapping[str, Any]]]) -> dict[str, Any]:
+    """Describe one grader mode within one planned coordinate cell."""
+    repeat_rows: list[dict[str, Any]] = []
+    documents: list[Mapping[str, Any]] = []
+    for coordinate, observation in planned_pairs:
+        repeat_index = coordinate.get("repeat_index")
+        state = str(observation.get("state"))
+        execution_id = (observation.get("identity") or {}).get("execution_id")
+        if state != "final":
+            repeat_rows.append({
+                "repeat_index": repeat_index, "state": state,
+                "reason": observation.get("reason") or state,
+                "execution_id": execution_id, "values": None,
+                "ready": observation.get("ready"),
+                "readiness_reason": observation.get("readiness_reason"),
+            })
+            continue
+        binding = (observation.get("documents") or {}).get(mode)
+        if binding is None:
+            repeat_rows.append({
+                "repeat_index": repeat_index, "state": "final",
+                "reason": "grader_mode_missing", "execution_id": execution_id,
+                "values": None,
+                "ready": observation.get("ready"),
+                "readiness_reason": observation.get("readiness_reason"),
+            })
+            continue
+        _path, document = binding
+        values = _receipt_values(document)
+        repeat_rows.append({
+            "repeat_index": repeat_index, "state": "final", "reason": None,
+            "execution_id": execution_id, "values": values,
+            "missing_components": [name for name, value in values.items() if value is None],
+            "ready": observation.get("ready"),
+            "readiness_reason": observation.get("readiness_reason"),
+        })
+        documents.append(document)
+
+    compatibility_keys = sorted({pair_compatibility_key(document) for document in documents})
+    compatible = len(compatibility_keys) <= 1
+    mismatches: list[str] = []
+    if not compatible:
+        reference = documents[0]
+        mismatches = sorted({
+            component
+            for document in documents[1:]
+            for component in pair_compatibility_mismatches(reference, document)
+        })
+    metrics: dict[str, dict[str, Any]] = {}
+    for name in COMPONENT_NAMES:
+        values = [
+            row["values"][name]
+            for row in repeat_rows
+            if isinstance(row.get("values"), Mapping) and row["values"].get(name) is not None
+        ]
+        metrics[name] = (
+            _outcome_distribution(values) if compatible and values
+            else _unavailable_distribution(
+                "receipt_compatibility_mismatch" if not compatible
+                else "no_final_receipts" if not documents
+                else "component_unavailable",
+                n=len(values),
+            )
+        )
+    return {
+        "scoring_mode": mode,
+        "status": "final" if compatible else "incompatible",
+        "reason": None if compatible else "receipt_compatibility_mismatch",
+        "n_planned": len(planned_pairs),
+        "n_final": len(documents),
+        "n_ready_final": sum(
+            1 for row in repeat_rows
+            if row["state"] == "final" and row.get("reason") is None
+            and row.get("ready") is True
+        ),
+        "n_with_values": sum(
+            1 for row in repeat_rows
+            if isinstance(row.get("values"), Mapping)
+            and any(value is not None for value in row["values"].values())
+        ),
+        "compatibility_keys": compatibility_keys,
+        "receipt_compatibility_mismatches": mismatches,
+        "metrics": metrics,
+        "repeats": repeat_rows,
+    }
+
+
+def _spread_summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Count assessed and degenerate cell/mode rows per graded outcome."""
+    materialized = list(rows)
+    by_metric: dict[str, dict[str, Any]] = {}
+    for name in COMPONENT_NAMES:
+        by_metric[name] = {
+            "n_cells_planned": len(materialized), "n_cell_modes": 0,
+            "n_zero_variance": 0, "n_nonzero_variance": 0,
+            "n_spread_unavailable": 0, "unavailable_reasons": Counter(),
+        }
+    for row in materialized:
+        for mode_row in (row.get("modes") or {}).values():
+            for name, distribution in (mode_row.get("metrics") or {}).items():
+                bucket = by_metric.setdefault(name, {
+                    "n_cells_planned": len(materialized), "n_cell_modes": 0,
+                    "n_zero_variance": 0, "n_nonzero_variance": 0,
+                    "n_spread_unavailable": 0, "unavailable_reasons": Counter(),
+                })
+                bucket["n_cell_modes"] += 1
+                if distribution.get("spread_available"):
+                    if distribution.get("all_equal") is True:
+                        bucket["n_zero_variance"] += 1
+                    else:
+                        bucket["n_nonzero_variance"] += 1
+                else:
+                    bucket["n_spread_unavailable"] += 1
+                    reason = str(distribution.get("spread_reason") or "unknown")
+                    bucket["unavailable_reasons"][reason] += 1
+    return {
+        "definition": (
+            "Zero-variance cells are rubric-saturation or task-difficulty findings; "
+            "they are not repaired by dropping repeats or changing caps."
+        ),
+        "n_cells_planned": len(materialized),
+        "n_cells_without_final": sum(
+            1 for row in materialized if row.get("n_final_repeats") == 0
+        ),
+        "n_cells_without_modes": sum(1 for row in materialized if not row.get("modes")),
+        "by_metric": {
+            name: {**bucket, "unavailable_reasons": dict(sorted(bucket["unavailable_reasons"].items()))}
+            for name, bucket in by_metric.items()
+        },
+    }
+
+
+def _outcome_spread(
+    planned: list[dict[str, Any]],
+    observations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Report all planned cells and repeats with descriptive outcome spread."""
+    cells: dict[tuple[str, ...], dict[str, Any]] = {}
+    for index, coordinate in enumerate(planned):
+        identity = _cell_identity(coordinate)
+        key = tuple(repr(identity[name]) for name in SPREAD_AXES)
+        cells.setdefault(key, {"coordinate": identity, "pairs": []})["pairs"].append(
+            (coordinate, observations[index])
+        )
+    rows: list[dict[str, Any]] = []
+    for key in sorted(cells):
+        cell = cells[key]
+        planned_pairs = sorted(
+            cell["pairs"], key=lambda pair: str(pair[0].get("repeat_index"))
+        )
+        repeat_indices = [coordinate.get("repeat_index") for coordinate, _ in planned_pairs]
+        duplicate_repeat = len({str(index) for index in repeat_indices}) != len(repeat_indices)
+        observation_states = Counter(str(observation.get("state")) for _, observation in planned_pairs)
+        unavailable_reasons = Counter(
+            str(observation.get("reason") or observation.get("state"))
+            for _, observation in planned_pairs
+            if observation.get("state") != "final"
+        )
+        final_repeats = observation_states.get("final", 0)
+        ready_final_repeats = sum(
+            1 for _, observation in planned_pairs
+            if observation.get("state") == "final" and observation.get("ready") is True
+        )
+        modes = sorted({
+            str(mode)
+            for _, observation in planned_pairs
+            for mode in (observation.get("documents") or {})
+        })
+        row: dict[str, Any] = {
+            "coordinate": cell["coordinate"],
+            "planned_repeats": len(planned_pairs),
+            "planned_repeat_indices": repeat_indices,
+            "n_final_repeats": final_repeats,
+            "n_ready_final_repeats": ready_final_repeats,
+            "n_unavailable_repeats": len(planned_pairs) - final_repeats,
+            "repeat_coverage": (
+                "complete" if final_repeats == len(planned_pairs)
+                else "partial" if final_repeats else "none"
+            ),
+            "observation_states": dict(sorted(observation_states.items())),
+            "unavailable_reasons": dict(sorted(unavailable_reasons.items())),
+            "status": "incompatible" if duplicate_repeat else "assessed",
+            "reason": "duplicate_repeat_index" if duplicate_repeat else (
+                None if modes else "no_final_receipts"
+            ),
+            "modes": {},
+        }
+        if not duplicate_repeat:
+            for mode in modes:
+                row["modes"][mode] = _mode_spread(mode, planned_pairs)
+        rows.append(row)
+    return {
+        "definition": (
+            "One row per planned frozen-cell identity (block, policy epoch, fixture, "
+            "protocol, budget, provider, model, surface, security level, condition, "
+            "method, payload mode, guardrail). Every planned repeat index is listed; "
+            "final receipts are distributed per grader mode; missing, failed, pending, "
+            "and unavailable repeats remain explicit and are never zero-filled."
+        ),
+        "repeat_unit": "one independently planned repeat index",
+        "spread_statistic": "sample variance/stdev across observed final repeats; descriptive only",
+        "cells": rows,
+        "summary": _spread_summary(rows),
     }
 
 
@@ -503,6 +802,313 @@ def _research_metric_summary(documents: Iterable[Mapping[str, Any]]) -> dict[str
     return aggregate_research_metrics(summaries)
 
 
+MODEL_CONTRAST_REASON = (
+    "model executions are separate runs; repeat indices are design-aligned only, "
+    "so this is an exploratory rank-sum, not a matched-pair test"
+)
+
+
+def _coverage(n_final: int, n_planned: int) -> str:
+    if n_final >= n_planned and n_planned:
+        return "complete"
+    return "partial" if n_final else "none"
+
+
+def _model_stratum(coordinate: Mapping[str, Any]) -> dict[str, Any]:
+    return {name: coordinate.get(name) for name in MODEL_STRATUM_AXES}
+
+
+def _model_stratum_key(coordinate: Mapping[str, Any]) -> tuple[str, ...]:
+    stratum = _model_stratum(coordinate)
+    return tuple(repr(stratum[name]) for name in MODEL_STRATUM_AXES) + (
+        repr(coordinate.get("experiment_condition")),
+    )
+
+
+def _side_compatibility_problem(
+    documents: list[Mapping[str, Any]], constraints: Mapping[str, Any]
+) -> str | None:
+    """Check that repeats on one side of a model contrast are comparable."""
+    if len(documents) < 2:
+        return None
+    if len({pair_compatibility_key(document) for document in documents}) > 1:
+        return "receipt_compatibility_mismatch"
+    reference = documents[0]
+    for document in documents[1:]:
+        problem = _receipt_common_problem(reference, document, constraints)
+        if problem:
+            return problem
+    return None
+
+
+def _model_contrast_row(
+    model_a: tuple[str, str],
+    model_b: tuple[str, str],
+    key: tuple[str, ...],
+    stratum: Mapping[str, Any],
+    mode: str | None,
+    final_documents: Mapping[tuple[tuple[str, str], tuple[str, ...], str], list[tuple[Any, Mapping[str, Any]]]],
+    unready_documents: Mapping[tuple[tuple[str, str], tuple[str, ...], str], list[tuple[Any, Mapping[str, Any]]]],
+    observation_states: Mapping[tuple[tuple[str, str], tuple[str, ...]], Counter[str]],
+    planned_counts: Mapping[tuple[tuple[str, str], tuple[str, ...]], int],
+    modes_by_model_key: Mapping[tuple[tuple[str, str], tuple[str, ...]], set[str]],
+    unready_modes_by_model_key: Mapping[tuple[tuple[str, str], tuple[str, ...]], set[str]],
+    constraints: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build one model-pair contrast row; never pair or pool silently."""
+    left = list(final_documents.get((model_a, key, mode), [])) if mode is not None else []
+    right = list(final_documents.get((model_b, key, mode), [])) if mode is not None else []
+    left_unready = list(unready_documents.get((model_a, key, mode), [])) if mode is not None else []
+    right_unready = list(unready_documents.get((model_b, key, mode), [])) if mode is not None else []
+    row: dict[str, Any] = {
+        "model_a": {"provider": model_a[0], "model": model_a[1]},
+        "model_b": {"provider": model_b[0], "model": model_b[1]},
+        "coordinate": dict(stratum["coordinate"]),
+        "scoring_mode": mode,
+        "direction": f"{model_a[0]}/{model_a[1]} minus {model_b[0]}/{model_b[1]}",
+        "paired": False,
+        "pairing": "model/provider are not pairing axes; repeat indices are design-aligned only",
+        "status": "unsupported",
+        "reason": None,
+        "n_planned_model_a": planned_counts.get((model_a, key), 0),
+        "n_planned_model_b": planned_counts.get((model_b, key), 0),
+        "n_final_model_a": len(left),
+        "n_final_model_b": len(right),
+        "n_unready_final_model_a": len(left_unready),
+        "n_unready_final_model_b": len(right_unready),
+        "n_observed_final_model_a": len(left) + len(left_unready),
+        "n_observed_final_model_b": len(right) + len(right_unready),
+        "coverage_model_a": _coverage(len(left), planned_counts.get((model_a, key), 0)),
+        "coverage_model_b": _coverage(len(right), planned_counts.get((model_b, key), 0)),
+        "observed_coverage_model_a": _coverage(
+            len(left) + len(left_unready), planned_counts.get((model_a, key), 0)
+        ),
+        "observed_coverage_model_b": _coverage(
+            len(right) + len(right_unready), planned_counts.get((model_b, key), 0)
+        ),
+        "observation_states_model_a": dict(sorted(observation_states.get((model_a, key), Counter()).items())),
+        "observation_states_model_b": dict(sorted(observation_states.get((model_b, key), Counter()).items())),
+        "metrics": {},
+    }
+    row["partial"] = (
+        row["coverage_model_a"] != "complete"
+        or row["coverage_model_b"] != "complete"
+        or row["n_unready_final_model_a"] > 0
+        or row["n_unready_final_model_b"] > 0
+    )
+    if mode is None:
+        row["reason"] = "no_final_receipts"
+        return row
+    left_modes = modes_by_model_key.get((model_a, key), set())
+    right_modes = modes_by_model_key.get((model_b, key), set())
+    left_unready_modes = unready_modes_by_model_key.get((model_a, key), set())
+    right_unready_modes = unready_modes_by_model_key.get((model_b, key), set())
+    if not left and not right:
+        if (left_unready or left_unready_modes) and (right_unready or right_unready_modes):
+            row["reason"] = "both_models_readiness_not_satisfied"
+        elif left_unready or left_unready_modes:
+            row["reason"] = "model_a_readiness_not_satisfied"
+        elif right_unready or right_unready_modes:
+            row["reason"] = "model_b_readiness_not_satisfied"
+        else:
+            row["reason"] = "no_final_receipts"
+        return row
+    if not left:
+        if left_unready or left_unready_modes:
+            row["reason"] = "model_a_readiness_not_satisfied"
+        else:
+            row["reason"] = (
+                "model_a_no_final_receipts" if not left_modes else "model_a_grader_mode_missing"
+            )
+        return row
+    if not right:
+        if right_unready or right_unready_modes:
+            row["reason"] = "model_b_readiness_not_satisfied"
+        else:
+            row["reason"] = (
+                "model_b_no_final_receipts" if not right_modes else "model_b_grader_mode_missing"
+            )
+        return row
+
+    left_documents = [document for _observation, document in left]
+    right_documents = [document for _observation, document in right]
+    left_problem = _side_compatibility_problem(left_documents, constraints)
+    if left_problem:
+        row["reason"] = f"model_a_{left_problem}"
+        return row
+    right_problem = _side_compatibility_problem(right_documents, constraints)
+    if right_problem:
+        row["reason"] = f"model_b_{right_problem}"
+        return row
+    contrast_problem = _receipt_common_problem(
+        left_documents[0], right_documents[0], constraints
+    )
+    if contrast_problem:
+        row["reason"] = f"model_contrast_{contrast_problem}"
+        return row
+
+    left_values = [_receipt_values(document) for document in left_documents]
+    right_values = [_receipt_values(document) for document in right_documents]
+    metrics: dict[str, dict[str, Any]] = {}
+    names = list(COMPONENT_NAMES)
+    tests: list[dict[str, Any]] = []
+    for name in names:
+        left_metric: list[float] = []
+        for values in left_values:
+            metric_value = values.get(name)
+            if metric_value is not None:
+                left_metric.append(metric_value)
+        right_metric: list[float] = []
+        for values in right_values:
+            metric_value = values.get(name)
+            if metric_value is not None:
+                right_metric.append(metric_value)
+        if not left_metric or not right_metric:
+            test: dict[str, Any] = {
+                "status": "unavailable", "reason": "empty_group", "independent": False,
+            }
+        else:
+            test = _mann_whitney_exploratory(
+                left_metric, right_metric, reason=MODEL_CONTRAST_REASON
+            )
+        tests.append(test)
+        metrics[name] = {
+            **test,
+            "model_a": (
+                _outcome_distribution(left_metric) if left_metric
+                else _unavailable_distribution(
+                    "no_final_receipts" if not left_documents else "component_unavailable"
+                )
+            ),
+            "model_b": (
+                _outcome_distribution(right_metric) if right_metric
+                else _unavailable_distribution(
+                    "no_final_receipts" if not right_documents else "component_unavailable"
+                )
+            ),
+        }
+    adjusted = _holm([test.get("p_value") for test in tests])
+    for index, name in enumerate(names):
+        metrics[name]["holm_adjusted_p"] = adjusted[index]
+    row["status"] = "analyzed"
+    row["metrics"] = metrics
+    return row
+
+
+def _model_contrasts(
+    planned: list[dict[str, Any]],
+    observations: list[dict[str, Any]],
+    constraints: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Contrast model pairs per frozen stratum, condition and grader mode."""
+    models: dict[tuple[str, str], dict[str, Any]] = {}
+    planned_counts: Counter[tuple[tuple[str, str], tuple[str, ...]]] = Counter()
+    strata: dict[tuple[str, ...], dict[str, Any]] = {}
+    missing_identity: list[dict[str, Any]] = []
+    for coordinate in planned:
+        provider, model = coordinate.get("provider"), coordinate.get("model")
+        if not provider or not model:
+            missing_identity.append({
+                "coordinate_index": coordinate.get("coordinate_index"),
+                "block": coordinate.get("block"),
+                "reason": "missing_model_identity",
+            })
+            continue
+        model_key = (str(provider), str(model))
+        models.setdefault(model_key, {"provider": provider, "model": model})
+        key = _model_stratum_key(coordinate)
+        strata.setdefault(key, {
+            "coordinate": {
+                **_model_stratum(coordinate),
+                "experiment_condition": coordinate.get("experiment_condition"),
+            },
+        })
+        planned_counts[(model_key, key)] += 1
+
+    final_documents: dict[
+        tuple[tuple[str, str], tuple[str, ...], str], list[tuple[Any, Mapping[str, Any]]]
+    ] = defaultdict(list)
+    unready_documents: dict[
+        tuple[tuple[str, str], tuple[str, ...], str], list[tuple[Any, Mapping[str, Any]]]
+    ] = defaultdict(list)
+    observation_states: dict[tuple[tuple[str, str], tuple[str, ...]], Counter[str]] = defaultdict(Counter)
+    modes_by_model_key: dict[tuple[tuple[str, str], tuple[str, ...]], set[str]] = defaultdict(set)
+    unready_modes_by_model_key: dict[tuple[tuple[str, str], tuple[str, ...]], set[str]] = defaultdict(set)
+    for index, coordinate in enumerate(planned):
+        provider, model = coordinate.get("provider"), coordinate.get("model")
+        if not provider or not model:
+            continue
+        model_key = (str(provider), str(model))
+        key = _model_stratum_key(coordinate)
+        observation = observations[index]
+        observation_states[(model_key, key)][str(observation.get("state"))] += 1
+        if observation.get("state") != "final":
+            continue
+        ready = observation.get("ready") is True
+        for mode, binding in (observation.get("documents") or {}).items():
+            if ready:
+                final_documents[(model_key, key, str(mode))].append((observation, binding[1]))
+                modes_by_model_key[(model_key, key)].add(str(mode))
+            else:
+                unready_documents[(model_key, key, str(mode))].append((observation, binding[1]))
+                unready_modes_by_model_key[(model_key, key)].add(str(mode))
+
+    model_keys = sorted(models)
+    results: list[dict[str, Any]] = []
+    for model_a, model_b in combinations(model_keys, 2):
+        for key in sorted(strata):
+            if not planned_counts.get((model_a, key)) and not planned_counts.get((model_b, key)):
+                continue
+            modes = sorted(
+                modes_by_model_key.get((model_a, key), set())
+                | modes_by_model_key.get((model_b, key), set())
+                | unready_modes_by_model_key.get((model_a, key), set())
+                | unready_modes_by_model_key.get((model_b, key), set())
+            )
+            for mode in (modes or [None]):
+                results.append(_model_contrast_row(
+                    model_a, model_b, key, strata[key], mode, final_documents,
+                    unready_documents, observation_states, planned_counts,
+                    modes_by_model_key, unready_modes_by_model_key, constraints,
+                ))
+    status_counts = Counter(row["status"] for row in results)
+    unsupported_reasons = Counter(
+        str(row.get("reason")) for row in results
+        if row["status"] == "unsupported" and row.get("reason")
+    )
+    summary: dict[str, Any] = {
+        "definition": (
+            "One row per planned model pair × frozen stratum (block, policy epoch, "
+            "fixture, protocol, budget, surface, level, method, payload mode, "
+            "guardrail) × condition × grader mode. All planned repeats contribute "
+            "to the descriptive distributions; no repeat is selected, pooled across "
+            "models as a pair, or zero-filled."
+        ),
+        "test": (
+            "exploratory two-sided Mann-Whitney U rank-sum with rank-biserial effect "
+            "size; normal approximation, p-values are exploratory only"
+        ),
+        "pairing": "not paired; model/provider are not pairing axes",
+        "independent": False,
+        "multiple_comparisons": (
+            "Holm-Bonferroni across the six outcomes within each "
+            "stratum/condition/grader-mode row"
+        ),
+        "models": [models[model_key] for model_key in model_keys],
+        "n_models": len(model_keys),
+        "missing_model_identity": missing_identity,
+        "n_contrast_rows": len(results),
+        "status_counts": {
+            state: status_counts.get(state, 0) for state in ("analyzed", "unsupported")
+        },
+        "unsupported_reasons": dict(sorted(unsupported_reasons.items())),
+        "supported": len(model_keys) >= 2,
+        "reason": None if len(model_keys) >= 2 else "fewer_than_two_planned_models",
+        "results": results,
+    }
+    return summary
+
+
 def analyze_plan(
     plan: Mapping[str, Any],
     *,
@@ -663,6 +1269,8 @@ def analyze_plan(
             })
 
     paired = _paired_analysis(observations, constraints)
+    outcome_spread = _outcome_spread(planned, observations)
+    model_contrasts = _model_contrasts(planned, observations, constraints)
     exclusions = Counter(
         str(observation.get("reason") or observation["state"])
         for observation in observations
@@ -711,6 +1319,8 @@ def analyze_plan(
         "groups": groups,
         "selection_groups": selection_groups,
         "group_exclusions": group_exclusions,
+        "outcome_spread": outcome_spread,
+        "model_contrasts": model_contrasts,
         "paired": paired,
         "score_epoch": {
             "runtime_provisional": "scoring.v2",
@@ -722,13 +1332,15 @@ def analyze_plan(
             "primary": "matched pairs only after readiness and fixture-equivalence evidence",
             "pairing_axes": list(PAIR_AXES),
             "receipt_axes": list(RECEIPT_AXES),
-            "contrast_axes": ["experiment_condition", "derived_method_choice"],
+            "contrast_axes": ["experiment_condition", "derived_method_choice", "model"],
             "direction": DIFFERENCE_DIRECTION,
             "paired_test": "two-sided Wilcoxon signed-rank; exact for n<=25, normal approximation above",
             "effect_size": "matched-pairs rank-biserial correlation",
             "uncertainty": "bootstrap percentile CI of median paired difference",
             "multiple_comparisons": "Holm-Bonferroni within the paired metric family",
             "rank_sum": "Mann-Whitney U reported only as exploratory; independence is not established",
+            "outcome_spread": "descriptive mean/median/sample variance/stdev/inclusive-quartile IQR per planned cell and grader mode; all repeats retained",
+            "model_contrast": "separate exploratory Mann-Whitney U per stratum/condition/grader mode; model/provider are not pairing axes and repeats are not paired across models",
             "no_imputation": "missing, pending, failed, and unassessable coordinates stay counted and null",
         },
     }
@@ -866,10 +1478,10 @@ def _paired_analysis(
     }
 
 
-def _receipt_pair_problem(
-    left: Mapping[str, Any], right: Mapping[str, Any], constraints: Mapping[str, Any]
+def _receipt_identity_problem(
+    left: Mapping[str, Any], right: Mapping[str, Any]
 ) -> str | None:
-    """Return the first reason two receipts are not a compatible matched pair."""
+    """Check rubric, scoring rule, grader mode and metrics epoch equality."""
     for field in ("rubric_version", "scoring_rule_sha256", "scoring_mode"):
         if left.get(field) != right.get(field) or not left.get(field):
             return f"receipt_{field}_mismatch"
@@ -877,11 +1489,53 @@ def _receipt_pair_problem(
     right_metrics_epoch = right.get("metrics_epoch")
     if left_metrics_epoch != right_metrics_epoch or not left_metrics_epoch:
         return "metrics_epoch_mismatch"
+    return None
+
+
+def _receipt_common_problem(
+    left: Mapping[str, Any], right: Mapping[str, Any], constraints: Mapping[str, Any]
+) -> str | None:
+    """Return a receipt-level or frozen-config reason two outcomes cannot compare.
+
+    Model contrasts legitimately differ in provider/model, so this check leaves
+    the scorer-owned pair identity to ``_receipt_pair_problem``. Everything
+    else that the plan freezes (rubric, rule, metrics epoch, fixture, protocol,
+    budget, guardrail, price schedule) must still agree.
+    """
+    problem = _receipt_identity_problem(left, right)
+    if problem:
+        return problem
+    raw_left_policy = left.get("scoring_policy")
+    raw_right_policy = right.get("scoring_policy")
+    left_policy: Mapping[str, Any] = raw_left_policy if isinstance(raw_left_policy, Mapping) else {}
+    right_policy: Mapping[str, Any] = raw_right_policy if isinstance(raw_right_policy, Mapping) else {}
+    for field in ("policy_version", "metrics_epoch", "rate_definition_version", "source_hashes"):
+        if left_policy.get(field) != right_policy.get(field):
+            return f"receipt_scoring_policy_{field}_mismatch"
+    if (left.get("prompt_identities") or []) != (right.get("prompt_identities") or []):
+        return "prompt_identities_mismatch"
+    return _receipt_config_problem(left, right, constraints)
+
+
+def _receipt_pair_problem(
+    left: Mapping[str, Any], right: Mapping[str, Any], constraints: Mapping[str, Any]
+) -> str | None:
+    """Return the first reason two receipts are not a compatible matched pair."""
+    problem = _receipt_identity_problem(left, right)
+    if problem:
+        return problem
     if pair_compatibility_key(left) != pair_compatibility_key(right):
         # The scorer owns the matched-pair identity: it excludes only the
         # contrasted condition, the derived method choice, and repeat identity.
         mismatches = pair_compatibility_mismatches(left, right)
         return "pair_incompatible:" + ";".join(mismatches) if mismatches else "receipt_compatibility_mismatch"
+    return _receipt_config_problem(left, right, constraints)
+
+
+def _receipt_config_problem(
+    left: Mapping[str, Any], right: Mapping[str, Any], constraints: Mapping[str, Any]
+) -> str | None:
+    """Check each receipt against the plan's frozen configuration constraints."""
     expected_snapshot = constraints.get("payload_policy_snapshot_sha256")
     if expected_snapshot:
         for document, label in ((left, "left"), (right, "right")):
@@ -958,6 +1612,8 @@ def main(argv: list[str] | None = None) -> int:
             "planned": result["planned"],
             "status_counts": result["status_counts"],
             "groups": len(result["groups"]),
+            "outcome_spread_cells": len(result["outcome_spread"]["cells"]),
+            "model_contrast_rows": result["model_contrasts"]["n_contrast_rows"],
             "paired_comparisons": len(result["paired"]["results"]),
             "output": str(args.output),
         }, sort_keys=True))

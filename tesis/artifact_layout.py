@@ -115,6 +115,10 @@ class ExperimentArtifactLayout:
         self._children.append(candidate)
         return candidate
 
+    def register_children(self, paths: Sequence[str | Path]) -> None:
+        """Bind already-allocated run directories to this layout for a manifest."""
+        self._children = [Path(path).resolve() for path in paths]
+
     @property
     def manifest_path(self) -> Path:
         return self.root / "experiment.manifest.json"
@@ -152,7 +156,7 @@ class ExperimentArtifactLayout:
             runs.append({
                 "index": index + 1,
                 "index_base": 1,
-                "coordinate_index": index,
+                "coordinate_index": artifact.get("coordinate_index", index),
                 "coordinate_index_base": 0,
                 "directory": str(child.relative_to(self.root)),
                 "artifact": str((child / primary_name).relative_to(self.root)) if primary_name else None,

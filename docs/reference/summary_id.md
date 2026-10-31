@@ -1,15 +1,20 @@
 # Technical Thesis Summary
 
-> **Ruang lingkup laporan tesis (keputusan pemilik, 2026-10-29):** Penelitian
-> utama membandingkan alur Linear dan AKG-guided dengan payload hybrid serta
-> metode yang dipilih model. Penilaian tesis dilakukan oleh manusia. Mode
-> Template dan penilai AI merupakan kemampuan perangkat lunak eksperimental
-> dan tidak dimasukkan sebagai metode maupun hasil tesis. Skor AI hanya boleh
-> mengisi tabel draf sebagai nilai sementara sampai penilaian manusia selesai,
-> dengan eksekusi, rubrik, dan bukti yang sesuai penelitian. Penjelasan
+> **Ruang lingkup laporan tesis (keputusan pemilik, 2026-10-31, menggantikan
+> keputusan penilai manusia 2026-10-29):** Penelitian utama membandingkan alur
+> Linear dan AKG-guided dengan payload hybrid serta metode yang dipilih model,
+> dan menilainya dengan penilai AI (`scoring_mode: ai`) pada `scoring.v4`.
+> Pemilihan penilai AI tidak memerlukan penilai manusia, verifikator manusia,
+> maupun signoff artefak manual: keputusan evaluator beku hanya diterima
+> setelah pemeriksaan mesin dan batas bukti yang didokumentasikan, dan workflow
+> AI tervalidasi yang lengkap menghasilkan receipt final tesis. Mode manusia
+> (`human`) dan ganda (`both`) tetap tersedia sebagai opsi dengan receipt
+> terpisah masing-masing. Mode Template tetap kemampuan perangkat lunak
+> eksperimental dan bukan metode maupun hasil tesis. Vektor awal bukan skor;
+> hanya receipt final tervalidasi yang merupakan skor tesis. Penjelasan
 > implementasi di bawah ini mendokumentasikan kemampuan perangkat lunak, bukan
-> perluasan protokol tesis. Keputusan ini menggantikan usulan terdahulu tentang
-> dua blok dan pilihan penilai manusia/AI/keduanya untuk tesis.
+> perluasan protokol tesis, dan tidak mengubah ruang lingkup, rubrik, bobot,
+> maupun konfigurasi bekunya.
 
 
 ## 1. Fixed Scope
@@ -26,7 +31,7 @@
 | Payload | Hybrid: validated static seeds + AKG-constrained LLM variants |
 | Eksperimen utama | Linear LLM + hybrid payloads vs AKG-guided LLM + hybrid payloads |
 | Model | Minimal satu model SOTA komersial dan satu model open-source atau open-weight |
-| Scoring | Rubrik 0 sampai 4, dipisahkan per dimensi evaluasi |
+| Scoring | Rubrik 0 sampai 4, dipisahkan per dimensi evaluasi; penilai AI dipilih, mode manusia/ganda opsional |
 
 Modul DVWA lain seperti Command Injection, File Upload, LFI, CSRF, XSS, Weak Session IDs, Insecure CAPTCHA, JavaScript Attacks, dan Open HTTP Redirect berada di luar ruang lingkup.
 
@@ -734,7 +739,7 @@ Perubahan ini tidak:
 * mengeksekusi payload yang belum divalidasi;
 * menjalankan request timing-sensitive DVWA secara bersamaan pada satu instance;
 * mengubah definisi kondisi `linear_hybrid` dan `akg_guided_hybrid`; atau
-* mengubah dimensi scoring dan kebutuhan manual-scoring evidence.
+* mengubah dimensi scoring dan kebutuhan bukti setiap dimensi.
 
 Dengan demikian, implementasi mengubah runtime envelope di sekitar workflow
 tesis, tetapi causal factor eksperimen dan aturan evidence tetap konstan.
@@ -1096,9 +1101,10 @@ Srun = 0.20 Smethod + 0.20 Spayload + 0.30 Sexploit + 0.10 Schain + 0.20 Soutput
 | `Schain` | 0.10 | Hasil chain |
 | `Soutput` | 0.20 | Kualitas output LLM dan guardrail handling |
 
-Penilaian tesis dilakukan oleh manusia dengan [scoring.v4](thesis_scoring.md).
-Perangkat lunak juga mendukung penilaian AI eksperimental dengan receipt
-terpisah; kemampuan ini berada di luar metodologi tesis. `Spayload_final` adalah rata-rata
+Penelitian saat ini dinilai dengan penilai AI pada [scoring.v4](thesis_scoring.md);
+workflow manusia (`human`) dan ganda (`both`) tetap tersedia dan menghasilkan
+receipt terpisah. Run dengan `scoring_mode: ai` tidak pernah memerlukan workflow
+manusia. `Spayload_final` adalah rata-rata
 aritmetika kandidat exploit/bypass valid yang telah dieksekusi, dihitung sekali
 per candidate_id dalam metode terakhir yang dipilih/dieksekusi. Kandidat ditolak,
 probe dan kandidat belum dieksekusi dikecualikan. Denominator kosong, bukti hilang
@@ -1110,14 +1116,38 @@ Penilai artefak tersimpan dikunci ke `scoring.v4`; deklarasi config atau
 tidak mengaktifkan kembali skor pemilihan legacy. Rata-rata `Spayload` hasil
 review dapat tetap numerik pada workflow pending, tetapi `Srun_final` tetap
 memerlukan kelima komponen. Retry komunikasi/rate-limit yang pulih bukan
-perbaikan struktur output. Penilaian manusia tetap menjadi acuan tesis;
-workflow AI bersifat eksperimental dan terpisah. Ledger fidelity offline
+perbaikan struktur output. Workflow yang dipilih bersifat otoritatif: receipt AI
+tidak memerlukan review maupun signoff manusia, sedangkan `both` menyimpan dua
+receipt terpisah tanpa menggabungkannya. Kontrol bukti mesin, bukan manusia,
+menentukan klaim yang boleh didukung; dimensi yang hilang atau dibatasi tetap
+unavailable atau parsial. Ledger fidelity offline
 melaporkan komponen graded, alasan pending, hash sumber dan FD1 tanpa mengganti
-dengan skor runtime atau mengklaim konvergensi epoch baru. Total permintaan
+dengan skor runtime atau mengklaim konvergensi epoch baru; di sana receipt dari
+workflow yang dipilih menjadi otoritatif, sehingga run `ai` memakai receipt AI
+tervalidasi tanpa workflow manusia, `human`/`both` mempertahankan otoritas
+manusia, `both` melaporkan workflow AI paralel secara terpisah tanpa
+menggabungkan komponen, dan receipt mode terpilih yang hilang merupakan celah
+bukti, bukan skor hasil sintesis. Total permintaan
 dipisahkan dari atribusi peran yang belum lengkap. Freeze/build/verify
 memerlukan jadwal harga nyata yang tidak kosong; kontrol profil sintetis hanya
 membuktikan keterjangkauan. Lihat
 [koreksi pelaporan offline](thesis_scoring.md#offline-reporting-correction-2026-10-31).
+
+Persiapan non-eksekusi mencakup draf ranking 27 entri untuk tinjauan pemilik,
+deklarasi studi tepat 108 koordinat, serta alat audit dan readiness offline.
+Cakupan lengkap bukan persetujuan atau kesiapan pembekuan. Studi primer
+selection-only dapat dibangun dan diverifikasi offline; jalur persiapan ini
+belum mendukung eksekusinya. Studi dua blok yang sudah ada tetap terpisah.
+Lihat [handoff aktif](../active/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md).
+
+Analisis offline mempertahankan seluruh identitas repeat terencana serta hasil
+missing, failed dan pending secara eksplisit. `outcome_spread` melaporkan varians
+sampel deskriptif dan IQR kuartil inklusif; `model_contrasts` memisahkan strata
+model, kondisi, fixture, epoch dan penilai, serta menandai perbandingan rank-sum
+sebagai eksploratif. Analisis kondisi yang sudah ada tetap berpasangan. Fixture
+sintetis atau epoch kosong hanya membuktikan mekanisme, bukan rekalibrasi D12 atas
+data baru. Draf preregistrasi oracle mengikat sumber protokol, bukan membuktikan
+keaslian pemberi persetujuan atau menciptakan attestation independen.
 
 Pemilihan metode memakai snapshot pemilihan terakhir dan profil evaluator
 berhash yang dibekukan sebelum eksekusi: 0 di luar surface, 1 prasyarat diketahui
@@ -1148,10 +1178,12 @@ independen. Konfirmasi Access Control dan Brute Force memerlukan oracle operator
 fixture, binding identitas/objek/sesi, hash sumber serta kontrol independen;
 visibilitas dan marker login saja dibatasi 2. Payload 4 memerlukan penggunaan
 lanjutan terverifikasi. Exploit 4 memeriksa konfirmasi metode sumber dan bukti
-penggunaan secara terpisah, bukan maksimum batas payload. Kesempatan chain lemah
-pasif menghasilkan 1 tanpa membuka route; semua prasyarat terbukti tanpa tujuan
-terkonfirmasi menghasilkan 2; satu ketergantungan terbukti 3; dua ketergantungan
-kausal terhubung 4. Log wajib yang hilang tetap pending. Kandidat metode sumber
+penggunaan secara terpisah, bukan maksimum batas payload. `Schain` berscope run
+menurut Tabel 3.10; aturan metode final untuk payload/output tidak diterapkan pada
+chain yang terhubung. Kesempatan lemah pasif menghasilkan 1 tanpa membuka route;
+material sumber dan semua prasyarat route terbukti tanpa konfirmasi tujuan
+menghasilkan 2; satu ketergantungan terbukti 3; dua ketergantungan kausal terhubung
+4. Log wajib yang hilang tetap pending. Kandidat metode sumber
 tidak masuk penyebut metode final; penghentian target dipertahankan. Keterjangkauan
 nilai penuh pada fixture aktual belum diverifikasi.
 
@@ -1205,7 +1237,11 @@ sesi admin sehingga belum membuktikan keputusan izin yang dilanggar.
 Evaluator memakai model `openai_compatible/deepseek-v4.1-flash` yang dikonfigurasi
 dalam role penilaian dengan konteks baru, dua percobaan, 1.024 output token dan
 timeout 60 detik. Ini bukan perbandingan model independen. Respons evaluator
-gagal tetap pending; receipt human tidak dapat mengisi receipt AI. Koreksi
+gagal tetap pending; receipt human tidak dapat mengisi receipt AI. Receipt AI
+baru bersifat final setelah keputusannya menyitasi bukti kandidat, tidak
+melampaui proof ceiling beku, dan cocok dengan identitas evaluator beku; vektor
+antrean atau `scoring.v2` runtime sebelum itu adalah vektor awal, bukan skor
+tesis. Koreksi
 append-only; receipt menyimpan hash sumber, sitasi kandidat, reviewer, versi,
 denominator, vektor komponen dan formula.
 CLI dan TUI memakai satu ledger review tervalidasi di dekat artifact sumber.
@@ -1831,7 +1867,7 @@ Cakupan projection membedakan rencana, artefak yang tersedia, completed, failed,
 
 ## Revisi alur eksperimen Bab III (2026-10-28)
 
-Metodologi tesis mengacu pada [Bab III hasil rekonsiliasi](../docx/bab-3-reconciled-2026-10-29.docx) dengan keputusan penilai manusia di atas. [Markdown turunan terdahulu](../completed/CHAPTER_3_REVISED_2026-10-28.md) memuat usulan desain yang sudah digantikan. Tabel rubrik 3.5–3.11 mengikuti [`thesis_scoring.md`](thesis_scoring.md#report-rubric-and-illustrative-conditions).
+Metodologi tesis mengacu pada [Bab III hasil rekonsiliasi](../docx/bab-3-reconciled-2026-10-29.docx) dengan keputusan penilaian pemilik di atas (penilai AI dipilih, sedangkan mode manusia dan ganda bersifat opsional dan tidak pernah menjadi syarat receipt AI). [Markdown turunan terdahulu](../completed/CHAPTER_3_REVISED_2026-10-28.md) memuat usulan desain yang sudah digantikan. Tabel rubrik 3.5–3.11 mengikuti [`thesis_scoring.md`](thesis_scoring.md#report-rubric-and-illustrative-conditions).
 
 Studi utama memakai `target_method=None`, kondisi `linear_hybrid` dan `akg_guided_hybrid`, serta payload `hybrid`; hanya keputusan yang berasal dari model mendukung klaim kemampuan memilih metode. Penetapan metode secara manual digunakan untuk diagnostik, bukan blok penelitian kedua dalam tesis. Setiap koordinat memiliki tiga repetisi; konfigurasi, profil acuan, sumber bukti, fixture, dan protokol dibekukan sebelum eksekusi. Run historis dan matriks penilaian terpisah tidak dilabeli ulang sebagai studi utama.
 

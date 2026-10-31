@@ -618,19 +618,47 @@ def chain_availability(artifact):
 
 
 def chain_grade(artifact, method, dependencies):
+    """Run-scope chain grade from the artifact's best verified chain evidence.
+
+    Tabel 3.10 grades the run's chain outcome. Unlike the Spayload and Soutput
+    final-method rules, it does not restrict credit to the final method, and
+    ``core.scorer``'s run-scope contract takes the run's best chain grade because
+    a completed route is by definition a visit by another method. ``method`` is
+    retained for call compatibility and never filters chain credit.
+    """
     state = artifact['final_state']
-    credited = [d for d in dependencies if d['destination']['agent_id'] == method]
+    credited = list(dependencies)
     if credited:
         for second in credited:
             for first in dependencies:
                 if first['route']['route_id'] != second['route']['route_id'] and first['destination']['evidence_id'] == second['source']['evidence_id']:
                     return 4
         return 3
-    from evaluation.thesis_scoring import _resolve
+    from evaluation.thesis_scoring import _candidate_proof, _resolve
+    # Level 2 needs both halves of Tabel 3.10: the route's source material and
+    # every route prerequisite are proved. ``prerequisite_proof`` proves only
+    # the second half, so source evidence is checked separately here.
     for route in state.get('chain_history', []):
-        if prerequisite_proof(artifact, route) and any(isinstance(row := _resolve(artifact, ref), dict)
-            and row.get('agent_id') == method for ref in route.get('source_evidence_refs', [])):
-            return 2
+        if not prerequisite_proof(artifact, route):
+            continue
+        for ref in route.get('source_evidence_refs', []):
+            row = _resolve(artifact, ref)
+            if not isinstance(row, dict):
+                continue
+            source_id, source_method = row.get('candidate_id'), row.get('agent_id')
+            if not source_id or not source_method:
+                continue
+            # A source may need complementary evidence rows (for example a
+            # boolean-blind repeat pair), so its whole bound evidence set is
+            # graded, not just the first row.
+            source_refs = []
+            for other in route.get('source_evidence_refs', []):
+                resolved = _resolve(artifact, other)
+                if isinstance(resolved, dict) and resolved.get('candidate_id') == source_id \
+                        and resolved.get('agent_id') == source_method:
+                    source_refs.append(other)
+            if candidate_base(artifact, source_id, source_method, source_refs) == 3:
+                return 2
     available, _reason = chain_availability(artifact)
     if not available:
         return None
@@ -638,15 +666,27 @@ def chain_grade(artifact, method, dependencies):
         if not isinstance(weak, dict):
             continue
         edge = edge_for(weak)
-        if weak.get('method') != method or weak.get('opportunity_class') != 'weak' or not edge or not weak.get('missing_material'):
+        if weak.get('opportunity_class') != 'weak' or not edge or not weak.get('missing_material'):
             continue
         statuses = weak.get('prerequisite_status') or {}
         if set(statuses) != set(edge['preconditions']) or not all(v in {'proved', 'unproved'} for v in statuses.values()) or 'unproved' not in statuses.values():
             continue
-        if any(isinstance(row := _resolve(artifact, ref), dict) and row.get('agent_id') == method and
-            candidate_base(artifact, row.get('candidate_id'), method, weak.get('source_evidence_refs', [])) in (1, 2)
-            for ref in weak.get('source_evidence_refs', [])):
-            return 1
+        for ref in weak.get('source_evidence_refs', []):
+            row = _resolve(artifact, ref)
+            if not isinstance(row, dict) or row.get('candidate_id') != weak.get('candidate_id') \
+                    or row.get('agent_id') != weak.get('method') \
+                    or (weak.get('visit_id') and row.get('visit_id') != weak.get('visit_id')):
+                continue
+            source_id, source_method = row.get('candidate_id'), row.get('agent_id')
+            # The candidate must be valid and executed with no verified
+            # negative, but level 1 is about this weak row's incomplete
+            # material. Another row's stronger proof for the same candidate
+            # must not erase the recorded weakness.
+            base = candidate_base(artifact, source_id, source_method, [ref])
+            if base is None or base == 0:
+                continue
+            if _candidate_proof(artifact, source_id, source_method, [ref]) in (1, 2):
+                return 1
     return 0
 
 
@@ -1162,9 +1202,13 @@ def automatic_components(artifact, method, rows):
     # run-level verified negative; the component stays unavailable.
     if exploit == 0 and any(r['eligible'] and r['base_proof'] is None for r in rows):
         exploit = None
+    # Sexploit level 4 stays source-method scoped (Tabel 3.7-3.9); run-scope
+    # chain credit does not transfer another method's downstream use.
     if exploit == 3 and any(d['source']['agent_id'] == method for d in dependencies):
         exploit = 4
     output, output_reason = output_grade(artifact, method)
+    # Schain is the run's best chain grade; the other automatic dimensions are
+    # scoped to the selected method by their own rubric statements.
     return {'Smethod': selection, 'Sexploit': exploit, 'Schain': chain_grade(artifact, method, dependencies),
         'Soutput': output}, evidence, output_reason
 

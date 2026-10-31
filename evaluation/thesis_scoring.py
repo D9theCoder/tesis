@@ -294,6 +294,10 @@ def _candidate_proof(artifact, candidate, method, refs):
                 tier = None
             if tier is None:
                 continue
+        if tier == 0 and row.get('signal_detected') is True:
+            # A "no verified signal" reason contradicts a positive signal on the
+            # same row. Contradictory evidence is pending, not a measured zero.
+            continue
         if tier == 3 and verifier.get('decision') != 'confirmed':
             tier = 2
         if tier == 3 and method == 'sqli_boolean_blind':
@@ -422,8 +426,11 @@ def review_queue(source: str | Path) -> dict:
     }
     component_refs['Soutput'] = [f'#/llm_performance/{i}' for i,r in enumerate(artifact.get('llm_performance', []))
         if isinstance(r, dict) and r.get('role') in {'orchestrator', 'payload_generator'} and (r.get('method') == method or r.get('scope') == 'run')]
+    # Schain is run-scope: the trace includes every recorded weak opportunity,
+    # not only rows attributed to the selected method.
     component_refs['Schain'].extend(f'#/final_state/weak_chain_opportunities/{i}'
-        for i,r in enumerate(state.get('weak_chain_opportunities', [])) if r.get('method') == method)
+        for i,r in enumerate(state.get('weak_chain_opportunities', []))
+        if isinstance(r, dict) and r.get('source_evidence_refs'))
     component_refs['Smethod'].append('#/config/scoring_profile')
     component_refs['Soutput'].extend(f'#/final_state/model_call_requirements/{i}'
         for i, r in enumerate(state.get('model_call_requirements', []) or [])

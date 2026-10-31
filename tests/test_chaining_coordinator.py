@@ -90,3 +90,25 @@ def test_linear_condition_does_not_take_cross_surface_chain():
     next_agent, event = evaluate_chain_route(state)
     assert next_agent == "orchestrator"
     assert event["reason"] == "no_chain"
+
+
+def test_routed_selection_grades_destination_method_preconditions():
+    """G16: AKG edge prerequisites must not replace the destination's own keys."""
+    from foundation.preconditions import precondition_keys_for_method
+
+    state = fresh_sqli_chain_state()
+    state["observations"] = {**state["observations"], "no_rate_limit": True}
+
+    update = chaining_router_node(state)
+
+    assert update["next_agent"] == "bf_dictionary"
+    decision = next(row for row in update["scoring_decisions"]
+        if row.get("dimension") == "Smethod" and row.get("method") == "bf_dictionary")
+    assert decision["preconditions"] == precondition_keys_for_method("bf_dictionary") == ["no_rate_limit"]
+    assert decision["viable"] is True
+    assert decision["score"] == 3
+    route = update["active_chain_route"]
+    assert route["preconditions"] == ["credentials_extracted"]
+    assert route["route_preconditions"] == ["credentials_extracted"]
+    assert [row["preconditions"] for row in update["chain_history"]] == [
+        ["credentials_extracted"], ["credentials_extracted"]]

@@ -3,7 +3,9 @@
 Mode contract (``core.payload_policy``):
 
 * ``static_only`` — validated static seeds only; no payload-generation call.
-* ``hybrid`` — validated static seeds plus any valid model seed mutation.
+* ``hybrid`` — validated static seeds plus any valid model seed mutation.  The
+  frozen candidate order queues valid generated candidates ahead of the static
+  seeds, which remain behind them as the exhaustion fallback.
 * ``llm_mutation_only`` — validated model seed mutations only.  A refusal,
   empty response, malformed JSON, schema violation, provider error, rejected
   candidate, zero budget, or stale candidate queues nothing; a static seed, a
@@ -27,6 +29,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from core.knowledge_graph import get_attack_knowledge_graph
 from core.payload_policy import (
+    CANDIDATE_ORDER_POLICY,
+    CANDIDATE_ORDER_POLICY_VERSION,
     DEFAULT_CANDIDATE_BUDGET,
     EVENT_NO_SUPPLIED_SEED,
     EVENT_PROVIDER_FAILURE,
@@ -44,6 +48,7 @@ from core.payload_policy import (
     TEMPLATE_PROMPT_ID,
     allows_chain_derived,
     allows_static_candidates,
+    candidate_order_metadata,
     coerce_budget,
     expected_origin_kind,
     generation_budget,
@@ -1065,6 +1070,10 @@ def _provenance_row(candidate: dict[str, Any], method: str) -> dict[str, Any]:
         "prompt_id": candidate.get("prompt_id"),
         "schema_version": candidate.get("schema_version"),
         "policy_version": candidate.get("policy_version") or PAYLOAD_POLICY_VERSION,
+        # Record which frozen ordering policy placed this candidate: generated
+        # candidates ahead of static seeds in hybrid, unchanged elsewhere.
+        "candidate_order_policy": CANDIDATE_ORDER_POLICY,
+        "candidate_order_policy_version": CANDIDATE_ORDER_POLICY_VERSION,
         "copy_of_supplied_seed": bool(candidate.get("copy_of_supplied_seed")),
         "equals_canonical_seed_id": candidate.get("equals_canonical_seed_id"),
     }
@@ -1080,8 +1089,11 @@ def build_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
     """Build the current visit's exploit/bypass candidates for one method.
 
     Static and hybrid modes keep their intended seeds plus any valid model
-    candidate.  Strict modes queue model candidates only, and every no-usable
-    -candidate case produces an explicit status instead of a substitute.
+    candidate.  Hybrid queues the generated candidates first and keeps the
+    static seeds behind them as the fallback; without a valid generated
+    candidate the static queue is unchanged.  Strict modes queue model
+    candidates only, and every no-usable-candidate case produces an explicit
+    status instead of a substitute.
     """
     method = str(state.get("selected_method") or state.get("next_agent") or "")
     if not method:
@@ -1253,12 +1265,24 @@ def build_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
                     "policy_version": PAYLOAD_POLICY_VERSION,
                 })
 
+    static_rows = (
+        _stamp_static_candidates(method, security_level, visit_id, seed_candidates)
+        if allows_static_candidates(mode)
+        else []
+    )
+    order_metadata = candidate_order_metadata(
+        mode, generated_count=len(generated), static_count=len(static_rows)
+    )
     candidates: list[dict] = []
-    if allows_static_candidates(mode):
-        candidates.extend(
-            _stamp_static_candidates(method, security_level, visit_id, seed_candidates)
-        )
+    # Frozen candidate order: only valid model-generated candidates reach this
+    # point (rejected output is dropped during normalization), and they are
+    # queued ahead of the static seeds.  The static seeds stay behind them as
+    # the fallback reached after the generated candidates are exhausted, and
+    # they are the whole queue when generation produced no valid candidate.
+    # Strict modes never allow static rows and static_only never generates, so
+    # both keep their prior queue unchanged.
     candidates.extend(generated)
+    candidates.extend(static_rows)
     if allows_chain_derived(mode):
         candidates.extend(_chain_derived_candidates(state, method, seed_candidates))
 
@@ -1296,7 +1320,8 @@ def build_payload_candidates(state: dict[str, Any]) -> dict[str, Any]:
     return {
         "payload_candidates": {method: candidates},
         "active_payload_candidates": {method: {"visit_id": visit_id,
-            "candidate_ids": [row["candidate_id"] for row in candidates], "status": "pending"}},
+            "candidate_ids": [row["candidate_id"] for row in candidates], "status": "pending",
+            "candidate_order": order_metadata}},
         "generated_payloads": {method: generated},
         "generation_prompts": [prompt_event] if prompt_event else [],
         "payload_guardrail_activations": guardrails,

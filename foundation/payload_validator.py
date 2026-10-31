@@ -475,6 +475,12 @@ def _provenance_update(
         "copy_of_supplied_seed": bool(candidate.get("copy_of_supplied_seed")),
         "equals_canonical_seed_id": candidate.get("equals_canonical_seed_id"),
     }
+    # Preserve the builder's frozen ordering identity; a historical artifact
+    # without it stays without it rather than claiming today's policy.
+    for order_field in ("candidate_order_policy", "candidate_order_policy_version"):
+        order_value = candidate.get(order_field)
+        if order_value:
+            row[order_field] = order_value
     if kind == "template_generation":
         row.pop("source_seed_id", None)
         row["feasibility"] = dict(candidate.get("feasibility") or {})
@@ -651,7 +657,7 @@ def validate_payload_candidates(
         else:
             rejected.append(_rejection_row(candidate, result, method))
 
-    ranked = rank_candidates(valid, queue_limit)
+    ranked = rank_candidates(valid, queue_limit, mode=mode)
     ranked_ids = {str(candidate.get("candidate_id")) for candidate in ranked}
     budget_excluded = [
         candidate for candidate in valid

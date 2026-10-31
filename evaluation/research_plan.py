@@ -1,4 +1,4 @@
-"""Declared Chapter 3 research plan: two blocks, frozen inputs, no silent pooling.
+"""Declared Chapter 3 research plan: declared blocks, frozen inputs, no pooling.
 
 The frozen ``evaluation/scoring_v4_matrix.py`` remains untouched. This module
 declares the *new* primary study described by the Chapter 3 handoff:
@@ -6,9 +6,11 @@ declares the *new* primary study described by the Chapter 3 handoff:
 * ``selection``: ``target_method=None`` so the model chooses a method;
 * ``forced``: every registered method is forced for payload/agent coverage.
 
-Both blocks keep the two primary hybrid conditions and at least three repeats.
-A plan freezes config/profile/oracle/policy/source identities before execution
-and refuses to run when they drift. Runtime aggregates remain provisional; final
+A study may declare the ``selection`` block alone (the owner-requested primary
+matrix) or both blocks; a forced-only or empty declaration is rejected. Both
+blocks keep the two primary hybrid conditions and at least three repeats. A plan
+freezes config/profile/oracle/policy/source identities before execution and
+refuses to run when they drift. Runtime aggregates remain provisional; final
 summaries come from review receipts in ``evaluation.research_analysis``.
 """
 
@@ -18,7 +20,7 @@ import argparse
 import json
 from datetime import datetime, timezone
 from hashlib import sha256
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 from core.payload_policy import (
@@ -31,7 +33,12 @@ from core.payload_policy import (
 from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS, SURFACES
 from evaluation.scoring_evidence import evidence_hash, validate_evidence_config, validate_profile
 from foundation.payload_snapshot import payload_policy_snapshot, verify_payload_policy_snapshot
-from tesis.config_loader import dump_yaml_config, load_yaml_config, load_and_resolve_config
+from tesis.config_loader import (
+    dump_yaml_config,
+    load_and_resolve_config,
+    load_yaml_config,
+    validate_provider,
+)
 
 RESEARCH_PLAN_VERSION = "chapter3-research-plan.v2"
 RESEARCH_CONFIG_VERSION = "chapter3-research-config.v1"
@@ -41,20 +48,41 @@ PRIMARY_PAYLOAD_MODE = "hybrid"
 BLOCKS: tuple[str, ...] = ("selection", "forced")
 SELECTION_TARGET = None
 FORCED_TARGET = "per_method"
+PRIMARY_REASONING_EFFORT = "max"
+OUTPUT_ROOT_PARENT = ("results", "runs")
 SOURCE_ROOTS = ("agents", "core", "evaluation", "foundation", "llm", "tesis")
 TOP_LEVEL_SOURCES = ("config.yaml", "pyproject.toml", "uv.lock")
 SOURCE_SUFFIXES = {".py", ".yaml", ".yml", ".json"}
 RESEARCH_CONFIG_KEYS = frozenset({
     "research_config_version", "epoch_id", "primary_conditions", "payload_mode",
     "blocks", "repeats", "levels", "surfaces", "design", "scoring",
-    "frozen_inputs_required", "fixture_restoration",
+    "frozen_inputs_required", "fixture_restoration", "model_profiles", "output_root",
 })
-OPTIONAL_RESEARCH_CONFIG_KEYS = frozenset({"fixture_restoration"})
+OPTIONAL_RESEARCH_CONFIG_KEYS = frozenset({
+    "fixture_restoration", "model_profiles", "output_root",
+})
+MODEL_PROFILE_KEYS = frozenset({"profile_id", "provider", "model_name", "reasoning_effort"})
+BLOCK_SPEC_KEYS = frozenset({"target_method", "unit"})
 REQUIRED_FROZEN_INPUTS = (
     "scoring_profile", "scoring_oracles", "scoring_policy_epoch",
     "token_price_schedule", "fixture_id", "protocol_version", "candidate_budget",
 )
 PRICE_SCHEDULE_REQUIRED = "token_price_schedule_required"
+FREEZE_PREGEN_ALLOWED = frozenset({
+    "census-before.json",
+    "census-after.json",
+    "no-mutation-check.json",
+    "fixture-restoration-evidence.json",
+    "fixture-restoration-low.json",
+    "fixture-restoration-medium.json",
+    "fixture-restoration-high.json",
+    "live-readiness.json",
+    "config.frozen.yaml",
+    "freeze-receipt.json",
+    "payload-policy-snapshot.json",
+    "policy-epoch.json",
+    "ranking-profile.frozen.json",
+})
 
 
 def require_frozen_token_price_schedule(config: Any) -> dict[str, Any]:
@@ -79,6 +107,141 @@ def require_frozen_token_price_schedule(config: Any) -> dict[str, Any]:
         raise ValueError(
             f"{PRICE_SCHEDULE_REQUIRED}: token_price_schedule invalid: {exc}"
         ) from exc
+
+
+def _ordered_block_names(declared: Mapping[str, Any], *, source: str) -> tuple[str, ...]:
+    """Return declared blocks in the canonical deterministic execution order.
+
+    A study may declare the model-selected ``selection`` block alone, or both
+    blocks.  A forced-only or empty declaration is never a valid study: forcing
+    every method without the model-selected comparison changes the estimand and
+    bypasses the selection/forced pairing.
+    """
+    if not isinstance(declared, Mapping) or not declared:
+        raise ValueError(f"{source} must declare at least one execution block")
+    unknown = sorted(set(declared) - set(BLOCKS))
+    if unknown:
+        raise ValueError(f"{source} declares unknown execution blocks: {unknown}")
+    if "selection" not in declared:
+        raise ValueError(
+            f"{source} must declare the selection block; forced-only plans are not supported"
+        )
+    return tuple(block for block in BLOCKS if block in declared)
+
+
+def _validate_declared_blocks(declared: Any, *, source: str) -> tuple[str, ...]:
+    """Validate the study declaration's block mapping and target semantics."""
+    names = _ordered_block_names(declared, source=source)
+    for block in names:
+        spec = declared[block]
+        if not isinstance(spec, Mapping):
+            raise ValueError(f"{source} block {block!r} must be a mapping")
+        unknown = sorted(set(spec) - BLOCK_SPEC_KEYS)
+        if unknown:
+            raise ValueError(f"{source} block {block!r} has unknown fields: {unknown}")
+        if "target_method" not in spec:
+            raise ValueError(f"{source} block {block!r} must declare target_method")
+        expected = SELECTION_TARGET if block == "selection" else FORCED_TARGET
+        if spec["target_method"] != expected:
+            raise ValueError(
+                f"{source} block {block!r} must declare target_method={expected!r}"
+            )
+    return names
+
+
+def _validate_model_profiles(document: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+    """Validate the optional exact model-profile selection of a study."""
+    profiles = document.get("model_profiles")
+    if profiles is None:
+        return None
+    if not isinstance(profiles, list) or not profiles:
+        raise ValueError("research config model_profiles must be a non-empty list")
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, profile in enumerate(profiles):
+        if not isinstance(profile, Mapping):
+            raise ValueError(f"research config model_profiles[{index}] must be a mapping")
+        unknown = sorted(set(profile) - MODEL_PROFILE_KEYS)
+        if unknown:
+            raise ValueError(
+                f"research config model_profiles[{index}] has unknown fields: {unknown}"
+            )
+        missing = sorted(MODEL_PROFILE_KEYS - set(profile))
+        if missing:
+            raise ValueError(
+                f"research config model_profiles[{index}] is missing fields: {missing}"
+            )
+        for key in MODEL_PROFILE_KEYS:
+            value = profile[key]
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    f"research config model_profiles[{index}].{key} must be a non-empty string"
+                )
+        profile_id = str(profile["profile_id"]).strip()
+        if profile_id in seen:
+            raise ValueError(f"research config declares duplicate model profile {profile_id!r}")
+        seen.add(profile_id)
+        if str(profile["reasoning_effort"]).strip().lower() != PRIMARY_REASONING_EFFORT:
+            raise ValueError(
+                f"research config model profile {profile_id!r} must request "
+                f"reasoning_effort={PRIMARY_REASONING_EFFORT!r}"
+            )
+        result.append({
+            "profile_id": profile_id,
+            "provider": str(profile["provider"]).strip(),
+            "model_name": str(profile["model_name"]).strip(),
+            "reasoning_effort": str(profile["reasoning_effort"]).strip().lower(),
+        })
+    return result
+
+
+def _validate_output_root(document: Mapping[str, Any]) -> str | None:
+    """Validate the declared run root used by tesis-web discovery."""
+    value = document.get("output_root")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("research config output_root must be a non-empty relative path")
+    path = PurePosixPath(value.strip())
+    if path.is_absolute() or any(part in (".", "..") for part in path.parts):
+        raise ValueError("research config output_root must be a safe relative path")
+    if path.parts[:len(OUTPUT_ROOT_PARENT)] != OUTPUT_ROOT_PARENT or len(path.parts) <= len(OUTPUT_ROOT_PARENT):
+        raise ValueError(
+            "research config output_root must be results/runs/<epoch> so run discovery stays bounded"
+        )
+    return path.as_posix()
+
+
+def _contained_run_root(
+    repository_root: Path,
+    output_root: str,
+    output_epoch: str | Path,
+    *,
+    source: str,
+) -> Path:
+    """Resolve a declared run root and refuse any escape from the repository.
+
+    A lexically safe ``results/runs/<epoch>`` can still be redirected outside the
+    repository by a symlinked ``results``, ``results/runs``, or epoch directory.
+    Both the declared path and the caller's epoch path are resolved, required to
+    stay strictly beneath the repository root, and required to name the same
+    directory.  Checking equality alone is insufficient because two paths can
+    resolve to the same outside target.
+    """
+    repository = Path(repository_root).resolve()
+    declared = (repository / output_root).resolve()
+    candidate = Path(output_epoch).resolve()
+    for label, resolved in (("declared run root", declared), ("output epoch", candidate)):
+        if resolved == repository or not resolved.is_relative_to(repository):
+            raise ValueError(
+                f"{source}: {label} resolves outside the repository root "
+                f"({repository}); symlinked or traversing run roots are rejected"
+            )
+    if candidate != declared:
+        raise ValueError(
+            f"{source}: output epoch must equal the declared run root {output_root!r}"
+        )
+    return candidate
 
 
 def load_research_config(path: str | Path) -> dict[str, Any]:
@@ -106,7 +269,12 @@ def load_research_config(path: str | Path) -> dict[str, Any]:
     if restoration is not None and not isinstance(restoration, (str, dict, list)):
         raise ValueError("research config fixture_restoration must be a path, object, or list")
     conditions = document.get("primary_conditions")
-    if not isinstance(conditions, list) or sorted(set(conditions)) != sorted(PRIMARY_CONDITIONS) or len(conditions) != len(set(conditions)):
+    if (
+        not isinstance(conditions, list)
+        or any(not isinstance(condition, str) for condition in conditions)
+        or sorted(set(conditions)) != sorted(PRIMARY_CONDITIONS)
+        or len(conditions) != len(set(conditions))
+    ):
         raise ValueError("research config must declare exactly both primary conditions")
     if document.get("payload_mode") != PRIMARY_PAYLOAD_MODE:
         raise ValueError("research config must declare the hybrid primary payload mode")
@@ -115,18 +283,27 @@ def load_research_config(path: str | Path) -> dict[str, Any]:
     if type(document.get("repeats")) is not int or document["repeats"] < MIN_REPEATS:
         raise ValueError(f"research config requires at least {MIN_REPEATS} repeats")
     blocks = document.get("blocks")
-    if not isinstance(blocks, dict) or sorted(blocks) != sorted(BLOCKS):
-        raise ValueError("research config must declare exactly the selection and forced blocks")
-    if blocks["selection"].get("target_method") is not None:
-        raise ValueError("the selection block must declare target_method=None")
-    if blocks["forced"].get("target_method") != FORCED_TARGET:
-        raise ValueError("the forced block must declare per-method targets")
+    _validate_declared_blocks(blocks, source="research config")
+    _validate_model_profiles(document)
+    _validate_output_root(document)
     levels = document.get("levels")
-    if not isinstance(levels, list) or not levels or any(level not in SECURITY_LEVELS for level in levels):
-        raise ValueError("research config levels must be known security levels")
+    if (
+        not isinstance(levels, list)
+        or not levels
+        or any(not isinstance(level, str) for level in levels)
+        or len(set(levels)) != len(levels)
+        or any(level not in SECURITY_LEVELS for level in levels)
+    ):
+        raise ValueError("research config levels must be unique known security levels")
     surfaces = document.get("surfaces")
-    if not isinstance(surfaces, list) or not surfaces or any(surface not in SURFACES for surface in surfaces):
-        raise ValueError("research config surfaces must be known surfaces")
+    if (
+        not isinstance(surfaces, list)
+        or not surfaces
+        or any(not isinstance(surface, str) for surface in surfaces)
+        or len(set(surfaces)) != len(surfaces)
+        or any(surface not in SURFACES for surface in surfaces)
+    ):
+        raise ValueError("research config surfaces must be unique known surfaces")
     declared_inputs = document.get("frozen_inputs_required")
     if not isinstance(declared_inputs, list) or sorted(declared_inputs) != sorted(REQUIRED_FROZEN_INPUTS):
         raise ValueError("research config must list the frozen epoch inputs it depends on")
@@ -345,6 +522,61 @@ def _coordinate_id(coordinate: Mapping[str, Any]) -> str:
     return _json_hash({axis: coordinate.get(axis) for axis in _COORDINATE_ID_AXES})[:16]
 
 
+def _block_coordinate_rows(
+    block: str,
+    *,
+    profiles: list[dict[str, Any]],
+    surfaces: list[str],
+    levels: list[str],
+    conditions: list[str],
+    repeats: int,
+    candidate_budget: int,
+    fixture_id: str,
+    protocol_version: str,
+    policy_epoch_id: str,
+    guardrail_retry_enabled: bool,
+    guardrail_handling: str,
+) -> list[dict[str, Any]]:
+    """Instantiate one block's declared coordinate grid deterministically.
+
+    The builder and plan verifier share this factory so a verified plan cannot
+    silently omit, duplicate, or reorder the coordinates its declaration implies.
+    """
+    rows: list[dict[str, Any]] = []
+    index = 0
+    for profile in sorted(profiles, key=lambda item: item["profile_id"]):
+        for surface in sorted(surfaces):
+            methods = [None] if block == "selection" else list(METHODS_BY_SURFACE[surface])
+            for level in sorted(levels):
+                for condition in sorted(conditions):
+                    for method in methods:
+                        for repeat_index in range(repeats):
+                            coordinate = {
+                                "coordinate_index": index,
+                                "block": block,
+                                "provider": profile["profile_id"],
+                                "model": profile["model_name"],
+                                "reasoning_effort": profile["reasoning_effort"],
+                                "surface": surface,
+                                "security_level": level,
+                                "payload_mode": PRIMARY_PAYLOAD_MODE,
+                                "experiment_condition": condition,
+                                "target_method": method,
+                                "repeat_index": repeat_index,
+                                "candidate_budget": candidate_budget,
+                                "guardrail_retry_enabled": guardrail_retry_enabled,
+                                "guardrail_handling": guardrail_handling,
+                                "fixture_id": fixture_id,
+                                "protocol_version": protocol_version,
+                                "policy_epoch_id": policy_epoch_id,
+                                "status": "planned",
+                            }
+                            coordinate["coordinate_id"] = _coordinate_id(coordinate)
+                            rows.append(coordinate)
+                            index += 1
+    return rows
+
+
 def planned_coordinates(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Return the plan's declared coordinates with block and planned status."""
     rows: list[dict[str, Any]] = []
@@ -361,6 +593,67 @@ def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _freeze_model_settings(
+    raw: dict[str, Any], *, providers: list[str] | None, config: Any,
+) -> None:
+    """Pin every selected model and role to the declared max reasoning.
+
+    The frozen config is the epoch's authority: a later config edit must fail
+    verification rather than silently lowering reasoning effort or dropping one
+    model from the matrix.  Generated provider profiles are pinned through
+    ``api_providers.*.model_options`` because their profile IDs are derived.
+    """
+    if not providers:
+        return
+    from tesis.provider_registry import model_profile_id
+
+    raw["providers"] = list(providers)
+    raw_models = raw.setdefault("models", {})
+    if not isinstance(raw_models, dict):
+        raise ValueError("config models must be a mapping before freeze")
+    api_providers = raw.get("api_providers") or {}
+    for profile_id in providers:
+        model = config.models.get(profile_id)
+        if model is None:
+            raise ValueError(f"frozen model profile {profile_id!r} is not configured")
+        if profile_id in raw_models:
+            section = raw_models[profile_id]
+            if not isinstance(section, dict):
+                raise ValueError(f"config models.{profile_id} must be a mapping")
+            section["reasoning_effort"] = PRIMARY_REASONING_EFFORT
+            continue
+        matches = [
+            (provider_id, entry) for provider_id, entry in api_providers.items()
+            if isinstance(entry, dict) and any(
+                model_profile_id(provider_id, model_name) == profile_id
+                for model_name in (entry.get("models") or [])
+            )
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"cannot locate one api_providers entry for frozen profile {profile_id!r}"
+            )
+        provider_id, entry = matches[0]
+        options = entry.setdefault("model_options", {})
+        if not isinstance(options, dict):
+            raise ValueError(f"api_providers.{provider_id}.model_options must be a mapping")
+        model_options = options.setdefault(model.model_name, {})
+        if not isinstance(model_options, dict):
+            raise ValueError(
+                f"api_providers.{provider_id}.model_options.{model.model_name} must be a mapping"
+            )
+        model_options["reasoning_effort"] = PRIMARY_REASONING_EFFORT
+    runtime = raw.get("llm_runtime")
+    if isinstance(runtime, dict):
+        roles = runtime.get("roles")
+        if isinstance(roles, dict):
+            for role_name, settings in roles.items():
+                if isinstance(settings, dict) and settings.get("reasoning_effort") not in (
+                    None, PRIMARY_REASONING_EFFORT,
+                ):
+                    settings["reasoning_effort"] = PRIMARY_REASONING_EFFORT
+
+
 def freeze_ranking_profile(
     *,
     config_path: str,
@@ -369,6 +662,7 @@ def freeze_ranking_profile(
     epoch_id: str,
     repeats: int = MIN_REPEATS,
     providers: list[str] | None = None,
+    fixture_restoration_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     """Re-freeze a pilot-derived profile for a new, explicitly declared epoch.
 
@@ -393,8 +687,22 @@ def freeze_ranking_profile(
     if any(source.get("origin") != "operator_fixture" for source in candidate["sources"]):
         raise ValueError("a current-epoch profile requires operator_fixture evidence sources")
     epoch_root = Path(output_epoch)
+    run_root = _repository_root(Path(config_path)) / "results" / "runs" / epoch_id
+    if run_root.exists() and any(run_root.iterdir()):
+        raise ValueError(
+            f"epoch {epoch_id!r} already has run artifacts under {run_root}; a new epoch "
+            "is required instead of re-freezing retained evidence"
+        )
     if epoch_root.exists() and any(epoch_root.iterdir()):
-        raise ValueError("output epoch must be new or empty")
+        unexpected = sorted(
+            entry.name for entry in epoch_root.iterdir()
+            if entry.name not in FREEZE_PREGEN_ALLOWED
+        )
+        if unexpected:
+            raise ValueError(
+                "output epoch must be new, empty, or contain only pre-freeze evidence; "
+                f"unexpected entries: {unexpected}"
+            )
     epoch_root.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc).isoformat()
     frozen = dict(candidate)
@@ -443,10 +751,29 @@ def freeze_ranking_profile(
     raw["protocol_version"] = config.protocol_version
     raw["candidate_budget"] = config.candidate_budget
     raw["repeats"] = repeats
+    raw["matrix"] = True
+    raw["levels"] = list(SECURITY_LEVELS)
+    raw["surfaces"] = list(SURFACES)
     raw["payload_mode"] = PRIMARY_PAYLOAD_MODE
     raw["payload_modes"] = [PRIMARY_PAYLOAD_MODE]
-    if providers:
-        raw["providers"] = list(providers)
+    if fixture_restoration_paths:
+        by_level: dict[str, dict[str, Any]] = {}
+        for path in fixture_restoration_paths:
+            document, _provenance = load_fixture_restoration(path)
+            if document["epoch_id"] != epoch_id:
+                raise ValueError(
+                    f"fixture restoration {path!r} is bound to epoch {document['epoch_id']!r}, "
+                    f"not {epoch_id!r}"
+                )
+            level = str(document["security_level"])
+            if level in by_level:
+                raise ValueError(f"duplicate fixture restoration for level {level!r}")
+            by_level[level] = document
+        raw["fixture_restoration_evidence"] = {
+            "by_level": by_level,
+            "levels": sorted(by_level),
+        }
+    _freeze_model_settings(raw, providers=providers, config=config)
     frozen_config = epoch_root / "config.frozen.yaml"
     frozen_config.write_text(dump_yaml_config(raw), encoding="utf-8")
     receipt = {
@@ -475,6 +802,75 @@ def _canonical_profile_sha(profile: Mapping[str, Any] | None) -> str | None:
     return evidence_hash({key: value for key, value in profile.items() if key != "sha256"})
 
 
+def _selected_model_profiles(
+    config: Any,
+    *,
+    declared_profiles: list[dict[str, Any]] | None,
+    providers: list[str] | None,
+    raw_config: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Resolve the exact evaluated model profiles and reject config mismatch.
+
+    A declaration pins profile ID, provider adapter, model name and ``max``
+    reasoning.  The resolved config is the authority for the adapter/model, so a
+    stale or differently configured profile fails here, before any plan freeze.
+    """
+    declared_by_id: dict[str, dict[str, Any]] = {}
+    if declared_profiles is not None:
+        declared_by_id = {profile["profile_id"]: profile for profile in declared_profiles}
+        declared_ids = sorted(declared_by_id)
+        if providers is not None and sorted(set(providers)) != declared_ids:
+            raise ValueError(
+                "providers must match the exact model profiles declared by the research config"
+            )
+        chosen = declared_ids
+    else:
+        chosen = list(providers or config.providers or [config.provider])
+    if not chosen:
+        raise ValueError("a research plan requires at least one model profile")
+    if len(set(chosen)) != len(chosen):
+        raise ValueError("a research plan cannot declare duplicate model profiles")
+    from llm.reasoning import model_efforts
+
+    selected: list[dict[str, Any]] = []
+    for profile_id in sorted(chosen):
+        validate_provider(profile_id, config.models)
+        model = config.models[profile_id]
+        expected = declared_by_id.get(profile_id)
+        if expected is not None:
+            if model.provider != expected["provider"]:
+                raise ValueError(
+                    f"model profile {profile_id!r} is configured with provider "
+                    f"{model.provider!r}, but the study declares {expected['provider']!r}"
+                )
+            if model.model_name != expected["model_name"]:
+                raise ValueError(
+                    f"model profile {profile_id!r} is configured with model "
+                    f"{model.model_name!r}, but the study declares {expected['model_name']!r}"
+                )
+            configured_effort = (model.reasoning_effort or "").strip().lower() or None
+            if configured_effort != expected["reasoning_effort"]:
+                raise ValueError(
+                    f"model profile {profile_id!r} is configured with reasoning_effort="
+                    f"{configured_effort!r}; the study requires "
+                    f"{expected['reasoning_effort']!r}"
+                )
+            advertised = model_efforts(dict(raw_config), expected["model_name"])
+            if advertised is not None and expected["reasoning_effort"] not in advertised:
+                raise ValueError(
+                    f"model {expected['model_name']!r} does not advertise "
+                    f"reasoning_effort={expected['reasoning_effort']!r} "
+                    f"(advertised: {advertised})"
+                )
+        selected.append({
+            "profile_id": profile_id,
+            "provider": model.provider,
+            "model_name": model.model_name,
+            "reasoning_effort": model.reasoning_effort,
+        })
+    return selected
+
+
 def build_research_plan(
     *,
     config_path: str,
@@ -485,13 +881,21 @@ def build_research_plan(
     conditions: list[str] | None = None,
     research_config_path: str | None = None,
 ) -> dict[str, Any]:
-    """Build and freeze the two-block plan without executing anything."""
+    """Build and freeze the declared-block plan without executing anything."""
     resolved_config = Path(config_path).resolve()
     declaration: dict[str, Any] | None = None
+    declared_block_names: tuple[str, ...] = BLOCKS
+    declared_profiles: list[dict[str, Any]] | None = None
+    declared_output_root: str | None = None
     if research_config_path:
         declaration = load_research_config(research_config_path)
         if declaration["epoch_id"] != epoch_id:
             raise ValueError("--epoch-id must match the declared research config epoch")
+        declared_block_names = _validate_declared_blocks(
+            declaration["blocks"], source="research config",
+        )
+        declared_profiles = _validate_model_profiles(declaration)
+        declared_output_root = _validate_output_root(declaration)
         repeats = declaration["repeats"]
         conditions = list(declaration["primary_conditions"])
         if declaration["payload_mode"] != PRIMARY_PAYLOAD_MODE:
@@ -522,43 +926,59 @@ def build_research_plan(
         raise ValueError("config requires an explicitly frozen scoring_policy_epoch")
     if config.scoring_policy_epoch["epoch_id"] != epoch_id:
         raise ValueError("--epoch-id must match the frozen config scoring_policy_epoch")
-    chosen_providers = list(providers or config.providers or [config.provider])
+    raw_config = load_yaml_config(resolved_config)
+    selected_profiles = _selected_model_profiles(
+        config,
+        declared_profiles=declared_profiles,
+        providers=providers,
+        raw_config=raw_config,
+    )
     chosen_levels = list(declaration["levels"] if declaration else config.levels or SECURITY_LEVELS)
     chosen_surfaces = list(declaration["surfaces"] if declaration else config.surfaces or SURFACES)
-    if not chosen_providers:
-        raise ValueError("a research plan requires at least one model profile")
+    for axis, values, known in (
+        ("levels", chosen_levels, SECURITY_LEVELS),
+        ("surfaces", chosen_surfaces, SURFACES),
+    ):
+        if (
+            not values
+            or any(not isinstance(value, str) for value in values)
+            or len(set(values)) != len(values)
+            or any(value not in known for value in values)
+        ):
+            raise ValueError(f"research plan {axis} must be unique known values")
+    if declared_output_root is not None:
+        _contained_run_root(
+            _repository_root(resolved_config),
+            declared_output_root,
+            output_epoch,
+            source="research plan build",
+        )
     guardrails = [(config.evasion_enabled, config.evasion_mode)]
-    blocks: dict[str, list[dict[str, Any]]] = {"selection": [], "forced": []}
-    for block in BLOCKS:
-        index = 0
-        for provider in sorted(chosen_providers):
-            for surface in sorted(chosen_surfaces):
-                methods = [None] if block == "selection" else list(METHODS_BY_SURFACE[surface])
-                for level in sorted(chosen_levels):
-                    for condition in sorted(chosen_conditions):
-                        for method in methods:
-                            for repeat_index in range(repeats):
-                                coordinate = {
-                                    "coordinate_index": index,
-                                    "block": block,
-                                    "provider": provider,
-                                    "surface": surface,
-                                    "security_level": level,
-                                    "payload_mode": PRIMARY_PAYLOAD_MODE,
-                                    "experiment_condition": condition,
-                                    "target_method": method,
-                                    "repeat_index": repeat_index,
-                                    "candidate_budget": config.candidate_budget,
-                                    "guardrail_retry_enabled": guardrails[0][0],
-                                    "guardrail_handling": guardrails[0][1],
-                                    "fixture_id": config.fixture_id,
-                                    "protocol_version": config.protocol_version,
-                                    "policy_epoch_id": epoch_id,
-                                    "status": "planned",
-                                }
-                                coordinate["coordinate_id"] = _coordinate_id(coordinate)
-                                blocks[block].append(coordinate)
-                                index += 1
+    blocks: dict[str, list[dict[str, Any]]] = {}
+    for block in declared_block_names:
+        blocks[block] = _block_coordinate_rows(
+            block,
+            profiles=selected_profiles,
+            surfaces=chosen_surfaces,
+            levels=chosen_levels,
+            conditions=chosen_conditions,
+            repeats=repeats,
+            candidate_budget=config.candidate_budget,
+            fixture_id=str(config.fixture_id),
+            protocol_version=str(config.protocol_version),
+            policy_epoch_id=epoch_id,
+            guardrail_retry_enabled=guardrails[0][0],
+            guardrail_handling=guardrails[0][1],
+        )
+    if declaration is not None:
+        expected_coordinates = (declaration.get("design") or {}).get("expected_coordinates")
+        if expected_coordinates is not None:
+            total = sum(len(rows) for rows in blocks.values())
+            if type(expected_coordinates) is not int or total != expected_coordinates:
+                raise ValueError(
+                    "research config declared expected_coordinates="
+                    f"{expected_coordinates!r}, but the frozen grid has {total} coordinates"
+                )
     research_config_resolved = (
         Path(str(research_config_path)).resolve() if declaration is not None else None
     )
@@ -661,12 +1081,27 @@ def build_research_plan(
             "protocol_version": config.protocol_version,
             "candidate_budget": config.candidate_budget,
             "scoring_rubric_version": config.scoring_rubric_version,
+            "scoring_mode": config.scoring_mode,
             "scoring_profile_sha256": _canonical_profile_sha(profile),
             "payload_policy_snapshot_sha256": policy_snapshot["snapshot_sha256"],
             "scoring_oracles_sha256": evidence_hash(config.scoring_oracles),
             "token_price_schedule_sha256": evidence_hash(config.token_price_schedule),
             "guardrail_retry_enabled": guardrails[0][0],
             "guardrail_handling": guardrails[0][1],
+            "model_profiles": selected_profiles,
+            "declared_axes": {
+                "blocks": {
+                    block: (
+                        SELECTION_TARGET if block == "selection" else FORCED_TARGET
+                    )
+                    for block in declared_block_names
+                },
+                "providers": sorted(profile["profile_id"] for profile in selected_profiles),
+                "surfaces": sorted(chosen_surfaces),
+                "levels": sorted(chosen_levels),
+                "conditions": sorted(chosen_conditions),
+                "repeats": repeats,
+            },
             "fixture_restoration": fixture_restoration,
             "fixture_restoration_sha256": (
                 _json_hash({
@@ -678,10 +1113,38 @@ def build_research_plan(
         "source_hashes": source_hashes,
         "source_hashes_sha256": source_info["source_hashes_sha256"],
         "blocks": blocks,
+        "output_root": declared_output_root,
+        "web_manifest": {
+            "status": "emitted_at_run",
+            "artifact_type": "experiment_manifest",
+            "schema_version": "artifact-manifest.v1",
+            "default_root": "results/runs",
+            "expected_path": (
+                f"{declared_output_root}/experiment.manifest.json"
+                if declared_output_root else None
+            ),
+            "required_run_fields": [
+                "execution_id",
+                "matrix_execution_id",
+                "coordinate_index",
+                "provider",
+                "model",
+                "surface",
+                "security_level",
+                "payload_mode",
+                "experiment_condition",
+                "target_method",
+                "repeat_index",
+            ],
+            "note": (
+                "run_research_plan writes experiment.manifest.json at the epoch root and "
+                "binds each run to its planned coordinate_index; planning itself writes no "
+                "execution claim."
+            ),
+        },
         "planned_counts": {
-            "selection": len(blocks["selection"]),
-            "forced": len(blocks["forced"]),
-            "total": len(blocks["selection"]) + len(blocks["forced"]),
+            **{block: len(rows) for block, rows in blocks.items()},
+            "total": sum(len(rows) for rows in blocks.values()),
         },
     }
     plan["plan_sha256"] = _json_hash(plan)
@@ -691,6 +1154,173 @@ def build_research_plan(
     _atomic_json(epoch_root / "payload-policy-snapshot.json", policy_snapshot)
     _atomic_json(epoch_root / "research-plan.json", plan)
     return plan
+
+
+def _plan_block_names(plan: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return the plan's declared execution blocks in canonical order."""
+    blocks = plan.get("blocks")
+    if not isinstance(blocks, Mapping):
+        raise ValueError("research plan must declare a block mapping")
+    return _ordered_block_names(blocks, source="research plan")
+
+
+def _plan_model_profiles(
+    plan: Mapping[str, Any], constraints: Mapping[str, Any], axes: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Validate the plan's exact model-profile recording against its axes."""
+    profiles = constraints.get("model_profiles")
+    if not isinstance(profiles, list) or not profiles:
+        raise ValueError("research plan declared axes require model_profiles")
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, profile in enumerate(profiles):
+        if not isinstance(profile, Mapping) or set(profile) != MODEL_PROFILE_KEYS:
+            raise ValueError(f"research plan model_profiles[{index}] is malformed")
+        profile_id = str(profile["profile_id"])
+        if not profile_id or profile_id in seen:
+            raise ValueError(f"research plan model_profiles[{index}] has an invalid profile_id")
+        seen.add(profile_id)
+        for key in ("provider", "model_name"):
+            value = profile[key]
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"research plan model_profiles[{index}].{key} is invalid")
+        effort = profile["reasoning_effort"]
+        if effort is not None and not isinstance(effort, str):
+            raise ValueError(f"research plan model_profiles[{index}].reasoning_effort is invalid")
+        result.append({
+            "profile_id": profile_id,
+            "provider": profile["provider"],
+            "model_name": profile["model_name"],
+            "reasoning_effort": effort,
+        })
+    if sorted(seen) != list(axes["providers"]):
+        raise ValueError("research plan model profiles do not match the declared providers")
+    return result
+
+
+def _verify_plan_blocks(plan: Mapping[str, Any], constraints: Mapping[str, Any]) -> None:
+    """Reject missing, duplicated, or drifted coordinates in a frozen plan."""
+    output_root = plan.get("output_root")
+    if output_root is not None:
+        _validate_output_root({"output_root": output_root})
+        manifest = plan.get("web_manifest")
+        if not isinstance(manifest, Mapping) or \
+                manifest.get("expected_path") != f"{output_root}/experiment.manifest.json":
+            raise ValueError("research plan web manifest metadata disagrees with output_root")
+    block_names = _plan_block_names(plan)
+    blocks = plan["blocks"]
+    counts = plan.get("planned_counts")
+    if not isinstance(counts, Mapping) or set(counts) != set(block_names) | {"total"}:
+        raise ValueError(
+            "research plan planned_counts must declare exactly "
+            f"{sorted(set(block_names) | {'total'})}"
+        )
+    repeats = constraints.get("repeats")
+    if type(repeats) is not int or repeats < MIN_REPEATS:
+        raise ValueError("research plan constraints declare invalid repeats")
+    total = 0
+    for block in block_names:
+        rows = blocks[block]
+        if not isinstance(rows, list) or not rows:
+            raise ValueError(f"research plan block {block!r} has no planned coordinates")
+        if counts[block] != len(rows):
+            raise ValueError(f"research plan planned_counts[{block!r}] does not match its block")
+        seen_ids: set[str] = set()
+        indexes: list[int] = []
+        for coordinate in rows:
+            if not isinstance(coordinate, Mapping):
+                raise ValueError(f"research plan block {block!r} has a malformed coordinate")
+            if coordinate.get("block") != block:
+                raise ValueError(f"research plan block {block!r} has a coordinate from another block")
+            if coordinate.get("status") != "planned":
+                raise ValueError(f"research plan block {block!r} has a non-planned coordinate")
+            coordinate_id = coordinate.get("coordinate_id")
+            if not isinstance(coordinate_id, str) or coordinate_id != _coordinate_id(coordinate):
+                raise ValueError(f"research plan block {block!r} has a drifted coordinate_id")
+            if coordinate_id in seen_ids:
+                raise ValueError(f"research plan block {block!r} duplicates a coordinate")
+            seen_ids.add(coordinate_id)
+            index = coordinate.get("coordinate_index")
+            if type(index) is not int:
+                raise ValueError(f"research plan block {block!r} has an invalid coordinate_index")
+            indexes.append(index)
+            for key in ("fixture_id", "protocol_version", "candidate_budget", "payload_mode"):
+                if coordinate.get(key) != constraints.get(key):
+                    raise ValueError(
+                        f"research plan block {block!r} coordinate disagrees with constraints.{key}"
+                    )
+            if coordinate.get("policy_epoch_id") != plan.get("epoch_id"):
+                raise ValueError(f"research plan block {block!r} coordinate has a foreign epoch")
+            condition = coordinate.get("experiment_condition")
+            if condition not in PRIMARY_CONDITIONS:
+                raise ValueError(f"research plan block {block!r} has an undeclared condition")
+            repeat_index = coordinate.get("repeat_index")
+            if type(repeat_index) is not int or not 0 <= repeat_index < repeats:
+                raise ValueError(f"research plan block {block!r} has an invalid repeat_index")
+            if block == "selection":
+                if coordinate.get("target_method") is not None:
+                    raise ValueError("the selection block must keep target_method=None")
+            else:
+                surface = str(coordinate.get("surface") or "")
+                method = coordinate.get("target_method")
+                if method not in METHODS_BY_SURFACE.get(surface, []):
+                    raise ValueError(
+                        f"the forced block coordinate has an invalid target for surface {surface!r}"
+                    )
+        if sorted(indexes) != list(range(len(rows))):
+            raise ValueError(f"research plan block {block!r} has missing or duplicate coordinate indexes")
+        total += len(rows)
+    if counts["total"] != total:
+        raise ValueError("research plan planned total does not match its blocks")
+
+    axes = constraints.get("declared_axes")
+    if axes is None:
+        return
+    if not isinstance(axes, Mapping) or set(axes) != {
+        "blocks", "providers", "surfaces", "levels", "conditions", "repeats",
+    }:
+        raise ValueError("research plan declared_axes are malformed")
+    axis_map: Mapping[str, Any] = axes
+    axis_blocks = axis_map["blocks"]
+    if not isinstance(axis_blocks, Mapping) or _ordered_block_names(
+        axis_blocks, source="research plan declared_axes",
+    ) != block_names:
+        raise ValueError("research plan declared_axes blocks disagree with its blocks")
+    for block, target in axis_blocks.items():
+        expected = SELECTION_TARGET if block == "selection" else FORCED_TARGET
+        if target != expected:
+            raise ValueError(f"research plan declared_axes block {block!r} has an invalid target")
+    for axis, known in (
+        ("providers", None), ("surfaces", SURFACES), ("levels", SECURITY_LEVELS),
+        ("conditions", PRIMARY_CONDITIONS),
+    ):
+        values = axis_map[axis]
+        if not isinstance(values, list) or not values or len(values) != len(set(values)):
+            raise ValueError(f"research plan declared_axes.{axis} must be a non-empty unique list")
+        if known is not None and any(value not in known for value in values):
+            raise ValueError(f"research plan declared_axes.{axis} contains an unknown value")
+    if axis_map["repeats"] != repeats:
+        raise ValueError("research plan declared_axes.repeats disagrees with constraints.repeats")
+    profiles = _plan_model_profiles(plan, constraints, axis_map)
+    for block in block_names:
+        expected_rows = _block_coordinate_rows(
+            block,
+            profiles=profiles,
+            surfaces=list(axis_map["surfaces"]),
+            levels=list(axis_map["levels"]),
+            conditions=list(axis_map["conditions"]),
+            repeats=repeats,
+            candidate_budget=int(constraints["candidate_budget"]),
+            fixture_id=str(constraints["fixture_id"]),
+            protocol_version=str(constraints["protocol_version"]),
+            policy_epoch_id=str(plan["epoch_id"]),
+            guardrail_retry_enabled=bool(constraints["guardrail_retry_enabled"]),
+            guardrail_handling=str(constraints["guardrail_handling"]),
+        )
+        if blocks[block] != expected_rows:
+            raise ValueError(
+                f"research plan block {block!r} coordinates do not match the declared axes"
+            )
 
 
 def verify_plan(plan_path: str | Path) -> dict[str, Any]:
@@ -719,6 +1349,35 @@ def verify_plan(plan_path: str | Path) -> dict[str, Any]:
         reloaded = load_research_config(declaration_path)
         if reloaded != research_config.get("declaration"):
             raise ValueError("research config declaration content changed after the plan was frozen")
+        declared_names = _validate_declared_blocks(
+            reloaded["blocks"], source="research config",
+        )
+        if declared_names != _plan_block_names(plan):
+            raise ValueError("research plan blocks disagree with the declared study")
+        declared_profiles = _validate_model_profiles(reloaded)
+        if declared_profiles is not None:
+            recorded_profiles = constraints.get("model_profiles")
+            if not isinstance(recorded_profiles, list) or sorted(
+                (
+                    str(profile.get("profile_id")),
+                    str(profile.get("provider")),
+                    str(profile.get("model_name")),
+                    str(profile.get("reasoning_effort")),
+                )
+                for profile in recorded_profiles
+                if isinstance(profile, Mapping)
+            ) != sorted(
+                (
+                    profile["profile_id"],
+                    profile["provider"],
+                    profile["model_name"],
+                    profile["reasoning_effort"],
+                )
+                for profile in declared_profiles
+            ):
+                raise ValueError(
+                    "research plan model profiles disagree with the declared study"
+                )
     if _json_hash(dict(config.scoring_policy_epoch)) != _json_hash(dict(plan["policy_epoch"])):
         raise ValueError("config scoring policy epoch changed after the plan was frozen")
     restoration = constraints.get("fixture_restoration")
@@ -778,17 +1437,27 @@ def verify_plan(plan_path: str | Path) -> dict[str, Any]:
             raise ValueError(f"configured {key} changed after the plan was frozen")
     if config.candidate_budget != constraints["candidate_budget"]:
         raise ValueError("candidate budget changed after the plan was frozen")
+    _verify_plan_blocks(plan, constraints)
     return plan
 
 
-def _run_block(plan: dict[str, Any], block: str, *, output_epoch: Path) -> dict[str, Any]:
+def _run_block(plan: dict[str, Any], block: str, *, output_epoch: Path
+               ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str], dict[str, Any] | None]:
     """Execute one declared block and always record a truthful receipt."""
+    if block not in BLOCKS:
+        raise ValueError(f"unknown experiment block {block!r}; expected one of {BLOCKS}")
+    declared = plan.get("blocks")
+    if not isinstance(declared, Mapping) or block not in declared:
+        raise ValueError(f"block {block!r} is not declared by the frozen plan")
+    coordinates = declared[block]
+    if not isinstance(coordinates, list) or not coordinates:
+        raise ValueError(f"block {block!r} has no planned coordinates")
+
     from dataclasses import asdict
 
     from evaluation.multi_llm_runner import run_provider_matrix
 
     config = load_and_resolve_config(config_path=plan["config_path"], cli_args={})
-    coordinates = plan["blocks"][block]
     first = coordinates[0]
     block_root = output_epoch / block
     if block_root.exists() and any(block_root.iterdir()):
@@ -808,7 +1477,7 @@ def _run_block(plan: dict[str, Any], block: str, *, output_epoch: Path) -> dict[
         return child
 
     models = {name: asdict(value) for name, value in config.models.items()}
-    receipt = {
+    receipt: dict[str, Any] = {
         "artifact_type": "chapter3_block_run",
         "block": block,
         "planned": len(coordinates),
@@ -882,6 +1551,8 @@ def _run_block(plan: dict[str, Any], block: str, *, output_epoch: Path) -> dict[
         })
         _atomic_json(block_root / "block-run-receipt.json", receipt)
         raise
+    if not isinstance(artifacts, list) or not isinstance(aggregate, Mapping):
+        raise ValueError("matrix runner did not return artifacts and an aggregate")
     aggregate_path = block_root / f"{aggregate['execution_id']}.matrix.json"
     if not aggregate_path.is_file():
         receipt.update({
@@ -893,6 +1564,7 @@ def _run_block(plan: dict[str, Any], block: str, *, output_epoch: Path) -> dict[
         })
         _atomic_json(block_root / "block-run-receipt.json", receipt)
         raise ValueError(f"block {block!r} produced no aggregate at {aggregate_path}")
+    reconciliation = _reconcile_coordinates(coordinates, artifacts)
     receipt.update({
         "status": "completed",
         "observed": len(artifacts),
@@ -900,16 +1572,119 @@ def _run_block(plan: dict[str, Any], block: str, *, output_epoch: Path) -> dict[
         "aggregate_path": str(aggregate_path),
         "aggregate_sha256": _file_hash(aggregate_path),
         "execution_id": aggregate.get("execution_id"),
+        "coordinate_reconciliation": {
+            key: reconciliation[key]
+            for key in ("planned", "observed", "matched", "missing", "extra")
+        },
+        "coordinate_reconciliation_path": str(block_root / "coordinate-reconciliation.json"),
     })
+    _atomic_json(block_root / "coordinate-reconciliation.json", reconciliation)
     _atomic_json(block_root / "block-run-receipt.json", receipt)
-    return receipt
+    return receipt, artifacts, attempt_directories, aggregate
+
+
+def _coordinate_axes(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Return the exact plan/run identity axes used for reconciliation."""
+    return (
+        row.get("provider"),
+        row.get("surface"),
+        row.get("security_level"),
+        row.get("payload_mode"),
+        row.get("experiment_condition"),
+        row.get("target_method"),
+        row.get("repeat_index"),
+    )
+
+
+def _reconcile_coordinates(
+    planned: list[dict[str, Any]], artifacts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Map observed run artifacts to the plan's exact coordinates.
+
+    Every planned coordinate must be observed exactly once.  Missing, extra or
+    duplicate runs stay visible; they are never replaced, zero-filled, or
+    collapsed into the planned count.
+    """
+    by_axes: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for row in planned:
+        by_axes.setdefault(_coordinate_axes(row), []).append(row)
+    observed: list[dict[str, Any]] = []
+    matched: set[str] = set()
+    duplicates: list[str] = []
+    extra: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        axes = _coordinate_axes(artifact)
+        candidates = [row for row in by_axes.get(axes, [])
+                      if row.get("coordinate_id") not in matched]
+        if not candidates:
+            known = by_axes.get(axes, [])
+            if known and len(known) == 1:
+                duplicates.append(str(known[0].get("coordinate_id")))
+            extra.append({
+                "axes": list(axes),
+                "execution_id": artifact.get("execution_id"),
+                "run_id": artifact.get("run_id"),
+            })
+            continue
+        coordinate = candidates[0]
+        matched.add(str(coordinate.get("coordinate_id")))
+        observed.append({
+            "coordinate_id": coordinate.get("coordinate_id"),
+            "coordinate_index": coordinate.get("coordinate_index"),
+            "execution_id": artifact.get("execution_id"),
+            "run_id": artifact.get("run_id"),
+            "status": artifact.get("status"),
+            "axes": list(axes),
+        })
+    missing = [
+        {
+            "coordinate_id": row.get("coordinate_id"),
+            "coordinate_index": row.get("coordinate_index"),
+            "axes": list(_coordinate_axes(row)),
+        }
+        for row in planned if str(row.get("coordinate_id")) not in matched
+    ]
+    return {
+        "artifact_type": "chapter3_coordinate_reconciliation",
+        "planned": len(planned),
+        "observed": len(artifacts),
+        "matched": len(matched),
+        "missing": missing,
+        "extra": extra,
+        "duplicates": sorted(set(duplicates)),
+        "coordinates": observed,
+    }
 
 
 def run_research_plan(plan_path: str | Path, *, output_epoch: str | None = None) -> dict[str, Any]:
-    """Verify the frozen plan, execute both blocks, and write run receipts."""
+    """Verify the frozen plan and execute its declared blocks in canonical order.
+
+    A study may declare only the model-selected ``selection`` block (the
+    owner-requested primary matrix) or both blocks.  Execution never adds a
+    block: exactly the declared coordinates run, under the frozen config,
+    profile, policy and price schedule.  Every planned coordinate is
+    reconciled against the observed artifacts, and the epoch writes an
+    ``experiment.manifest.json`` for tesis-web discovery.
+    """
     plan = verify_plan(plan_path)
+    declared_blocks = plan.get("blocks")
+    if not isinstance(declared_blocks, Mapping) or "selection" not in declared_blocks:
+        raise ValueError("a research plan must declare the selection block")
+    block_names = _plan_block_names(plan)
     epoch_root = Path(output_epoch or Path(plan_path).parent)
+    declared_output_root = plan.get("output_root")
+    if declared_output_root is not None:
+        _contained_run_root(
+            _repository_root(Path(plan["config_path"])),
+            declared_output_root,
+            epoch_root,
+            source="research plan run",
+        )
     receipts: dict[str, Any] = {}
+    artifacts: list[dict[str, Any]] = []
+    children: list[str] = []
+    aggregates: dict[str, Any] = {}
+    reconciliations: dict[str, Any] = {}
     summary: dict[str, Any] = {
         "artifact_type": "chapter3_research_run_summary",
         "epoch_id": plan["epoch_id"],
@@ -918,6 +1693,8 @@ def run_research_plan(plan_path: str | Path, *, output_epoch: str | None = None)
         "blocks": receipts,
         "status": "running",
         "error": None,
+        "manifest": None,
+        "coordinate_reconciliation": reconciliations,
         "score_epoch": {
             "runtime_provisional": "scoring.v2",
             "thesis_final": plan["constraints"]["scoring_rubric_version"],
@@ -925,20 +1702,117 @@ def run_research_plan(plan_path: str | Path, *, output_epoch: str | None = None)
         },
     }
     try:
-        for block in BLOCKS:
-            receipts[block] = _run_block(plan, block, output_epoch=epoch_root)
-            summary["observed_counts"][block] = receipts[block]["observed"]
+        for block in block_names:
+            receipt, block_artifacts, block_children, aggregate = _run_block(
+                plan, block, output_epoch=epoch_root
+            )
+            receipts[block] = receipt
+            summary["observed_counts"][block] = receipt["observed"]
+            artifacts.extend(block_artifacts)
+            children.extend(block_children)
+            if aggregate is not None:
+                aggregates[block] = aggregate
+            reconciliation_path = Path(receipt["coordinate_reconciliation_path"])
+            reconciliations[block] = json.loads(reconciliation_path.read_bytes())
+        expected = int(plan["planned_counts"]["total"])
+        missing = sum(len(row["missing"]) for row in reconciliations.values())
+        extra = sum(len(row["extra"]) for row in reconciliations.values())
+        duplicates = sorted({value for row in reconciliations.values()
+                             for value in row.get("duplicates") or []})
+        summary["coordinate_reconciliation"] = reconciliations
+        summary["coordinate_summary"] = {
+            "planned": expected,
+            "observed": len(artifacts),
+            "missing": missing,
+            "extra": extra,
+            "duplicates": duplicates,
+        }
+        manifest_path = _write_epoch_manifest(
+            epoch_root, plan=plan,
+            artifacts=_manifest_artifacts(artifacts, reconciliations),
+            children=children,
+            aggregate=aggregates.get(block_names[0]),
+            status="completed" if not missing and not extra and not duplicates else "incomplete",
+        )
+        summary["manifest"] = {
+            "path": str(manifest_path),
+            "sha256": _file_hash(manifest_path),
+        }
+        if missing or extra or duplicates:
+            summary["status"] = "incomplete"
+            summary["error"] = (
+                f"coordinate reconciliation failed: missing={missing} extra={extra} "
+                f"duplicates={duplicates}"
+            )
+        else:
+            summary["status"] = "completed"
     except Exception as exc:  # noqa: BLE001 - retain the failed attempt, never roll back
         summary.update({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
         _atomic_json(epoch_root / "research-run-summary.json", summary)
         raise
-    summary["status"] = "completed"
     _atomic_json(epoch_root / "research-run-summary.json", summary)
     return summary
 
 
+def _manifest_artifacts(
+    artifacts: list[dict[str, Any]], reconciliations: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Attach each run's planned coordinate index for tesis-web binding."""
+    by_execution: dict[str, int] = {}
+    for reconciliation in reconciliations.values():
+        for row in reconciliation.get("coordinates") or []:
+            if row.get("execution_id") is not None and row.get("coordinate_index") is not None:
+                by_execution[str(row["execution_id"])] = int(row["coordinate_index"])
+    projected: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        execution_id = artifact.get("execution_id")
+        index = by_execution.get(str(execution_id)) if execution_id is not None else None
+        projected.append(
+            {**artifact, "coordinate_index": index} if index is not None else artifact
+        )
+    return projected
+
+
+def _write_epoch_manifest(
+    epoch_root: Path,
+    *,
+    plan: Mapping[str, Any],
+    artifacts: list[dict[str, Any]],
+    children: list[str],
+    aggregate: Mapping[str, Any] | None,
+    status: str,
+) -> Path:
+    """Write the epoch-level manifest tesis-web uses for discovery."""
+    from tesis.artifact_layout import ExperimentArtifactLayout
+
+    layout = ExperimentArtifactLayout(
+        root=epoch_root.resolve(),
+        mode="matrix",
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    layout.register_children(children)
+    return layout.write_manifest(
+        config={
+            "epoch_id": plan["epoch_id"],
+            "plan_sha256": plan.get("plan_sha256"),
+            "source_hashes_sha256": plan.get("source_hashes_sha256"),
+            "scoring_profile_sha256": (plan.get("constraints") or {}).get(
+                "scoring_profile_sha256"
+            ),
+            "policy_epoch_id": (plan.get("policy_epoch") or {}).get("epoch_id"),
+            "payload_mode": (plan.get("constraints") or {}).get("payload_mode"),
+            "repeats": (plan.get("constraints") or {}).get("repeats"),
+            "target_url": None,
+            "scoring_mode": (plan.get("constraints") or {}).get("scoring_mode"),
+        },
+        artifacts=artifacts,
+        aggregate=aggregate,
+        status=status,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Freeze or run the Chapter 3 two-block research plan")
+    parser = argparse.ArgumentParser(description="Freeze or run the Chapter 3 declared-block research plan")
     subparsers = parser.add_subparsers(dest="command", required=True)
     freeze = subparsers.add_parser("freeze-profile", help="re-freeze a pilot profile for a new declared epoch")
     freeze.add_argument("--config", default="config.yaml")
@@ -947,7 +1821,8 @@ def main(argv: list[str] | None = None) -> int:
     freeze.add_argument("--epoch-id", required=True)
     freeze.add_argument("--repeats", type=int, default=MIN_REPEATS)
     freeze.add_argument("--providers", nargs="*")
-    plan_parser = subparsers.add_parser("plan", help="write and freeze the two-block plan")
+    freeze.add_argument("--fixture-restoration", action="append", default=None)
+    plan_parser = subparsers.add_parser("plan", help="write and freeze the declared-block plan")
     plan_parser.add_argument("--config", required=True)
     plan_parser.add_argument("--output-epoch", required=True)
     plan_parser.add_argument("--epoch-id", required=True)
@@ -955,7 +1830,11 @@ def main(argv: list[str] | None = None) -> int:
     plan_parser.add_argument("--providers", nargs="*")
     plan_parser.add_argument(
         "--research-config",
-        help="declared study contract (config/research/chapter3_study.json)",
+        help=(
+            "declared study contract (for example "
+            "config/research/autoresearch-primary-study-2026-10-31.json); "
+            "selection-only contracts execute one block"
+        ),
     )
     run_parser = subparsers.add_parser("run", help="verify and execute a frozen plan (live DVWA/provider)")
     run_parser.add_argument("--manifest", required=True)
@@ -970,6 +1849,7 @@ def main(argv: list[str] | None = None) -> int:
                 epoch_id=args.epoch_id,
                 repeats=args.repeats,
                 providers=args.providers,
+                fixture_restoration_paths=args.fixture_restoration,
             )
             print(json.dumps({"status": "frozen", **{k: result[k] for k in (
                 "epoch_id", "config_path", "frozen_profile", "frozen_profile_sha256")}}, sort_keys=True))
@@ -1011,6 +1891,7 @@ __all__ = [
     "MIN_REPEATS",
     "PRIMARY_CONDITIONS",
     "PRIMARY_PAYLOAD_MODE",
+    "PRIMARY_REASONING_EFFORT",
     "REQUIRED_FROZEN_INPUTS",
     "RESEARCH_CONFIG_VERSION",
     "RESEARCH_PLAN_VERSION",
