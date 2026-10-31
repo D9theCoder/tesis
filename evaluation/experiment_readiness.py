@@ -1671,14 +1671,20 @@ def analyse_output_root(repo_root: str | Path, draft: Mapping[str, Any]) -> tupl
     result["exists"] = target.exists()
     if target.exists():
         try:
-            result["non_empty"] = any(target.iterdir())
+            entries = sorted(entry.name for entry in target.iterdir())
         except OSError as exc:
-            result["non_empty"] = True
+            entries = []
             result["error"] = str(exc)
+        pre_execution = {"research-plan.json", "payload-policy-snapshot.json"}
+        unexpected = [name for name in entries if name not in pre_execution]
+        result["entries"] = entries
+        result["pre_execution_only"] = bool(entries) and not unexpected
+        result["non_empty"] = bool(unexpected)
     if result["non_empty"]:
         blockers.append(_blocker(
             "output_root_not_empty", "output",
-            f"intended run root already has evidence at {output_root}; a new epoch must be allocated",
+            f"intended run root already has execution evidence at {output_root}; "
+            "a new epoch must be allocated",
         ))
     return result, blockers
 
