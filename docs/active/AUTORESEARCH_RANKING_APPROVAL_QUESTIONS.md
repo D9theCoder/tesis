@@ -7,12 +7,19 @@ approval remains outstanding. Do not ask these questions again. This record stay
 at its original path because frozen ranking and execution metadata reference it;
 it is not an active handoff.
 
+**Unfinished scoring work:** [active AC scoring and methodology handoff](HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md).
+It owns the eight remaining work items; this file retains the settled ranking decisions.
+
 **Artifacts:** [ranking draft JSON](../../config/research/autoresearch-ranking-draft-2026-10-31.json)
 and [completed handoff](../completed/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md).
 **Coverage:** 27 entries / 9 scenarios; 23 supported numeric defaults approved,
 4 Access Control fits kept null by option A.
 
 ## 1. Decision binding and technical status
+
+The table below retains the pre-execution draft status, not the current frozen
+epoch status. The completed handoff records the executed epoch; the active
+scoring handoff tracks its unresolved approval-to-freeze identity and evidence gaps.
 
 | Field | Value |
 | --- | --- |
@@ -26,15 +33,20 @@ and [completed handoff](../completed/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md).
 | Machine JSON status | Still `draft_unapproved_unfrozen`; approval metadata not yet migrated |
 | Freeze / selector eligibility | Not frozen; not a scoring profile or selector input |
 
-The assistant must transcribe the actual decision provenance into machine metadata,
-validate the resulting document and freeze prospectively only when evidence gates
-are satisfied. This bookkeeping is not another request for owner approval. No
-approval date, evidence or frozen profile is invented by this record.
+Settled approval provenance must remain bound to the actual profile and evidence.
+For a future epoch, reconcile approval-to-freeze identity and validate the resulting
+bindings before selection. This bookkeeping is not another request for owner
+approval; no approval date, evidence, or prospective freeze may be invented.
 
 `reference_fit` is a ranking-reference level (1–3), not a rubric score. Approval of
 the 23 supported defaults does not supply missing evidence for the remaining four.
-Current scoring is **`scoring_mode=ai`**: no human scorer, verifier or manual artifact
-sign-off is required. This choice is fixed and must not be asked again.
+**Manual scorer includes human and AI scorers.** The configured `scoring_mode=ai`
+is the selected implementation of the manual scorer, not a reference-only
+substitute. This choice is fixed and must not be asked again; no additional human
+scorer, verifier, or human sign-off is required. Retain **manual scoring / manual
+assessment** in thesis/manuscript DOCX files; never change that wording to say the
+study uses an AI scorer, AI reviewer, or AI-assisted assessment. Internal scorer
+metadata remains traceable, and valid existing receipts do not require human regrading.
 
 ## 2. Recorded responses
 
@@ -106,14 +118,33 @@ now recorded. A `pending` evidence status is not a pending owner decision.
 
 ## 4. Remaining assistant work, not owner questions
 
-- Preserve the four nulls and report broad exposure separately until method-specific
-  machine evidence supports a reference value. Do not fill them with zero or 3.
-- Transcribe settled approvals, validate source/fixture/protocol/epoch bindings and
-  distinguish preregistration readiness from later collected evidence.
-- Complete implementation and technical readiness work under the existing scope.
-  This record starts no run and relaxes no containment or evidence requirement.
-- Preserve original artifacts and prospective epoch boundaries; no historical
-  scoring retrofit, fabricated receipt or backdated preregistration.
+The [active scoring-completion handoff](HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md)
+owns these eight unfinished items:
 
-The underlying JSONs remain unchanged by this documentation update. Their stale
-approval fields need migration by the assistant, not a repeated owner questionnaire.
+1. Apply the settled manual-scorer contract consistently: human and AI scorers
+   are both manual scorers; the selected AI scorer is not reference-only.
+2. Reconcile prospective ranking-profile, approval, oracle, fixture, protocol,
+   and epoch bindings without rewriting historical metadata.
+3. Resolve the four null AC low/medium fits and AC candidate/control evidence,
+   including the 12 high-level runs with no assessable candidates.
+4. Prepare a corrected prospective epoch when required; keep any AC-only
+   supplement separate from a comparable full 108-run primary dataset.
+5. Finalize eligible source-bound manual-scoring receipts with the selected
+   scorer; do not require a separate human review or fill unavailable scores.
+6. Complete the superseding F3 audit, analysis, and reporting with evidence-linked
+   causes and explicit remaining gaps.
+7. Remove genuinely obsolete scorer implementations and migrate live callers
+   without changing current scoring behavior or historical artifact readability.
+   Preserve current rubric semantics while migrating its name under item 8.
+8. Remove arbitrary project-authored version names across the entire codebase.
+   Keep one canonical unversioned implementation/contract per responsibility,
+   migrate all live consumers, and ban future `v1`/`vX` naming with a focused
+   naming guard. Preserve historical identities and external version facts.
+
+Preserve the four nulls and report broad exposure separately until method-specific
+machine evidence supports a reference value. Do not fill them with zero or 3.
+Preserve original artifacts and prospective epoch boundaries: no fabricated
+receipt, historical profile retrofit, or backdated preregistration. The linked
+handoff records current unfinished work; old draft-status fields above are not a
+claim that the executed epoch had no frozen profile. These documentation changes
+make no runtime, configuration, artifact, or DOCX changes.
