@@ -1,5 +1,14 @@
 # Fix `sqli/medium` — evidenced `static_only` → `hybrid` gate (keep `sqli/high` + `bf/high` quarantined)
 
+> **Historical task plan:** This document records the medium-SQLi remediation
+> plan based on the August 2026 runs cited below. Its commands, quarantine
+> assumptions, live probes, matrices, and acceptance criteria belong to that
+> task; they are not standing instructions or current authorization to execute
+> them. Consult current owning code for behavior and
+> [AGENTS.md](../../AGENTS.md#maintenance-scope-and-completion) for maintenance
+> scope and verification. This label does not assert that the original plan's
+> acceptance criteria were completed.
+
 ## Manifest
 - **module_name:** `fix-sqli-medium-evidence`
 - **output_filename:** `docs/reference/plan-sqli-medium.md`

@@ -3,6 +3,34 @@
 TESIS is an LLM-assisted penetration-testing framework for authorized DVWA
 sandbox experiments. Keep the research scope and containment rules below intact.
 
+## Maintenance scope and completion
+
+- For a bug fix or refactor, implement the requested change using the owning
+  code and relevant documentation. Research launch gates, final thesis-score
+  requirements, and historical acceptance campaigns do not automatically become
+  prerequisites for completing a maintenance task.
+- Follow the user's verification scope. Once the requested change and requested
+  checks are complete, stop. If no checks were requested, report that validation
+  was not run; do not create additional acceptance work to declare completion.
+- Expand investigation only when a concrete finding could invalidate the fix.
+  Report unrelated evidence gaps separately instead of trying to close them.
+  Do not repeat a check unless a relevant change, failure, or unresolved finding
+  justifies it. Existing evidence may be reused within its actual scope.
+- Use past artifacts when needed to diagnose a failure, reproduce inputs, or
+  substantiate a claim. Stop once the relevant question is answered and implement
+  the correction. Old results cannot establish that changed code works. When a
+  fresh run is authorized and necessary, execute the smallest affected flow
+  instead of repeatedly analyzing old artifacts; retain its new evidence separately.
+  Saved inputs may suffice for arithmetic/reporting fixes. Existing target/provider
+  authorization remains valid within its scope; do not ask for it again.
+- Preserve runtime containment, validation, scoring, and evidence-integrity
+  contracts. Missing research evidence can block a research claim or launch;
+  it does not block implementing a correction. Do not weaken software gates,
+  fabricate evidence, or relabel historical results to finish a maintenance task.
+- Historical plans and acceptance records describe their original task only.
+  Their commands, approvals, thresholds, and outstanding gaps are not standing
+  instructions for unrelated work. Use this file for current work scope.
+
 ## Commands
 
 Run from the repository root; `uv sync` installs the locked environment:
@@ -36,9 +64,15 @@ Use these sources for the area being changed; read only the relevant docs:
 | Runners, scoring, reports, artifacts | `evaluation/`, `core/scorer.py` |
 | CLI, configuration, TUI | `tesis/`; [runtime architecture](docs/reference/architecture.md) |
 | Research design, scoring rubrics, full artifact schema | [methodology](docs/reference/summary_en.md) |
+| Dated implementation status, experiment results, known gaps | [current status](docs/reference/current-status.md), only when relevant to the task |
 
 Use runtime code to establish implemented behavior and the methodology for
-research requirements; the thesis draft is downstream documentation. For TUI
+research requirements. The reconciled
+[Chapter 3](docs/docx/bab-3-reconciled-2026-10-29.docx) is the ground truth for
+methodology; reference summaries must not redefine it from implementation or
+historical results. The owner's clarification permits a human or AI scorer
+interchangeably for the report's manual-scoring role, with the same rubric and
+artifact requirements. Other thesis drafts are downstream documentation. For TUI
 changes, preserve `tesis.tui` as the public facade and use
 `tesis.tui_state.CONFIG_PATH` as the shared configuration-path owner.
 
@@ -106,7 +140,10 @@ changes, preserve `tesis.tui` as the public facade and use
   do not cover; assert behavior rather than constructors, constants, or
   implementation details.
 - E2E tests are opt-in. Run one only when the user explicitly asks. For a major
-  code change, ask whether the user wants E2E coverage and wait for their answer.
+  code change (a change to cross-component runtime behavior or public execution
+  contracts), ask whether the user wants focused E2E coverage unless already
+  answered. Wait before executing E2E, while continuing authorized implementation
+  and independent work. A change to an important file alone is not a major change.
   A handoff or this file alone does not authorize an E2E run. This applies to
   offline/mocked E2E as well as live DVWA/provider E2E; live runs also require
   explicit target and provider scope.
@@ -117,11 +154,15 @@ changes, preserve `tesis.tui` as the public facade and use
   incomplete. Do not expand a requested E2E into a full suite or experiment
   matrix without authorization.
 - Reuse valid validation evidence while the relevant code and configuration
-  are unchanged. Before a main experiment, ensure the required core gates have
-  evidence for the current code/config epoch: AKG structure and preconditions,
+  are unchanged. For an authorized main-experiment readiness task, ensure the
+  required core gates have evidence for the current code/config epoch: AKG structure and preconditions,
   prompt schemas/JSON parsing, payload validation, chain routing, containment,
-  artifact completeness, and at least one dry run per surface. After a change,
-  rerun only the affected non-E2E gates; ask before any E2E validation.
+  artifact completeness, and at least one dry run per surface. Within that task,
+  renew only evidence invalidated by relevant changes and rerun only the affected
+  non-E2E gates within the requested verification scope; ask before any E2E
+  validation. For maintenance alone, record any readiness impact without renewing
+  experiment evidence or launching a matrix. Report readiness as incomplete when
+  required evidence is missing; this does not make an implemented fix incomplete.
 - For an offline suite report, use
   `.venv/bin/python -m pytest -q --junitxml=results/validation/junit.xml`.
   Generated evidence belongs under `results/` (gitignored). Keep routine
@@ -134,7 +175,8 @@ Place new Markdown documentation in one lifecycle folder:
 
 - `docs/upcoming/`: proposed or unstarted work, including incomplete remediation.
 - `docs/active/`: handoffs whose implementation is in progress.
-- `docs/completed/`: handoffs whose implementation and required acceptance checks pass.
+- `docs/completed/`: handoffs whose implementation and task-scoped required
+  acceptance checks pass.
 - `docs/reference/`: durable architecture, methodology, research, and acceptance guidance.
 
 Move handoffs as their status changes and update links. Generated TUI captures
@@ -143,3 +185,8 @@ stay outside these lifecycle folders; the existing `docs/tui_baseline_*`,
 When methodology or architecture changes, update both
 [summary_en.md](docs/reference/summary_en.md) and
 [summary_id.md](docs/reference/summary_id.md), plus affected architecture docs.
+Restoring documented behavior is not itself an architecture or methodology
+change. Update only documentation made inaccurate by the fix. For handoff
+completion, use the current task's agreed acceptance scope; historical research
+gaps and unrelated pending reviews do not add requirements. Requested checks
+that remain unrun must still be reported as incomplete.

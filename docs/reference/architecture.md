@@ -1,5 +1,19 @@
 # Interactive Runtime Architecture
 
+## Maintenance scope
+
+For dated implementation status, experiment outcomes, and historical limitations,
+see [current-status.md](current-status.md). Read those records when relevant;
+they are not prerequisites for every implementation task.
+
+This document describes runtime behavior and contracts. Apply
+[AGENTS.md](../../AGENTS.md#maintenance-scope-and-completion) to code-maintenance
+scope: implementing a correction does not require renewing experiment evidence,
+finalizing thesis receipts, or repeating historical acceptance campaigns.
+Preserve the runtime gates described here; distinguish completion of the requested
+fix from readiness to launch research or support a thesis claim. A fix restoring
+documented behavior does not by itself change the architecture or methodology.
+
 ## Entry point and screens
 
 `python -m tesis run` starts `TesisApp`. For automation, the same entry point

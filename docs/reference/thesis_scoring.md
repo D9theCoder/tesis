@@ -1,5 +1,33 @@
 # Thesis scoring v4
 
+## Methodology authority and scorer terminology
+
+[Reconciled Chapter 3](../docx/bab-3-reconciled-2026-10-29.docx), especially
+Tables 3.4-3.11, is the ground truth for research methodology. Per the owner's
+clarification, its manual/human scorer may be either a human or an AI scorer,
+interchangeably. The role performs artifact-based rubric review and does not
+replace automatic validation, verification, or evidence ceilings. Either reviewer
+type can fulfill the role without a mandatory second reviewer of the other type.
+Keep reviewer identities and existing decisions when changing reviewers; do not
+silently relabel receipts. The AI-selected setting below describes a study choice,
+not a thesis requirement to use only AI or only a person.
+
+## Scope of scoring requirements
+
+The consolidated dated codebase/experiment snapshot is in
+[current-status.md](current-status.md). Historical acceptance records below remain
+scoped to their named campaigns, not every scoring correction.
+
+The evidence, approval, and finalization requirements below apply when launching
+research, reviewing artifacts, or claiming final thesis scores. They remain
+software contracts that a scoring fix must preserve. They do not require a code
+maintenance task to collect new oracle evidence, resolve unrelated pending
+reviews, finalize existing receipts, or rerun experiments. Follow the maintenance
+and verification scope in [AGENTS.md](../../AGENTS.md#maintenance-scope-and-completion).
+A correction can be complete while final scores or research readiness remain
+unavailable; report those limitations separately. Acceptance histories below
+record their original tasks, not new work required for every scoring change.
+
 > **Thesis-report scope (owner decision, 2026-10-31, superseding the 2026-10-29
 > human-evaluator decision):** The current study selects the AI scorer
 > (`scoring_mode: ai`) under `scoring.v4`. Selecting the AI scorer requires no
@@ -588,7 +616,7 @@ Grouping for research summaries must use the public `receipt_compatibility_key` 
 
 Physical request metrics consume `artifact["http_request_counters"]` (`http-accounting.v1`: actual requests/retries/redirect hops/failures by phase/role/method). Each actual dispatch, including oracle/verification traffic tagged `phase="verification"` with `candidate_verification` or `independent_control` roles, is counted once; redirect hops are a separate counter. Evidence-row counts are named separately as `evidence_requests_total`; a missing/incomplete counter is unavailable, never inferred from rows. `payload_generation_opportunities` is role+generation-stage-unique evidence; validation receipts are joined separately, so one refusal/provider failure is not two opportunities, and `payload_generation_opportunity_coverage` reports `generation_receipt_missing` rather than a measured zero when only validation rows survive. `recorded_payload_policy` (payload policy version + hash-pinned template registry/prompt manifests) is persisted on the artifact, `final_state`, and frozen method inputs; historical replay validates against that recorded snapshot, and a missing snapshot is unavailable rather than today's-registry revalidation. Matrix `totals` and provider rollups are operational counts only, with no pooled metric means across coordinates. Fixture restoration/equivalence comes only from an authorized `fixture-restoration.v1` operator attestation threaded through readiness; absent/mismatched evidence leaves paired analysis unmatched, and no reset endpoint is invoked. `compare_receipts` derives incomplete/unassessable/pending counts from task/pending reasons and canonical statuses, not a nonexistent `execution_status="incomplete"`. Candidate baselines require `candidate_verification` (or a documented explicit baseline purpose); ambiguous historical multi-visit execution stays unavailable.
 
-Matched Linear/AKG pairs require a ready readiness receipt on both sides with matching requested/observed level, fixture/protocol, and attested fixture restoration. Unmatched pairs are counted, not silently dropped. The predeclared paired analysis is a two-sided Wilcoxon signed-rank test with matched-pairs rank-biserial effect size, bootstrap percentile CI for the median paired difference, and Holm–Bonferroni correction within the metric family. Mann–Whitney U is exploratory only because paired coordinates violate independence. `Srun_final` still requires every component, an eligible candidate denominator, and a complete review workflow for the selected mode (human, AI, or both in parallel); no provisional v2 component or invented zero may fill a pending final.
+Matched Linear/AKG pairs require a ready readiness receipt on both sides with matching requested/observed level, fixture/protocol, and attested fixture restoration. Unmatched pairs are counted, not silently dropped. The software supports additional paired analysis using a two-sided Wilcoxon signed-rank test, matched-pairs rank-biserial effect size, bootstrap percentile CI for the median paired difference, and Holm–Bonferroni correction within the metric family. These capabilities do not replace the ground-truth Chapter 3 protocol: exploratory Mann–Whitney U with U, p-value, group sample sizes, median, IQR, and effect size, interpreted with scenario/repeat dependence and optional multiple-comparison correction. Changing the thesis analysis requires an explicit methodology revision. `Srun_final` still requires every component, an eligible candidate denominator, and a complete review workflow for the selected mode (human, AI, or both in parallel); no provisional v2 component or invented zero may fill a pending final.
 
 ## Review corrections (2026-10-31)
 
