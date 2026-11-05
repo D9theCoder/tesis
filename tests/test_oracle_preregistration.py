@@ -161,6 +161,11 @@ def test_preregistered_draft_binds_operator_protocols_and_keeps_proof_missing():
     assert set(report["readiness"]["blockers"]) == {
         "oracle_attestation_not_collected",
         "oracle_control_missing:10",
+        # The shipped oracle declaration moved forward to the canonical protocol
+        # file for the corrected epoch, so this historical draft no longer pins
+        # the configured sources. The mismatch is reported, never ignored; a
+        # prospective draft for the current epoch has to bind the new file.
+        "configured_oracle_source_mismatch",
     }
     assert report["readiness"]["commitment"] == {
         "preregistered": True,
