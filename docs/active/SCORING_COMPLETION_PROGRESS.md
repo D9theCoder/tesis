@@ -511,3 +511,39 @@ Check live tool job state and artifact receipts first. Continue implementation,
 controls, binding repair, readiness, execution, receipts and audit in that order
 where dependencies require it; independent report recovery may proceed now.
 Overall goal stays active, with no completion or global blocked claim.
+
+### 17 — Access Control: the gap is a design outcome, proven by measurement
+
+Receipt: [AC permission-scope evidence](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/ac-permission-scope-evidence.json>).
+
+Approved reference fits for the Access-Control scenarios: high `ac_force_browse 1`,
+`ac_idor 1`, `ac_vertical_escalation 1`; low `ac_force_browse 3`, `ac_idor null`,
+`ac_vertical_escalation null`; medium `ac_force_browse 1`, `ac_idor null`,
+`ac_vertical_escalation null`.
+
+What the corrected epoch measured:
+
+| Level | Methods the model selected | Permission-oracle scope outcomes |
+| --- | --- | --- |
+| low (6) | `ac_vertical_escalation` 6 | `ac_idor` + `ac_vertical_escalation` → **broad_exposure only**; `ac_force_browse` → candidate_specific |
+| medium (6) | `ac_vertical_escalation` 3, `ac_idor` 3 | `ac_idor` + `ac_vertical_escalation` → **broad_exposure only** |
+| high (6) | none selected | no candidates; the three high fits are numeric but there is no selection to score |
+
+Conclusions, all evidence-backed:
+
+- The owner's option A is empirically confirmed for this fixture: IDOR and
+  vertical escalation at low/medium are broad anonymous exposure, not
+  method-specific bypass. The four null fits must stay null; the epoch did not
+  produce the evidence that would justify changing them.
+- `Smethod` is therefore unavailable exactly where a null fit exists, and the
+  model never chose `ac_force_browse` at low — the one low method with a numeric
+  fit. AC numeric scores cannot be produced by repeating this epoch; they would
+  need either method-specific IDOR/vertical evidence the fixture does not exhibit,
+  or a design decision to score Access Control differently. Both are owner
+  decisions, not further execution.
+- High Access Control is a measured negative: no viable method, so nothing is
+  compared and nothing is scored. Reporting 0 would be an invented result.
+
+**This is the definitive answer to the AC requirement in the handoff:** numeric
+Access Control scores are unavailable for a reason that is recorded, measured and
+not repairable by more runs. No score is claimed.
