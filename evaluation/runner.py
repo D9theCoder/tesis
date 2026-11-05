@@ -471,10 +471,10 @@ def resolve_recorded_payload_policy(snapshot: Any) -> dict[str, Any] | None:
             + ", ".join(str(issue.get("reason")) for issue in issues)
         )
     current = recorded_payload_policy_snapshot()
-    identity_fields = ("snapshot_version", "policy_version", "payload_policy_version",
+    identity_fields = ("snapshot_sha256", "policy_version", "payload_policy_version",
         "control_policy_version", "budget_policy_version", "experiment_policy_version",
         "mutation_schema_version", "template_schema_version", "template_registry_version",
-        "prompt_manifest_version")
+        "prompt_manifest_version", "template_registry_sha256", "prompt_manifests_sha256")
     if any(snapshot.get(field) != current.get(field) for field in identity_fields):
         raise ValueError("Historical payload contract identities are read-only; a new live run requires canonical bindings")
     return deepcopy(snapshot)

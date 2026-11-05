@@ -1713,7 +1713,7 @@ def normalize_fixture_documents(value: Any) -> dict[str, dict[str, Any]]:
         return {}
     documents: dict[str, dict[str, Any]] = {}
     if isinstance(value, Mapping):
-        if read_contract(value.get("policy_version"), FIXTURE_RESTORATION_POLICY_VERSION):
+        if value.get("policy_version") == FIXTURE_RESTORATION_POLICY_VERSION:
             document = _fixture_document(value)
             documents[str(document["security_level"])] = document
             return documents

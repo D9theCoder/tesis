@@ -113,6 +113,19 @@ def validate_evidence_config(version, profile, oracles):
         raise ValueError('Live scoring configuration requires the canonical thesis-scoring rubric')
     validate_profile(profile)
     validate_sources(oracles)
+    known_kinds = {'dvwa_candidate_permission', 'dvwa_candidate_session',
+                   'dvwa_causal_dependency'}
+    for source in oracles:
+        protocol = source['document'].get('oracle_protocol')
+        if not isinstance(protocol, dict) or protocol.get('enabled') is not True:
+            continue
+        kind = protocol.get('kind')
+        if kind not in known_kinds:
+            raise ValueError(
+                f'Oracle source {source.get("source_id")!r} enables protocol {kind!r}, '
+                'which no collector recognises; a run would silently collect no evidence')
+        if protocol.get('protocol_version') not in (None, profile.get('protocol_version')):
+            raise ValueError('Oracle protocol scope must match the ranking profile protocol')
     for source in oracles:
         for field in ('attestations', 'negative_attestations'):
             attestations = source['document'].get(field, [])
@@ -358,7 +371,11 @@ def selection_grade(artifact, method):
     if not selection:
         return None, result
     surface = selection.get('surface')
-    if method not in METHODS_BY_SURFACE.get(surface, []):
+    if surface not in METHODS_BY_SURFACE:
+        # Absent evidence about which surface was evaluated is not a measured
+        # negative; grading it 0 would invent a result.
+        return None, {**result, 'status': 'unavailable', 'reason': 'missing_selection_surface'}
+    if method not in METHODS_BY_SURFACE[surface]:
         return 0, {**result, 'status': 'assessed', 'reason': 'outside_selected_surface'}
     observations = selection.get('observations')
     statuses = selection.get('precondition_status')

@@ -156,6 +156,144 @@ in the handoff. The original handoff remains authoritative.
 - [ ] 8g Verify imports/CLI/scoring/reporting/checkpoints/historical reading;
   document old-to-new mapping and every necessary historical exception.
 
+### 9 — Corrections verified 2026-11-06 (bulk cutover, fixture, corrected epoch)
+
+Coordinated bulk migration executed once from an explicit reviewed mapping, not by
+piecemeal edits. Evidence:
+[bulk manifest](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/bulk-migration-manifest.json>),
+[applied receipt](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/bulk-migration-applied.json>),
+[read-boundary inventory](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/bulk-read-boundary-inventory.json>).
+
+- [x] 8a/8b 60 files, 139 sites migrated from one mapping; unchanged external
+  model/API/package facts; historical files, saved artifacts and DOCX untouched.
+- [x] 8g Naming gate now reports **0 project-owned naming violations**
+  (`.venv/bin/python -m tesis.naming_guard`, exit 0). It passed only after the
+  obsolete fixture attestation in `config.yaml` was replaced by freshly measured
+  attestations, not by suppressing a violation.
+- [x] 8d Read-only adapters added for original identities
+  ([receipt](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/bulk-read-adapters-applied.json>)):
+  `core/historical_contracts.py` now owns `HISTORICAL_CONTRACT_NAMES` and
+  `read_contract()`; live launch/plan/checkpoint/resume/snapshot paths stay strict.
+  Historical detection controls keep their own original header bytes for their
+  catalog digest; candidate rows, safety classes, scope and budgets are unchanged.
+- [x] 7f/8c Focused batch: `tests/test_research_plan_blocks.py`,
+  `test_oracle_preregistration.py`, `test_fixture_epoch.py`,
+  `test_fixture_census.py` → **63 passed**
+  ([JUnit](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/bulk-corrected-fixture2-junit.xml>)).
+- [x] Remaining-scorer slice: earlier scorer batches remain valid
+  (**51**, **13**, **47**, **21** passed) and the full historical 108-coordinate
+  regeneration still reports **72 final / 36 pending**, unchanged.
+
+### 10 — Target fixture and corrected prospective epoch
+
+- DVWA itself was down: the configured database at `127.0.0.1:3307` refused
+  connections (`mysqli_error(false)`, error 2002). The running MySQL service was a
+  different instance. The existing XAMPP MariaDB was started on loopback only;
+  no database content, reset or fixture state was changed.
+  Evidence: [login GET diagnostic](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/login-server-diagnostic.json>).
+- Maintained collector replaced the deleted helper:
+  [fixture_census.py](</home/kevin/coding/tesis/evaluation/fixture_census.py>),
+  with offline controls in `tests/test_fixture_census.py`.
+- [x] Live read-only census, all three levels observed, 4 scoped modules each,
+  non-admin principal resolved, 99 physical requests, zero exploit candidates:
+  [census](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/restored-fixture-census.json>).
+- [x] Fresh two-census fixture-restoration attestations collected and bound to
+  epoch `corrected-primary-2026-11-06`
+  ([binding receipt](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/fixture-attestation-binding.json>)).
+- [x] Approved ranking profile recovered verbatim from retained epoch artifacts
+  (digest `42127e6b…`, cross-checked in the matrix artifact and manifest), with the
+  four owner-deferred AC fits still null
+  ([provenance](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/recovered-approved-ranking-profile-provenance.json>)).
+  No fit, source document or source hash was invented.
+- [x] Corrected epoch frozen: `results/studies/corrected-primary-2026-11-06/`
+  (`config.frozen.yaml`, `ranking-profile.frozen.json`, `policy-epoch.json`,
+  `freeze-receipt.json`). Declared two-model design restored
+  ([binding](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/declared-model-design-binding.json>)):
+  DeepSeek-V4.1-Flash-1017 at `max`; gpt-6-luna remains at its recorded
+  owner-authorised `low`.
+- [x] Research plan built: **selection block = exactly 108 coordinates**
+  (forced block 324 is a separate, unauthorized block and is not part of the
+  primary matrix). `results/runs/corrected-primary-2026-11-06/research-plan.json`.
+
+### 11 — Readiness blockers (measured, not resolved)
+
+Offline readiness: **108 coordinates, 14 blockers, `execution_authorized: false`**
+([report](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/readiness-2026-11-06/readiness-report.json>)).
+
+1. The readiness validator is still pointed at the **original** draft
+   (`autoresearch-primary-draft-2026-10-31.json`): old `primary-study-readiness.v1`,
+   `scoring.v4`, protocol `…v1`, approved digest `045f8d…`, epoch
+   `autoresearch-primary-2026-10-31`. A **new prospective readiness draft** for the
+   corrected epoch is required; the old draft must not be patched.
+2. `configured_reasoning_effort_not_max`: gpt-6-luna is `low`. The config comment
+   records an owner authorisation for that value, while the active instruction and
+   the gate require max. This is a deliberate owner decision, not an assistant
+   edit: resolve by setting max or by recording an approved amendment.
+3. The freshly generated fixture attestations predate the model-design edit, so
+   their source-tree hash no longer matches; regenerate **after** all source edits.
+4. `study_contract_incompatible`: the corrected declaration still declares both
+   blocks and no model profiles; readiness requires selection-only, 108, two
+   declared profiles, an output root and the canonical rubric.
+5. `source_tree_not_commit_bound`: 65 files differ from HEAD. No commit is
+   authorized, so this needs an explicit approved amendment record.
+6. `live_readiness_identity_mismatch` (gate): a live readiness probe bound to the
+   current epoch is still required.
+7. `output_root_not_empty`: the plan was written into the run root before
+   readiness; readiness expects a clean run root, so plan-then-readiness order must
+   be reconsidered.
+
+Nothing in this section is complete. The matrix has **not** been executed; no new
+receipts exist; AC still has no numeric scores.
+
+### 11 — Readiness: 14 blockers reduced to 2 (measured)
+
+Progression, each step re-run against the offline validator and never by editing
+the validator or suppressing a check:
+
+| Run | Blockers | What changed |
+| --- | ---: | --- |
+| `readiness-2026-11-06` | 14 | original draft still bound to the old epoch/labels |
+| `…-06b` | 19 | corrected draft authored; exposed draft-level mistakes |
+| `…-06c` | 5 | epoch rebuilt: design, schedule epoch, freezes, study contract |
+| `…-06d` | 5 | 108 coordinates declared; model keys/display names corrected |
+| `…-06e` | **2** | live probe recorded at `results/epochs/corrected-primary-2026-11-06/live-readiness.json` |
+
+Final measured state ([report](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/readiness-2026-11-06e/readiness-report.json>)):
+`status: blocked`, `execution_authorized: false`, **108 declared / 108 unique /
+0 missing**, 2 blockers. Both need owner action; neither may be bypassed:
+
+1. `live_readiness_checks_failed` — `live.model.openai_codex_auth` fails with
+   `SIWCError: Unable to access private SIWC storage; check its ownership and
+   permissions`. The DeepSeek/River probe, DVWA authentication, all three levels,
+   all three surfaces and containment **passed**
+   ([probe](</home/kevin/coding/tesis/results/epochs/corrected-primary-2026-11-06/live-readiness.json>)).
+   The sign-in credential store is the owner's; this session must not change its
+   ownership or permissions.
+2. `source_tree_not_commit_bound` — 65 source/config files differ from HEAD. The
+   validator has **no** amendment bypass; the epoch source must be committed.
+   No commit is authorised in this task.
+
+Because of these two, the authorized corrected 108-coordinate matrix has **not**
+run. No receipts, no new AC scores, no corrected F3 evidence exist. Fixing the
+credential store and authorising a commit of the epoch source are the only
+remaining prerequisites found by the gate.
+
+### 12 — Corrected epoch artifacts (frozen inputs, no executions)
+
+- `results/studies/corrected-primary-2026-11-06/`: `config.frozen.yaml`,
+  `ranking-profile.frozen.json` (`d539a56e…`), `policy-epoch.json`,
+  `freeze-receipt.json`, `study.json` (selection-only, 108, two declared models).
+- Rebuild receipt:
+  [corrected-epoch-rebuild.json](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/corrected-epoch-rebuild.json>).
+- Superseded pre-freeze attempts are retained under
+  `results/studies/_superseded_corrected-primary-2026-11-06_*`; nothing was deleted.
+- Model design now: DeepSeek-V4.1-Flash-1017 **max**, gpt-6-luna **max** (the
+  current instruction requires max for both; it supersedes the earlier `low` pin,
+  which is recorded in the rebuild receipt). Evaluator stays GLM-5.3-Flash at
+  `high`, outside the evaluated model set.
+- Three independent read-only audits are still running (historical compatibility,
+  rubric 0–4 coverage, F3/analysis reproduction) and are not yet integrated.
+
 ## Findings and resumable command log
 
 ### Entry inspection

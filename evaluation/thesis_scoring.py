@@ -41,6 +41,10 @@ PROOF_TIERS = {
     'partial_union_data': 2, 'evaluated_boolean_branch': 2,
     'repeatable_boolean_branch': 2, 'bounded_delay_signal': 2,
     'visibility_without_permission_oracle': 2,
+    # Emitted by all three Access-Control agents. Visibility alone caps at 2;
+    # the existing oracle-confirmed branch raises it to 3. Without this entry
+    # the class resolved to no tier at all, making levels 1-2 unreachable.
+    'verified_permission_candidate': 2,
     'verified_account_extraction': 3, 'verified_error_extraction': 3,
     'verified_repeatable_boolean_extraction': 3,
     'verified_repeatable_bounded_delay': 3,

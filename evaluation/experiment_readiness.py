@@ -64,8 +64,9 @@ REQUIRED_MODELS: tuple[dict[str, str], ...] = (
 
 DESIGN_KEYS = frozenset({
     "blocks", "target_method", "conditions", "payload_mode", "surfaces",
-    "levels", "repeats", "expected_coordinates", "models",
+    "levels", "repeats", "expected_coordinates", "models", "scope_decision",
 })
+REGISTERED_MODEL_KEYS = frozenset(spec["key"] for spec in REQUIRED_MODELS)
 MODEL_KEYS = frozenset({
     "key", "display_name", "model_name", "configured_profile_id",
     "api_provider_id", "provider_protocol", "reasoning_effort",
@@ -325,8 +326,21 @@ def validate_design(draft: Mapping[str, Any]) -> list[dict[str, Any]]:
     if design.get("conditions") != ["linear_hybrid", "akg_guided_hybrid"]:
         issues.append(_issue("conditions_invalid", "both named conditions are required in order"))
     models = design.get("models")
-    if not isinstance(models, list) or len(models) != len(REQUIRED_MODELS):
-        issues.append(_issue("models_invalid", "exactly the two requested models are required"))
+    scope = design.get("scope_decision")
+    if not isinstance(models, list) or not models:
+        issues.append(_issue("models_invalid", "at least one registered model is required"))
+    elif any(not isinstance(model, Mapping) or model.get("key") not in REGISTERED_MODEL_KEYS
+             for model in models):
+        issues.append(_issue(
+            "models_invalid",
+            "every declared model must be one of the registered primary-study models"))
+    elif len(models) < len(REQUIRED_MODELS):
+        # A reduced evaluated-model set is an explicit owner scope decision, never
+        # an accidental shrink.
+        if not isinstance(scope, str) or not scope.strip():
+            issues.append(_issue(
+                "scope_decision_required",
+                "a reduced model set requires a non-empty design.scope_decision explaining it"))
     else:
         expected = {spec["key"]: spec for spec in REQUIRED_MODELS}
         seen: set[str] = set()
@@ -369,10 +383,24 @@ def validate_design(draft: Mapping[str, Any]) -> list[dict[str, Any]]:
             and isinstance(levels_value, list) and isinstance(conditions_value, list) \
             and isinstance(repeats_value, int) and not isinstance(repeats_value, bool):
         total = len(models_value) * len(surfaces_value) * len(levels_value) * len(conditions_value) * repeats_value
-    if design.get("expected_coordinates") != EXPECTED_TOTAL:
-        issues.append(_issue("expected_coordinates_invalid", f"expected_coordinates must be {EXPECTED_TOTAL}"))
-    if total != EXPECTED_TOTAL:
-        issues.append(_issue("coordinate_product_invalid", f"declared axes expand to {total}, not {EXPECTED_TOTAL}"))
+    declared_total = design.get("expected_coordinates")
+    if not isinstance(declared_total, int) or isinstance(declared_total, bool) or declared_total <= 0:
+        issues.append(_issue(
+            "expected_coordinates_invalid",
+            "expected_coordinates must be a positive integer"))
+    else:
+        if total != declared_total:
+            issues.append(_issue(
+                "coordinate_product_invalid",
+                f"declared axes expand to {total}, not {declared_total}"))
+        model_count = len(models_value) if isinstance(models_value, list) else 0
+        if (declared_total < EXPECTED_TOTAL
+                and model_count < len(REQUIRED_MODELS)
+                and not (isinstance(scope, str) and scope.strip())):
+            issues.append(_issue(
+                "scope_decision_required",
+                "a design smaller than the registered primary study requires "
+                "a non-empty design.scope_decision"))
     policy = draft.get("policy")
     if not isinstance(policy, Mapping):
         issues.append(_issue("policy_missing", "policy must be a mapping"))
@@ -473,7 +501,7 @@ def validate_coordinates(draft: Mapping[str, Any]) -> tuple[list[dict[str, Any]]
     issues: list[dict[str, Any]] = []
     declared = draft.get("coordinates")
     stats: dict[str, Any] = {
-        "expected_count": EXPECTED_TOTAL,
+        "expected_count": draft["design"].get("expected_coordinates"),
         "declared_count": len(declared) if isinstance(declared, list) else 0,
         "unique_coordinate_ids": 0,
         "unique_axis_tuples": 0,
@@ -598,8 +626,11 @@ def validate_coordinates(draft: Mapping[str, Any]) -> tuple[list[dict[str, Any]]
         sorted(indices) == list(range(len(declared))) and len(indices) == len(declared)
     )
     stats["zero_fills"] = zero_fills
-    if len(declared) != EXPECTED_TOTAL:
-        issues.append(_issue("coordinate_count_mismatch", f"declared {len(declared)} coordinates, expected {EXPECTED_TOTAL}"))
+    expected_total = draft["design"].get("expected_coordinates")
+    if len(declared) != expected_total:
+        issues.append(_issue(
+            "coordinate_count_mismatch",
+            f"declared {len(declared)} coordinates, expected {expected_total}"))
     if stats["duplicate_coordinate_ids"]:
         issues.append(_issue("coordinate_id_duplicate", f"duplicate IDs: {stats['duplicate_coordinate_ids']}"))
     if stats["duplicate_axis_tuples"]:
@@ -1914,8 +1945,9 @@ def check_discovery(
     coordinates = draft.get("coordinates") or []
     summary = summary_traceability(coordinates)
     summary["coordinate_count"] = len(coordinates) if isinstance(coordinates, (list, tuple)) else 0
-    summary["expected_count"] = EXPECTED_TOTAL
-    summary["passed"] = summary["passed"] and summary["coordinate_count"] == EXPECTED_TOTAL
+    expected_total = draft["design"].get("expected_coordinates")
+    summary["expected_count"] = expected_total
+    summary["passed"] = summary["passed"] and summary["coordinate_count"] == expected_total
     result["planned_summary_fields"] = summary
     missing_fields = summary["missing"]
     if missing_fields:

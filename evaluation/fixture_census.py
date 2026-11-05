@@ -29,6 +29,12 @@ MODULE_PATHS = (
     "/vulnerabilities/sqli/", "/vulnerabilities/sqli_blind/",
     "/vulnerabilities/brute/", "/vulnerabilities/authbypass/",
 )
+MODULE_NAMES = {
+    "/vulnerabilities/sqli/": "sqli",
+    "/vulnerabilities/sqli_blind/": "sqli_blind",
+    "/vulnerabilities/brute/": "brute",
+    "/vulnerabilities/authbypass/": "authbypass",
+}
 POLICY_MARKER = "This page should only be accessible by the admin user"
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,6 +49,7 @@ def page_observation(response, path: str) -> dict:
     kind = ("admin_user_manager" if policy else "credential_form" if "password" in names
             else "object_form" if "id" in names else "module_page")
     return {
+        "module": MODULE_NAMES[path],
         "requested_path": path, "status": response.status_code,
         "final_path": urlsplit(response.url).path,
         "content_sha256": sha256(text.encode()).hexdigest(),
@@ -82,10 +89,10 @@ def collect_census(config_path: str | Path = "config.yaml") -> dict:
                 # Closed scope: do not follow arbitrary navigation or inspect
                 # out-of-scope DVWA attack modules.
                 index = admin.http.get("index.php")
-                links = [urlsplit(str(a.get("href") or "")).path
-                         for a in BeautifulSoup(index.text, "html.parser").select("a[href]")]
+                links = {"/" + urlsplit(str(a.get("href") or "")).path.strip("/")
+                         for a in BeautifulSoup(index.text, "html.parser").select("a[href]")}
                 document["index_nav_paths"] = [path for path in MODULE_PATHS
-                    if any(link.rstrip("/").endswith(path.rstrip("/")) for link in links)]
+                    if path.rstrip("/") in {link.rstrip("/") for link in links}]
                 try:
                     alternate, identity, _ = open_documented_nonadmin_session(base, level)
                     document["nonadmin_principal"] = identity

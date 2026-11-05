@@ -74,7 +74,7 @@ def validate_fixture_restoration_evidence(
     unknown = sorted(set(evidence) - FIXTURE_RESTORATION_KEYS)
     if unknown:
         raise ValueError(f"fixture restoration evidence has unknown keys: {unknown}")
-    if not read_contract(evidence.get("policy_version"), FIXTURE_RESTORATION_POLICY_VERSION):
+    if evidence.get("policy_version") != FIXTURE_RESTORATION_POLICY_VERSION:
         raise ValueError("unsupported fixture restoration policy version")
     if evidence.get("kind") != "operator_attestation":
         raise ValueError("fixture restoration evidence must be an operator attestation")

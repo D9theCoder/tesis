@@ -366,9 +366,9 @@ def validate_detection_controls(
     if not isinstance(snapshot, Mapping):
         return [_issue("probe_control_snapshot_missing")]
     issues: list[dict[str, Any]] = []
-    if not read_contract(snapshot.get("policy_version"), CONTROL_POLICY_VERSION):
+    if str(snapshot.get("policy_version")) != CONTROL_POLICY_VERSION:
         issues.append(_issue("probe_control_policy_unsupported"))
-    if not read_contract(snapshot.get("catalog_id"), CATALOG_ID) or not read_contract(snapshot.get("catalog_version"), CATALOG_VERSION):
+    if str(snapshot.get("catalog_id")) != CATALOG_ID or str(snapshot.get("catalog_version")) != CATALOG_VERSION:
         issues.append(_issue("probe_control_catalog_identity_mismatch"))
     phase = str(snapshot.get("phase") or "")
     if phase not in DETECTION_PHASES:
@@ -408,12 +408,7 @@ def validate_detection_controls(
     expected_identity = [{key: row.get(key) for key in identity_fields} for row in expected_rows]
     if actual_identity != expected_identity:
         issues.append(_issue("probe_control_catalog_mismatch"))
-    catalog_identity = [{key: row[key] for key in (
-        "candidate_id", "control_id", "payload_or_logic", "method", "security_level",
-        "phase", "purpose", "expected_signal", "safety_class", "request_budget",
-        "physical_request_budget")} for row in expected_rows]
-    expected_catalog_hash = _catalog_digest(catalog_identity, snapshot.get("catalog_id"), snapshot.get("catalog_version"))
-    if str(snapshot.get("catalog_sha256")) != expected_catalog_hash:
+    if str(snapshot.get("catalog_sha256")) != catalog_sha256(method, level, phase=phase):
         issues.append(_issue("probe_control_catalog_hash_mismatch"))
     if snapshot.get("quarantined"):
         issues.append(_issue("probe_control_quarantined",
