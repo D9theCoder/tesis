@@ -547,3 +547,15 @@ Conclusions, all evidence-backed:
 **This is the definitive answer to the AC requirement in the handoff:** numeric
 Access Control scores are unavailable for a reason that is recorded, measured and
 not repairable by more runs. No score is claimed.
+
+### 18 — Prospective oracle preregistration declared
+
+The historical preregistration no longer pins the shipped protocol sources once
+the canonical declaration was authored. A prospective draft now binds the
+canonical file: `config/research/corrected-primary-oracle-preregistration-draft.json`.
+Assessment: commitment **preregistered, 0 commitment blockers**; proof remains
+`oracle_attestation_not_collected` and `oracle_control_missing:10`, which is
+truthful for the document — the epoch's per-run permission/session/dependency
+attestations live in the run artifacts, not in this preregistration. The
+historical draft is preserved unchanged and still reports
+`configured_oracle_source_mismatch`, which the test suite now asserts explicitly.

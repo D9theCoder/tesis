@@ -1,0 +1,113 @@
+{
+  "approval": {
+    "approval_reference": "docs/active/AUTORESEARCH_RANKING_APPROVAL_QUESTIONS.md + docs/active/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md#2c--what-approval-and-independent-evidence-mean + owner session directive 2026-10-31",
+    "approved_at": "2026-10-31T10:04:26+00:00",
+    "approved_by": "repository owner (kevin)",
+    "reason": "Transcribed from the repository owner's explicit session directive of 2026-10-31 ('I APPROVE EVERYTHING' and 'i already gave my approval for everything') together with docs/active/AUTORESEARCH_RANKING_APPROVAL_QUESTIONS.md and docs/active/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md sections 2C and 4. approved_at is the time this metadata was transcribed, not a backdated message timestamp. signature is a metadata digest of the approval reference, not a cryptographic identity proof.",
+    "signature": "4350e109d96c687484780df1942a18ba984cfbeecb04702f3a7a64e7bf080f98",
+    "status": "approved"
+  },
+  "artifact_type": "autoresearch_oracle_preregistration_draft",
+  "collected_attestations": [],
+  "collection": {
+    "collection_completed_at": null,
+    "collection_started_at": null,
+    "collector": null,
+    "collector_sha256": null,
+    "provider_access_performed": false,
+    "reason": "The protocol commitments and owner approval are recorded prospectively, before the intended epoch. No independent control attestation was collected yet; collection occurs only during a technically ready execution, and none may be fabricated, inferred, or backdated.",
+    "status": "not_collected",
+    "target_access_performed": false
+  },
+  "created_at": "2026-10-31T01:00:42+00:00",
+  "created_at_basis": "Original commitment recording time, re-declared unchanged with canonical protocol labels for the corrected epoch; not a new approval and not a backdated message.",
+  "draft_id": "corrected-primary-oracle-preregistration-draft",
+  "draft_sha256": "0644241b2c596e7a817e8c5f04a7a26412bb63ee793fc2b7b614aa535593a94b",
+  "draft_version": "oracle-preregistration-draft.v1",
+  "fixture": {
+    "fixture_id": "dvwa-source-fee264766667580e5352",
+    "protocol_version": "ranking-session-acceptance"
+  },
+  "intended_epoch": {
+    "epoch_id": "corrected-primary-2026-11-06",
+    "output_root": "results/runs/corrected-primary-2026-11-06",
+    "started_at": null,
+    "status": "not_started"
+  },
+  "not_a_preregistration": false,
+  "offline_controls": [],
+  "protocol_commitments": [
+    {
+      "commitment_id": "commitment-dvwa-session-protocol",
+      "document_sha256": "b3295990c86ab0d714263f0f206a5ff3ef7d3097e2678823c4d29bf97ee1774f",
+      "fixture_id": "dvwa-source-fee264766667580e5352",
+      "origin": "operator_fixture",
+      "protocol_kind": "dvwa_candidate_session",
+      "protocol_version": "ranking-session-acceptance",
+      "required_controls": [
+        "unauthenticated",
+        "wrong_credential",
+        "reuse_authenticated_session",
+        "different_identity"
+      ],
+      "rubric_use": "Tabel 3.9 Brute Force session-control confirmation.",
+      "scope": "Configured DVWA; fresh sequential sessions; fixture-documented alternate account; no writes",
+      "source_id": "dvwa-session-protocol",
+      "status": "planned"
+    },
+    {
+      "commitment_id": "commitment-dvwa-candidate-permission-protocol",
+      "document_sha256": "fd5be20c66e0ba8604b74e6999bf71f94a9cab9bd4dc12d40d1854ad7f23ec33",
+      "fixture_id": "dvwa-source-fee264766667580e5352",
+      "origin": "operator_fixture",
+      "protocol_kind": "dvwa_candidate_permission",
+      "protocol_version": "ranking-session-acceptance",
+      "required_controls": [
+        "admin_allowed",
+        "anonymous_denied",
+        "candidate_replay"
+      ],
+      "rubric_use": "Tabel 3.8 Access Control permission and IDOR confirmation.",
+      "scope": "Configured DVWA only; fresh exact-resource read sessions; no writes or reset",
+      "source_id": "dvwa-candidate-permission-protocol-completion-all-frozen-objects",
+      "status": "planned"
+    },
+    {
+      "commitment_id": "commitment-dvwa-causal-dependency-protocol",
+      "document_sha256": "ca1080809da6f24a567185b64aae08edb44ec33ae4f905dae00c61897b157c49",
+      "fixture_id": "dvwa-source-fee264766667580e5352",
+      "origin": "operator_fixture",
+      "protocol_kind": "dvwa_causal_dependency",
+      "protocol_version": "ranking-session-acceptance",
+      "required_controls": [
+        "candidate_material_positive",
+        "wrong_credential_negative",
+        "destination_permission_oracle"
+      ],
+      "rubric_use": "Tabel 3.10 chain and dependency attribution; no historical Sexploit level 4 or Schain level 3 claim.",
+      "scope": "Configured DVWA only; candidate-bound credential consumption and read-only destination permission control",
+      "source_id": "dvwa-causal-dependency-protocol-completion",
+      "status": "planned"
+    }
+  ],
+  "source_record": {
+    "content_sha256": "f735bf16646b4c3e7a606fe31c26635df1d5f33e0e7e4a152d84dd44b339f26a",
+    "file_sha256": "28a1793e9fb0c4a6dc76f092834e761352bf5b8124f6f3576bc5dd8cd17684a0",
+    "path": "config/oracles/dvwa-candidate-protocols-fee264766667580e5352.json",
+    "source_count": 3
+  },
+  "status": "preregistered",
+  "traceability": {
+    "detail": "The three pinned protocols are configured operator sources. This artifact now records the prospective commitments and the owner's approval before the intended epoch; collected attestations and control coverage remain later run-bound proof, not preregistration.",
+    "handoff": "docs/active/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md",
+    "item": "G22",
+    "note": "Prospective redeclaration for the corrected epoch with canonical protocol labels; the historical draft is preserved unchanged.",
+    "rubric_rows": [
+      "Tabel 3.8",
+      "Tabel 3.9",
+      "Tabel 3.10"
+    ],
+    "source_audit": "docs/active/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md"
+  },
+  "validation_scope": "operator_fixture"
+}
