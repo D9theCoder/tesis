@@ -665,3 +665,26 @@ Two scoring-epoch identities now exist and must not be mixed: the original
 corrected epoch (35 final) and the revised-rubric epoch (41 final). Analysis and
 F3 figures in §16 belong to the original epoch; a revised-epoch F3/analysis can be
 recomputed from the same executions without touching either receipt set.
+
+### 23 — Revised-epoch analysis and F3 (final figures for this epoch)
+
+Computed from a dedicated review root containing only the 41 revised-rubric
+receipts (`results/reviews/corrected-primary-revised/`), so the two scoring epochs
+are never mixed.
+
+- [Revised analysis](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/corrected-revised-analysis/analysis.json>):
+  **7 strata analysed, 2 unsupported** (AC medium and high — no `Srun_final`).
+  Access-Control low is now a real analysed stratum.
+- [Revised F3 audit](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/corrected-revised-analysis/baseline-audit.json>):
+  **168 / 270 = 0.6222**, 102 unresolved.
+  Causes of the 168 attributed components: fixture_infeasible 72,
+  model_output_quality 90, harness_scoring 6.
+  Unresolved gaps: destination_precondition_unproved 42, payload_downstream_use_unproved
+  22, unclassified_payload_deduction 17, missing_selected_authority_receipt 7,
+  chain_evidence_unavailable 6, selection_rank_unresolved 6,
+  static_seed_payload_deduction 2 (sum 102).
+  Population: 54 accepted/graded, **41 reviewed**, 41 payload-reviewed, 48 runtime-scored.
+
+Epoch map, to prevent mixing: original corrected epoch (§16) 35 final,
+F3 162/270, 6 strata analysed; revised-rubric epoch (§22–23) 41 final,
+F3 168/270, 7 strata analysed. Both derive from the same 54 executions.
