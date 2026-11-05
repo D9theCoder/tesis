@@ -831,14 +831,104 @@ def analyse_policy(draft: Mapping[str, Any], configured: Mapping[str, Any]) -> t
             "scoring_oracle_sources_drift", "policy",
             "the draft scoring-oracle source IDs no longer match the configured operator sources",
         ))
-    ranking = policy.get("ranking_profile") or {}
-    if profile and profile.get("frozen_at") and profile.get("sha256"):
-        ranking = {
-            **ranking,
-            "status": "present_frozen_before_selection",
-            "sha256": profile.get("sha256"),
-            "profile_id": profile.get("profile_id"),
-        }
+    ranking = dict(policy.get("ranking_profile") or {})
+    declared_profile = policy.get("scoring_profile") or {}
+    declared_epoch = policy.get("scoring_policy_epoch") or {}
+    intended_epoch_id = (draft.get("intended_epoch") or {}).get("epoch_id")
+    configured_epoch_id = epoch.get("epoch_id")
+    configured_digest = (
+        _canonical_hash({key: value for key, value in profile.items() if key != "sha256"})
+        if profile else None
+    )
+    configured_profile_id = profile.get("profile_id") if profile else None
+    approved_digest = ranking.get("sha256") or declared_profile.get("sha256")
+    approved_profile_id = ranking.get("profile_id") or declared_profile.get("profile_id")
+    digest_match = None
+    profile_id_match = None
+    epoch_match = None
+    if profile:
+        if not approved_digest:
+            blockers.append(_blocker(
+                "ranking_profile_digest_missing", "policy",
+                "the approved draft ranking profile declares no digest; the configured frozen "
+                "profile cannot be shown to be the approved profile",
+            ))
+        else:
+            digest_match = configured_digest == approved_digest
+            if not digest_match:
+                blockers.append(_blocker(
+                    "ranking_profile_digest_mismatch", "policy",
+                    f"configured scoring profile canonical digest {configured_digest} does not "
+                    f"match the approved draft ranking digest {approved_digest}; the configured "
+                    "profile must not be substituted for the approved profile",
+                    evidence={
+                        "configured_sha256": configured_digest,
+                        "approved_sha256": approved_digest,
+                    },
+                ))
+        if approved_profile_id and configured_profile_id:
+            profile_id_match = approved_profile_id == configured_profile_id
+            if not profile_id_match:
+                blockers.append(_blocker(
+                    "ranking_profile_identity_mismatch", "policy",
+                    f"configured scoring profile_id {configured_profile_id!r} does not match "
+                    f"the approved draft profile_id {approved_profile_id!r}",
+                    evidence={
+                        "configured_profile_id": configured_profile_id,
+                        "approved_profile_id": approved_profile_id,
+                    },
+                ))
+        if profile.get("sha256") and profile.get("sha256") != configured_digest:
+            blockers.append(_blocker(
+                "scoring_profile_self_hash_mismatch", "policy",
+                "the configured scoring profile's own sha256 does not match its canonical "
+                "content digest; the profile cannot be bound to an approved draft",
+            ))
+    approved_epoch_ids = sorted({
+        value
+        for value in (
+            declared_epoch.get("epoch_id"),
+            declared_epoch.get("intended_epoch_id"),
+            intended_epoch_id,
+        )
+        if value
+    })
+    epoch_conflict = len(approved_epoch_ids) > 1
+    if epoch_conflict:
+        blockers.append(_blocker(
+            "scoring_policy_epoch_identity_conflict", "policy",
+            "the approved draft declares contradictory scoring policy epoch identities: "
+            f"{approved_epoch_ids}; a configured epoch cannot match every identity",
+            evidence={"approved_epoch_ids": approved_epoch_ids},
+        ))
+    if configured_epoch_id and approved_epoch_ids:
+        epoch_match = not epoch_conflict and configured_epoch_id in approved_epoch_ids
+        if not epoch_match:
+            blockers.append(_blocker(
+                "scoring_policy_epoch_identity_mismatch", "policy",
+                f"configured scoring policy epoch {configured_epoch_id!r} does not match "
+                f"every approved draft epoch identity {approved_epoch_ids}",
+                evidence={
+                    "configured_epoch_id": configured_epoch_id,
+                    "approved_epoch_ids": approved_epoch_ids,
+                    "conflicting_declarations": epoch_conflict,
+                },
+            ))
+    for label, declared_epoch_digest in (
+        ("draft scoring policy epoch", declared_epoch.get("ranking_profile_sha256")),
+        ("configured scoring policy epoch", epoch.get("ranking_profile_sha256")),
+    ):
+        if declared_epoch_digest and approved_digest and declared_epoch_digest != approved_digest:
+            blockers.append(_blocker(
+                "scoring_policy_epoch_ranking_digest_mismatch", "policy",
+                f"{label} ranking_profile_sha256 {declared_epoch_digest} does not match the "
+                f"approved draft ranking digest {approved_digest}",
+                evidence={
+                    "source": label,
+                    "epoch_sha256": declared_epoch_digest,
+                    "approved_sha256": approved_digest,
+                },
+            ))
     if ranking.get("status") != "present_frozen_before_selection":
         blockers.append(_blocker(
             "ranking_profile_missing", "policy",
@@ -884,7 +974,21 @@ def analyse_policy(draft: Mapping[str, Any], configured: Mapping[str, Any]) -> t
         "scoring_oracles_count": len(oracles),
         "scoring_oracles_sha256": configured.get("scoring_oracles_sha256"),
         "scoring_oracle_validation": oracle_validation,
-        "ranking_profile": ranking,
+        "ranking_profile": {
+            **ranking,
+            "canonical_source": "approved_draft_commitment",
+            "configured_binding": {
+                "configured_profile_present": bool(profile),
+                "configured_canonical_sha256": configured_digest,
+                "configured_profile_id": configured_profile_id,
+                "configured_epoch_id": configured_epoch_id,
+                "approved_sha256": approved_digest,
+                "approved_profile_id": approved_profile_id,
+                "digest_match": digest_match,
+                "profile_id_match": profile_id_match,
+                "epoch_match": epoch_match,
+            },
+        },
         "oracle_preregistration": preregistration,
         "candidate_order": candidate_order,
         "historical_smethod": policy.get("historical_smethod"),
@@ -1056,6 +1160,9 @@ def analyse_live_readiness(
         issues.append("target_url")
     if document.get("source_hashes_sha256") != source:
         issues.append("source_tree_hash")
+    config_sha = configured.get("_config_sha256")
+    if not config_sha or document.get("config_sha256") != config_sha:
+        issues.append("config_sha256")
     try:
         generated_at = datetime.fromisoformat(str(document.get("generated_at")))
         if generated_at.tzinfo is None:
@@ -1656,6 +1763,7 @@ def analyse_output_root(repo_root: str | Path, draft: Mapping[str, Any]) -> tupl
     result = {
         "output_root": output_root,
         "exists": False,
+        "readable": False,
         "non_empty": False,
         "created_by_validator": False,
         "writes_beneath_results_runs": False,
@@ -1670,14 +1778,33 @@ def analyse_output_root(repo_root: str | Path, draft: Mapping[str, Any]) -> tupl
     target = Path(repo_root).resolve() / Path(*parts)
     result["exists"] = target.exists()
     if target.exists():
+        if not target.is_dir():
+            result["readable"] = False
+            blockers.append(_blocker(
+                "output_root_not_directory", "output",
+                f"intended run root {output_root} exists but is not a directory; "
+                "existence cannot be established as an empty pre-execution root",
+            ))
+            return result, blockers
         try:
-            entries = sorted(entry.name for entry in target.iterdir())
+            entries = sorted(target.iterdir(), key=lambda entry: entry.name)
         except OSError as exc:
-            entries = []
+            result["readable"] = False
             result["error"] = str(exc)
+            blockers.append(_blocker(
+                "output_root_unreadable", "output",
+                f"intended run root {output_root} exists but cannot be enumerated: "
+                f"{type(exc).__name__}: {exc}; readiness cannot assume it is empty",
+            ))
+            return result, blockers
+        result["readable"] = True
         pre_execution = {"research-plan.json", "payload-policy-snapshot.json"}
-        unexpected = [name for name in entries if name not in pre_execution]
-        result["entries"] = entries
+        unexpected = [
+            entry.name
+            for entry in entries
+            if entry.name not in pre_execution or not entry.is_file()
+        ]
+        result["entries"] = [entry.name for entry in entries]
         result["pre_execution_only"] = bool(entries) and not unexpected
         result["non_empty"] = bool(unexpected)
     if result["non_empty"]:
@@ -1918,6 +2045,7 @@ def build_readiness_report(
     configured = load_configured(config_path)
     source, source_blockers = source_snapshot(repo_root, config_path)
     configured["_source_tree_sha256"] = source["tree_sha256"]
+    configured["_config_sha256"] = source["config_sha256"]
     models, model_blockers, warnings = analyse_models(draft, configured)
     policy, policy_blockers = analyse_policy(draft, configured)
     cost, cost_blockers, cost_warnings = analyse_cost(draft, configured)
@@ -1933,6 +2061,21 @@ def build_readiness_report(
     discovery, discovery_blockers = check_discovery(
         repo_root=repo_root, web_root=web_root, draft=draft,
     )
+    oracle = _oracle_preregistration(draft, root=Path(repo_root).resolve())
+    oracle_blockers: list[dict[str, Any]] = []
+    if not oracle["registered"]:
+        oracle_blockers.append(_blocker(
+            "oracle_preregistration_uncommitted", "policy",
+            "the preregistration artifact does not record a valid prospective commitment "
+            f"(status={oracle.get('status')!r}); declared "
+            "policy.oracle_preregistration.status alone is not authorization. "
+            f"{oracle.get('detail') or ''}".strip(),
+            evidence={
+                "status": oracle.get("status"),
+                "declared_status": oracle.get("draft_declared_status"),
+                "draft_path": oracle.get("draft_path"),
+            },
+        ))
     blockers = []
     for issue in [*issues, *coordinate_issues]:
         blockers.append(_blocker(
@@ -1946,6 +2089,7 @@ def build_readiness_report(
     blockers.extend(source_blockers)
     blockers.extend(output_blockers)
     blockers.extend(discovery_blockers)
+    blockers.extend(oracle_blockers)
     authorization = _authorization_gate(draft)
     launch_ready = bool(
         not blockers
@@ -1988,9 +2132,7 @@ def build_readiness_report(
         "scope": scope,
         "study_contract": study,
         "planner": planner,
-        "oracle_preregistration": _oracle_preregistration(
-            draft, root=Path(repo_root).resolve()
-        ),
+        "oracle_preregistration": oracle,
         "source_identity": source,
         "output_intent": output,
         "discovery": discovery,
@@ -2000,6 +2142,7 @@ def build_readiness_report(
         "launch_gate": {
             "matrix_launch_ready": launch_ready,
             "owner_execution_hold": not authorization["owner_approval_recorded"],
+            "oracle_preregistration_committed": bool(oracle["registered"]),
             "planner_build_verify": planner["build_verify"],
             "planner_execution": planner["execution"],
             "detail": (

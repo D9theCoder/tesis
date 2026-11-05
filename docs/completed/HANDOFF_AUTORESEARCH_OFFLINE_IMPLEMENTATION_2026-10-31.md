@@ -1,7 +1,7 @@
 # Completed — offline scoring and reporting fixes
 
-**Completed:** 2026-10-31. **Scope:** offline implementation only; the full research loop is not complete.
-**Next:** [remaining work and decisions](../active/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md).
+**Completed:** 2026-10-31. **Scope:** offline scoring/reporting implementation; the later live loop is recorded in the linked completed handoff.
+**Next:** [completed research loop and remaining findings](HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md).
 **Rubric:** Tabel 3.5–3.11 in [reconciled Chapter 3](../docx/bab-3-reconciled-2026-10-29.docx); source DOCX unchanged.
 
 ## What changed
@@ -31,4 +31,4 @@ Recovered transport retries do **not** reduce the baseline output grades. FD1 is
 **110 focused offline checks passed:** [JUnit](../../results/validation/autoresearch-2026-10-31/focused-junit.xml).
 The [saved-artifact smoke](../../results/validation/autoresearch-2026-10-31/offline-1814d68ac6/) blocked HTTP/provider access, preserved source hashes, generated the ledger/projection, rendered reports at 60/80 columns, and checked diagnostic counts with a synthetic 2/5 fixture—not a full historical audit.
 
-No full suite, offline/live E2E, target replay or provider-backed epoch was run for this completed slice. No improved-harness or full-convergence claim is made. **Later owner clarification (2026-10-31): matrix execution is on hold**, including after readiness gates pass; a later launch instruction is required. Follow the active handoff for subsequent verification and preparation.
+No full suite, offline/live E2E, target replay or provider-backed epoch was run for this completed slice. No improved-harness or full-convergence claim is made. **Later owner decision (2026-10-31):** the hold was lifted; the 108-run live epoch was executed and is reported in the linked completed handoff. Its F3/F6 gaps remain findings, not a convergence claim.

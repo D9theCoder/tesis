@@ -28,9 +28,14 @@ class FakeEntry:
 
 
 def _receipt(condition, mode, *, base=2.0, components=None,
-             metrics_epoch="scoring-policy.v4.2"):
+             metrics_epoch="scoring-policy.v4.2", reviewer=None,
+             review_version=None):
     vector = {name: base for name in COMPONENTS}
     vector.update(components or {})
+    if reviewer is None:
+        reviewer = "ai/independent-judge" if mode == "ai" else "human-reviewer-a"
+    if review_version is None:
+        review_version = "judge.v1" if mode == "ai" else "human.v1"
     return {
         "artifact_type": "thesis_score_receipt",
         "status": "final",
@@ -45,6 +50,14 @@ def _receipt(condition, mode, *, base=2.0, components=None,
         "rubric_version": "scoring.v4",
         "scoring_rule_sha256": RULE,
         "metrics_epoch": metrics_epoch,
+        "review_history": [{
+            "candidate_id": "candidate-1",
+            "decision_id": f"decision-{mode}",
+            "scoring_mode": mode,
+            "reviewer_id": reviewer,
+            "review_version": review_version,
+            "score": 3,
+        }],
         "config": {
             "experiment_condition": condition,
             "fixture_id": "fx",
@@ -88,13 +101,15 @@ def _reviews(receipt, modes, *, review_status):
 def _record(condition, repeat, *, model="model-a", provider="profile-a",
             surface="sqli", level="low", status="completed", readiness=True,
             modes=("human",), base=2.0, components=None,
-            metrics_epoch="scoring-policy.v4.2", review_status="final"):
+            metrics_epoch="scoring-policy.v4.2", review_status="final",
+            reviewer=None, review_version=None):
     receipt = None
     mode = modes[0] if modes else "human"
     if review_status == "final" and modes:
         receipt = _receipt(
             condition, mode, base=base, components=components,
-            metrics_epoch=metrics_epoch,
+            metrics_epoch=metrics_epoch, reviewer=reviewer,
+            review_version=review_version,
         )
     record = {
         "execution_id": f"run-{provider}-{model}-{surface}-{level}-{condition}-{repeat}",
@@ -380,6 +395,133 @@ def test_outcome_spread_refuses_incompatible_receipts(monkeypatch):
         assert distribution["n"] == 2
 
 
+def test_outcome_spread_keeps_same_grader_repeats_stable(monkeypatch):
+    coordinates = [_coordinate("linear_hybrid", repeat) for repeat in range(2)]
+    entries, documents = [], {}
+    for repeat, base in ((0, 1.0), (1, 3.0)):
+        entry, entry_documents = _make_entry(
+            "linear_hybrid", repeat, base=base,
+            reviewer="human-reviewer-a", review_version="human.v1",
+        )
+        entries.append(entry)
+        documents.update(entry_documents)
+
+    result = _analyze(monkeypatch, entries, _plan(coordinates, repeats=2), documents)
+
+    mode = result["outcome_spread"]["cells"][0]["modes"]["human"]
+    assert mode["status"] == "final"
+    assert mode["reason"] is None
+    assert mode["receipt_compatibility_mismatches"] == []
+    assert mode["grader_identity"] == {
+        "status": "recorded",
+        "graders": [{
+            "reviewer_id": "human-reviewer-a",
+            "review_version": "human.v1",
+        }],
+    }
+    smethod = mode["metrics"]["Smethod"]
+    assert smethod["n"] == 2
+    assert smethod["variance"] == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize(
+    ("reviewer_a", "reviewer_b", "version_a", "version_b", "expected"),
+    [
+        ("human-reviewer-a", "human-reviewer-b", "human.v1", "human.v1", {"reviewer_id"}),
+        ("human-reviewer-a", "human-reviewer-a", "human.v1", "human.v2", {"review_version"}),
+    ],
+)
+def test_outcome_spread_refuses_distinct_grader_repeats(
+        monkeypatch, reviewer_a, reviewer_b, version_a, version_b, expected):
+    coordinates = [_coordinate("linear_hybrid", repeat) for repeat in range(2)]
+    entries, documents = [], {}
+    for repeat, reviewer, version in (
+        (0, reviewer_a, version_a), (1, reviewer_b, version_b),
+    ):
+        entry, entry_documents = _make_entry(
+            "linear_hybrid", repeat, reviewer=reviewer, review_version=version,
+        )
+        entries.append(entry)
+        documents.update(entry_documents)
+
+    result = _analyze(monkeypatch, entries, _plan(coordinates, repeats=2), documents)
+
+    mode = result["outcome_spread"]["cells"][0]["modes"]["human"]
+    assert mode["status"] == "incompatible"
+    assert mode["reason"] == "receipt_grader_identity_mismatch"
+    assert expected <= set(mode["receipt_compatibility_mismatches"])
+    assert mode["grader_identity"]["status"] == "recorded"
+    assert {
+        (row["reviewer_id"], row["review_version"])
+        for row in mode["grader_identity"]["graders"]
+    } == {(reviewer_a, version_a), (reviewer_b, version_b)}
+    for distribution in mode["metrics"].values():
+        assert distribution["availability"] is False
+        assert distribution["unavailable_reason"] == "receipt_grader_identity_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("history_state", "problem"),
+    [
+        ("missing", "review_history_missing"),
+        ("empty", "review_history_empty"),
+    ],
+)
+def test_outcome_spread_refuses_receipts_without_grader_identity(
+        monkeypatch, history_state, problem):
+    coordinates = [_coordinate("linear_hybrid", repeat) for repeat in range(2)]
+    entries, documents = [], {}
+    for repeat in range(2):
+        entry, entry_documents = _make_entry("linear_hybrid", repeat)
+        for document in entry_documents.values():
+            if history_state == "missing":
+                document.pop("review_history", None)
+            else:
+                document["review_history"] = []
+        entries.append(entry)
+        documents.update(entry_documents)
+
+    result = _analyze(monkeypatch, entries, _plan(coordinates, repeats=2), documents)
+
+    mode = result["outcome_spread"]["cells"][0]["modes"]["human"]
+    expected_reason = f"receipt_grader_identity_unavailable:{problem}"
+    assert mode["status"] == "incompatible"
+    assert mode["reason"] == expected_reason
+    assert mode["grader_identity"] == {
+        "status": "unavailable",
+        "graders": [],
+        "reasons": [problem],
+    }
+    assert {"grader_identity", problem} <= set(mode["receipt_compatibility_mismatches"])
+    for distribution in mode["metrics"].values():
+        assert distribution["availability"] is False
+        assert distribution["unavailable_reason"] == expected_reason
+
+
+def test_ai_only_repeats_never_require_a_human_reviewer(monkeypatch):
+    coordinates = [_coordinate("linear_hybrid", repeat) for repeat in range(2)]
+    entries, documents = [], {}
+    for repeat in range(2):
+        entry, entry_documents = _make_entry(
+            "linear_hybrid", repeat, modes=("ai",),
+            reviewer="ai/independent-judge", review_version="judge.v1",
+        )
+        entries.append(entry)
+        documents.update(entry_documents)
+
+    result = _analyze(monkeypatch, entries, _plan(coordinates, repeats=2), documents)
+
+    mode = result["outcome_spread"]["cells"][0]["modes"]["ai"]
+    assert mode["status"] == "final"
+    assert mode["reason"] is None
+    assert mode["grader_identity"]["status"] == "recorded"
+    assert mode["grader_identity"]["graders"] == [{
+        "reviewer_id": "ai/independent-judge",
+        "review_version": "judge.v1",
+    }]
+    assert "human" not in result["outcome_spread"]["cells"][0]["modes"]
+
+
 def test_outcome_spread_refuses_duplicate_repeat_identity(monkeypatch):
     coordinates = [
         _coordinate("linear_hybrid", 0),
@@ -402,16 +544,20 @@ def _two_model_setup(*, include_model_a=True, modes=None,
                      base_a=3.0, base_b=1.0, conditions=None,
                      metrics_epoch_a="scoring-policy.v4.2",
                      metrics_epoch_b="scoring-policy.v4.2",
-                     readiness_a=True, readiness_b=True):
+                     readiness_a=True, readiness_b=True,
+                     reviewer_a=None, reviewer_b=None,
+                     review_version_a=None, review_version_b=None):
     conditions = conditions or list(analysis.PRIMARY_CONDITIONS)
     coordinates, entries, documents = [], [], {}
     for condition in conditions:
         for repeat in range(3):
-            for model, provider, base, epoch, model_modes, include, ready in (
+            for model, provider, base, epoch, model_modes, include, ready, reviewer, version in (
                 ("model-a", "profile-a", base_a, metrics_epoch_a,
-                 ("human",) if modes is None else modes[0], include_model_a, readiness_a),
+                 ("human",) if modes is None else modes[0], include_model_a, readiness_a,
+                 reviewer_a, review_version_a),
                 ("model-b", "profile-b", base_b, metrics_epoch_b,
-                 ("human",) if modes is None else modes[1], True, readiness_b),
+                 ("human",) if modes is None else modes[1], True, readiness_b,
+                 reviewer_b, review_version_b),
             ):
                 coordinates.append(_coordinate(
                     condition, repeat, model=model, provider=provider
@@ -421,7 +567,8 @@ def _two_model_setup(*, include_model_a=True, modes=None,
                 entry, entry_documents = _make_entry(
                     condition, repeat, model=model, provider=provider,
                     base=base, metrics_epoch=epoch, modes=model_modes,
-                    readiness=ready,
+                    readiness=ready, reviewer=reviewer,
+                    review_version=version,
                 )
                 entries.append(entry)
                 documents.update(entry_documents)
@@ -553,3 +700,182 @@ def test_model_contrast_reports_cross_model_receipt_mismatch(monkeypatch):
     assert row["metrics"] == {}
     assert row["n_final_model_a"] == 3
     assert row["n_final_model_b"] == 3
+
+
+def test_model_contrast_refuses_distinct_graders_across_models(monkeypatch):
+    coordinates, entries, documents = _two_model_setup(
+        conditions=["linear_hybrid"],
+        reviewer_a="human-reviewer-a", reviewer_b="human-reviewer-b",
+        review_version_a="human.v1", review_version_b="human.v1",
+    )
+    result = _analyze(
+        monkeypatch, entries, _plan(coordinates, repeats=3), documents
+    )
+
+    row = result["model_contrasts"]["results"][0]
+    assert row["status"] == "unsupported"
+    assert row["reason"] == "model_contrast_receipt_reviewer_id_mismatch"
+    assert row["metrics"] == {}
+    assert row["grader_identity_model_a"]["graders"] == [{
+        "reviewer_id": "human-reviewer-a", "review_version": "human.v1",
+    }]
+    assert row["grader_identity_model_b"]["graders"] == [{
+        "reviewer_id": "human-reviewer-b", "review_version": "human.v1",
+    }]
+
+
+def test_model_contrast_refuses_receipts_without_grader_identity(monkeypatch):
+    coordinates, entries, documents = _two_model_setup(
+        conditions=["linear_hybrid"]
+    )
+    for document in documents.values():
+        document.pop("review_history", None)
+    result = _analyze(
+        monkeypatch, entries, _plan(coordinates, repeats=3), documents
+    )
+
+    row = result["model_contrasts"]["results"][0]
+    assert row["status"] == "unsupported"
+    assert row["reason"] == (
+        "model_a_receipt_grader_identity_unavailable:review_history_missing"
+    )
+    assert row["metrics"] == {}
+    assert row["grader_identity_model_a"] == {
+        "status": "unavailable",
+        "graders": [],
+        "reasons": ["review_history_missing"],
+    }
+    assert row["grader_identity_model_b"] == {
+        "status": "unavailable",
+        "graders": [],
+        "reasons": ["review_history_missing"],
+    }
+
+
+def test_model_contrast_refuses_repeat_grader_mixing(monkeypatch):
+    coordinates, entries, documents = [], [], {}
+    for repeat in range(3):
+        for condition in ("linear_hybrid",):
+            coordinates.append(_coordinate(
+                condition, repeat, model="model-a", provider="profile-a"
+            ))
+            coordinates.append(_coordinate(
+                condition, repeat, model="model-b", provider="profile-b"
+            ))
+            entry_a, docs_a = _make_entry(
+                condition, repeat, model="model-a", provider="profile-a",
+                reviewer=f"human-reviewer-{repeat}", review_version="human.v1",
+            )
+            entry_b, docs_b = _make_entry(
+                condition, repeat, model="model-b", provider="profile-b",
+                reviewer="human-reviewer-stable", review_version="human.v1",
+            )
+            entries.extend((entry_a, entry_b))
+            documents.update(docs_a)
+            documents.update(docs_b)
+
+    result = _analyze(
+        monkeypatch, entries, _plan(coordinates, repeats=3), documents
+    )
+
+    row = result["model_contrasts"]["results"][0]
+    assert row["status"] == "unsupported"
+    assert row["reason"] == "model_a_receipt_grader_identity_mismatch"
+    assert row["metrics"] == {}
+    assert row["n_final_model_a"] == 3
+    assert row["n_final_model_b"] == 3
+    assert {
+        (grader["reviewer_id"], grader["review_version"])
+        for grader in row["grader_identity_model_a"]["graders"]
+    } == {
+        ("human-reviewer-0", "human.v1"),
+        ("human-reviewer-1", "human.v1"),
+        ("human-reviewer-2", "human.v1"),
+    }
+
+
+def test_paired_analysis_refuses_distinct_graders(monkeypatch):
+    coordinates, entries, documents = [], [], {}
+    for repeat in range(2):
+        for condition, reviewer in (
+            ("linear_hybrid", "human-reviewer-a"),
+            ("akg_guided_hybrid", "human-reviewer-b"),
+        ):
+            coordinates.append(_coordinate(condition, repeat))
+            entry, entry_documents = _make_entry(
+                condition, repeat, reviewer=reviewer, review_version="human.v1",
+            )
+            entries.append(entry)
+            documents.update(entry_documents)
+
+    result = _analyze(
+        monkeypatch, entries, _plan(coordinates, repeats=2), documents
+    )
+
+    paired = result["paired"]
+    assert paired["results"] == []
+    assert paired["n_eligible_pairs"] == 0
+    assert {row["reason"] for row in paired["unmatched"]} == {
+        "receipt_reviewer_id_mismatch"
+    }
+
+
+def test_paired_analysis_refuses_receipts_without_grader_identity(monkeypatch):
+    coordinates, entries, documents = [], [], {}
+    for repeat in range(2):
+        for condition, base in (
+            ("linear_hybrid", 3.0), ("akg_guided_hybrid", 1.0),
+        ):
+            coordinates.append(_coordinate(condition, repeat))
+            entry, entry_documents = _make_entry(
+                condition, repeat, base=base,
+            )
+            entries.append(entry)
+            documents.update(entry_documents)
+    for document in documents.values():
+        document["review_history"] = []
+
+    result = _analyze(
+        monkeypatch, entries, _plan(coordinates, repeats=2), documents
+    )
+
+    paired = result["paired"]
+    assert paired["results"] == []
+    assert paired["n_eligible_pairs"] == 0
+    assert {row["reason"] for row in paired["unmatched"]} == {
+        "receipt_grader_identity_unavailable:review_history_empty"
+    }
+
+
+def test_paired_analysis_never_pools_repeats_graded_by_different_reviewers(monkeypatch):
+    coordinates, entries, documents = [], [], {}
+    for repeat in range(2):
+        for condition, base in (
+            ("linear_hybrid", 3.0), ("akg_guided_hybrid", 1.0),
+        ):
+            coordinates.append(_coordinate(condition, repeat))
+            entry, entry_documents = _make_entry(
+                condition, repeat, base=base,
+                reviewer=f"human-reviewer-{repeat}", review_version="human.v1",
+            )
+            entries.append(entry)
+            documents.update(entry_documents)
+
+    result = _analyze(
+        monkeypatch, entries, _plan(coordinates, repeats=2), documents
+    )
+
+    paired = result["paired"]
+    assert paired["n_eligible_pairs"] == 2
+    assert len(paired["results"]) == 2
+    assert all(row["n_pairs"] == 1 for row in paired["results"])
+    assert {
+        tuple(
+            (grader["reviewer_id"], grader["review_version"])
+            for grader in row["grader_identity"]["graders"]
+        )
+        for row in paired["results"]
+    } == {
+        (("human-reviewer-0", "human.v1"),),
+        (("human-reviewer-1", "human.v1"),),
+    }

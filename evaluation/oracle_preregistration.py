@@ -397,6 +397,7 @@ def _check_collection(
     *,
     attestations: list[dict[str, Any]],
     created_at: datetime | None,
+    approved_at: datetime | None,
     errors: list[str],
 ) -> None:
     """Validate collection metadata against the recorded attestations."""
@@ -434,6 +435,9 @@ def _check_collection(
             errors.append("collection.collection_completed_at precedes collection_started_at")
         if started_at is not None and created_at is not None and started_at < created_at:
             errors.append("collection.collection_started_at predates the recorded commitment")
+        if started_at is not None and approved_at is not None and started_at < approved_at:
+            errors.append("collection.collection_started_at precedes the recorded approval; "
+                          "a retrospective collection window cannot supply preregistered evidence")
         if not attestations:
             errors.append("collection.status is collected but no attestation is recorded")
         for attestation in attestations:
@@ -607,7 +611,8 @@ def assess_draft(
     )
     approval = _check_approval(draft.get("approval"), errors)
     _check_collection(
-        draft.get("collection"), attestations=attestations, created_at=created_at, errors=errors,
+        draft.get("collection"), attestations=attestations, created_at=created_at,
+        approved_at=approval["approved_at"] if approval else None, errors=errors,
     )
     offline_controls = _check_offline_controls(
         draft.get("offline_controls"), scope=scope, errors=errors,

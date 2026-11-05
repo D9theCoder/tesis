@@ -27,8 +27,10 @@ A cause is assigned only when the artifact itself carries the evidence:
   not bind it (for example no frozen ranking profile, or a completed required
   call excluded because no final method was selected).
 * ``model_output_quality`` — the model output was valid but lacked required
-  references (Tabel 3.11 level 3), was replaced by a static fallback (level 1),
-  or was otherwise the recorded reason the component fell below cap.
+  references (Tabel 3.11 level 3), was replaced by a static fallback (Soutput
+  level 1), or was otherwise the recorded reason the component fell below cap.
+  A numeric Spayload backed by a static seed or by missing downstream proof is
+  not a model-output cause.
 * ``provider_failure`` — the required call ended in a provider error.
 * ``rubric_ceiling`` — the rubric's own scope/cap, not an implementation defect,
   bounds the value.
@@ -51,6 +53,7 @@ from evaluation.fidelity_ledger import CLOSED_CAUSES, DIMENSIONS, build_ledger
 from evaluation.scoring_evidence import (
     EXPERIMENT_ROLES,
     chain_availability,
+    origin_kind,
     output_references_valid,
     verified_dependencies,
 )
@@ -73,6 +76,21 @@ RUBRIC_TABLES = {
     '3.11': {'caption_line': 208, 'component': 'Soutput'},
 }
 _MISSING = object()
+
+# Origin classes that can carry model-output attribution.  Static seeds and
+# chain-derived material are retained evidence about the fixture, not model
+# generation, so a payload grade backed by them is never a model deduction.
+_MODEL_PAYLOAD_ORIGINS = frozenset({
+    'seed_mutation', 'template_generation', 'llm_generated', 'model',
+})
+# Recorded review reasons that establish a verified negative candidate signal.
+_NEGATIVE_PAYLOAD_REASONS = frozenset({
+    'own_exploit_events_all_negative',
+    'no_verified_candidate_signal',
+    'no_verified_exploit_signal',
+    'login_not_confirmed',
+    'timing_not_verified',
+})
 
 
 def _now():
@@ -412,6 +430,35 @@ def _fixture_refs(record, queue, *, include_calls=True):
     return refs
 
 
+def _payload_refs(candidates):
+    """Candidate, validation and provenance pointers backing a payload grade."""
+    refs = ['#/final_state/payload_candidates', '#/final_state/payload_validation_results']
+    for candidate in candidates:
+        refs.extend(ref for ref in candidate.get('evidence_refs') or [])
+        refs.extend(ref for ref in candidate.get('execution_evidence_refs') or [])
+        candidate_id = candidate.get('candidate_id')
+        if candidate_id is None:
+            continue
+        escaped = str(candidate_id).replace('~', '~0').replace('/', '~1')
+        refs.append(f'#/final_state/payload_provenance/{escaped}')
+    return refs
+
+
+def _payload_review_decisions(record, queue, candidate_ids):
+    """Recorded Spayload decisions bound to the queue's scored candidates."""
+    method = queue.get('method')
+    rows = []
+    for index, decision in enumerate(_state(record).get('scoring_decisions') or []):
+        if not isinstance(decision, dict) or decision.get('dimension') != 'Spayload':
+            continue
+        if method is not None and decision.get('method') != method:
+            continue
+        if str(decision.get('candidate_id')) not in candidate_ids:
+            continue
+        rows.append((index, decision))
+    return rows
+
+
 def _classify_smethod(record, queue, row, run_ref):
     state = _state(record)
     decisions = _selection_decisions(state)
@@ -538,7 +585,8 @@ def _classify_spayload(record, queue, row, run_ref):
             'The payload component is unavailable for a reason outside the closed causes.',
             ['queue:#/candidates', '#/final_state/payload_candidates'])
     value = row.get('component')
-    refs = ['#/final_state/payload_candidates', '#/final_state/payload_validation_results']
+    refs = ['#/final_state/payload_candidates', '#/final_state/payload_validation_results',
+            'queue:#/candidates']
     candidates = [candidate for candidate in queue.get('candidates') or []
                   if isinstance(candidate, dict) and candidate.get('eligible')]
     if not candidates:
@@ -548,12 +596,93 @@ def _classify_spayload(record, queue, row, run_ref):
             'DOCX forbids filling an empty denominator with a value.',
             ['#/final_state/payload_candidates', 'queue:#/candidates'])
     if value is not None and value < 4:
-        refs.extend(ref for candidate in candidates for ref in candidate.get('evidence_refs') or [])
-        if candidates:
-            return _decision(
-                run_ref, 'Spayload', 'model_output_quality', record, queue, refs,
-                f'Spayload {value} comes from the recorded candidate grades; the candidate '
-                'evidence stops below the level-4 downstream-use requirement.'), None
+        candidate_ids = {str(candidate.get('candidate_id')) for candidate in candidates
+                         if candidate.get('candidate_id') is not None}
+        refs.extend(_payload_refs(candidates))
+        reviews = _payload_review_decisions(record, queue, candidate_ids)
+        refs.extend(f'#/final_state/scoring_decisions/{index}' for index, _review in reviews)
+        reviewed = {str(decision.get('candidate_id')): decision for _index, decision in reviews}
+        statuses = {str(candidate.get('status')) for candidate in candidates}
+        negative_verified = bool(candidate_ids) and candidate_ids <= set(reviewed) and all(
+            str(reviewed[candidate_id].get('reason')) in _NEGATIVE_PAYLOAD_REASONS
+            for candidate_id in candidate_ids)
+        if value == 0 and (statuses == {'signal_absent'} or negative_verified):
+            return None, _gap(
+                run_ref, 'Spayload', row, 'payload_negative_outcome_without_cause_evidence',
+                'Every scored candidate is valid and executed with a recorded negative signal. '
+                'Tabel 3.6 level 0 is a rubric outcome, but the retained evidence does not '
+                'establish whether the fixture or the payload caused the absence; no '
+                'model-output cause is assigned.', refs)
+        if statuses == {'signal_absent'}:
+            return None, _gap(
+                run_ref, 'Spayload', row, 'signal_gate_contradicts_grade',
+                'Every scored candidate is marked signal_absent with proof ceiling 0, yet the '
+                'recorded Spayload is not 0; the grading path and candidate evidence disagree.',
+                refs)
+        origins = set()
+        for candidate in candidates:
+            provenance = candidate.get('provenance')
+            if not isinstance(provenance, dict):
+                continue
+            origin = origin_kind(provenance)
+            if isinstance(origin, str) and origin:
+                origins.add(origin)
+        if not origins:
+            return None, _gap(
+                run_ref, 'Spayload', row, 'payload_provenance_unavailable',
+                'Eligible candidates exist, but none records payload provenance, so the '
+                'candidate origin cannot be established. A numeric Spayload alone does not '
+                'support a model-output cause.', refs)
+        if origins == {'static_seed'}:
+            return None, _gap(
+                run_ref, 'Spayload', row, 'static_seed_payload_deduction',
+                'Every scored payload candidate is an origin_kind=static_seed candidate. The '
+                'numeric Spayload grades static seed evidence, not model output; a static seed '
+                'is never attributed to model quality.', refs)
+        if not origins & _MODEL_PAYLOAD_ORIGINS:
+            return None, _gap(
+                run_ref, 'Spayload', row, 'payload_grade_without_model_origin',
+                'No scored payload candidate has a model-output origin, so the numeric '
+                'deduction cannot be attributed to model output quality. Recorded origins: '
+                f'{sorted(origins)}.', refs)
+        method = queue.get('method')
+        dependencies = [dependency for dependency in verified_dependencies(record)
+                        if str(dependency['source'].get('candidate_id')) in candidate_ids
+                        and dependency['source'].get('agent_id') == method]
+        if dependencies:
+            return None, _gap(
+                run_ref, 'Spayload', row, 'verified_dependency_contradicts_grade',
+                'A verified dependency names an eligible candidate of the final method as '
+                'source, yet Spayload is below 4; the grading path and evidence disagree.',
+                ['#/final_state/chain_history', '#/final_state/chain_assessment', *refs])
+        ceilings = []
+        for candidate in candidates:
+            ceiling = candidate.get('proof_ceiling')
+            if isinstance(ceiling, int) and not isinstance(ceiling, bool):
+                ceilings.append(ceiling)
+        if ceilings and len(ceilings) == len(candidates):
+            max_ceiling = max(ceilings)
+            if all(ceiling == 3 for ceiling in ceilings) and value == 3:
+                return None, _gap(
+                    run_ref, 'Spayload', row, 'payload_downstream_use_unproved',
+                    'Every scored candidate has a recorded proof ceiling of 3: candidate and '
+                    'control evidence confirm the method result, while Tabel 3.6 level 4 needs '
+                    'independently verified downstream use. No verified dependency is bound to '
+                    'these candidates, so the missing downstream proof is an evidence gap and '
+                    'not a model-output defect.',
+                    ['#/final_state/chain_history', '#/final_state/chain_assessment', *refs])
+            if max_ceiling < 4 and value == max_ceiling and len(set(ceilings)) == 1:
+                return None, _gap(
+                    run_ref, 'Spayload', row, 'payload_grade_limited_by_candidate_evidence',
+                    'The recorded candidate evidence ceilings cap the eligible candidates at '
+                    f'{max_ceiling}, so the numeric Spayload deduction is bounded by the '
+                    'retained candidate evidence rather than an identified model-output defect.',
+                    ['#/final_state/verifier_history', *refs])
+        return None, _gap(
+            run_ref, 'Spayload', row, 'unclassified_payload_deduction',
+            'No candidate origin, review decision, proof ceiling or dependency evidence '
+            'explains the numeric Spayload deduction; the cause remains unresolved rather '
+            'than being assigned to the model.', refs)
     return None, _gap(run_ref, 'Spayload', row, 'unclassified_payload_deduction',
                       'No evidence-backed cause matched the recorded deduction.')
 
@@ -971,14 +1100,29 @@ def _dependency_census(records):
             consumptions = [row for row in route.get('consumption') or [] if isinstance(row, dict)]
             if not consumptions or any(not row.get('dependency_ref') for row in consumptions):
                 missing += 1
+    verified = sum(len(verified_dependencies(record)) for record in records)
+    if completed == 0:
+        route_note = 'No completed runtime route is recorded in this population.'
+    elif missing == completed:
+        route_note = (f'All {completed} completed runtime route(s) lack a dependency_ref to an '
+                      'independent operator attestation.')
+    else:
+        route_note = (f'{missing} of {completed} completed runtime route(s) lack a '
+                      'dependency_ref to an independent operator attestation.')
+    if verified == 0:
+        dependency_note = ('No verified dependency attestation is recorded in this population, '
+                           'so no recorded run supports a level-4 claim.')
+    else:
+        dependency_note = (f'{verified} verified dependency attestation(s) are recorded; '
+                           'level-4 credit still requires each attestation to bind source, '
+                           'consumption and destination.')
     return {
         'completed_chain_routes': completed,
         'completed_routes_without_dependency_ref': missing,
-        'verified_dependencies': sum(len(verified_dependencies(record)) for record in records),
+        'verified_dependencies': verified,
         'note': 'A completed runtime route is not a verified dependency. Tabel 3.7-3.10 level '
                 '4 requires an independent dependency attestation bound to source, consumption '
-                'and destination; the recorded routes lack dependency_ref, so verified '
-                'dependencies are zero and no historical level-4 claim is possible.',
+                'and destination. ' + route_note + ' ' + dependency_note,
     }
 
 
@@ -1255,34 +1399,99 @@ def _label_corrections(records):
     }
 
 
+def _render_component_counts(rows):
+    return ', '.join(f'{row["component"]} ({row["n_runs"]} run(s))' for row in rows)
+
+
 def _ceilings(ledger):
     graded = ledger['resolution']['graded_vectors']
     runtime = ledger['resolution']['runtime_vectors']
-    observed = defaultdict(set)
+    observed = defaultdict(Counter)
+    unavailable = Counter()
     for run in ledger['runs']:
         for dimension, row in run['dimensions'].items():
-            if row.get('state') in {'cap', 'deduction'}:
-                observed[dimension].add(row.get('component'))
+            state = row.get('state')
+            component = row.get('component')
+            if state in {'cap', 'deduction'}:
+                if component is not None:
+                    observed[dimension][component] += 1
+            elif state == 'null':
+                unavailable[dimension] += 1
+    observed_counts = {
+        dimension: [{'component': value, 'n_runs': count}
+                    for value, count in sorted(counter.items())]
+        for dimension, counter in sorted(observed.items())
+    }
+    unavailable_counts = {dimension: count for dimension, count in sorted(unavailable.items())}
+    graded_runs = sum(row['n_runs'] for row in graded)
+    complete_graded_runs = sum(
+        row['n_runs'] for row in graded
+        if row.get('vector') and all(value is not None for value in row['vector'].values()))
+    sexploit_level_4 = any(row['component'] == 4
+                           for row in observed_counts.get('Sexploit') or [])
+    schain_connected = any(row['component'] >= 3
+                           for row in observed_counts.get('Schain') or [])
+    notes = []
+    exploit = observed_counts.get('Sexploit')
+    if exploit:
+        rendered = _render_component_counts(exploit)
+        if sexploit_level_4:
+            notes.append(f'Sexploit is observed at {rendered}; the level-4 value present in '
+                         'this population is subject to the rubric\'s verified-dependency '
+                         'requirement of Tabel 3.7-3.9.')
+        else:
+            notes.append(f'Sexploit is observed at {rendered}; level 4 is not observed, so no '
+                         'run in this population reached the independently verified dependency '
+                         'requirement of Tabel 3.7-3.9.')
+    chain = observed_counts.get('Schain')
+    if chain:
+        rendered = _render_component_counts(chain)
+        if schain_connected:
+            notes.append(f'Schain is observed at {rendered}; a connected-route value (3 or 4) '
+                         'is present in this population.')
+        else:
+            notes.append(f'Schain is observed at {rendered}; no run in this population reaches '
+                         'the connected-route level 3.')
+    output = observed_counts.get('Soutput')
+    if output:
+        notes.append(f'Soutput is observed at {_render_component_counts(output)}.')
+    for dimension in ('Smethod', 'Spayload'):
+        if dimension in observed_counts:
+            notes.append(f'{dimension} is observed at '
+                         f'{_render_component_counts(observed_counts[dimension])}.')
+        count = unavailable_counts.get(dimension, 0)
+        if count:
+            notes.append(f'{dimension} is unavailable (null) for {count} run(s) in this '
+                         'population.')
+    if complete_graded_runs:
+        notes.append(f'{complete_graded_runs} run(s) have a complete graded component vector '
+                     'and a computable Srun.')
+    elif graded_runs:
+        notes.append(f'Graded vectors are recorded for {graded_runs} run(s), but none has every '
+                     'component graded, so no graded Srun can be computed.')
+    else:
+        notes.append('No graded component vector is resolved for this population, so no graded '
+                     'Srun can be computed from the ledger.')
+    notes.append('Legacy runtime surface/chain scores (including "Chain Exploit" 4) are '
+                 'run-scope runtime labels and are not graded v4 components.')
     return {
         'graded_vectors': [
             {'vector': row['vector'], 'n_runs': row['n_runs']} for row in graded
         ],
-        'observed_values': {dimension: sorted(value for value in values if value is not None)
-                            for dimension, values in sorted(observed.items())},
+        'observed_values': {dimension: sorted(counter)
+                            for dimension, counter in sorted(observed.items())},
+        'observed_counts': observed_counts,
+        'unavailable_counts': unavailable_counts,
         'runtime_vectors': [
             {'vector': row['vector'], 'n_runs': row['n_runs']} for row in runtime
         ],
-        'notes': [
-            'Sexploit is observed at 3 for every eligible run; level 4 is unreachable without '
-            'verified dependency evidence.',
-            'Schain resolves to 0 (no opportunity), 1 (weak opportunity with incomplete route '
-            'prerequisites) or 2 (route ready but no independent dependency attestation); no '
-            'level 3/4 is recorded.',
-            'Soutput resolves to 1 or 3; Smethod and Spayload are null for all 60 runs, so no '
-            'graded Srun can be computed.',
-            'Legacy runtime surface/chain scores (including "Chain Exploit" 4) are run-scope '
-            'runtime labels and are not graded v4 components.',
-        ],
+        'derived': {
+            'graded_runs': graded_runs,
+            'complete_graded_runs': complete_graded_runs,
+            'sexploit_level_4_observed': sexploit_level_4,
+            'schain_connected_level_observed': schain_connected,
+        },
+        'notes': notes,
     }
 
 

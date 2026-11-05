@@ -589,3 +589,38 @@ Grouping for research summaries must use the public `receipt_compatibility_key` 
 Physical request metrics consume `artifact["http_request_counters"]` (`http-accounting.v1`: actual requests/retries/redirect hops/failures by phase/role/method). Each actual dispatch, including oracle/verification traffic tagged `phase="verification"` with `candidate_verification` or `independent_control` roles, is counted once; redirect hops are a separate counter. Evidence-row counts are named separately as `evidence_requests_total`; a missing/incomplete counter is unavailable, never inferred from rows. `payload_generation_opportunities` is role+generation-stage-unique evidence; validation receipts are joined separately, so one refusal/provider failure is not two opportunities, and `payload_generation_opportunity_coverage` reports `generation_receipt_missing` rather than a measured zero when only validation rows survive. `recorded_payload_policy` (payload policy version + hash-pinned template registry/prompt manifests) is persisted on the artifact, `final_state`, and frozen method inputs; historical replay validates against that recorded snapshot, and a missing snapshot is unavailable rather than today's-registry revalidation. Matrix `totals` and provider rollups are operational counts only, with no pooled metric means across coordinates. Fixture restoration/equivalence comes only from an authorized `fixture-restoration.v1` operator attestation threaded through readiness; absent/mismatched evidence leaves paired analysis unmatched, and no reset endpoint is invoked. `compare_receipts` derives incomplete/unassessable/pending counts from task/pending reasons and canonical statuses, not a nonexistent `execution_status="incomplete"`. Candidate baselines require `candidate_verification` (or a documented explicit baseline purpose); ambiguous historical multi-visit execution stays unavailable.
 
 Matched Linear/AKG pairs require a ready readiness receipt on both sides with matching requested/observed level, fixture/protocol, and attested fixture restoration. Unmatched pairs are counted, not silently dropped. The predeclared paired analysis is a two-sided Wilcoxon signed-rank test with matched-pairs rank-biserial effect size, bootstrap percentile CI for the median paired difference, and Holm–Bonferroni correction within the metric family. Mann–Whitney U is exploratory only because paired coordinates violate independence. `Srun_final` still requires every component, an eligible candidate denominator, and a complete review workflow for the selected mode (human, AI, or both in parallel); no provisional v2 component or invented zero may fill a pending final.
+
+## Review corrections (2026-10-31)
+
+Payload grades describe observed evidence, not its cause. A numeric `Spayload`
+deduction, a static seed, or missing downstream-use proof does not establish
+`model_output_quality`. The audit retains an explicit gap when candidate,
+provenance and review evidence cannot support a closed cause. Ceiling and
+dependency summaries derive from the audited population, not the old 60-run
+baseline.
+
+D12 repeat distributions, model contrasts and paired comparisons require the
+same recorded reviewer identities and review versions, using the latest
+decision per candidate. Missing or empty review history leaves the comparison
+unavailable; scoring mode alone is not grader identity. AI-selected workflows
+still require no human scorer. Explicit price mappings use the call's recorded
+runtime route or configured profile before a conflicting direct model price.
+
+Readiness validates the actual prospective oracle commitment before launch
+authorization. Configured profile digests and policy epochs must match the
+approved declaration; live probes must match the frozen config digest.
+Collection cannot begin before protocol approval. Missing later per-run proof
+remains a separate grading limitation.
+
+Epoch manifest aggregate paths resolve relative to the manifest, including
+nested block files. Output enumeration failures block readiness, and incomplete
+or failed fixture censuses cannot produce equivalence attestations. These
+corrections do not rewrite retained runs, approvals, receipts or old reports.
+
+Verification: 175 focused offline regressions passed. The
+[offline smoke](../../results/validation/review-fixes-2026-10-31/smoke.json)
+checks aggregate resolution, fail-closed output handling and unchanged retained
+census digests. A read-only replay of the retained epoch resolves 72 final
+receipts and 36 pending reviews; its corrected audit records F3 = 0.5807
+(313/539) because unsupported payload causes remain explicit gaps. No live
+experiment or provider call was made.

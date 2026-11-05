@@ -3,10 +3,12 @@
 **Owner decisions: complete.** The owner accepted the proposed defaults with
 “I APPROVE EVERYTHING” and resolved the remaining interpretation with “yup i agree
 with A”. No current questionnaire response, personal opinion or routine yes/no
-approval remains outstanding. Do not ask these questions again.
+approval remains outstanding. Do not ask these questions again. This record stays
+at its original path because frozen ranking and execution metadata reference it;
+it is not an active handoff.
 
 **Artifacts:** [ranking draft JSON](../../config/research/autoresearch-ranking-draft-2026-10-31.json)
-and [active handoff](HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md).
+and [completed handoff](../completed/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md).
 **Coverage:** 27 entries / 9 scenarios; 23 supported numeric defaults approved,
 4 Access Control fits kept null by option A.
 
@@ -46,7 +48,7 @@ sign-off is required. This choice is fixed and must not be asked again.
 | Q6 — Administrative approval/freeze | Routine approval is settled. Machine-metadata migration, evidence validation and prospective freeze are assistant work; approval does not mean those steps have passed. |
 
 The same blanket approval accepts the currently proposed measurement-protocol
-defaults. As explained in [2C](HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md#2c--what-approval-and-independent-evidence-mean),
+defaults. As explained in [2C](../completed/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md#2c--what-approval-and-independent-evidence-mean),
 prospective protocol commitment and later run-specific proof are separate states.
 Missing machine evidence is not a request for manual verification or another opinion.
 

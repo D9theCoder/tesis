@@ -14,8 +14,10 @@ Paired analysis uses the same model/block/surface/level/target/repeat/
 fixture/protocol/policy-epoch coordinate across the two primary conditions. A
 pair is eligible only when both sides carry a ready readiness receipt with
 matching requested/observed level and attested fixture restoration, and both
-receipts share rubric, scoring-rule hash, metrics epoch and grader mode.
-Unmatched or pending coordinates are counted with reasons, never dropped.
+receipts share rubric, scoring-rule hash, metrics epoch, grader mode and recorded
+reviewer identity/version. A missing, empty or malformed grader identity is
+unavailable, never treated as a compatible grader. Unmatched or pending
+coordinates are counted with reasons, never dropped.
 """
 
 from __future__ import annotations
@@ -66,7 +68,10 @@ PAIR_AXES = (
     "protocol_version", "policy_epoch_id", "guardrail_retry_enabled",
     "guardrail_handling", "token_price_schedule_sha256",
 )
-RECEIPT_AXES = ("scoring_mode", "rubric_version", "scoring_rule_sha256", "metrics_epoch")
+RECEIPT_AXES = (
+    "scoring_mode", "reviewer_id", "review_version", "rubric_version",
+    "scoring_rule_sha256", "metrics_epoch",
+)
 
 OBSERVATION_STATES = (
     "final", "pending_review", "unassessable", "error", "interrupted", "missing",
@@ -416,6 +421,153 @@ def _cell_identity(coordinate: Mapping[str, Any]) -> dict[str, Any]:
     return {name: coordinate.get(name) for name in SPREAD_AXES}
 
 
+def _receipt_graders(
+    document: Mapping[str, Any],
+) -> tuple[tuple[tuple[str, str], ...] | None, str | None]:
+    """Return the recorded ``(reviewer_id, review_version)`` identities.
+
+    ``compare_receipts`` groups repeats by the latest decision per candidate,
+    so the same rule is used here: a superseded decision never contributes a
+    stale grader. A missing, empty or malformed ``review_history`` yields no
+    identity and an explicit reason; it is never inferred from the scoring mode
+    or treated as compatible with another receipt that lacks an identity.
+    """
+    history = document.get("review_history")
+    if history is None:
+        return None, "review_history_missing"
+    if not isinstance(history, list):
+        return None, "review_history_invalid"
+    latest: dict[Any, Mapping[str, Any]] = {}
+    for decision in history:
+        if not isinstance(decision, Mapping):
+            return None, "review_decision_invalid"
+        candidate = decision.get("candidate_id")
+        if not isinstance(candidate, str) or not candidate:
+            return None, "review_candidate_identity_missing"
+        latest[candidate] = decision
+    graders: set[tuple[str, str]] = set()
+    for decision in latest.values():
+        reviewer = decision.get("reviewer_id")
+        version = decision.get("review_version")
+        if not (isinstance(reviewer, str) and reviewer.strip()):
+            return None, "reviewer_id_missing"
+        if not (isinstance(version, str) and version.strip()):
+            return None, "review_version_missing"
+        graders.add((reviewer, version))
+    if not graders:
+        return None, "review_history_empty"
+    return tuple(sorted(graders)), None
+
+
+def _grader_rows(graders: Iterable[tuple[str, str]]) -> list[dict[str, str]]:
+    return [
+        {"reviewer_id": reviewer, "review_version": version}
+        for reviewer, version in graders
+    ]
+
+
+def _grader_problems(documents: Iterable[Mapping[str, Any]]) -> list[str]:
+    problems: set[str] = set()
+    for document in documents:
+        problem = _receipt_graders(document)[1]
+        if problem:
+            problems.add(problem)
+    return sorted(problems)
+
+
+def _grader_unavailable_reason(problems: Iterable[str]) -> str:
+    return "receipt_grader_identity_unavailable:" + ";".join(problems)
+
+
+def _grader_report(documents: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Describe the recorded grader identities behind a set of receipts."""
+    materialized = list(documents)
+    graders: set[tuple[str, str]] = set()
+    reasons: set[str] = set()
+    for document in materialized:
+        values, problem = _receipt_graders(document)
+        if problem:
+            reasons.add(problem)
+        else:
+            assert values is not None
+            graders.update(values)
+    if not materialized:
+        status = "no_final_receipts"
+    elif reasons:
+        status = "unavailable"
+    else:
+        status = "recorded"
+    report: dict[str, Any] = {"status": status, "graders": _grader_rows(sorted(graders))}
+    if reasons:
+        report["reasons"] = sorted(reasons)
+    return report
+
+
+def _grader_component_difference(
+    left_graders: tuple[tuple[str, str], ...],
+    right_graders: tuple[tuple[str, str], ...],
+) -> list[str]:
+    if left_graders == right_graders:
+        return []
+    left_ids = {reviewer for reviewer, _version in left_graders}
+    right_ids = {reviewer for reviewer, _version in right_graders}
+    left_versions = {version for _reviewer, version in left_graders}
+    right_versions = {version for _reviewer, version in right_graders}
+    different: list[str] = []
+    if left_ids != right_ids:
+        different.append("reviewer_id")
+    if left_versions != right_versions:
+        different.append("review_version")
+    return different or ["graders"]
+
+
+def _grader_difference(left: Mapping[str, Any], right: Mapping[str, Any]) -> list[str]:
+    """Return the grader components that make two receipts incompatible."""
+    left_graders, left_problem = _receipt_graders(left)
+    right_graders, right_problem = _receipt_graders(right)
+    if left_problem or right_problem:
+        return ["grader_identity"]
+    assert left_graders is not None and right_graders is not None
+    return _grader_component_difference(left_graders, right_graders)
+
+
+def _grader_identity_problem(left: Mapping[str, Any], right: Mapping[str, Any]) -> str | None:
+    """Return why two receipts cannot share one grader identity boundary."""
+    left_graders, left_problem = _receipt_graders(left)
+    right_graders, right_problem = _receipt_graders(right)
+    problems = sorted({problem for problem in (left_problem, right_problem) if problem})
+    if problems:
+        return _grader_unavailable_reason(problems)
+    assert left_graders is not None and right_graders is not None
+    different = _grader_component_difference(left_graders, right_graders)
+    if not different:
+        return None
+    if different == ["reviewer_id"]:
+        return "receipt_reviewer_id_mismatch"
+    if different == ["review_version"]:
+        return "receipt_review_version_mismatch"
+    return "receipt_graders_mismatch"
+
+
+def _receipt_compatibility_key(document: Mapping[str, Any]) -> str:
+    """Scorer pair identity plus the recorded grader identity/version."""
+    graders, problem = _receipt_graders(document)
+    evidence: Any = problem if problem else graders
+    return (
+        f"{pair_compatibility_key(document)}|graders:"
+        + json.dumps(evidence, sort_keys=True, default=str, separators=(",", ":"))
+    )
+
+
+def _receipt_compatibility_mismatches(
+    left: Mapping[str, Any], right: Mapping[str, Any]
+) -> list[str]:
+    return sorted(
+        set(pair_compatibility_mismatches(left, right))
+        | set(_grader_difference(left, right))
+    )
+
+
 def _mode_spread(mode: str, planned_pairs: list[tuple[Mapping[str, Any], Mapping[str, Any]]]) -> dict[str, Any]:
     """Describe one grader mode within one planned coordinate cell."""
     repeat_rows: list[dict[str, Any]] = []
@@ -454,16 +606,30 @@ def _mode_spread(mode: str, planned_pairs: list[tuple[Mapping[str, Any], Mapping
         })
         documents.append(document)
 
-    compatibility_keys = sorted({pair_compatibility_key(document) for document in documents})
-    compatible = len(compatibility_keys) <= 1
+    compatibility_keys = sorted({_receipt_compatibility_key(document) for document in documents})
+    grader_problems = _grader_problems(documents)
+    compatible = len(compatibility_keys) <= 1 and not grader_problems
     mismatches: list[str] = []
     if not compatible:
-        reference = documents[0]
-        mismatches = sorted({
-            component
-            for document in documents[1:]
-            for component in pair_compatibility_mismatches(reference, document)
-        })
+        if grader_problems:
+            mismatches = sorted({"grader_identity", *grader_problems})
+        else:
+            reference = documents[0]
+            mismatches = sorted({
+                component
+                for document in documents[1:]
+                for component in _receipt_compatibility_mismatches(reference, document)
+            })
+    grader_only = {"reviewer_id", "review_version", "graders", "grader_identity"}
+    if not compatible:
+        if grader_problems:
+            incompatible_reason = _grader_unavailable_reason(grader_problems)
+        elif mismatches and set(mismatches) <= grader_only:
+            incompatible_reason = "receipt_grader_identity_mismatch"
+        else:
+            incompatible_reason = "receipt_compatibility_mismatch"
+    else:
+        incompatible_reason = "receipt_compatibility_mismatch"
     metrics: dict[str, dict[str, Any]] = {}
     for name in COMPONENT_NAMES:
         values = [
@@ -474,7 +640,7 @@ def _mode_spread(mode: str, planned_pairs: list[tuple[Mapping[str, Any], Mapping
         metrics[name] = (
             _outcome_distribution(values) if compatible and values
             else _unavailable_distribution(
-                "receipt_compatibility_mismatch" if not compatible
+                incompatible_reason if not compatible
                 else "no_final_receipts" if not documents
                 else "component_unavailable",
                 n=len(values),
@@ -483,7 +649,8 @@ def _mode_spread(mode: str, planned_pairs: list[tuple[Mapping[str, Any], Mapping
     return {
         "scoring_mode": mode,
         "status": "final" if compatible else "incompatible",
-        "reason": None if compatible else "receipt_compatibility_mismatch",
+        "reason": None if compatible else incompatible_reason,
+        "grader_identity": _grader_report(documents),
         "n_planned": len(planned_pairs),
         "n_final": len(documents),
         "n_ready_final": sum(
@@ -831,8 +998,20 @@ def _side_compatibility_problem(
     """Check that repeats on one side of a model contrast are comparable."""
     if len(documents) < 2:
         return None
-    if len({pair_compatibility_key(document) for document in documents}) > 1:
-        return "receipt_compatibility_mismatch"
+    grader_problems = _grader_problems(documents)
+    if grader_problems:
+        return _grader_unavailable_reason(grader_problems)
+    if len({_receipt_compatibility_key(document) for document in documents}) > 1:
+        grader_fields = {
+            field
+            for document in documents[1:]
+            for field in _grader_difference(documents[0], document)
+        }
+        return (
+            "receipt_grader_identity_mismatch"
+            if grader_fields
+            else "receipt_compatibility_mismatch"
+        )
     reference = documents[0]
     for document in documents[1:]:
         problem = _receipt_common_problem(reference, document, constraints)
@@ -932,6 +1111,8 @@ def _model_contrast_row(
 
     left_documents = [document for _observation, document in left]
     right_documents = [document for _observation, document in right]
+    row["grader_identity_model_a"] = _grader_report(left_documents)
+    row["grader_identity_model_b"] = _grader_report(right_documents)
     left_problem = _side_compatibility_problem(left_documents, constraints)
     if left_problem:
         row["reason"] = f"model_a_{left_problem}"
@@ -1341,6 +1522,7 @@ def analyze_plan(
             "rank_sum": "Mann-Whitney U reported only as exploratory; independence is not established",
             "outcome_spread": "descriptive mean/median/sample variance/stdev/inclusive-quartile IQR per planned cell and grader mode; all repeats retained",
             "model_contrast": "separate exploratory Mann-Whitney U per stratum/condition/grader mode; model/provider are not pairing axes and repeats are not paired across models",
+            "grader_identity": "reviewer_id/review_version from the latest review decision per candidate; receipts with different recorded graders or versions are incompatible, and a missing/empty/invalid review_history is unavailable rather than pooled",
             "no_imputation": "missing, pending, failed, and unassessable coordinates stay counted and null",
         },
     }
@@ -1412,21 +1594,29 @@ def _paired_analysis(
                 "pair": list(base),
                 "mode": mode,
                 "conditions": list(PRIMARY_CONDITIONS),
+                "grader_identity": _grader_report([left_document, right_document]),
                 "shared_compatibility_key": pair_compatibility_key(left_document)
                 == pair_compatibility_key(right_document),
                 "metrics": metrics,
             })
 
     # Pool repeat units within one comparison identity; repeat identity is a
-    # pairing axis and must not leak into the pooled group key.
+    # pairing axis and must not leak into the pooled group key.  Recorded grader
+    # identity/version is also a pooling boundary: repeats graded by different
+    # reviewers (or versions) are separate analyses, never one sample.
     pooled: dict[tuple[Any, ...], dict[str, dict[str, list[float]]]] = defaultdict(
         lambda: defaultdict(lambda: {"differences": [], "left": [], "right": []})
     )
+    pooled_graders: dict[tuple[Any, ...], dict[str, Any]] = {}
     for comparison in comparisons:
         pair = tuple(comparison["pair"])
         # Repeat is a pairing axis and is pooled; grader mode is NOT pooled —
         # 3 repeats under human + AI receipts are two analyses of n=3, not n=6.
-        base = pair[:7] + pair[8:] + (comparison["mode"],)
+        grader_key = json.dumps(
+            comparison["grader_identity"], sort_keys=True, separators=(",", ":")
+        )
+        base = pair[:7] + pair[8:] + (comparison["mode"], grader_key)
+        pooled_graders.setdefault(base, comparison["grader_identity"])
         for name, row in comparison["metrics"].items():
             pooled[base][name]["differences"].append(row["difference"])
             pooled[base][name]["left"].append(row["left"])
@@ -1438,8 +1628,9 @@ def _paired_analysis(
         adjusted = _holm([test.get("p_value") for test in tests])
         n_pairs = len(metrics[names[0]]["differences"]) if names else 0
         results.append({
-            "comparison": list(base[:-1]),
-            "scoring_mode": base[-1],
+            "comparison": list(base[:-2]),
+            "scoring_mode": base[-2],
+            "grader_identity": pooled_graders[base],
             "conditions": list(PRIMARY_CONDITIONS),
             "direction": DIFFERENCE_DIRECTION,
             "n_pairs": n_pairs,
@@ -1469,6 +1660,7 @@ def _paired_analysis(
         "receipt_axes": list(RECEIPT_AXES),
         "grader_mode_axis": "scoring_mode",
         "grader_mode_pooling": "separate analyses per grader mode; never pooled into one sample",
+        "grader_identity_pooling": "reviewer_id/review_version from the latest review decision per candidate; different recorded grader identities are separate analyses, and missing/empty/invalid identity is unavailable rather than pooled as a repeat",
         "direction": DIFFERENCE_DIRECTION,
         "planner_contract": {
             "planned_repeats": constraints.get("repeats"),
@@ -1505,6 +1697,9 @@ def _receipt_common_problem(
     problem = _receipt_identity_problem(left, right)
     if problem:
         return problem
+    problem = _grader_identity_problem(left, right)
+    if problem:
+        return problem
     raw_left_policy = left.get("scoring_policy")
     raw_right_policy = right.get("scoring_policy")
     left_policy: Mapping[str, Any] = raw_left_policy if isinstance(raw_left_policy, Mapping) else {}
@@ -1522,6 +1717,9 @@ def _receipt_pair_problem(
 ) -> str | None:
     """Return the first reason two receipts are not a compatible matched pair."""
     problem = _receipt_identity_problem(left, right)
+    if problem:
+        return problem
+    problem = _grader_identity_problem(left, right)
     if problem:
         return problem
     if pair_compatibility_key(left) != pair_compatibility_key(right):

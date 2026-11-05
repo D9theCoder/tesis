@@ -1103,12 +1103,28 @@ a real non-empty price schedule; synthetic profile controls prove reachability
 only. See
 [offline reporting correction](thesis_scoring.md#offline-reporting-correction-2026-10-31).
 
-The non-execution preparation includes a 27-entry owner-review ranking draft,
-an exact 108-coordinate study declaration and offline readiness/audit tools.
-Coverage is not approval or freeze readiness. The primary selection-only study
-can be built and verified offline; its execution remains unsupported by this
-preparation path. The existing two-block study remains separate. See the
-[active handoff](../active/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md).
+The primary selection-only study `autoresearch-primary-2026-10-31` executed all
+108 coordinates. Its retained report records 96 confirmed outcomes, 12
+unconfirmed outcomes, 72 final AI receipts and 36 pending Access Control reviews
+under the original scoring epoch. The epoch is not converged; F6 = 0.1111 and
+the retained analysis reports no statistically significant condition/model
+contrast at n=3. The original F3 attribution is superseded by the
+[post-review audit](../../results/validation/review-fixes-2026-10-31/baseline-audit.json):
+a payload deduction alone cannot establish a model-output cause. The post-review audit
+closes 313 of 539 causes (F3 = 0.5807); 226 remain explicit gaps. Original
+artifacts, receipts and reports remain unchanged. See the
+[completed handoff](../completed/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md) and
+[retained execution report](../../results/validation/autoresearch-2026-10-31/analysis/epoch-report.md).
+
+Readiness requires the assessed prospective oracle commitment, matching approved
+profile and policy identities, and live evidence bound to the frozen config
+digest. Protocol approval must precede collection; missing later proof remains
+separate. Incomplete fixture censuses and unreadable output roots cannot establish
+readiness. D12 comparisons require recorded reviewer identities and versions;
+missing grader identity is unavailable, not a shared anonymous grader. Explicit
+cost routes take precedence over conflicting direct model prices. These
+[review corrections](thesis_scoring.md#review-corrections-2026-10-31) do not add
+human review requirements to AI-scored workflows.
 
 Offline analysis retains all planned repeat identities and explicit missing,
 failed and pending outcomes. `outcome_spread` reports descriptive sample variance

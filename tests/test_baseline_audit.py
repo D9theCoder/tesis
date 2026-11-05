@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from evaluation.baseline_audit import audit_baseline, classify_dimension
+import evaluation.baseline_audit as baseline_audit
+from evaluation.baseline_audit import (
+    _ceilings,
+    _dependency_census,
+    audit_baseline,
+    classify_dimension,
+)
 
 
 def measured_negative_artifact(**overrides):
@@ -226,3 +232,172 @@ def test_gap_refs_are_filtered_to_resolving_pointers():
     assert 'queue:#/candidates' in gap['evidence_refs']
     assert '#/final_state/payload_candidates' in gap['evidence_refs']
     assert all(ref.startswith(('#/', 'queue:#/')) for ref in gap['evidence_refs'])
+
+
+def payload_artifact(origin):
+    record = measured_negative_artifact()
+    record['final_state']['payload_candidates'] = {'ac_idor': [{
+        'candidate_id': 'c1', 'method': 'ac_idor', 'stage': 'exploit',
+        'origin_kind': origin, 'source': origin, 'visit_id': 'ac_idor:visit:1',
+    }]}
+    record['final_state']['payload_provenance'] = {'c1': {
+        'origin_kind': origin, 'source': origin, 'visit_id': 'ac_idor:visit:1',
+        'model_call_id': None,
+    }}
+    record['final_state']['payload_validation_results'] = {'ac_idor': [{
+        'candidate_id': 'c1', 'valid': True, 'reason': 'ok',
+        'visit_id': 'ac_idor:visit:1',
+    }]}
+    record['final_state']['response_evidence'] = [{
+        'evidence_id': 'response:1', 'candidate_id': 'c1', 'agent_id': 'ac_idor',
+        'visit_id': 'ac_idor:visit:1', 'stage': 'exploit', 'status_code': 200,
+        'response_sha256': 'a' * 64,
+        'verification_reason': 'no_verified_exploit_signal',
+    }]
+    return record
+
+
+def payload_queue(origin, ceiling, status='pending_review'):
+    return {'method': 'ac_idor', 'candidates': [{
+        'candidate_id': 'c1', 'method': 'ac_idor', 'stage': 'exploit',
+        'eligible': True, 'status': status, 'proof_ceiling': ceiling,
+        'base_proof': ceiling, 'executed': True,
+        'provenance': {'origin_kind': origin, 'source': origin,
+                       'visit_id': 'ac_idor:visit:1'},
+        'evidence_refs': ['#/final_state/response_evidence/0'],
+        'execution_evidence_refs': ['#/final_state/response_evidence/0'],
+    }]}
+
+
+def test_static_seed_payload_deduction_is_not_model_quality():
+    row = {'state': 'deduction', 'component': 3, 'pending_reason': None}
+    decision, gap = classify_dimension(
+        payload_artifact('static_seed'), payload_queue('static_seed', 3),
+        'Spayload', row, 'mn-1')
+    assert decision is None
+    assert gap['gap'] == 'static_seed_payload_deduction'
+    assert '#/final_state/payload_provenance/c1' in gap['evidence_refs']
+
+
+def test_model_payload_deduction_without_cause_evidence_is_a_gap():
+    row = {'state': 'deduction', 'component': 2, 'pending_reason': None}
+    decision, gap = classify_dimension(
+        payload_artifact('seed_mutation'), payload_queue('seed_mutation', 2),
+        'Spayload', row, 'mn-1')
+    assert decision is None
+    assert gap['gap'] == 'payload_grade_limited_by_candidate_evidence'
+    assert '#/final_state/response_evidence/0' in gap['evidence_refs']
+
+
+def test_model_payload_missing_downstream_proof_is_not_model_quality():
+    row = {'state': 'deduction', 'component': 3, 'pending_reason': None}
+    decision, gap = classify_dimension(
+        payload_artifact('seed_mutation'), payload_queue('seed_mutation', 3),
+        'Spayload', row, 'mn-1')
+    assert decision is None
+    assert gap['gap'] == 'payload_downstream_use_unproved'
+
+
+def test_verified_negative_payload_signal_is_a_gap_not_model_quality():
+    row = {'state': 'deduction', 'component': 0, 'pending_reason': None}
+    decision, gap = classify_dimension(
+        payload_artifact('seed_mutation'),
+        payload_queue('seed_mutation', 0, status='signal_absent'),
+        'Spayload', row, 'mn-1')
+    assert decision is None
+    assert gap['gap'] == 'payload_negative_outcome_without_cause_evidence'
+    assert '#/final_state/response_evidence/0' in gap['evidence_refs']
+
+
+def test_recorded_negative_candidate_reviews_are_a_gap_not_model_quality():
+    record = payload_artifact('seed_mutation')
+    record['final_state']['scoring_decisions'] = [{
+        'dimension': 'Spayload', 'method': 'ac_idor', 'candidate_id': 'c1',
+        'score': 0, 'reason': 'own_exploit_events_all_negative',
+        'evidence_refs': ['#/final_state/response_evidence/0'],
+    }]
+    row = {'state': 'deduction', 'component': 0, 'pending_reason': None}
+    decision, gap = classify_dimension(
+        record, payload_queue('seed_mutation', 2), 'Spayload', row, 'mn-1')
+    assert decision is None
+    assert gap['gap'] == 'payload_negative_outcome_without_cause_evidence'
+    assert '#/final_state/scoring_decisions/0' in gap['evidence_refs']
+
+
+def ceiling_ledger():
+    runs = []
+    for index in range(108):
+        dimensions = {
+            'Smethod': {'state': 'null', 'component': None},
+            'Spayload': {'state': 'null', 'component': None},
+            'Sexploit': {'state': 'deduction', 'component': 3},
+            'Schain': {'state': 'deduction', 'component': 2},
+            'Soutput': {'state': 'deduction', 'component': 3},
+        }
+        if index == 0:
+            dimensions['Smethod'] = {'state': 'deduction', 'component': 3}
+            dimensions['Spayload'] = {'state': 'deduction', 'component': 2.5}
+        elif index == 1:
+            dimensions['Schain'] = {'state': 'deduction', 'component': 3}
+        elif index == 2:
+            dimensions['Sexploit'] = {'state': 'cap', 'component': 4}
+        runs.append({'dimensions': dimensions})
+    counted = {}
+    for run in runs:
+        vector = tuple(
+            run['dimensions'][dimension].get('component')
+            if run['dimensions'][dimension].get('state') in {'cap', 'deduction'} else None
+            for dimension in ('Smethod', 'Spayload', 'Sexploit', 'Schain', 'Soutput'))
+        counted[vector] = counted.get(vector, 0) + 1
+    graded_vectors = [
+        {'vector': dict(zip(('Smethod', 'Spayload', 'Sexploit', 'Schain', 'Soutput'), vector)),
+         'n_runs': count}
+        for vector, count in sorted(counted.items(), key=lambda item: str(item[0]))
+    ]
+    return {'resolution': {'graded_vectors': graded_vectors, 'runtime_vectors': []},
+            'runs': runs}
+
+
+def test_ceilings_notes_follow_heterogeneous_population():
+    result = _ceilings(ceiling_ledger())
+    assert result['observed_counts']['Smethod'] == [{'component': 3, 'n_runs': 1}]
+    assert result['observed_counts']['Spayload'] == [{'component': 2.5, 'n_runs': 1}]
+    assert result['observed_counts']['Schain'] == [
+        {'component': 2, 'n_runs': 107}, {'component': 3, 'n_runs': 1}]
+    assert result['observed_counts']['Sexploit'] == [
+        {'component': 3, 'n_runs': 107}, {'component': 4, 'n_runs': 1}]
+    assert result['unavailable_counts'] == {'Smethod': 107, 'Spayload': 107}
+    assert result['derived'] == {
+        'graded_runs': 108,
+        'complete_graded_runs': 1,
+        'sexploit_level_4_observed': True,
+        'schain_connected_level_observed': True,
+    }
+
+
+def test_dependency_census_reports_mixed_route_evidence(monkeypatch):
+    missing = measured_negative_artifact()
+    missing['execution_id'] = 'dep-missing'
+    missing['final_state']['chain_history'] = [{
+        'status': 'completed', 'route_id': 'route:missing',
+        'consumption': [{'source_evidence_id': 's1', 'destination_evidence_id': 'd1'}],
+    }]
+    verified = measured_negative_artifact()
+    verified['execution_id'] = 'dep-verified'
+    verified['final_state']['chain_history'] = [{
+        'status': 'completed', 'route_id': 'route:verified',
+        'consumption': [{
+            'source_evidence_id': 's2', 'destination_evidence_id': 'd2',
+            'dependency_ref': '#/config/scoring_oracles/0/document/dependencies/0',
+        }],
+    }]
+    empty = measured_negative_artifact()
+    empty['execution_id'] = 'dep-empty'
+    monkeypatch.setattr(
+        baseline_audit, 'verified_dependencies',
+        lambda record: [{'source': {'candidate_id': 'c1', 'agent_id': 'ac_idor'}}]
+        if record is verified else [])
+    census = _dependency_census([missing, verified, empty])
+    assert census['completed_chain_routes'] == 2
+    assert census['completed_routes_without_dependency_ref'] == 1
+    assert census['verified_dependencies'] == 1

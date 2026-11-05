@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from hashlib import sha256
+import json
 import math
 
 from evaluation.remaining_evidence import _check_grades
+from evaluation.research_metrics import SCORING_RULE_DIGEST_DEFINITION, SCORING_SOURCE_FILES
 from evaluation.thesis_scoring import WEIGHTS, _validated_reviews, review_queue
 from tesis.artifact_repository import config_fingerprint
 from tesis.runtime_events import redact_secrets
@@ -27,6 +30,70 @@ def _empty(reason="missing_review"):
             "numerator": None, "denominator": None, "candidate_grades": [],
             "receipt": None, "review_status": None, "decision_ledger": None,
             "generated_at": None, "rubric_version": None, "scoring_rule_sha256": None}
+
+
+def _hex64(value):
+    return isinstance(value, str) and len(value) == 64 and set(value) <= set("0123456789abcdef")
+
+
+def _source_set_digest(value):
+    return sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def _source_bound_queue(entry, document, queue):
+    """Return a queue carrying a historical digest only when source-anchored.
+
+    Current-source validation is unchanged: a document matching the live queue
+    digest is returned untouched. A differing digest is accepted only when the
+    raw source artifact independently records the same canonical four-file
+    source hashes and scoring epoch as the document policy.
+    """
+    recorded = document.get("scoring_rule_sha256")
+    if recorded == queue.get("scoring_rule_sha256"):
+        return queue
+    if not _hex64(recorded):
+        return queue
+    policy = document.get("scoring_policy")
+    if not isinstance(policy, dict):
+        raise ValueError("scoring_rule_epoch_anchor_missing")
+    if policy.get("digest_definition") != SCORING_RULE_DIGEST_DEFINITION:
+        raise ValueError("scoring_rule_epoch_definition_mismatch")
+    if policy.get("source_files") != list(SCORING_SOURCE_FILES):
+        raise ValueError("scoring_rule_epoch_source_files_mismatch")
+    policy_hashes = policy.get("source_hashes")
+    if not isinstance(policy_hashes, dict) or set(policy_hashes) != set(SCORING_SOURCE_FILES):
+        raise ValueError("scoring_rule_epoch_source_hashes_missing")
+    if any(not _hex64(policy_hashes[path]) for path in SCORING_SOURCE_FILES):
+        raise ValueError("scoring_rule_epoch_source_hash_invalid")
+    digest = sha256(
+        "".join(policy_hashes[path] for path in SCORING_SOURCE_FILES).encode()
+    ).hexdigest()
+    if policy.get("scoring_rule_sha256") != digest or recorded != digest:
+        raise ValueError("scoring_rule_epoch_anchor_digest_mismatch")
+    record = entry.record if isinstance(getattr(entry, "record", None), dict) else {}
+    source_identity = record.get("source_identity")
+    if not isinstance(source_identity, dict):
+        raise ValueError("source_identity_missing")
+    source_hashes = source_identity.get("source_hashes")
+    if not isinstance(source_hashes, dict):
+        raise ValueError("source_identity_source_hashes_missing")
+    if any(source_hashes.get(path) != policy_hashes[path] for path in SCORING_SOURCE_FILES):
+        raise ValueError("source_identity_hash_mismatch")
+    identity_digest = source_identity.get("source_hashes_sha256")
+    if not _hex64(identity_digest) or identity_digest != _source_set_digest(source_hashes):
+        raise ValueError("source_identity_digest_mismatch")
+    if record.get("source_hashes_sha256") != identity_digest:
+        raise ValueError("source_identity_digest_mismatch")
+    score_epoch = record.get("score_epoch")
+    if not isinstance(score_epoch, dict):
+        raise ValueError("scoring_epoch_missing")
+    if score_epoch.get("scoring_rule_sha256") != digest:
+        raise ValueError("scoring_epoch_digest_mismatch")
+    anchored = dict(queue)
+    anchored["scoring_rule_sha256"] = digest
+    return anchored
 
 
 def _binding_check(entry, document, queue, *, legacy=False):
@@ -57,6 +124,7 @@ def _binding_check(entry, document, queue, *, legacy=False):
 
 
 def _validated_receipt(catalog, entry, path, receipt, queue):
+    queue = _source_bound_queue(entry, receipt, queue)
     _binding_check(entry, receipt, queue)
     if catalog.resolve(receipt["source_path"], owner=path) != entry.path:
         raise ValueError("source_path_mismatch")
@@ -110,6 +178,7 @@ def _validated_receipt(catalog, entry, path, receipt, queue):
 
 
 def _validated_status(catalog, entry, path, status, queue, source_hash_count):
+    queue = _source_bound_queue(entry, status, queue)
     legacy = not status.get("execution_id") or not status.get("generated_at")
     _binding_check(entry, status, queue, legacy=legacy)
     if not legacy and (not status.get("source_path") or _timestamp(status) is None):

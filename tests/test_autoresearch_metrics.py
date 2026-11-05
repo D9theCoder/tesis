@@ -329,3 +329,85 @@ def test_measured_non_events_keep_legitimate_zero():
                  'mean_attempts_to_success', 'method_selection_accuracy'):
         assert summary['metric_availability'][name] is True, name
         assert metric_reading(summary, name)[1] is True, name
+
+
+# --------------------------------------------------------------------------- #
+# Explicit price routes keyed by the configured runtime profile
+# --------------------------------------------------------------------------- #
+
+
+def test_price_route_for_configured_profile_wins_over_direct_rate():
+    schedule = {
+        'schedule_id': 'pricing-fixture',
+        'version': '2026-10-31',
+        'effective_at': '2026-10-01T00:00:00+00:00',
+        'currency': 'USD',
+        'accounting_basis': 'api_equivalent_estimate',
+        'billing_route': 'subscription-profile',
+        'prices': {
+            'provider/model': {
+                'input_per_million': 100.0, 'output_per_million': 100.0,
+            },
+            'provider/subscription-model': {
+                'input_per_million': 1.0, 'output_per_million': 2.0,
+                'accounting_basis': 'api_equivalent_estimate',
+            },
+        },
+        'price_routes': {'configured-profile': 'provider/subscription-model'},
+    }
+    call = {
+        'call_id': 'call-1',
+        'role': 'orchestrator',
+        'provider': 'provider',
+        'model': 'model',
+        'model_profile': 'configured-profile',
+        'provider_usage': {
+            'input_tokens': 1_000_000,
+            'output_tokens': 1_000_000,
+            'total_tokens': 2_000_000,
+            'input_token_details': {'cache_read': 0, 'cache_write': 0},
+        },
+    }
+
+    document = compute_run_metrics(artifact(
+        config={'token_price_schedule': schedule},
+        llm_performance=[call],
+    ))
+
+    assert document['availability']['token_cost'] is True
+    assert document['values']['token_cost'] == pytest.approx(3.0)
+    detail = document['denominators']['token_cost']
+    assert detail['price_schedule_id'] == 'pricing-fixture'
+    # The declared route row (1 + 2) wins over the conflicting direct row
+    # (100 + 100) keyed by provider/model.
+    assert detail['price_routes_used'] == {
+        'configured-profile': 'provider/subscription-model',
+    }
+    assert detail['accounting_basis'] == 'api_equivalent_estimate'
+    assert detail['billing_route'] == 'subscription-profile'
+    assert detail['accounting_basis_by_price_key'] == {
+        'provider/subscription-model': 'api_equivalent_estimate',
+    }
+
+
+def test_missing_price_schedule_keeps_cost_unavailable():
+    call = {
+        'call_id': 'call-1',
+        'role': 'orchestrator',
+        'provider': 'provider',
+        'model': 'model',
+        'model_profile': 'configured-profile',
+        'provider_usage': {
+            'input_tokens': 1,
+            'output_tokens': 1,
+            'total_tokens': 2,
+            'input_token_details': {'cache_read': 0, 'cache_write': 0},
+        },
+    }
+
+    document = compute_run_metrics(artifact(llm_performance=[call]))
+
+    assert document['availability']['token_cost'] is False
+    assert document['values']['token_cost'] is None
+    assert document['unavailable_reason']['token_cost'] == 'token_price_schedule_missing'
+    assert document['denominators']['token_cost']['accounting_basis'] == 'unspecified'

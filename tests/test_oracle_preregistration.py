@@ -433,6 +433,44 @@ def test_timestamp_order_rejects_backdating_and_retrospective_evidence():
         _assess(draft)
 
 
+def test_collection_window_cannot_start_before_approval():
+    draft = _synthetic_preregistered_fixture()
+    draft["collected_attestations"] = [
+        _synthetic_attestation(
+            draft["protocol_commitments"][0],
+            # The attestation itself is later than approval; only the window
+            # start is retrospective, so later collection cannot rescue it.
+            collected_at="2026-10-31T02:00:00+00:00",
+            recorded_at="2026-10-31T02:01:00+00:00",
+        )
+    ]
+    _mark_collected(
+        draft,
+        started="2026-10-31T01:05:00+00:00",
+        completed="2026-10-31T02:10:00+00:00",
+    )
+    with pytest.raises(oracle_preregistration.PreregistrationValidationError,
+                       match="collection.collection_started_at precedes the recorded approval"):
+        _assess(draft)
+
+    draft = _synthetic_preregistered_fixture()
+    draft["collected_attestations"] = [
+        _synthetic_attestation(
+            draft["protocol_commitments"][0],
+            collected_at="2026-10-31T02:00:00+00:00",
+            recorded_at="2026-10-31T02:01:00+00:00",
+        )
+    ]
+    _mark_collected(
+        draft,
+        started=SYNTHETIC_APPROVED_AT,
+        completed="2026-10-31T02:10:00+00:00",
+    )
+    report = _assess(draft)
+    assert report["collection_status"] == "collected"
+    assert report["readiness"]["commitment"]["preregistered"] is True
+
+
 def test_epoch_started_before_preregistration_blocks_presence():
     draft = _synthetic_preregistered_fixture()
     draft["intended_epoch"].update({

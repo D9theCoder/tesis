@@ -1133,12 +1133,29 @@ memerlukan jadwal harga nyata yang tidak kosong; kontrol profil sintetis hanya
 membuktikan keterjangkauan. Lihat
 [koreksi pelaporan offline](thesis_scoring.md#offline-reporting-correction-2026-10-31).
 
-Persiapan non-eksekusi mencakup draf ranking 27 entri untuk tinjauan pemilik,
-deklarasi studi tepat 108 koordinat, serta alat audit dan readiness offline.
-Cakupan lengkap bukan persetujuan atau kesiapan pembekuan. Studi primer
-selection-only dapat dibangun dan diverifikasi offline; jalur persiapan ini
-belum mendukung eksekusinya. Studi dua blok yang sudah ada tetap terpisah.
-Lihat [handoff aktif](../active/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md).
+Studi primer selection-only `autoresearch-primary-2026-10-31` mengeksekusi seluruh
+108 koordinat. Laporan tersimpan mencatat 96 hasil terkonfirmasi, 12 tidak
+terkonfirmasi, 72 receipt AI final dan 36 tinjauan Access Control tertunda pada
+epoch penilaian awal. Epoch ini belum konvergen; F6 = 0.1111 dan analisis tersimpan
+tidak menemukan kontras kondisi/model yang signifikan secara statistik pada n=3.
+Atribusi F3 awal digantikan oleh
+[audit pascatinjauan](../../results/validation/review-fixes-2026-10-31/baseline-audit.json):
+deduksi payload saja tidak membuktikan penyebab kualitas keluaran model.
+Audit pascatinjauan menutup 313 dari 539 penyebab (F3 = 0.5807); 226 tetap
+menjadi gap eksplisit. Artefak, receipt dan laporan awal tetap utuh. Lihat
+[handoff selesai](../completed/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md) dan
+[laporan eksekusi tersimpan](../../results/validation/autoresearch-2026-10-31/analysis/epoch-report.md).
+
+Readiness memerlukan komitmen oracle prospektif yang benar-benar dinilai,
+identitas profil dan kebijakan yang sesuai persetujuan, serta bukti live yang
+terikat pada digest konfigurasi beku. Persetujuan protokol harus mendahului
+pengumpulan; bukti per-run yang belum ada tetap dipisahkan. Sensus fixture yang
+tidak lengkap dan direktori keluaran yang tidak dapat dibaca tidak membuktikan
+readiness. Perbandingan D12 memerlukan identitas serta versi penilai yang
+tercatat; identitas yang hilang tetap unavailable, bukan penilai anonim bersama.
+Rute biaya eksplisit didahulukan atas harga model langsung yang bertentangan.
+[Koreksi tinjauan](thesis_scoring.md#review-corrections-2026-10-31) ini tidak
+menambahkan kewajiban penilaian manusia pada workflow AI.
 
 Analisis offline mempertahankan seluruh identitas repeat terencana serta hasil
 missing, failed dan pending secara eksplisit. `outcome_spread` melaporkan varians

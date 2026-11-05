@@ -32,6 +32,12 @@ def _receipt(condition, mode, *, base=2.0):
                             + 0.3 * vector["Sexploit"] + 0.1 * vector["Schain"], 4),
         "rubric_version": "scoring.v4", "scoring_rule_sha256": "a" * 64,
         "metrics_epoch": "scoring-policy.v4.2",
+        "review_history": [{
+            "candidate_id": "candidate-1",
+            "scoring_mode": mode,
+            "reviewer_id": "ai/independent-judge" if mode == "ai" else "human-reviewer-a",
+            "review_version": "judge.v1" if mode == "ai" else "human.v1",
+        }],
         "config": {
             "experiment_condition": condition,
             "fixture_id": "fx",

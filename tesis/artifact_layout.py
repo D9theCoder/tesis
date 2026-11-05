@@ -36,6 +36,19 @@ def _local_date(now: datetime | None = None) -> str:
     return current.date().isoformat()
 
 
+def _contained_reference(path: str | Path, root: Path) -> str:
+    """Return ``path`` relative to the layout root, refusing escapes."""
+
+    resolved_root = root.resolve()
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = resolved_root / candidate
+    try:
+        return candidate.resolve().relative_to(resolved_root).as_posix()
+    except ValueError as exc:
+        raise ValueError(f"manifest artifact is outside the layout root: {path}") from exc
+
+
 @dataclass(slots=True)
 class ExperimentArtifactLayout:
     """Allocated directory and manifest state for one experiment invocation."""
@@ -129,9 +142,17 @@ class ExperimentArtifactLayout:
         config: Mapping[str, Any] | None = None,
         artifacts: Sequence[Mapping[str, Any]] = (),
         aggregate: Mapping[str, Any] | None = None,
+        aggregate_artifact: str | Path | None = None,
         status: str | None = None,
     ) -> Path:
-        """Write a compact index while keeping full evidence in run JSON files."""
+        """Write a compact index while keeping full evidence in run JSON files.
+
+        ``aggregate_artifact`` names the aggregate file relative to this layout
+        root.  Nested layouts (for example a research-plan block that writes
+        ``selection/<execution_id>.matrix.json``) must pass it so the recorded
+        reference resolves to the real aggregate instead of a root-level copy
+        that does not exist.
+        """
 
         safe_config = redact_secrets(dict(config or {}))
         parent_id = (aggregate or {}).get("execution_id")
@@ -200,12 +221,18 @@ class ExperimentArtifactLayout:
         aggregate_info: dict[str, Any] | None = None
         if aggregate is not None:
             aggregate_execution_id = aggregate.get("execution_id")
+            if aggregate_artifact is not None:
+                artifact_reference = _contained_reference(aggregate_artifact, self.root)
+                if not (self.root.resolve() / artifact_reference).is_file():
+                    raise ValueError(
+                        f"aggregate artifact does not exist under the layout root: {artifact_reference}"
+                    )
+            elif aggregate_execution_id:
+                artifact_reference = f"{aggregate_execution_id}.matrix.json"
+            else:
+                artifact_reference = None
             aggregate_info = {
-                "artifact": (
-                    f"{aggregate_execution_id}.matrix.json"
-                    if aggregate_execution_id
-                    else None
-                ),
+                "artifact": artifact_reference,
                 "execution_id": aggregate_execution_id,
                 "run_id": aggregate.get("run_id"),
                 "status": aggregate.get("status"),

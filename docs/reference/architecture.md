@@ -643,15 +643,19 @@ The two-block study is declared by `config/research/chapter3_study.json` and ope
 
 The 2026-10-31 primary-study declaration
 `config/research/autoresearch-primary-study-2026-10-31.json` declares only the
-selection block: two explicitly pinned max-reasoning models, all surfaces and
-levels, both hybrid conditions and three repeats (108 planned coordinates).
-`research_plan` accepts selection-only build/verify while retaining the default
-two-block declaration. Missing frozen profiles, prices and other inputs still
-block plan creation; preparing a declaration does not freeze them.
-Selection-only execution is explicitly unsupported by this preparation path.
-`experiment_readiness`, `ranking_draft` and `baseline_audit` read local evidence
-and emit derived validation reports, never experimental run artifacts. The
-owner's execution hold remains in force after all preparation gates pass.
+selection block: two pinned max-reasoning models, all surfaces and levels,
+both hybrid conditions and three repeats (108 coordinates). `research_plan`
+supports this declaration and the default two-block study. Epoch manifests
+resolve aggregate references relative to the manifest directory, including
+aggregates stored inside a block directory.
+
+Readiness requires the configured profile digest and policy epoch to match the
+approved declaration, a valid prospective oracle commitment, and live evidence
+bound to the exact frozen config digest. Later per-run oracle proof is assessed
+separately. Unreadable output roots and directories masquerading as allowed
+pre-execution files block readiness. Fixture-equivalence attestations require
+complete successful census coverage; matching omissions are not equivalence.
+The offline reporters do not collect target or provider evidence.
 
 ### Correction release fields (2026-10-28)
 

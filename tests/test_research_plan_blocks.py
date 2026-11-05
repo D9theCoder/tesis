@@ -23,6 +23,7 @@ from evaluation.research_plan import (
     load_research_config,
     verify_plan,
 )
+from tesis.artifact_catalog import ArtifactCatalog
 from tests.test_autoresearch_profile import _protocol_source, synthetic_profile
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -571,4 +572,61 @@ def test_runner_rejects_symlinked_plan_output_root(monkeypatch, offline):
         )
 
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    "block_names",
+    (("selection",), ("selection", "forced")),
+    ids=("selection-only", "selection-and-forced"),
+)
+def test_epoch_manifest_aggregate_resolves_to_real_block_file(
+    monkeypatch, tmp_path, block_names,
+):
+    plan = _summary_plan(block_names)
+    epoch = tmp_path / "epoch"
+    epoch.mkdir()
+    aggregate_paths: dict[str, Path] = {}
+
+    def fake_block(_plan, block, *, output_epoch):
+        root = Path(output_epoch) / block
+        root.mkdir(parents=True, exist_ok=True)
+        execution_id = f"{_plan['epoch_id']}-{block}"
+        aggregate = {
+            "execution_id": execution_id,
+            "run_id": f"run-{block}",
+            "status": "completed",
+            "totals": {},
+        }
+        aggregate_path = root / f"{execution_id}.matrix.json"
+        aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
+        aggregate_paths[block] = aggregate_path
+        reconciliation = {
+            "coordinates": [], "missing": [], "extra": [], "duplicates": [],
+        }
+        reconciliation_path = root / "coordinate-reconciliation.json"
+        reconciliation_path.write_text(json.dumps(reconciliation), encoding="utf-8")
+        receipt = {
+            "observed": 0,
+            "status": "completed",
+            "coordinate_reconciliation_path": str(reconciliation_path),
+            "aggregate_path": str(aggregate_path),
+            "execution_id": execution_id,
+        }
+        return receipt, [], [], aggregate
+
+    monkeypatch.setattr(research_plan, "verify_plan", lambda _path: plan)
+    monkeypatch.setattr(research_plan, "_run_block", fake_block)
+
+    research_plan.run_research_plan(tmp_path / "plan.json", output_epoch=str(epoch))
+
+    manifest_path = epoch / "experiment.manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    selection_aggregate = aggregate_paths["selection"]
+    reference = manifest["aggregate"]["artifact"]
+    assert reference == selection_aggregate.relative_to(epoch).as_posix()
+    assert reference == "selection/offline-run-selection.matrix.json"
+    assert manifest["aggregate"]["execution_id"] == "offline-run-selection"
+    catalog = ArtifactCatalog(source_roots={"epoch": epoch}, review_roots={})
+    assert catalog.resolve(reference, owner=manifest_path) == selection_aggregate.resolve()
+    assert not (epoch / "offline-run-selection.matrix.json").exists()
 

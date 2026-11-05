@@ -1684,6 +1684,7 @@ def run_research_plan(plan_path: str | Path, *, output_epoch: str | None = None)
     artifacts: list[dict[str, Any]] = []
     children: list[str] = []
     aggregates: dict[str, Any] = {}
+    aggregate_artifact: Path | None = None
     reconciliations: dict[str, Any] = {}
     summary: dict[str, Any] = {
         "artifact_type": "chapter3_research_run_summary",
@@ -1712,6 +1713,8 @@ def run_research_plan(plan_path: str | Path, *, output_epoch: str | None = None)
             children.extend(block_children)
             if aggregate is not None:
                 aggregates[block] = aggregate
+            if block == block_names[0] and receipt.get("aggregate_path"):
+                aggregate_artifact = Path(receipt["aggregate_path"]).resolve()
             reconciliation_path = Path(receipt["coordinate_reconciliation_path"])
             reconciliations[block] = json.loads(reconciliation_path.read_bytes())
         expected = int(plan["planned_counts"]["total"])
@@ -1732,6 +1735,7 @@ def run_research_plan(plan_path: str | Path, *, output_epoch: str | None = None)
             artifacts=_manifest_artifacts(artifacts, reconciliations),
             children=children,
             aggregate=aggregates.get(block_names[0]),
+            aggregate_artifact=aggregate_artifact,
             status="completed" if not missing and not extra and not duplicates else "incomplete",
         )
         summary["manifest"] = {
@@ -1781,6 +1785,7 @@ def _write_epoch_manifest(
     children: list[str],
     aggregate: Mapping[str, Any] | None,
     status: str,
+    aggregate_artifact: Path | None = None,
 ) -> Path:
     """Write the epoch-level manifest tesis-web uses for discovery."""
     from tesis.artifact_layout import ExperimentArtifactLayout
@@ -1807,6 +1812,7 @@ def _write_epoch_manifest(
         },
         artifacts=artifacts,
         aggregate=aggregate,
+        aggregate_artifact=aggregate_artifact,
         status=status,
     )
 

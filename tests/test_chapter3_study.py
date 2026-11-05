@@ -68,6 +68,12 @@ def _receipt(condition, mode, *, base=2.0, rubric="scoring.v4", rule=RULE,
         "rubric_version": rubric,
         "scoring_rule_sha256": rule,
         "metrics_epoch": metrics_epoch,
+        "review_history": [{
+            "candidate_id": "candidate-1",
+            "scoring_mode": mode,
+            "reviewer_id": "ai/independent-judge" if mode == "ai" else "human-reviewer-a",
+            "review_version": "judge.v1" if mode == "ai" else "human.v1",
+        }],
         "config": {
             "experiment_condition": condition,
             "scoring_profile": {"sha256": "profile"},

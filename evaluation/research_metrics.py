@@ -847,6 +847,11 @@ def _cost(artifact, calls):
     and ``billing_route`` so an API-equivalent estimate is never presented as a
     billed charge.  Cost is never a fabricated zero: an empty selection over a
     run that did record experiment calls is an attribution failure.
+
+    Each call's recorded runtime ``route``/``model_profile`` is forwarded to
+    ``resolve_price_entry``, so an explicit ``price_routes`` entry keyed by the
+    configured profile wins over a directly keyed provider/model row instead of
+    silently pricing the latter.
     """
     schedule = _price_schedule(artifact)
     usage = _usage_summary(calls)
@@ -886,8 +891,12 @@ def _cost(artifact, calls):
         if not isinstance(provider, str) or not isinstance(model, str):
             return result(reason='call_model_identity_unavailable')
         try:
+            route = call.get('route')
+            if not isinstance(route, str) or not route.strip():
+                route = call.get('model_profile')
             entry, resolution = resolve_price_entry(
-                schedule, provider, model, call.get('model_profile'))
+                schedule, provider, model, call.get('model_profile'), route=route
+            )
         except KeyError:
             return result(reason='price_schedule_model_unavailable')
         label = accounting_label(schedule, resolution['price_key'])

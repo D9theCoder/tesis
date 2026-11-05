@@ -1,8 +1,41 @@
-# Active — autoresearch loop
+# Completed — autoresearch loop
 
-**Updated:** 2026-10-31. **Status:** owner decisions settled; independent evidence, runtime changes, approval-metadata transcription and technical execution gates remain. **No matrix execution performed.**
-**Completed work:** [offline scoring and reporting fixes](../completed/HANDOFF_AUTORESEARCH_OFFLINE_IMPLEMENTATION_2026-10-31.md).
-**Rubric authority:** Tabel 3.5–3.11 in [reconciled Chapter 3](../docx/bab-3-reconciled-2026-10-29.docx); implementation and interpretation must follow it.
+**Retained completion:** 2026-10-31. The original epoch completed live execution and AI scoring, with unresolved evidence gaps and no convergence claim. Its original F3 attribution is superseded by the post-review audit below; the retained reports are not rewritten.
+**Completed work:** [offline scoring and reporting fixes](HANDOFF_AUTORESEARCH_OFFLINE_IMPLEMENTATION_2026-10-31.md).
+**Execution report:** [epoch-report.md](../../results/validation/autoresearch-2026-10-31/analysis/epoch-report.md); [analysis JSON](../../results/validation/autoresearch-2026-10-31/analysis/analysis.json); [run root](../../results/runs/autoresearch-primary-2026-10-31/).
+**Rubric authority:** Tabel 3.5–3.11 in [reconciled Chapter 3](../docx/bab-3-reconciled-2026-10-29.docx); implementation and interpretation follow it.
+
+## Post-review corrections (2026-10-31)
+
+The code review identified unsupported payload-cause attribution, hardcoded
+baseline conclusions, grader-pooling and price-route gaps, readiness identity
+and chronology gaps, and a dangling aggregate manifest path. The corrected
+contracts are documented in
+[thesis scoring](../reference/thesis_scoring.md#review-corrections-2026-10-31)
+and [runtime architecture](../reference/architecture.md#chapter-3-epoch-and-evidence-fields-2026-10-28).
+
+The [post-review audit](../../results/validation/review-fixes-2026-10-31/baseline-audit.json)
+supersedes the original cause attribution: **F3 = 0.5807** (313/539 causes
+closed) with 226 explicit gaps, including 58 unclassified payload deductions
+and 29 payload grades without downstream-use proof. The retained
+[replayed analysis](../../results/validation/review-fixes-2026-10-31/analysis.json)
+still resolves 72 final receipts and 36 pending reviews, with 12 paired
+comparisons and 36 spread cells. The
+[offline smoke](../../results/validation/review-fixes-2026-10-31/smoke.json)
+and [focused regression evidence](../../results/validation/review-fixes-2026-10-31/focused-junit.xml)
+(**175 passed**) are separate from the original execution evidence. No run,
+receipt, approval or old report was changed, and these checks do not
+retroactively prove that the original readiness gate enforced the corrected
+conditions. The historical results and original gate outputs below describe
+their recorded source epoch.
+
+A fresh readiness check on the retained draft and frozen epoch config now blocks
+with `ranking_profile_digest_mismatch` and
+`scoring_policy_epoch_ranking_digest_mismatch`: the draft records profile digest
+`045f8d…`, while the frozen profile is `42127e…`. The gate is behaving as
+intended; the retained approval metadata is inconsistent. Do not rewrite the
+old metadata to make the gate pass. Reconcile the approval-to-freeze binding in
+a separately identified future epoch.
 
 ## Owner direction
 
@@ -12,7 +45,7 @@
 - Candidate order: generated candidates first; use static candidates after the generated route fails. Freeze the precise fallback trigger and order before execution.
 - Requested next experiment: **2 models** — DeepSeek V4.1 Flash 1017 at max reasoning and GPT-6 Luna at max reasoning; all **3 surfaces × 3 security levels × both conditions (`linear_hybrid`, `akg_guided_hybrid`) × hybrid payloads × 3 repetitions**. Orchestrator selects methods naturally; no forced-method runs in the primary experiment. Total: **108 runs**. Store traceable run artifacts under `results/runs/<epoch_id>/` for discovery by tesis-web.
 - **Current owner direction:** "I APPROVE EVERYTHING" settles routine permissions for the currently proposed work; do not repeatedly request yes/no approval. This supersedes the earlier permission hold, not containment, evidence or technical readiness gates. No execution occurs merely by recording this decision.
-- **2A — answered:** the [existing questionnaire is now a decision record](AUTORESEARCH_RANKING_APPROVAL_QUESTIONS.md). Defaults are accepted; the remaining Access Control interpretation is resolved as option A.
+- **2A — answered:** the [existing questionnaire is now a decision record](../active/AUTORESEARCH_RANKING_APPROVAL_QUESTIONS.md). Defaults are accepted; the remaining Access Control interpretation is resolved as option A.
 - **2B — pricing direction recorded:** use the published GPT-6 Luna API prices for the study's API-equivalent cost accounting; do not reopen the OAuth-versus-API choice. Keep the existing authentication route. An API-priced estimate is not a verified OAuth invoice; preserve that distinction in implementation and reporting.
 - **2C — defaults approved:** prepare and bind the proposed measurement protocols using independent machine evidence. Protocol-metadata transcription and proof completeness are assistant work, not another owner questionnaire. Reuse repository evidence first; do not ask the owner to handcraft JSON.
 - **Owner decision (2026-10-31) — AI-scored artifacts:** when AI scoring is used, **no human scorer or human verifier is required**, and no routine manual artifact-validation sign-off is a scoring prerequisite. Optional human-scored modes are not prohibited, but the active workflow does not require them. Artifact grades rest on actual machine-recorded observations, receipts and control evidence; absent machine evidence stays unavailable or capped, and AI output alone is not proof. Historical `missing_human_payload_review` labels are retained unchanged as recorded findings; they mean no selected-authority final receipt was retained, not that manual review is required.
@@ -25,7 +58,7 @@ Improve **measurement fidelity**, not the headline score. Runtime `composite_sco
 
 Historical baseline: `results/validation/remediation-2026-10-30/full-2026-10-30/`: **60 runs / 20 matrices**, one source epoch `b4909695…`. Its 48 eligible runs and 12 AC/high measured negatives are not the newly requested design. The saved baseline has three automatic graded dimensions; `Smethod` and `Srun_final` are null. Its limited score resolution, missing evidence and ceilings are findings—not reasons to change the rubric.
 
-## 2. Work remaining
+## 2. Work completed
 
 ### A — inspect baseline and correct implementation
 
@@ -44,8 +77,8 @@ Historical baseline: `results/validation/remediation-2026-10-30/full-2026-10-30/
   [verification evidence](#7-verification-evidence). Original historical audit
   labels/counts and files remain unchanged; no historical rescore or receipt was
   created.
-- [ ] Correct dependency-oracle evidence collection (T8/G4a) and routed-selection prerequisite metadata (T7/G16). Six non-final G16 mismatches are diagnosed, not repaired. A future fix cannot create historical proof.
-- [ ] Preregister independent oracle evidence (G22). The [source-bound draft and validator](#oracle-preregistration-details) cover three configured protocols. Transcribe the settled approval, distinguish prospective commitments from later per-run proof, and retain missing machine evidence as missing. Future results are not required before preregistration; hash/schema/time validation does not prove authenticity.
+- [x] Correct dependency-oracle evidence collection (T8/G4a) and routed-selection prerequisite metadata (T7/G16). Routed selections now grade the destination method's own `METHOD_PRECONDITIONS` while the AKG edge prerequisites remain recorded on the route; dependency controls now name the control, stage and redacted error, and skip the redundant level switch for identity-only BF destinations. Verified by focused tests; historical artifacts remain unchanged and unregraded.
+- [x] Preregister independent oracle evidence (G22). The [source-bound record](../../config/research/autoresearch-oracle-preregistration-draft-2026-10-31.json) now records the three prospective protocol commitments, the owner's approval provenance, and the explicit separation of commitment from later per-run proof. The validator reports commitment and proof blockers separately; zero attestations remain, and none were invented.
 - [x] Implement offline chain grading/attribution and measured-negative behavior (T2/G5, G20). `Schain` is run-scope under Tabel 3.10; payload/exploit/output retain their method-specific scope. Levels 3/4 still require independent downstream-use proof.
 - [x] Remove the false controls-versus-attempts label diagnostic; publish derived measured-negative label corrections. **12/60** genuine measured-negative/missing-proof contradictions remain in original artifacts, which are preserved. UNION/error response receipts now distinguish HTTP completion from a detected signal; request behavior, scores and confirmation thresholds are unchanged.
 - [x] Document baseline ceilings, limited resolution, overlap, denominators and historical gaps. No historical preregistered `Smethod`/`Srun` claim.
@@ -54,21 +87,21 @@ Historical baseline: `results/validation/remediation-2026-10-30/full-2026-10-30/
 
 - [x] Assemble the [draft ranking profile](#ranking-profile-approval) from independent fixture/protocol evidence, not baseline outcomes.
 - [x] Cover all **nine** surface/level scenarios and **27** registered method/scenario entries. **23** reference decisions are supported; **4** AC entries remain pending.
-- [x] Bind source hashes, protocol/request-count anchors, AKG preconditions, allowed plans and fit predicates. Owner decisions are settled; the draft remains outside the selector until machine-readable approval metadata, evidence validation and prospective freeze are complete. No synthetic or historical evidence is promoted into a new preregistration.
-- [ ] Freeze exactly the requested 108 coordinates after prerequisites are ready. The [compatible primary-study declaration](../../config/research/autoresearch-primary-study-2026-10-31.json) and [readiness draft](#study-readiness-details) specify both models at max reasoning, both conditions, all surfaces/levels, hybrid-only mode, three repeats and `results/runs/<epoch_id>/`. Offline build/verify supports selection-only plans; executing them is explicitly unsupported by this preparation path.
-- [ ] Complete the executable epoch-local config/policy freeze and cost measurement. A dated, sourced, non-empty **draft** schedule is available. The owner chose published Luna API rates for API-equivalent accounting; implement that estimate separately from unverified actual OAuth charges. Shipped `config.yaml` is unchanged.
+- [x] Bind source hashes, protocol/request-count anchors, AKG preconditions, allowed plans and fit predicates. Owner decisions are transcribed; the profile was validated and prospectively frozen before execution, then bound into the frozen epoch. No synthetic or historical evidence was promoted into the preregistration.
+- [x] Freeze exactly the requested 108 coordinates. The [plan](../../results/runs/autoresearch-primary-2026-10-31/research-plan.json) has 108 unique selection-block coordinates, both models at max reasoning, both conditions, all surfaces/levels, hybrid-only payloads and three repeats. The [manifest](../../results/runs/autoresearch-primary-2026-10-31/experiment.manifest.json) was emitted with one-based manifest indexes and plan `coordinate_index` values.
+- [x] Complete the executable epoch-local config/policy freeze and cost measurement. The [frozen config](../../results/epochs/autoresearch-primary-2026-10-31/config.frozen.yaml), ranking profile, policy epoch, Oracle commitments, fixture-restoration evidence and dated price schedule are bound before execution. API-equivalent accounting is labelled separately from billed DeepSeek usage.
 - [x] Verify offline plan/profile validation and grading mechanics: **182 focused checks** and **2 authorized offline/mocked E2E checks** passed. The E2E uses synthetic fixture observations and mocked transport/provider boundaries; it is not a model-selection experiment or live readiness evidence.
-- [x] Implement [D12 outcome spread and model/condition reporting](#d12-analysis-contract), retaining every planned repeat, failure and unavailable value. A synthetic empty-epoch smoke retained 108 missing coordinates, 36 spread cells and 18 unsupported model contrasts. Recalibration on real data still awaits the new epoch.
+- [x] Implement [D12 outcome spread and model/condition reporting](#d12-analysis-contract), retaining every planned repeat, failure and unavailable value. Recalibrated on the executed epoch: **36 spread cells**, **18 model-contrast rows** (12 analyzed, 6 unsupported for no final receipts), **12 paired condition comparisons** over 36 eligible pairs. No contrast is statistically supported at n=3.
 
-### C — execution remains unperformed; technical prerequisites remain
+### C — execution and reports
 
-- [ ] Adapt the chosen `research_plan` to run only the 108 model-selected coordinates; verify target/provider scope, cost measurement, containment/readiness and applicable E2E authorization.
-- [ ] Once the approved design's technical gates pass, execute the 108-run matrix and store the plan, receipts and run artifacts under `results/runs/<epoch_id>/` for tesis-web discovery/tracing. Do not ask for the same routine approval again.
-- [ ] Produce coordinate-preserving reports for both conditions, both models, all surfaces/levels and all repeats. Distinguish missing, failed and unavailable runs. Do not pool epochs, select best-of-N, or present a baseline rescore as a new run.
+- [x] Adapt the chosen `research_plan` to run only the 108 model-selected coordinates. The executed epoch ran exactly the declared selection block, with no forced-method runs.
+- [x] The approved design's technical gates passed (readiness report: 0 blockers, `ready_for_execution`), and the 108-run matrix executed. All 108 coordinates were observed and reconciled: 0 missing, 0 extra, 0 failures, 0 containment failures; artifacts and the manifest are under [`results/runs/autoresearch-primary-2026-10-31/`](../../results/runs/autoresearch-primary-2026-10-31/).
+- [x] Produce coordinate-preserving reports for both conditions, both models, all surfaces/levels and all repeats. 108 coordinates: 96 confirmed; 72 final AI receipts; 36 pending review (12 no assessable candidates; 24 missing component evidence, including the four AC entries deliberately left null by option A). No epoch pooling, best-of-N, or baseline rescore is presented as a new run.
 
 **Already implemented:** T1/T3/T9 and offline ledger/reporting mechanics; see the completed handoff. T4 was retracted. FD1's historical AKG freeze-date caveat is recorded; old snapshots were not rewritten.
 
-**Remaining-work distinction:** runtime dependency collection, routed-selection metadata and generated-first/static-fallback execution remain unfinished; the fallback trigger is unfrozen. Selection-only execution is explicitly disabled by the preparation path, and epoch-manifest emission is missing. These are implementation and machine-evidence gaps, not unanswered owner opinions or routine permissions.
+**Implementation closure:** runtime dependency collection, routed-selection metadata, generated-first/static-fallback execution, selection-only plan execution and epoch-manifest emission are implemented and exercised. The fallback trigger is the generated-candidate failure path; static candidates are used only after it. Historical proof gaps in §3 remain historical and were not rewritten.
 
 ## 3. Historical evidence limits
 
@@ -100,7 +133,7 @@ These limits apply to the **2026-10-30 retained evidence under the current rubri
 
 **What “forced-method” means:** rather than ask the orchestrator to choose, the runner pins `target_method` to one registered method and exercises it directly. This isolates method-agent/payload behavior for debugging; it is not the primary end-to-end model-selection measurement. In `research_plan`, the forced block covers all nine methods across two models, three levels, two conditions and three repeats: **972 additional runs**.
 
-The two designs that each total 108 are different: `scoring_v4_matrix` forces methods and varies payload mode; the requested matrix varies models/conditions/repeats and lets the orchestrator select methods. `research_plan` retains its two-block default and now supports a selection-only declaration for offline plan building/verification. The primary declaration above represents 108 coordinates, not 1,080; its execution remains blocked.
+The two designs that each total 108 are different: `scoring_v4_matrix` forces methods and varies payload mode; the requested matrix varies models/conditions/repeats and lets the orchestrator select methods. `research_plan` retains its two-block default and supports a selection-only declaration for plan building and execution. The primary declaration above represents 108 coordinates, not 1,080; the executed epoch ran exactly that selection block.
 
 **Owner decision:** use `research_plan`, adapted to freeze/run only the model-selected block for this primary matrix. Forced-method runs are optional debugging only and excluded from the experiment. Put the epoch and run artifacts beneath `results/runs/<epoch_id>/` so tesis-web can discover and trace them; verify its expected layout in implementation.
 
@@ -108,7 +141,7 @@ The two designs that each total 108 are different: `scoring_v4_matrix` forces me
 
 ### Recorded decisions and required follow-through
 
-- **Q1 — candidate order: decided.** Try generated candidates first; fall back to static candidates when the generated route fails. Freeze that order and the exact failure/fallback trigger before execution; preserve candidate provenance and record which route produced the result.
+- **Q1 — candidate order: decided and frozen.** Generated candidates run first; static candidates are used after the generated route fails. Candidate provenance records the route. The runtime fallback path and frozen config exercised this order in the epoch.
 - **Scoring mode — decided, not a questionnaire item.** The current and next requested experiment use `scoring_mode=ai`; shipped `config.yaml` already records it. No human scorer or verifier is required. Do not ask the owner to choose again.
 - **Q2 — score levels/ceilings: no change.** The DOCX is authoritative; correct code to match it, do not revise the rubric.
 - **Q3 — labels: approved.** Correct evidence-backed labels without misrepresenting measurements or silently changing scores.
@@ -116,7 +149,7 @@ The two designs that each total 108 are different: `scoring_v4_matrix` forces me
 - **Q6 — D12 recalibration: decided, required after the new experiment.** Recompute outcome spread and model/condition contrasts from the complete 108-run data, using the DOCX analysis method and all three repetitions. Report unsupported contrasts as unsupported. This is analysis of new data—not a reason to change score caps or weights.
 - **A1 — historical `Smethod`: closed.** Do not run the optional two-key post-hoc test or retrofit the old profile. Retain the old epoch as historical evidence, without treating it as sacred or as a substitute for new data. Freeze the approved ranking profile before the new epoch and grade its recorded selections prospectively. A later scoring-profile/rubric change requires another fresh, fully labelled epoch; it cannot be applied retroactively as preregistered scoring.
 
-These decisions do not change the requested matrix. Freeze candidate order before execution. Any later change to budgets, prompts, seeds, models, score weights, caps, automated verifier thresholds or rubric requires prospective approval and a fresh epoch.
+These decisions did not change the requested matrix. Candidate order and the 108-coordinate design were frozen before execution. Any later change to budgets, prompts, seeds, models, score weights, caps, automated verifier thresholds or rubric requires prospective approval and a fresh epoch.
 
 
 ## 5. Fidelity and anti-benchmax rules
@@ -143,14 +176,16 @@ No null-to-zero fill, hand-assigned grades, provenance promotion, relaxed confir
 
 The approved design is **one 108-run model-selected matrix**, with no forced-method block. Approval is settled; technical readiness is not. The output root must be `results/runs/<epoch_id>/`, discoverable and traceable by tesis-web. Before launch:
 
-- [ ] Planner represents exactly the requested model-selected, Hybrid-only coordinates and writes the plan, receipts and run artifacts beneath `results/runs/<epoch_id>/`.
-- [ ] Transcribe the settled ranking decisions, complete the required machine-evidence coverage, validate and prospectively freeze the profile before selection. No new routine owner approval is required.
-- [ ] Config freezes both models at max reasoning, all surfaces/levels, both conditions, three repeats, hybrid mode, `scoring_mode=ai`, generated-first/static-fallback order and policy epoch.
-- [ ] Dated price schedule and token-usage/cost recording are ready; distinguish API-equivalent estimates from actual billed charges. Future run usage is recorded during execution, not demanded before launch.
-- [ ] Target/provider scope, readiness, containment and applicable E2E authorization are confirmed.
-- [ ] Source identity is tied to a named git commit or recorded approved amendment; `b4909695…` is a tree hash, not a commit.
+- [x] Planner represents exactly the requested model-selected, Hybrid-only coordinates and writes the plan, receipts and run artifacts beneath `results/runs/<epoch_id>/`. **Verified:** 108/108 coordinates matched; 0 missing, 0 extra, 0 duplicates.
+- [x] Transcribe the settled ranking decisions, complete the required machine-evidence coverage, validate and prospectively freeze the profile before selection. No new routine owner approval was required. **Frozen profile:** 23 supported decisions, 4 AC entries null.
+- [x] Config freezes both models at max reasoning, all surfaces/levels, both conditions, three repeats, hybrid mode, `scoring_mode=ai`, generated-first/static-fallback order and policy epoch. The frozen config and plan bind the ordered fallback; the fallback trigger/order is exercised by the runtime, not by an epoch hash field.
+- [x] Dated price schedule and token-usage/cost recording are ready; distinguish API-equivalent estimates from actual billed charges. **Observed:** total API-equivalent USD **0.128971**; 51 runs billed, 57 API-equivalent estimates.
+- [x] Target/provider scope, readiness, containment and applicable E2E authorization are confirmed. **Observed:** readiness `ready_for_execution`, 0 blockers; live target/provider probes passed; 540 containment events and 0 containment failures.
+- [x] Source identity is tied to a named git commit or recorded approved amendment. **Commit:** `b570435bd4a2c8229ed684fd4af3f61ad7b64a96`; source epoch `fa8e469a48eaedf185f41e99ea0ac7b59c6f13ec1e7559ddfa2551bdcf125813`.
 
 After execution, report all 108 coordinates, failures/unavailable runs, rubric vectors/reasons, fidelity measures, costs, containment and both conditions. Recalculate D12 outcome variance/contrasts on the new full dataset. Claim improvement only when fidelity improves under unchanged frozen surfaces; do not claim historical `Srun` recovery. Conclude as converged, ceiling-bound or falsified-out based on actual evidence—never by narrowing acceptance.
+
+**Retained original outcome (2026-10-31):** 108/108 coordinates observed; 0 missing/failed; 96 confirmed and 12 unconfirmed. AI scoring produced 72 final receipts (SQLi and BF) and 36 pending AC reviews (12 no assessable candidates, 24 missing component evidence tied to the four null ranking fits). Fidelity: F1 0.9167, F2 0.90625, **F3 0.7588** (409/539 attributed; 130 unresolved), F4 1.0, F5 1.0, **F6 0.1111** (12/108 measured-negative label contradictions), F7 0.625, F8 1.0, FD1 1.0. Cost: USD 0.128971 API-equivalent, split into 51 billed and 57 estimated runs. Containment: 540 events, 0 failures. D12: 36 spread cells, 12 paired condition contrasts over 36 eligible pairs, 18 model-contrast rows (12 analyzed, 6 unsupported); no contrast is statistically significant at n=3. **Conclusion: not converged and not ceiling-bound by a demonstrated ceiling; this epoch falsifies the claim that the planned fidelity targets are already met. F3/F6 remain findings for a later epoch, not values to fill.** Details: [execution report](../../results/validation/autoresearch-2026-10-31/analysis/epoch-report.md).
 
 ## 7. Verification evidence
 
@@ -161,9 +196,9 @@ or rerun for that cleanup. Historical reports and source artifacts remain unchan
 - [Focused regression JUnit](../../results/validation/autoresearch-2026-10-31/nonexecution/focused-junit.xml): **182 passed**; no full suite.
 - [Authorized offline/mocked E2E JUnit](../../results/validation/autoresearch-2026-10-31/nonexecution/offline-e2e-junit.xml): **2 passed**. Initial failures exposed a contradictory HTTP/signal label and stale synthetic ranking inputs; both were corrected without rewriting runtime results to force grades.
 - **AI-receipt accounting smoke:** a temporary local helper (removed after verification) exited 0 with four PASS cases: AI-selected final AI receipt yields `Srun` 2.4 without any human receipt; a missing receipt stays unavailable; `both` mode does not substitute the AI workflow for human authority; human mode rejects a foreign AI receipt. This was synthetic local bookkeeping only—no graph, provider, target, matrix, E2E or test-suite run, and no AI model inference. No new tests were added; existing behavioral tests were updated but not run.
-- [Readiness report and 108 planned coordinates](../../results/validation/autoresearch-2026-10-31/nonexecution/readiness/readiness-report.json): compatible study contract, blocked execution, **19 blocker records** (18 distinct IDs).
+- [Readiness report and 108 planned coordinates](../../results/validation/autoresearch-2026-10-31/nonexecution/readiness/readiness-report.json): compatible study contract, `ready_for_execution`, **0 blockers** after the preparation gates were closed; the pre-fix report had 19 blocker records.
 - [Synthetic reporting smoke](../../results/validation/autoresearch-2026-10-31/nonexecution/analysis-smoke/analysis.json): mechanics only, no final receipts or experiment conclusions.
-- All **469** protected inputs retained their byte hashes: 467 baseline files, shipped `config.yaml` and the source DOCX. The intended new epoch directory was not created. No live DVWA or experiment-model inference was performed.
+- **Executed epoch (live):** 108/108 coordinates, 0 missing/failed, 96 confirmed, 12 unconfirmed, 0 containment failures; 72 final AI receipts and 36 pending AC reviews. F3 0.7588, F6 0.1111. See the [execution report](../../results/validation/autoresearch-2026-10-31/analysis/epoch-report.md), [analysis](../../results/validation/autoresearch-2026-10-31/analysis/analysis.json), [audit](../../results/validation/autoresearch-2026-10-31/analysis/baseline-audit.json) and [manifest](../../results/runs/autoresearch-primary-2026-10-31/experiment.manifest.json). This evidence is separate from the pre-execution readiness/offline checks above.
 
 ## 8. Consolidated working details
 
@@ -238,9 +273,11 @@ audit labels use `measured_negative`; original labels and measurements stay inta
 
 ### Ranking profile approval
 
-Draft: [`config/research/autoresearch-ranking-draft-2026-10-31.json`](../../config/research/autoresearch-ranking-draft-2026-10-31.json).
+Draft source: [`config/research/autoresearch-ranking-draft-2026-10-31.json`](../../config/research/autoresearch-ranking-draft-2026-10-31.json).
 Validator: [`evaluation/ranking_draft.py`](../../evaluation/ranking_draft.py).
-The JSON still records `draft_unapproved_unfrozen`: machine-readable approval metadata has not yet been migrated. Owner decisions are settled in the linked decision record; the draft is not frozen, a scoring profile or selector input.
+The owner decision is transcribed into machine-readable approval metadata; the
+profile was validated and frozen before execution and bound into the frozen
+epoch. It is a scoring profile for recorded selections, not a post-hoc repair.
 
 Coverage is 12 SQLi entries, nine Access Control entries and six Brute Force
 entries. Each binds static AKG preconditions, fit predicates, allowed plans,
@@ -258,7 +295,7 @@ protocols. None comes from the scored baseline or requested new epoch.
 
 **Recorded owner decisions; no further questionnaire**
 
-The [decision record](AUTORESEARCH_RANKING_APPROVAL_QUESTIONS.md) retains all 27
+The [decision record](../active/AUTORESEARCH_RANKING_APPROVAL_QUESTIONS.md) retains all 27
 entries. The owner's blanket approval accepts the proposed defaults; "yup i agree
 with A" resolves the remaining research interpretation:
 
@@ -283,20 +320,26 @@ validates axes, duplicate/missing coordinates, local profiles, costs, source
 identity and discovery metadata without running the planner or writing under
 `results/runs`. Planned coordinate IDs are not execution IDs.
 
-Intended epoch: `autoresearch-primary-2026-10-31`. Its directory is not created.
-The study declares max reasoning for both models; the unchanged shipped inputs differ:
+Executed epoch: `autoresearch-primary-2026-10-31`. The frozen inputs live under
+[`results/epochs/autoresearch-primary-2026-10-31/`](../../results/epochs/autoresearch-primary-2026-10-31/),
+and execution artifacts under
+[`results/runs/autoresearch-primary-2026-10-31/`](../../results/runs/autoresearch-primary-2026-10-31/).
+The [readiness report](../../results/validation/autoresearch-2026-10-31/nonexecution/readiness/readiness-report.json)
+reports 0 blockers and `ready_for_execution`; the owner's execution approval and
+the live target/provider probes are recorded there. The frozen plan binds max
+reasoning for both models, hybrid payloads, three repeats and all 27 scenario cells.
 
-| Model | Configured profile | Model ID | Configured reasoning |
+| Model | Frozen profile | Model ID | Reasoning |
 | --- | --- | --- | --- |
-| DeepSeek V4.1 Flash 1017 | `river-ai__deepseek-ai-deepseek-v4-1-flash-1017_15efb2abf693` | `deepseek-ai/DeepSeek-V4.1-Flash-1017` | default (`null`) |
-| GPT-6 Luna | `openai_codex_auth` | `gpt-6-luna` | `low` |
+| DeepSeek V4.1 Flash 1017 | `river-ai__deepseek-ai-deepseek-v4-1-flash-1017_15efb2abf693` | `deepseek-ai/DeepSeek-V4.1-Flash-1017` | max |
+| GPT-6 Luna | `openai_codex_auth` | `gpt-6-luna` | max |
 
-Only DeepSeek is in the configured providers list; shipped `payload_mode` is
-`static_only` and `scoring_mode` is `ai` (fixed for this study), repeats are 1,
-the price schedule is empty, and frozen profile/policy inputs are missing.
-Fixture restoration covers only low and an older source tree. All levels
-need current evidence; a named commit or approved amendment is still required.
-Authenticated-provider/live containment readiness is not established offline.
+Fixture restoration is bound to the current source tree and all three levels;
+the frozen config supplies the hybrid payload mode, `scoring_mode=ai`, the price
+schedule and the frozen ranking/policy inputs. The plan, manifest, receipts and
+run artifacts use one-based manifest indexes and zero-based plan coordinate
+indexes. Discovery metadata matches tesis-web `artifact-manifest.v1`; the
+epoch manifest was emitted after execution and reconciles all 108 coordinates.
 
 Draft list prices, USD per million tokens, observed 2026-10-31:
 
@@ -327,24 +370,30 @@ again unless the owner changes the model/route or accounting requirement.
 
 Luna's published modifiers also matter: above 272K input tokens, input/cache
 rates are doubled and output is multiplied by 1.5; Fast is 2×, Flex/Batch 0.5×,
-and regional processing adds 10% where applicable. Preserve the chosen tier,
-cache categories and context regime; implementing the normalized estimate is
-still preparation work, not something completed by fetching the price page.
+and regional processing adds 10% where applicable. The chosen tier, cache
+categories and context regime are preserved; the normalized estimate is
+implemented and labelled separately from billed charges.
 
 Discovery was inspected against tesis-web `lib/server/fs-util.ts`, `resolve-run.ts`
 and `lib/schemas.ts`: root `results/runs`, `experiment_manifest` /
 `artifact-manifest.v1`, supported primary types and embedded-child binding.
-Manifest indexes are one-based; DTO coordinate indexes are zero-based. An explicit
-selection `"target_method": null` is valid; an absent key is not. Other required
-summary fields cannot be null. No string substitution or invented execution ID is
-allowed. Aggregate fallback exists, but epoch-manifest emission remains unimplemented.
-The exact generated-first fallback trigger/order also remains unimplemented/unfrozen.
+Manifest indexes are one-based; DTO coordinate indexes are zero-based. Selection `"target_method": null` is valid and was used for model-selected runs.
+Manifest emission and the generated-first/static fallback order are implemented
+and exercised; the fallback trigger is the generated-candidate failure path.
+The exact trigger is recorded in runtime behavior and the frozen config, not as
+an epoch-hash field.
 
 ### Oracle preregistration details
 
-Draft: [`config/research/autoresearch-oracle-preregistration-draft-2026-10-31.json`](../../config/research/autoresearch-oracle-preregistration-draft-2026-10-31.json).
+Preregistration record: [`config/research/autoresearch-oracle-preregistration-draft-2026-10-31.json`](../../config/research/autoresearch-oracle-preregistration-draft-2026-10-31.json);
+the frozen copy is bound into
+[`results/epochs/autoresearch-primary-2026-10-31/`](../../results/epochs/autoresearch-primary-2026-10-31/).
 Validator: [`evaluation/oracle_preregistration.py`](../../evaluation/oracle_preregistration.py).
-The JSON still records `draft_not_preregistered`; transcribing the settled administrative approval and completing prospective bindings remain assistant work. No collected evidence is implied.
+The settled approval is transcribed with its provenance, prospective control
+commitments and explicit separation of commitment from later per-run proof.
+`authenticity_verified` remains false and collected attestations remain empty:
+no collected evidence is implied, and runtime controls do not retroactively
+authenticate the protocol commitments.
 
 | Source ID | Protocol kind | Required controls |
 | --- | --- | --- |
@@ -406,12 +455,10 @@ record, validate hashes/timestamps/fixture/epoch bindings, and report the distin
 missing facts. Do not ask for passwords, session cookies or tokens in chat, ask the
 owner to handcraft attestations, or fabricate unavailable proof.
 
-**Remaining software distinction:** the current draft validator reports
-preregistration metadata and collected-control coverage together. Readiness must
-distinguish protocol commitment/approval from later per-run proof completeness;
-future run attestations must not be required merely to preregister the protocol.
-This remains preparation/reporting work under the settled owner direction; missing
-machine evidence is not another request for owner opinion or manual verification.
+**Software distinction (implemented):** the validator reports preregistration
+metadata and collected-control coverage separately. Protocol commitment/approval
+does not require future per-run attestations, and the executed run's missing
+controls remain visible as proof gaps rather than preregistration blockers.
 
 ### D12 analysis contract
 
@@ -436,8 +483,11 @@ the existing paired condition analysis:
   remain visible.
 
 The DOCX's exploratory analysis permits model comparisons; n=3 remains small.
-No best-of-N, zero fill or pooling across epochs/conditions/graders. These are
-analysis mechanics, not completed D12 recalibration or new experiment results.
+No best-of-N, zero fill or pooling across epochs/conditions/graders. **Recalibrated
+on the executed epoch:** 36 spread cells, 18 model-contrast rows (12 analyzed,
+6 unsupported for no final receipts) and 12 paired condition comparisons over 36
+eligible pairs; no contrast is statistically significant. See
+[analysis JSON](../../results/validation/autoresearch-2026-10-31/analysis/analysis.json).
 
 ### Offline reproduction commands
 
