@@ -100,7 +100,9 @@ def test_reviewed_payload_mean_survives_missing_selection_profile(tmp_path):
     queue = review_queue(path)
     decisions = [
         {'decision_id': f'decision-{index}', 'candidate_id': row['candidate_id'],
-         'scoring_mode': 'human', 'score': index + 1, 'reason': 'Synthetic partial evidence',
+         # The machine proof is a floor as well as a ceiling (methodology revision
+         # 2026-11-06), so a legal review cannot sit below it.
+         'scoring_mode': 'human', 'score': row['base_proof'], 'reason': 'Synthetic partial evidence',
          'source_sha256': queue['source_sha256'], 'run_id': queue['run_id'],
          'rubric_version': queue['rubric_version'], 'reviewer_id': 'fixture-reviewer',
          'review_version': 'fixture-review', 'timestamp': '2026-10-31T00:00:00+00:00',
@@ -111,9 +113,9 @@ def test_reviewed_payload_mean_survives_missing_selection_profile(tmp_path):
     assert workflow['status'] == 'pending'
     assert workflow['components']['Smethod'] is None
     assert workflow['component_pending_reasons']['Smethod']
-    assert workflow['numerator'] == 3
+    assert workflow['numerator'] == 4
     assert workflow['denominator'] == 2
-    assert workflow['components']['Spayload'] == workflow['Spayload_final'] == 1.5
+    assert workflow['components']['Spayload'] == workflow['Spayload_final'] == 2.0
     assert workflow['Srun_final'] is None
     assert result['receipts'] == {}
     from evaluation.observer_reviews import discover_reviews
@@ -121,7 +123,7 @@ def test_reviewed_payload_mean_survives_missing_selection_profile(tmp_path):
     catalog = ArtifactCatalog({'source': path}, {'reviews': tmp_path / 'derived'}).scan()
     observed = discover_reviews(catalog, catalog.runs[0])['human']
     assert observed['status'] == 'pending'
-    assert observed['components']['Spayload'] == observed['Spayload_final'] == 1.5
+    assert observed['components']['Spayload'] == observed['Spayload_final'] == 2.0
     assert observed['Srun_final'] is None
 
 

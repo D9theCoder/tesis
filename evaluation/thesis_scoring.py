@@ -392,8 +392,16 @@ def review_queue(source: str | Path) -> dict:
         provenance = state.get('payload_provenance', {}).get(cid, {})
         from evaluation.scoring_evidence import candidate_base, verified_dependencies
         base = candidate_base(artifact, cid, method, refs) if eligible and provenance else None
-        ceiling = 4 if base == 3 and any(d['source'].get('candidate_id') == cid and d['source'].get('agent_id') == method
-            for d in verified_dependencies(artifact)) else base
+        dependencies = verified_dependencies(artifact)
+        # Methodology revision (owner-authorised 2026-11-06): level 4 is reachable
+        # when the assessed method is the dependency source *or* when its own
+        # executed candidate consumed a verified dependency. Either way the base
+        # proof must already be 3 and a dependency must be recorded.
+        consumes_dependency = any(d.get('source', {}).get('candidate_id') == cid
+                                  for d in dependencies)
+        ceiling = 4 if base == 3 and (
+            any(d['source'].get('candidate_id') == cid and d['source'].get('agent_id') == method
+                for d in dependencies) or consumes_dependency) else base
         proof_refs = []
         for ref in refs:
             evidence = _resolve(artifact, ref)
@@ -485,6 +493,12 @@ def _validated_reviews(queue, decisions):
             raise ValueError('Review source/run/rubric mismatch')
         if type(d.get('score')) is not int or not 0 <= d['score'] <= row['proof_ceiling']:
             raise ValueError('Review grade exceeds evidence ceiling or is not an integer')
+        base_proof = row.get('base_proof')
+        if type(base_proof) is int and d['score'] < base_proof:
+            # Methodology revision (owner-authorised 2026-11-06): the machine
+            # proof already established for this candidate is a floor, not only a
+            # ceiling. A lower review would contradict recorded evidence.
+            raise ValueError('Review grade is below the machine proof for this candidate')
         if not identifier or identifier in seen or not all(isinstance(d.get(k), str) and d[k].strip()
             for k in ('reason', 'reviewer_id', 'review_version', 'timestamp')):
             raise ValueError('Missing review identity/reason/version/timestamp or duplicate decision')

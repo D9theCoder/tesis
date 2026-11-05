@@ -341,21 +341,30 @@ def ranking_comparison(artifact, selection):
     if not entries:
         return None, 'ranking_scenario_unavailable', detail
     ranking = {}
+    # Methodology revision (owner-authorised 2026-11-06): a method whose reference
+    # fit is still pending is *unrankable*, not a reason to void the scenario. It
+    # is left out of the comparison set and can never be reported as optimal.
+    unranked: list[str] = []
     for name, entry in entries.items():
         # Unknown comparison predicates cannot silently remove a competitor.
         keys = [*entry['preconditions'], *[p['key'] for p in entry['fit_predicates']]]
         if any(type(observations.get(k)) is not bool for k in keys):
             return None, 'ranking_observation_unknown', detail
         eligible = all(observations[k] is True for k in entry['preconditions'])
-        if eligible and entry.get('reference_status') == 'pending':
-            return None, 'ranking_reference_pending', {
-                **detail, 'pending_method': name, 'reference_reason': entry['reference_reason']}
+        if entry.get('reference_status') == 'pending':
+            if eligible:
+                unranked.append(name)
+            ranking[name] = {'eligible': False, 'fit_level': None, 'unranked': True,
+                             'reference_reason': entry.get('reference_reason'),
+                             'planned_request_count': entry['planned_request_count']}
+            continue
         fit = entry.get('reference_fit', 2) if all(observations[p['key']] == p['equals'] for p in entry['fit_predicates']) else 1
         ranking[name] = {'eligible': eligible, 'fit_level': fit,
             'planned_request_count': entry['planned_request_count']}
+    detail['unranked_methods'] = unranked
     pairs = {name: (-r['fit_level'], r['planned_request_count']) for name, r in ranking.items() if r['eligible']}
     if not pairs:
-        return None, 'ranking_no_eligible_method', detail
+        return None, 'ranking_no_rankable_method', detail
     best = min(pairs.values())
     top = [name for name, pair in pairs.items() if pair == best]
     detail.update(status='assessed', comparison=ranking, top_methods=top)
@@ -398,8 +407,15 @@ def selection_grade(artifact, method):
     result.update({k: detail.get(k) for k in ('profile_sha256', 'profile_id') if detail.get(k) is not None})
     if top is None:
         return None, {**result, 'reason': reason, **{k: v for k, v in detail.items()
-            if k in ('pending_method', 'reference_reason')}}
+            if k in ('unranked_methods', 'reference_reason')}}
     entries = config['scoring_profile']['scenarios'][f"{surface}:{config.get('security_level')}"]
+    if method in (detail.get('unranked_methods') or []):
+        # The selected method has no proven reference fit while a confirmed entry
+        # exists: that is a worse choice than the best confirmed entry, never an
+        # optimal one, and never a claim that the method is unexploitable.
+        return 2, {**result, 'status': 'assessed', 'top_methods': top,
+                   'comparison': detail.get('comparison'),
+                   'reason': 'selected_method_unranked_reference_pending'}
     result.update(status='assessed', comparison=detail.get('comparison'), top_methods=top,
         reason='higher_ranked_comparison_exists' if method not in top else 'top_ranked')
     if method not in top:

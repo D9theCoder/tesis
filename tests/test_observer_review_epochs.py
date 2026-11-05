@@ -71,7 +71,8 @@ def decisions_for(queue):
         "rubric_version": queue["rubric_version"],
         "scoring_mode": "human",
         "candidate_id": row["candidate_id"],
-        "score": 2,
+        # Legal range is machine proof (floor) .. proof ceiling.
+        "score": row["base_proof"],
         "reason": "Reviewed candidate-linked execution evidence",
         "evidence_refs": row["evidence_refs"],
         "reviewer_id": "offline-reviewer",
@@ -134,7 +135,9 @@ def test_historical_final_receipt_and_status_survive_live_digest_drift(tmp_path,
     entry, discovered = discover(source, review_dir)
 
     assert discovered["human"]["status"] == "final"
-    assert discovered["human"]["Srun_final"] == 2.5
+    # Weighted composite recomputed from the fixture's own component vector
+    # (the payload grade follows the machine-proof floor).
+    assert discovered["human"]["Srun_final"] == 2.7
     assert discovered["human"]["scoring_rule_sha256"] == HISTORICAL_DIGEST
     assert invalid_reasons(entry) == set()
 
