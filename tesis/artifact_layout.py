@@ -243,7 +243,7 @@ class ExperimentArtifactLayout:
             }
 
         payload = {
-            "schema_version": "artifact-manifest.v1",
+            "schema_version": 'artifact-manifest',
             "artifact_type": "experiment_manifest",
             "mode": self.mode,
             "directory": self.root.name,

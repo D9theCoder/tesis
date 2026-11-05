@@ -18,7 +18,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 _CONTAINMENT_RECEIPTS: ContextVar[list | None] = ContextVar("containment_receipts", default=None)
-HTTP_ACCOUNTING_POLICY_VERSION = "http-accounting.v1"
+HTTP_ACCOUNTING_POLICY_VERSION = 'http-accounting'
 HTTP_PHASES = ("recon", "destination", "method", "verification", "token", "other")
 HTTP_ROLES = ("detection_control", "candidate", "independent_control", "candidate_verification", "other")
 _HTTP_COUNTER: ContextVar[dict | None] = ContextVar("http_request_counter", default=None)

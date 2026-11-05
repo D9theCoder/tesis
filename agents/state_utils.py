@@ -50,7 +50,7 @@ class ControlPayload(str):
         return str(self), self.control_id
 
 
-CONTROL_EVENT_POLICY_VERSION = "control-event.v1"
+CONTROL_EVENT_POLICY_VERSION = 'control-event'
 _NON_CANDIDATE_IDENTITY_KINDS = frozenset({
     "independent_control", "derived_control", "probe_candidate", "unresolved",
 })

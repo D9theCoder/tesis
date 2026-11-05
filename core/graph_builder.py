@@ -34,7 +34,7 @@ from llm.runtime import serialized_dvwa_node, current_call_context
 from tesis.runtime_events import redact_secrets
 
 
-GRAPH_BUILD_VERSION = "graph.v2"
+GRAPH_BUILD_VERSION = "execution-graph"
 
 RUNTIME_AGENT_NODE_NAMES: tuple[str, ...] = (
     "sqli_union",

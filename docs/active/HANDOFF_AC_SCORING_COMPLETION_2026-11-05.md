@@ -6,6 +6,36 @@ remaining work, not completed implementation, validation, or a new execution.
 
 Execution objective: [concise goal-mode prompt](../../GOAL_PROMPT.md).
 
+## Verified interim progress (2026-11-05)
+
+The overall goal remains active. The [persistent requirement checklist](</home/kevin/coding/tesis/docs/active/SCORING_COMPLETION_PROGRESS.md>)
+and [verified interim evidence report](</home/kevin/coding/tesis/docs/active/SCORING_COMPLETION_EVIDENCE_2026-11-05.md>)
+record scoped implementation closure separately from research completion.
+The missing post-review reports were regenerated from preserved sources:
+108 historical executions, 72 final selected-scorer receipts, 36 pending AC
+workflows; F3 is independently reproduced as **313/539, 226 gaps**.
+All 36 AC runs now have a source-bound component/denominator inventory. The
+Mann–Whitney implementation correction passed 35 focused checks and the actual
+saved-artifact analysis CLI; declared condition/model comparisons are explicit,
+with paired/bootstrap results supplementary. Naming-guard implementation passed
+15 checks, but the repository gate still fails with 248 current violations.
+The archived-only alternate diagnostic scorer was also removed after confirming
+no current callers or source-hash consumers; 16 focused checks and a
+[source-bound saved-artifact smoke](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/cleanup-smoke.json>)
+verified numeric/pending/empty-denominator behavior and historical reading.
+This scoped removal is complete independently of the still-open naming cutover.
+Later implementation in the same session migrated checkpoint/graph/state/
+workflow/precondition identities, descriptor/snapshot/failure/cache/containment
+headers, and fixed-method tooling/test paths. [Canonical contract map](</home/kevin/coding/tesis/docs/reference/canonical-contracts.md>)
+records historical decoding and focused verification. The latest naming guard
+still fails with **214** violations; this is incomplete, not launch-ready.
+Focused offline E2E passed (4 planner/workflow checks and 25 evidence-path
+checks), plus 13 shared-reader/fact checks. These are mocked controls, not new
+AC scores, a corrected primary freeze, or a live experiment.
+No corrected primary epoch is frozen or executed and no live target or
+provider/scoring-LLM calls were made. Prospective bindings, AC controls, canonical migration, full
+rubric coverage, readiness, corrected execution and final audit closure remain open.
+
 ## Settled scorer policy
 
 **Manual scorer includes both human and AI scorers. An AI scorer is an
@@ -115,8 +145,11 @@ Existing approvals are not reopened and preregistration is never backdated.
 - [ ] Resolve the four low/medium IDOR and vertical-escalation reference fits
       using method-specific candidate evidence. Keep them null until supported;
       broad exposure must remain a separate finding, not an assumed fit of 3.
-- [ ] Inspect all 36 AC artifacts for the exact component and denominator gaps,
-      reusing valid saved evidence before collecting anything new.
+- [x] Inspect all 36 AC artifacts for the exact component and denominator gaps,
+      reusing valid saved evidence before collecting anything new. Source-bound
+      [candidate inventory](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/historical-ac-inventory.json>)
+      and [stored workflow inventory](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/historical-ac-receipt-inventory.json>)
+      retain every run, component, payload numerator/denominator and unavailable reason.
 - [ ] Investigate the 12 AC/high empty candidate populations. Obtain legitimate,
       validated, executed exploit/bypass candidates where feasible; do not
       count probes, rejected, or unexecuted candidates to force a denominator.
@@ -178,8 +211,11 @@ than claiming a fully numeric score set.
 
 ### 6. Complete the superseding audit, analysis, and reporting
 
-- [ ] Recover or regenerate the missing post-review derived audit/analysis
-      outputs, retaining source identity and original artifacts.
+- [x] Regenerate the missing post-review derived audit/analysis outputs from
+      preserved sources, retaining source identity and original artifacts.
+      [Regenerated audit](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/recovered/baseline-audit.json>)
+      and [corrected exploratory analysis](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/corrected-analysis/analysis.json>)
+      are new derivations, not recovery of deleted bytes or retroactive evidence.
 - [ ] Resolve F3 deductions/nulls using evidence-linked causes across all
       surfaces, not only AC. Preserve unresolved gaps; implementation completion
       alone does not establish F3 = 1.0.
@@ -314,7 +350,10 @@ for example, “implementation verified; AC evidence collection blocked; overall
 goal incomplete.” Do not use the overall goal to delay reachable implementation,
 and do not narrow the overall goal to the easiest open subtask.
 
-## Documentation-only change
+## Original handoff creation (historical)
+
+The statements below describe creation of the original handoff, not the
+subsequent implementation and verification recorded in the interim progress above.
 
 No runtime code, configuration, scorer execution, experiment artifacts, or DOCX
 files are changed by this handoff. No tests, dry runs, E2E, target requests, or

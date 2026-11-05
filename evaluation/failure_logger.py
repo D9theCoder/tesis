@@ -30,7 +30,7 @@ def write_failure_artifact(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     payload = {
-        "schema_version": "stage6.failure.v1",
+        "schema_version": "execution-failure",
         "run_id": run_id,
         **terminal_status(final_state),
         "error": error,

@@ -1,5 +1,7 @@
 """Evidence verification for contained DVWA experiments."""
 
+from core.historical_contracts import read_contract
+
 from dataclasses import dataclass, field
 import logging
 import os
@@ -77,7 +79,7 @@ def fixture_attestation_valid(attestation, row, document, artifact, *, outcome="
             and c.get('object_id') == attestation['object_id'] and c.get('action') == attestation['action']
             for c in controls) for allowed in (True, False))
         protocol = (document.get('oracle_protocol') or {}).get('kind')
-        if protocol == 'dvwa_candidate_permission.v1':
+        if read_contract(protocol, 'dvwa_candidate_permission'):
             replay = document.get('candidate_replay')
             policy = document.get('policy_evidence')
             if not isinstance(replay, dict) or not isinstance(policy, dict):
@@ -141,7 +143,7 @@ def fixture_attestation_valid(attestation, row, document, artifact, *, outcome="
             and any(c.get('credentials_valid') is False for c in controls)
             and any(c.get('session_fingerprint') == c.get('initial_session_fingerprint') for c in controls)
             and any(c.get('principal_id') != c.get('expected_principal_id') for c in controls))
-        if (document.get('oracle_protocol') or {}).get('kind') == 'dvwa_candidate_session.v1':
+        if read_contract((document.get('oracle_protocol') or {}).get('kind'), 'dvwa_candidate_session'):
             replay = document.get('candidate_replay')
             if not isinstance(replay, dict) or any(replay.get(key) != attestation.get(key) for key in (
                     'run_id', 'execution_id', 'fixture_id', 'protocol_version', 'method',

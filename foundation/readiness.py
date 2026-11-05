@@ -14,6 +14,8 @@ router's destination-precondition measurement.
 
 from __future__ import annotations
 
+from core.historical_contracts import read_contract
+
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -21,7 +23,7 @@ from typing import Any, Iterable, Mapping
 
 from core.state import METHODS_BY_SURFACE
 
-READINESS_POLICY_VERSION = "readiness.v1"
+READINESS_POLICY_VERSION = 'readiness'
 READINESS_STATUSES = ("ready", "failed", "unknown")
 BLOCKING_SEVERITY = "blocking"
 ADVISORY_SEVERITY = "advisory"
@@ -42,7 +44,7 @@ REASON_RESTORATION_INVALID = "fixture_restoration_invalid"
 REASON_RESTORATION_SCOPE_MISMATCH = "fixture_restoration_scope_mismatch"
 REASON_READINESS_MISSING = "readiness_missing"
 
-FIXTURE_RESTORATION_POLICY_VERSION = "fixture-restoration.v1"
+FIXTURE_RESTORATION_POLICY_VERSION = 'fixture-restoration'
 FIXTURE_RESTORATION_KEYS = frozenset({
     "policy_version", "evidence_id", "kind", "fixture_id", "protocol_version",
     "security_level", "epoch_id", "source_hashes_sha256", "restoration",
@@ -72,7 +74,7 @@ def validate_fixture_restoration_evidence(
     unknown = sorted(set(evidence) - FIXTURE_RESTORATION_KEYS)
     if unknown:
         raise ValueError(f"fixture restoration evidence has unknown keys: {unknown}")
-    if evidence.get("policy_version") != FIXTURE_RESTORATION_POLICY_VERSION:
+    if not read_contract(evidence.get("policy_version"), FIXTURE_RESTORATION_POLICY_VERSION):
         raise ValueError("unsupported fixture restoration policy version")
     if evidence.get("kind") != "operator_attestation":
         raise ValueError("fixture restoration evidence must be an operator attestation")

@@ -53,7 +53,8 @@ def _install_censuses(
 ) -> list[str]:
     calls: list[str] = []
 
-    def fake_run_census(output: Path) -> dict[str, Any]:
+    def fake_run_census(output: Path, config_path: Path) -> dict[str, Any]:
+        assert config_path == output.parent.parent / "config.yaml"
         calls.append(Path(output).name)
         return deepcopy(before if Path(output).name == "census-before.json" else after)
 

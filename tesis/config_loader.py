@@ -999,13 +999,13 @@ def _validate_engagement_config(config: EngagementConfig) -> None:
             )
 
 
-def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any],
-                            secret_overrides: Mapping[str, str] | None = None) -> EngagementConfig:
-    """Loads and resolve config from configured inputs.
+def load_runtime_inputs(*, config_path: str, cli_args: Mapping[str, Any],
+                        secret_overrides: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Resolve configured inputs/secrets; this does not authorize an engagement.
 
-    Args:
-        config_path: Value used by this function.
-        cli_args: Value used by this function."""
+    Operator-only collectors share these exact input precedence rules. All
+    execution/research validation remains in load_and_resolve_config.
+    """
     # Load secrets from the .env file colocated with config.yaml before model
     # defaults and ${VAR} references are resolved.  An epoch-local frozen config
     # lives outside the repository root, so the repository .env is also loaded
@@ -1027,6 +1027,19 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any],
 
     merged = merge_config(yaml_cfg, env_cfg)
     merged = merge_config(merged, cli_cfg)
+
+    return merged
+
+
+def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any],
+                            secret_overrides: Mapping[str, str] | None = None) -> EngagementConfig:
+    """Loads and resolve config from configured inputs.
+
+    Args:
+        config_path: Value used by this function.
+        cli_args: Value used by this function."""
+    merged = load_runtime_inputs(config_path=config_path, cli_args=cli_args,
+                                 secret_overrides=secret_overrides)
 
     # Role defaults must see registry profiles as well as legacy models.
     # Expand once, after overrides, before resolving profile token budgets.
@@ -1171,7 +1184,7 @@ def load_and_resolve_config(*, config_path: str, cli_args: Mapping[str, Any],
         payload_mode=payload_mode,
         scoring_mode=str(merged.get("scoring_mode", "human")).strip().lower(),
         scoring_evaluator=dict(merged.get("scoring_evaluator") or {}),
-        scoring_rubric_version=str(merged.get("scoring_rubric_version", "scoring.v4")),
+        scoring_rubric_version=str(merged.get("scoring_rubric_version", "thesis-scoring")),
         scoring_profile=evidence_config["scoring_profile"],
         scoring_oracles=evidence_config["scoring_oracles"],
         scoring_policy_epoch=dict(evidence_config["scoring_policy_epoch"] or {}),

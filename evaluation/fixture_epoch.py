@@ -21,7 +21,7 @@ from typing import Any
 
 from evaluation.research_plan import source_identity
 
-CENSUS_SCRIPT = Path("results/validation/remediation-2026-10-30/census.py")
+CENSUS_MODULE = "evaluation.fixture_census"
 LEVELS = ("low", "medium", "high")
 AUTHORIZED_PROTOCOL = (
     "docs/active/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md sections 2C/6: read-only "
@@ -210,9 +210,9 @@ def _coverage_issues(
     return issues
 
 
-def _run_census(output: Path) -> dict[str, Any]:
+def _run_census(output: Path, config_path: Path) -> dict[str, Any]:
     completed = subprocess.run(
-        [sys.executable, str(CENSUS_SCRIPT), str(output)],
+        [sys.executable, "-m", CENSUS_MODULE, str(output.resolve()), "--config", str(config_path.resolve())],
         capture_output=True, text=True, check=False,
     )
     if completed.returncode != 0:
@@ -232,8 +232,8 @@ def build_attestations(
     output_dir.mkdir(parents=True, exist_ok=True)
     first_path = output_dir / "census-before.json"
     second_path = output_dir / "census-after.json"
-    before = _run_census(first_path)
-    after = _run_census(second_path)
+    before = _run_census(first_path, config_path)
+    after = _run_census(second_path, config_path)
     before_rows, after_rows = _observed(before), _observed(after)
     coverage = {
         "before": _coverage_issues(before, before_rows),
@@ -297,11 +297,11 @@ def build_attestations(
     documents: dict[str, dict[str, Any]] = {}
     for level in LEVELS:
         document = {
-            "policy_version": "fixture-restoration.v1",
+            "policy_version": 'fixture-restoration',
             "evidence_id": f"fixture-restoration:dvwa:{level}:{epoch_id}",
             "kind": "operator_attestation",
             "fixture_id": "dvwa-source-fee264766667580e5352",
-            "protocol_version": "ranking-session-acceptance.v1",
+            "protocol_version": 'ranking-session-acceptance',
             "security_level": level,
             "epoch_id": epoch_id,
             "source_hashes_sha256": identity["source_hashes_sha256"],

@@ -63,7 +63,7 @@ def _mutation_candidate(seed, *, candidate_id, payload=None, visit="sqli_union:v
         "policy_version": PAYLOAD_POLICY_VERSION,
         "model_call_id": "call-1",
         "prompt_id": "payload_generation.constrained_variant",
-        "schema_version": "payload-variants.v3",
+        "schema_version": 'payload-variants',
         "copy_of_supplied_seed": False,
     }
 

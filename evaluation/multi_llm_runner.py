@@ -14,6 +14,7 @@ from time import perf_counter
 from typing import Any, Callable
 
 from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS
+from core.scoring_contracts import THESIS_RUBRIC
 from core.payload_policy import (
     BUDGET_POLICY_VERSION,
     CONTROL_POLICY_VERSION,
@@ -395,7 +396,7 @@ def _build_matrix_aggregate(
             for level_payload in payload.values():
                 successes = level_payload["statuses"]["success"]
                 level_payload["legacy_runtime"] = {
-                    "score_epoch": "runtime_provisional_scoring.v2 (legacy)",
+                    "score_epoch": "runtime-provisional (legacy)",
                     "mean_module_score_sum": round(level_payload.pop("total_score") / successes, 2) if successes else None,
                     "unavailable_reason": None if successes else "no_completed_runs",
                 }
@@ -406,7 +407,7 @@ def _build_matrix_aggregate(
         for level_payload in provider_levels.values():
             successes = level_payload["statuses"]["success"]
             level_payload["legacy_runtime"] = {
-                "score_epoch": "runtime_provisional_scoring.v2 (legacy)",
+                "score_epoch": "runtime-provisional (legacy)",
                 "mean_module_score_sum": round(level_payload.pop("total_score") / successes, 2) if successes else None,
                 "unavailable_reason": None if successes else "no_completed_runs",
             }
@@ -466,7 +467,7 @@ def _build_matrix_aggregate(
     totals.update(audit_totals)
 
     return {
-        "schema_version": "stage8.v1",
+        "schema_version": 'matrix-execution',
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "recorded_payload_policy": recorded_payload_policy,
         "matrix": {
@@ -584,7 +585,7 @@ def run_provider_matrix(
     experiment_id: str | None = None,
     scoring_mode: str = "human",
     scoring_evaluator: dict[str, Any] | None = None,
-    scoring_rubric_version: str = "scoring.v4",
+    scoring_rubric_version: str = "thesis-scoring",
     scoring_profile: dict[str, Any] | None = None,
     scoring_oracles: list[dict[str, Any]] | None = None,
     scoring_policy_epoch: dict[str, Any] | None = None,
@@ -605,6 +606,8 @@ def run_provider_matrix(
     and guardrail configurations explicitly when executing the full experiment.
     Every coordinate is recorded in the individual artifact configuration.
     """
+    if scoring_rubric_version != THESIS_RUBRIC:
+        raise ValueError('Matrix launches require the canonical thesis-scoring rubric')
     if llm_role_configs is None:
         llm_role_configs = role_configs
     if llm_runtime_config:
@@ -818,7 +821,7 @@ def run_provider_matrix(
             "not_started_runs": max(0, total_runs - len(artifacts)),
             "matrix_wall_time_ms": int((perf_counter() - matrix_started_clock) * 1000),
             "score_epoch": {
-                "runtime_provisional": "scoring.v2",
+                "runtime_provisional": "runtime-scoring",
                 "thesis_final": scoring_rubric_version,
                 "final_status": "pending_review",
             },
@@ -967,7 +970,7 @@ def run_provider_matrix(
             "module_scores": {},
         }
         artifact = {
-            "schema_version": "tui.v1",
+            "schema_version": 'execution',
             "execution_id": run_execution_id,
             "run_id": run_id,
             "status": status,
@@ -997,7 +1000,7 @@ def run_provider_matrix(
                 for key in ("identity_version", "source_hashes", "source_hashes_sha256", "config_sha256")
             },
             "http_request_counters": {
-                "policy_version": "http-accounting.v1", "scope": "run",
+                "policy_version": 'http-accounting', "scope": "run",
                 "total_requests": 0,
                 "by_phase": {phase: 0 for phase in HTTP_PHASES},
                 "by_role": {role: 0 for role in HTTP_ROLES},
@@ -1031,13 +1034,13 @@ def run_provider_matrix(
             "payload_mode": coordinate["payload_mode"],
             "llm_required": False,
             "score_epoch": {
-                "runtime_provisional": "scoring.v2",
+                "runtime_provisional": "runtime-scoring",
                 "thesis_final": scoring_rubric_version,
                 "final_status": "pending_review",
                 "scoring_policy_version": SCORING_POLICY_VERSION,
             },
             "scoring_policy": None,
-            "composite_score_status": "runtime_provisional_scoring.v2",
+            "composite_score_status": "runtime-provisional",
             "thesis_scoring_status": "pending_review",
             "payload_mode_label": mode_display_label(coordinate["payload_mode"]),
             "llm_activity": llm_activity,

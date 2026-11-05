@@ -21,7 +21,7 @@ from evaluation.research_plan import source_identity
 from tesis.config_loader import load_and_resolve_config
 
 ARTIFACT_TYPE = "autoresearch_live_readiness"
-ARTIFACT_VERSION = "autoresearch-live-readiness.v1"
+ARTIFACT_VERSION = 'study-live-readiness'
 
 
 def _probe_profile(config: Any, profile_id: str) -> dict[str, Any]:
@@ -81,7 +81,7 @@ def _probe_profile(config: Any, profile_id: str) -> dict[str, Any]:
                 system_message="Return the requested health-check JSON only.",
                 user_message='Return exactly {"status":"ok"}.',
                 schema=schema,
-                schema_version="live-readiness-probe.v1",
+                schema_version='live-readiness-probe',
                 validator=validate,
                 max_tokens=budget,
             )

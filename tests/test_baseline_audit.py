@@ -22,13 +22,13 @@ def measured_negative_artifact(**overrides):
         'execution_id': 'mn-1',
         'validation_scope': 'offline_synthetic_fixture',
         'config': {
-            'scoring_mode': 'human', 'scoring_rubric_version': 'scoring.v4',
+            'scoring_mode': 'human', 'scoring_rubric_version': 'thesis-scoring',
             'scoring_profile': {}, 'scoring_oracles': [],
             'experiment_condition': 'linear_hybrid', 'model': 'model-a',
             'provider': 'provider-a', 'surface': 'access_control',
             'security_level': 'high', 'repeat_index': 0,
         },
-        'score_epoch': {'thesis_final': 'scoring.v4', 'scoring_rule_sha256': 'recorded'},
+        'score_epoch': {'thesis_final': 'thesis-scoring', 'scoring_rule_sha256': 'recorded'},
         'final_state': {
             'weak_chain_opportunities': [],
             'model_call_requirements': [{

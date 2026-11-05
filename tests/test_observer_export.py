@@ -15,7 +15,7 @@ def write(path, data):
 
 
 def run_record(eid="older-test-id", **fields):
-    return {"schema_version": "tui.v1", "execution_id": eid, "run_id": "repeated-run-id",
+    return {"schema_version": 'execution', "execution_id": eid, "run_id": "repeated-run-id",
             "status": "success", "config": {"surface": "sqli", "security_level": "high"},
             "final_state": {}, **fields}
 

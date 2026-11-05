@@ -26,9 +26,9 @@ from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-DRAFT_VERSION = "autoresearch-primary-readiness.v1"
-REPORT_VERSION = "autoresearch-readiness.v1"
-PLANNED_MANIFEST_VERSION = "autoresearch-planned-manifest.v1"
+DRAFT_VERSION = 'primary-study-readiness'
+REPORT_VERSION = 'study-readiness'
+PLANNED_MANIFEST_VERSION = 'study-planned-manifest'
 DRAFT_STATUS = "draft_unapproved_unfrozen"
 APPROVED_DRAFT_STATUS = "approved_frozen_ready"
 DRAFT_STATUSES = frozenset({DRAFT_STATUS, APPROVED_DRAFT_STATUS})
@@ -148,9 +148,9 @@ GIT_SOURCE_SCOPE = (
 
 # The declared study contract is read as data only.  It is never imported,
 # executed or treated as an approval.  Linking the draft is not registration.
-STUDY_CONTRACT_VERSION = "chapter3-research-config.v1"
+STUDY_CONTRACT_VERSION = 'study-config'
 STUDY_CONTRACT_PATH = "config/research/autoresearch-primary-study-2026-10-31.json"
-STUDY_SCORING_RUNTIME_PROVISIONAL = "scoring.v2"
+STUDY_SCORING_RUNTIME_PROVISIONAL = "runtime-scoring"
 STUDY_SCORING_FINAL_SOURCE = "thesis_score_receipt only"
 STUDY_FROZEN_INPUTS = frozenset({
     "scoring_profile", "scoring_oracles", "scoring_policy_epoch",
@@ -380,8 +380,8 @@ def validate_design(draft: Mapping[str, Any]) -> list[dict[str, Any]]:
         unknown = sorted(set(policy) - DRAFT_POLICY_KEYS)
         if unknown:
             issues.append(_issue("policy_unknown_fields", f"unknown policy fields: {unknown}"))
-        if policy.get("rubric_version") != "scoring.v4":
-            issues.append(_issue("rubric_version_invalid", "rubric_version must be scoring.v4"))
+        if policy.get("rubric_version") != "thesis-scoring":
+            issues.append(_issue("rubric_version_invalid", "rubric_version must be thesis-scoring"))
         declared_policy_epoch = policy.get("scoring_policy_epoch")
         intended_epoch_id = declared_policy_epoch.get("intended_epoch_id") \
             if isinstance(declared_policy_epoch, Mapping) else None
@@ -1579,7 +1579,7 @@ def analyse_study_contract(
             "final_source": scoring.get("final_source") if isinstance(scoring, Mapping) else None,
             "final_scoring_available": False,
             "detail": (
-                "scoring.v4 remains the final rubric; scoring.v2 is runtime-provisional; "
+                "thesis-scoring remains the final rubric; runtime-scoring is runtime-provisional; "
                 "only thesis_score_receipt can supply final v4 components. No frozen "
                 "scoring profile or policy epoch exists in the configured inputs."
             ),

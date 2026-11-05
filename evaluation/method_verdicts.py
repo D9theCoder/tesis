@@ -35,7 +35,7 @@ from core.knowledge_graph import AttackKnowledgeGraph
 from core.state import METHODS_BY_SURFACE
 from foundation.preconditions import method_statuses
 
-VERDICT_POLICY_VERSION = "measured-negative-verdicts.v1"
+VERDICT_POLICY_VERSION = 'measured-negative-verdicts'
 VERDICT_NOT_VULNERABLE = "not_vulnerable"
 VERDICT_BASIS = "bounded_detection_control"
 VERDICT_REASON = "every_required_precondition_measured_false"

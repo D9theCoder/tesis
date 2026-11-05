@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
-CONTAINMENT_POLICY_VERSION = "containment-summary.v1"
+CONTAINMENT_POLICY_VERSION = "containment-summary"
 
 # Classes that mean an actual outbound request/redirect left the allowed scope.
 ATTACK_RELEVANT_CLASSES = frozenset({"scope_violation"})

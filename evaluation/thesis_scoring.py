@@ -1,7 +1,7 @@
 """Artifact-only thesis grading; reviewers cannot change execution or proof.
 
-Runtime scoring.v2 remains an immutable historical/provisional measurement.
-scoring.v4 reviews distinct executed valid exploit/bypass candidates, then
+Runtime scores remain immutable provisional measurements, separate from grades.
+The thesis rubric reviews distinct executed valid exploit/bypass candidates, then
 derives independent human/AI receipts from one hash-pinned execution artifact.
 """
 from __future__ import annotations
@@ -25,9 +25,11 @@ from tesis.runtime_events import redact_secrets
 from llm.reasoning_evidence import reasoning_evidence
 
 
-RUBRIC_VERSION = 'scoring.v4'
-JUDGE_VERSION = 'judge.v1'
-WEIGHTS = {'Smethod': .2, 'Spayload': .2, 'Sexploit': .3, 'Schain': .1, 'Soutput': .2}
+from core.historical_contracts import HISTORICAL_LABELS
+from core.scoring_contracts import (
+    ARTIFACT_JUDGE as JUDGE_VERSION, SCORE_WEIGHTS as WEIGHTS,
+    THESIS_RUBRIC as RUBRIC_VERSION, SELECTION_CONSISTENCY, is_thesis_rubric,
+)
 SCORING_MODES = ('human', 'ai', 'both')
 EXPERIMENT_ROLES = frozenset({'orchestrator', 'payload_generator'})
 # These are verifier evidence classes, never translations of legacy scores.
@@ -334,16 +336,19 @@ def review_queue(source: str | Path) -> dict:
     config, state = artifact.get('config', {}), artifact['final_state']
     if not isinstance(config, dict):
         raise ValueError('Expected an execution artifact config mapping')
-    version = RUBRIC_VERSION
-    if config.get('scoring_rubric_version', version) != version:
-        raise ValueError('Thesis grading requires scoring.v4; legacy rubrics cannot select the rulebook')
     epoch = artifact.get('score_epoch', {})
     if not isinstance(epoch, dict):
         raise ValueError('Expected a score_epoch mapping')
+    version = config.get('scoring_rubric_version', epoch.get('thesis_final', RUBRIC_VERSION))
+    if not is_thesis_rubric(version, allow_historical=True):
+        raise ValueError('Thesis grading requires thesis-scoring; obsolete rubrics cannot select the rulebook')
     if 'thesis_final' in epoch and epoch['thesis_final'] != version:
-        raise ValueError('score_epoch.thesis_final must agree with scoring.v4')
+        raise ValueError('score_epoch.thesis_final must agree with the declared thesis rubric')
+    historical_read_only = version != RUBRIC_VERSION
     from evaluation.scoring_evidence import validate_evidence_config
-    validate_evidence_config(version, config.get('scoring_profile') or {}, config.get('scoring_oracles') or [])
+    # One maintained rulebook validates evidence. The original label remains in
+    # a read-only historical view; it never selects an alternate implementation.
+    validate_evidence_config(RUBRIC_VERSION, config.get('scoring_profile') or {}, config.get('scoring_oracles') or [])
     mode, evaluator = config.get('scoring_mode'), config.get('scoring_evaluator', {})
     validate_scoring_config(mode, evaluator)
     method = artifact.get('selected_method') or state.get('selected_method') or (state.get('verifier_decision') or {}).get('agent_id')
@@ -435,7 +440,10 @@ def review_queue(source: str | Path) -> dict:
     component_refs['Soutput'].extend(f'#/final_state/model_call_requirements/{i}'
         for i, r in enumerate(state.get('model_call_requirements', []) or [])
         if isinstance(r, dict) and r.get('role') in {'orchestrator', 'payload_generator'})
-    return {**terminal_status(artifact), 'rubric_version': version, 'source_path': str(path.resolve()),
+    return {**terminal_status(artifact), 'rubric_version': version,
+        'historical_read_only': historical_read_only,
+        'source_rubric_version': config.get('scoring_rubric_version', epoch.get('thesis_final')),
+        'source_path': str(path.resolve()),
         'source_sha256': sha256(raw).hexdigest(), 'run_id': artifact.get('run_id'),
         'execution_id': artifact.get('execution_id'), 'selection': mode,
         'evaluator': redact_secrets(evaluator), 'method': method, 'candidates': rows,
@@ -455,7 +463,7 @@ def review_queue(source: str | Path) -> dict:
 def _thesis_metrics(artifact, rows, components):
     """Compute evidence-backed metrics for the artifact's own scoring epoch."""
     from evaluation.research_metrics import compute_run_metrics
-    return compute_run_metrics(artifact, rows=rows, components=components)
+    return compute_run_metrics(artifact, rubric_version=RUBRIC_VERSION, rows=rows, components=components)
 
 
 def _validated_reviews(queue, decisions):
@@ -486,7 +494,9 @@ def _validated_reviews(queue, decisions):
             raise ValueError('Review citations must reference this candidate evidence')
         if mode == 'ai':
             evaluator = queue['evaluator']
-            if not evaluator or d['reviewer_id'] != f"{evaluator['provider']}/{evaluator['model']}" or d['review_version'] != JUDGE_VERSION:
+            judge_matches = (d['review_version'] in HISTORICAL_LABELS['artifact_judge']
+                             if queue.get('historical_read_only') else d['review_version'] == JUDGE_VERSION)
+            if not evaluator or d['reviewer_id'] != f"{evaluator['provider']}/{evaluator['model']}" or not judge_matches:
                 raise ValueError('AI review does not match frozen evaluator')
         if mode in reviewers and reviewers[mode] != d['reviewer_id']:
             raise ValueError('One fixed reviewer per workflow')
@@ -632,6 +642,8 @@ def append_evaluator_decisions(history, additions):
 
 def save_evaluator_telemetry(source, evaluated, *, output_dir=None):
     queue = review_queue(source)
+    if queue.get('historical_read_only') or queue.get('rubric_version') != RUBRIC_VERSION:
+        raise ValueError('Historical scoring identities are read-only')
     out = Path(output_dir) if output_dir else Path(source).parent / 'reviews'
     path = out / f'{_review_identity(queue)}.evaluator.json'
     _write_review_file(path, evaluated, source)
@@ -641,6 +653,8 @@ def save_evaluator_telemetry(source, evaluated, *, output_dir=None):
 def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=False,
                      review_runtime=None):
     queue = review_queue(source)
+    if queue.get('historical_read_only') or queue.get('rubric_version') != RUBRIC_VERSION:
+        raise ValueError('Historical scoring identities are read-only; reuse stored receipts or execute a prospective canonical epoch')
     if isolated_output and output_dir is None:
         raise ValueError('isolated review output requires a separate output_dir')
     out = Path(output_dir) if output_dir else Path(source).parent / 'reviews'
@@ -737,6 +751,8 @@ def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=Fals
 def evaluate_queue(queue, evaluator, *, invoke=None, candidate_ids=None, expected_source_sha256=None,
                    max_tokens_override=None):
     """Bounded independent evaluator; refusal/malformed/missing citations abstain."""
+    if queue.get('historical_read_only') or queue.get('rubric_version') != RUBRIC_VERSION:
+        raise ValueError('Historical scoring identities are read-only; no evaluator calls are permitted')
     validate_scoring_config(queue['selection'], evaluator)
     source_sha256 = queue.get('source_sha256')
     if expected_source_sha256 is not None and expected_source_sha256 != source_sha256:
@@ -1008,7 +1024,7 @@ def _selection_repeat_summaries(records):
             'coverage': available / total if total else None,
             'unavailable_reason': reason, 'repeat_indices': repeats,
             'sources': sorted(records_by_source),
-            'definition_version': 'selection-consistency.v1',
+            'definition_version': SELECTION_CONSISTENCY,
         })
     return summaries
 

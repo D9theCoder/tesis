@@ -1,4 +1,4 @@
-"""Final-receipt-backed Chapter 3 summaries and matched paired analysis.
+"""Final-receipt-backed Chapter 3 summaries and exploratory rank-sum analysis.
 
 Ownership: the study module owns block/target/repeat matching, planned-status
 accounting, fixture-equivalence eligibility, and paired statistics. Score
@@ -21,6 +21,8 @@ coordinates are counted with reasons, never dropped.
 """
 
 from __future__ import annotations
+
+from core.historical_contracts import read_contract
 
 import argparse
 import json
@@ -51,14 +53,14 @@ from evaluation.thesis_scoring import (
 )
 from tesis.artifact_catalog import ArtifactCatalog
 
-ANALYSIS_SCHEMA_VERSION = "chapter3-analysis.v3"
-SUPPORTED_PLAN_VERSIONS = ("chapter3-research-plan.v2",)
+ANALYSIS_SCHEMA_VERSION = 'study-analysis'
+SUPPORTED_PLAN_VERSIONS = ('study-plan',)
 PRIMARY_CONDITIONS: tuple[str, ...] = ("linear_hybrid", "akg_guided_hybrid")
 COMPONENT_NAMES = ("Smethod", "Spayload", "Sexploit", "Schain", "Soutput", "Srun_final")
 BOOTSTRAP_RESAMPLES = 2000
 BOOTSTRAP_SEED = 20261028
 DIFFERENCE_DIRECTION = "linear_hybrid_minus_akg_guided_hybrid"
-STUDY_DESIGN_VERSION = "chapter3-study-design.v1"
+STUDY_DESIGN_VERSION = 'study-design'
 
 # Axes that must agree for a coordinate pair to be compared. Repeat is a
 # pairing axis (paired by repeat) and is dropped only when pooling pairs.
@@ -332,26 +334,46 @@ def _mann_whitney_exploratory(
     left: list[float],
     right: list[float],
     *,
-    reason: str = "paired coordinates survive; rank-sum is supplementary only",
+    reason: str = "declared exploratory comparison; independence is not established",
 ) -> dict[str, Any]:
-    """Exploratory rank-sum comparison; independence is not established."""
-    if not left or not right:
-        return {"status": "unavailable", "reason": "empty_group", "independent": False}
-    combined = [(value, 0) for value in left] + [(value, 1) for value in right]
-    ranks = _rank([value for value, _ in combined])
-    rank_sum = sum(rank for rank, (_, group) in zip(ranks, combined) if group == 0)
-    n1, n2 = len(left), len(right)
-    u_value = rank_sum - n1 * (n1 + 1) / 2
-    mean = n1 * n2 / 2
-    variance = n1 * n2 * (n1 + n2 + 1) / 12
-    p_value = min(1.0, math.erfc(abs((u_value - mean - 0.5) / math.sqrt(variance)) / math.sqrt(2))) if variance else None
-    return {
-        "status": "exploratory", "independent": False,
-        "reason": reason,
-        "n_left": n1, "n_right": n2, "u": u_value, "p_value": p_value,
-        "effect_size": round(2 * u_value / (n1 * n2) - 1, 4) if n1 and n2 else None,
-        "effect_size_name": "rank_biserial_exploratory",
+    """Two-sided, tie-corrected rank sum; never assume independent repeats.
+
+    Continuity correction moves the absolute distance *towards* the null mean,
+    so exchanging groups preserves p while reversing the signed effect size.
+    The normal approximation is explicitly exploratory at limited sample sizes.
+    """
+    result: dict[str, Any] = {
+        "status": "unavailable", "independent": False, "reason": "empty_group",
+        "n_left": len(left), "n_right": len(right), "u": None, "p_value": None,
+        "effect_size": None, "effect_size_name": "rank_biserial_exploratory",
+        "method": "normal_approximation_tie_corrected",
+        "continuity_correction": 0.5,
+        "left": _outcome_distribution(left), "right": _outcome_distribution(right),
+        "limitations": (
+            "Shared fixture, model and grader can induce dependence; equal repeat "
+            "indices do not establish independence. Small-repeat asymptotic p-values "
+            "are exploratory, not confirmatory evidence of model ranking."
+        ),
     }
+    if not left or not right:
+        return result
+    combined = left + right
+    ranks = _rank(combined)
+    n1, n2 = len(left), len(right)
+    u_value = sum(ranks[:n1]) - n1 * (n1 + 1) / 2
+    total = n1 + n2
+    ties = Counter(combined)
+    tie_term = sum(count ** 3 - count for count in ties.values())
+    variance = n1 * n2 / 12 * (total + 1 - tie_term / (total * (total - 1)))
+    distance = max(0.0, abs(u_value - n1 * n2 / 2) - 0.5)
+    # All observations tied: U equals its null mean, with no rank separation.
+    p_value = math.erfc(distance / math.sqrt(2 * variance)) if variance > 0 else 1.0
+    result.update(
+        status="exploratory", reason=reason, u=u_value, p_value=min(1.0, p_value),
+        effect_size=round(2 * u_value / (n1 * n2) - 1, 4),
+        tie_correction_term=tie_term, null_variance=variance,
+    )
+    return result
 
 
 def _unavailable_distribution(reason: str, *, n: int = 0) -> dict[str, Any]:
@@ -1290,16 +1312,115 @@ def _model_contrasts(
     return summary
 
 
+def _condition_contrasts(
+    observations: list[dict[str, Any]], constraints: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Declared rank sums over compatible conditions, not complete pairs only.
+
+    Every planned coordinate remains in a stratum's coverage ledger. Final,
+    ready receipts contribute once even if the other condition's same-index
+    repeat is unavailable. Different models, epochs, fixtures and graders are
+    never pooled. Matched-pair statistics are reported separately.
+    """
+    axes = tuple(name for name in SPREAD_AXES if name != "experiment_condition")
+    strata: dict[tuple[str, ...], list[dict[str, Any]]] = defaultdict(list)
+    for observation in observations:
+        coordinate = observation["coordinate"]
+        strata[tuple(repr(coordinate.get(name)) for name in axes)].append(observation)
+    results = []
+    for key in sorted(strata):
+        population = strata[key]
+        modes = sorted({
+            str(mode) for observation in population
+            for mode in (observation.get("documents") or {})
+        })
+        for mode in modes or [None]:
+            sides = {
+                condition: [observation for observation in population
+                            if observation["coordinate"].get("experiment_condition") == condition]
+                for condition in PRIMARY_CONDITIONS
+            }
+            documents: dict[str, list[Mapping[str, Any]]] = {}
+            coverage = {}
+            for condition, rows in sides.items():
+                included = [row for row in rows if row.get("state") == "final"
+                            and row.get("ready") is True and mode in row.get("documents", {})]
+                documents[condition] = [row["documents"][mode][1] for row in included]
+                coverage[condition] = {
+                    "n_planned": len(rows), "n_final_ready": len(included),
+                    "states": dict(sorted(Counter(str(row.get("state")) for row in rows).items())),
+                    "n_unready_final": sum(row.get("state") == "final" and row.get("ready") is not True
+                                           for row in rows),
+                    "repeat_indices": [row["coordinate"].get("repeat_index") for row in rows],
+                    "included_repeat_indices": [row["coordinate"].get("repeat_index") for row in included],
+                    "receipts": [str(row["documents"][mode][0]) for row in included],
+                }
+            row = {
+                "coordinate": {name: population[0]["coordinate"].get(name) for name in axes},
+                "scoring_mode": mode, "conditions": list(PRIMARY_CONDITIONS),
+                "direction": DIFFERENCE_DIRECTION, "coverage": coverage,
+                "status": "unsupported", "reason": None, "metrics": {},
+            }
+            repeats = [report["repeat_indices"] for report in coverage.values()]
+            if any(len(indices) != len(set(indices)) for indices in repeats):
+                row["reason"] = "duplicate_repeat_index"
+            else:
+                for condition in PRIMARY_CONDITIONS:
+                    if not documents[condition]:
+                        row["reason"] = f"{condition}:no_ready_final_receipts"
+                        break
+                    problem = _side_compatibility_problem(documents[condition], constraints)
+                    if problem:
+                        row["reason"] = f"{condition}:{problem}"
+                        break
+                if row["reason"] is None:
+                    # Conditions and derived method choices may differ, but the
+                    # scorer's other matched-identity gates still apply.
+                    row["reason"] = _receipt_pair_problem(
+                        documents[PRIMARY_CONDITIONS[0]][0],
+                        documents[PRIMARY_CONDITIONS[1]][0], constraints,
+                    )
+            if row["reason"] is None:
+                vectors = {
+                    condition: [_receipt_values(document) for document in group]
+                    for condition, group in documents.items()
+                }
+                metrics = {}
+                for name in COMPONENT_NAMES:
+                    values = {
+                        condition: [vector[name] for vector in group if vector[name] is not None]
+                        for condition, group in vectors.items()
+                    }
+                    metrics[name] = _mann_whitney_exploratory(
+                        values[PRIMARY_CONDITIONS[0]], values[PRIMARY_CONDITIONS[1]],
+                    )
+                adjusted = _holm([metric.get("p_value") for metric in metrics.values()])
+                for metric, p_value in zip(metrics.values(), adjusted):
+                    metric["holm_adjusted_p"] = p_value
+                row.update(status="analyzed", metrics=metrics)
+            results.append(row)
+    return {
+        "role": "declared_exploratory_analysis", "test": "two-sided Mann-Whitney U",
+        "pairing": "not restricted to complete pairs; every eligible final repeat contributes",
+        "independent": False,
+        "limitations": "Shared fixtures, models and graders may induce dependence; three repeats limit inference.",
+        "multiple_comparisons": "Holm-Bonferroni across six outcomes within each stratum/grader row",
+        "n_contrast_rows": len(results),
+        "status_counts": dict(sorted(Counter(row["status"] for row in results).items())),
+        "results": results,
+    }
+
+
 def analyze_plan(
     plan: Mapping[str, Any],
     *,
     source_roots: Mapping[str, str | Path],
     review_roots: Mapping[str, str | Path],
 ) -> dict[str, Any]:
-    """Group compatible final receipts and run matched paired comparisons."""
+    """Group final receipts, run declared rank sums and supplementary paired tests."""
     if plan.get("artifact_type") != "chapter3_research_plan":
         raise ValueError("analysis requires a declared Chapter 3 research plan")
-    if plan.get("plan_version") not in SUPPORTED_PLAN_VERSIONS:
+    if not read_contract(plan.get("plan_version"), SUPPORTED_PLAN_VERSIONS[0]):
         raise ValueError(f"unsupported research plan version: {plan.get('plan_version')!r}")
     if not plan.get("source_hashes_sha256"):
         # A plan without a frozen source identity cannot reject stale artifacts;
@@ -1502,24 +1623,26 @@ def analyze_plan(
         "group_exclusions": group_exclusions,
         "outcome_spread": outcome_spread,
         "model_contrasts": model_contrasts,
-        "paired": paired,
+        "condition_contrasts": _condition_contrasts(observations, constraints),
+        "paired": {"role": "supplementary", **paired},
         "score_epoch": {
-            "runtime_provisional": "scoring.v2",
+            "runtime_provisional": "runtime-scoring",
             "thesis_final": constraints.get("scoring_rubric_version"),
             "final_status": "review_receipts_only",
             "policy_epoch": dict(plan.get("policy_epoch") or {}),
         },
         "statistics_policy": {
-            "primary": "matched pairs only after readiness and fixture-equivalence evidence",
+            "primary": "declared exploratory Mann-Whitney U on compatible ready condition/model groups; not restricted to complete pairs",
+            "supplementary": "matched-pair Wilcoxon and bootstrap intervals, never replacements for the declared rank-sum analysis",
             "pairing_axes": list(PAIR_AXES),
             "receipt_axes": list(RECEIPT_AXES),
             "contrast_axes": ["experiment_condition", "derived_method_choice", "model"],
             "direction": DIFFERENCE_DIRECTION,
             "paired_test": "two-sided Wilcoxon signed-rank; exact for n<=25, normal approximation above",
-            "effect_size": "matched-pairs rank-biserial correlation",
-            "uncertainty": "bootstrap percentile CI of median paired difference",
-            "multiple_comparisons": "Holm-Bonferroni within the paired metric family",
-            "rank_sum": "Mann-Whitney U reported only as exploratory; independence is not established",
+            "effect_size": "rank-biserial correlation; matched-pairs rank-biserial only for supplementary paired results",
+            "uncertainty": "supplementary bootstrap percentile CI of median paired difference",
+            "multiple_comparisons": "Holm-Bonferroni across six outcomes within each declared contrast row; supplementary adjustment within paired families",
+            "rank_sum": "declared exploratory two-sided Mann-Whitney U with average-tie ranks, tie-corrected null variance and continuity correction towards the null; independence is not established",
             "outcome_spread": "descriptive mean/median/sample variance/stdev/inclusive-quartile IQR per planned cell and grader mode; all repeats retained",
             "model_contrast": "separate exploratory Mann-Whitney U per stratum/condition/grader mode; model/provider are not pairing axes and repeats are not paired across models",
             "grader_identity": "reviewer_id/review_version from the latest review decision per candidate; receipts with different recorded graders or versions are incompatible, and a missing/empty/invalid review_history is unavailable rather than pooled",

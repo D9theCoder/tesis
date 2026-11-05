@@ -1,12 +1,17 @@
 """Contained, original-byte catalog for transport-neutral observer exports."""
 from __future__ import annotations
 
+from core.historical_contracts import read_contract
+
 from dataclasses import dataclass, field
 from hashlib import sha256
 import json
 from pathlib import Path
 import re
 from typing import Any, Mapping
+
+from core.historical_contracts import HISTORICAL_LABELS
+from tesis.live_runtime import AKG_SNAPSHOT_VERSION, SCHEMA_VERSION as RUNTIME_DESCRIPTOR_SCHEMA
 
 
 SUPERSEDED_PREFIX = "_superseded"
@@ -146,9 +151,9 @@ class ArtifactCatalog:
             return "manifest"
         if kind in {"thesis_score_receipt", "thesis_review_status"}:
             return "review"
-        if schema in {"stage8.v1"} or kind == "matrix_aggregate":
+        if read_contract(schema, 'matrix-execution') or kind == "matrix_aggregate":
             return "matrix" if isinstance(record.get("runs"), list) else None
-        if schema == "tui.v1" or (schema in {None, "stage6.v1"} and (
+        if read_contract(schema, 'execution') or ((schema is None or schema in HISTORICAL_LABELS['legacy_execution_report']) and (
             isinstance(record.get("final_state"), dict) or (
                 (record.get("execution_id") or record.get("run_id"))
                 and record.get("status") in {"success", "error", "cancelled", "skipped", "completed", "failed", "interrupted"}
@@ -198,10 +203,10 @@ class ArtifactCatalog:
                                                      parent.source))
                     else:
                         self.diagnostic("invalid_matrix_child", path, coordinate_index=index)
-            elif isinstance(record, dict) and record.get("schema_version") == "runtime-descriptor.v1":
+            elif isinstance(record, dict) and record.get("schema_version") in ({RUNTIME_DESCRIPTOR_SCHEMA} | HISTORICAL_LABELS["runtime_descriptor"]):
                 descriptors[path.parent.resolve()] = (path, record)
             elif (isinstance(record, dict) and (record.get("execution_id") or record.get("schema_version"))
-                  and family != "review" and record.get("schema_version") != "akg-snapshot.v1"):
+                  and family != "review" and record.get("schema_version") not in ({AKG_SNAPSHOT_VERSION} | HISTORICAL_LABELS["akg_snapshot"])):
                 self.diagnostic("unsupported_schema", path, schema_version=record.get("schema_version"))
 
         # Merge a standalone child with its exact embedded representation. Any

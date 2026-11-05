@@ -140,7 +140,7 @@ class EngagementConfig:
     dvwa_password: str = field(default="password", repr=False)
     scoring_mode: str = "human"
     scoring_evaluator: dict[str, Any] = field(default_factory=dict)
-    scoring_rubric_version: str = "scoring.v4"
+    scoring_rubric_version: str = "thesis-scoring"
     scoring_profile: dict[str, Any] = field(default_factory=dict)
     scoring_oracles: list[dict[str, Any]] = field(default_factory=list)
     # Chapter 3 epoch identity and cost evidence are external inputs. They stay

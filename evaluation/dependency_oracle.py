@@ -136,8 +136,8 @@ def collect_dependency_oracles(artifact: dict, raw_state: dict) -> dict:
     """Attach a dependency attestation only when the exact source material works downstream."""
     sources = artifact["config"].get("scoring_oracles", [])
     validate_sources(sources)
-    protocol_source = _enabled_source(sources, "dvwa_causal_dependency.v1")
-    permission_source = _enabled_source(sources, "dvwa_candidate_permission.v1")
+    protocol_source = _enabled_source(sources, 'dvwa_causal_dependency')
+    permission_source = _enabled_source(sources, 'dvwa_candidate_permission')
     if protocol_source is None:
         return artifact
     config = artifact["config"]

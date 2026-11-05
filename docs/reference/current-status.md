@@ -49,13 +49,18 @@ owning modules; consult only the area relevant to the task.
 | Runtime versus thesis scores | `core/scorer.py` produces provisional runtime reports; `evaluation/thesis_scoring.py` reviews artifacts and emits separate final receipts. Metrics/contracts are shared evaluation helpers, not a second mandatory experiment. |
 | Reporting and observers | `evaluation/reporter.py`, `observer_reviews.py`, and `observer_export.py` publish reports and source-bound projections. The fidelity ledger is an offline analysis tool, not a runner. |
 
-Version constants observed in source: `graph.v2`, `workflow.v2`, `state.v3`,
-`checkpoint.v2`, `scoring.v4`, and `scoring-policy.v4.3`. Runtime scoring remains
-labelled provisional `scoring.v2`. These identify different contracts, not one
-shared version. Dependency declarations and the lockfile are authoritative for
-library versions; old summary version tables are not an environment audit.
+At this snapshot's creation, source constants were `graph.v2`, `workflow.v2`,
+`state.v3`, `checkpoint.v2`, `scoring.v4`, and `scoring-policy.v4.3`, with
+provisional runtime scoring labelled `scoring.v2`. This is the retained
+pre-cutover observation, not the current naming contract. The subsequent
+[canonical cutover](</home/kevin/coding/tesis/docs/reference/canonical-contracts.md>)
+has migrated graph/state/checkpoint/workflow, scoring/metrics and selected
+reporting contracts; the full payload/oracle/study cutover remains in progress. Historical data and
+its original labels remain unchanged. Dependency declarations and the lockfile
+remain authoritative for external library versions.
 
-Root `config.yaml` selects AI scoring under `scoring.v4`. Settings and model
+Root [config.yaml](</home/kevin/coding/tesis/config.yaml>) now selects AI scoring
+under `thesis-scoring`; original frozen configurations retain their recorded labels. Settings and model
 profiles may change independently of this snapshot. The reconciled
 [Chapter 3](../docx/bab-3-reconciled-2026-10-29.docx) and
 [scoring reference](thesis_scoring.md) document the research rubric; earlier

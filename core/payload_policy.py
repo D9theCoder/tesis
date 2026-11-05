@@ -22,20 +22,22 @@ version they were produced under and readers dispatch on that recorded version.
 
 from __future__ import annotations
 
+from core.historical_contracts import HISTORICAL_LABELS
+
 import json
 from collections.abc import Mapping
 from hashlib import sha256
 from typing import Any
 
-PAYLOAD_POLICY_VERSION = "payload-policy.v2"
-CONTROL_POLICY_VERSION = "detection-controls.v2"
-BUDGET_POLICY_VERSION = "candidate-budget.v2"
-EXPERIMENT_POLICY_VERSION = "chapter3-flow.v2"
+PAYLOAD_POLICY_VERSION = 'payload-policy'
+CONTROL_POLICY_VERSION = 'detection-controls'
+BUDGET_POLICY_VERSION = 'candidate-budget'
+EXPERIMENT_POLICY_VERSION = 'experiment-flow'
 
 # Historical detection-control snapshots were frozen as a complete ordered
 # canonical probe set with a bare content hash.  Readers must keep dispatching
 # on the recorded policy version rather than reinterpreting old snapshots.
-LEGACY_CONTROL_POLICY_VERSION = "detection-controls.v1"
+LEGACY_CONTROL_POLICY_VERSION = next(iter(HISTORICAL_LABELS["legacy_detection_controls"]))
 
 DEFAULT_CANDIDATE_BUDGET = 5
 
@@ -67,7 +69,7 @@ TEMPLATE_PAYLOAD_MODES = frozenset({"llm_template"})
 # as the exhaustion fallback and remain the whole queue when generation produced
 # no valid candidate.  ``static_only`` and the strict modes are unchanged: a
 # strict mode never gains static fallback, and ``static_only`` never generates.
-CANDIDATE_ORDER_POLICY_VERSION = "candidate-order.v1"
+CANDIDATE_ORDER_POLICY_VERSION = 'candidate-order'
 CANDIDATE_ORDER_POLICY = "validated_generated_first_static_fallback"
 CANDIDATE_ORDER_TRIGGER = "hybrid_valid_generated_candidate"
 
@@ -139,9 +141,9 @@ EVENT_NO_SUPPLIED_SEED = "payload_generation.no_supplied_seed"
 # while historical artifacts keep their recorded one.
 MUTATION_PROMPT_ID = "payload_generation.constrained_variant"
 TEMPLATE_PROMPT_ID = "payload_generation.template_construction"
-PAYLOAD_SCHEMA_VERSION = "payload-variants.v3"
-PAYLOAD_TEMPLATE_SCHEMA_VERSION = "payload-template.v1"
-TEMPLATE_REGISTRY_VERSION = "dvwa-neutral-template.v1"
+PAYLOAD_SCHEMA_VERSION = 'payload-variants'
+PAYLOAD_TEMPLATE_SCHEMA_VERSION = 'payload-template'
+TEMPLATE_REGISTRY_VERSION = 'dvwa-neutral-template'
 # Template candidates carry a construction label, never a seed-mutation label.
 TEMPLATE_MUTATION_TYPE = "template_construction"
 

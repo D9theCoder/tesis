@@ -1,6 +1,6 @@
 """Offline fidelity ledger for the Chapter 3 research loop (P-1 / P0 / P1).
 
-The ledger restates saved artifacts under the pinned ``scoring.v4`` graded path
+The ledger restates saved artifacts under the pinned ``thesis-scoring`` graded path
 (P-1), attributes every graded deduction and null to a closed-list cause with
 evidence pointers (P0), and orders explicit hypotheses with the handoff section
 5.3 lexicographic rule (P1).  It is read-only over artifacts: no provider,
@@ -64,8 +64,8 @@ from evaluation.thesis_scoring import WEIGHTS, review_queue
 from tesis.artifact_catalog import ArtifactCatalog
 
 
-LEDGER_VERSION = 'fidelity-ledger.v1'
-RUNTIME_PROVISIONAL_LABEL = 'runtime_provisional_scoring.v2'
+LEDGER_VERSION = 'fidelity-ledger'
+RUNTIME_PROVISIONAL_LABEL = 'runtime-provisional'
 DIMENSIONS = ('Smethod', 'Spayload', 'Sexploit', 'Schain', 'Soutput')
 CLOSED_CAUSES = frozenset({
     'model_output_quality',
@@ -1550,7 +1550,7 @@ def rank_hypotheses(hypotheses):
                                   EVIDENCE_ORDER[row['evidence_strength']],
                                   -row['runs_affected'], row['id']))
     return {
-        'definition_version': 'p1-ranking.v1',
+        'definition_version': 'hypothesis-ranking',
         'sort': 'lexicographic: risk asc, evidence strength desc, runs affected desc, id asc',
         'ordered': ordered,
         'falsified': falsified,
@@ -1712,7 +1712,7 @@ def build_ledger(sources, receipts=None, *, attributions=None, hypotheses=None, 
     document = {
         'ledger_version': LEDGER_VERSION,
         'generated_at': _now(),
-        'rubric_version': 'scoring.v4',
+        'rubric_version': 'thesis-scoring',
         'runtime_label': RUNTIME_PROVISIONAL_LABEL,
         'inputs': {
             'source_roots': {identifier: str(path) for identifier, path in source_roots.items()},

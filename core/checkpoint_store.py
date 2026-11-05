@@ -93,7 +93,7 @@ def stable_thread_id(experiment_id: str, coordinate: Mapping[str, Any]) -> str:
 def coordinate_fingerprint(coordinate: Mapping[str, Any]) -> str:
     """Secret-free fingerprint of the effective coordinate setup."""
     canonical = {
-        "fingerprint_version": "coordinate.v2",
+        "fingerprint_version": "coordinate-setup",
         "target_url": str(coordinate.get("target_url") or ""),
         "provider": str(coordinate.get("provider") or coordinate.get("llm_provider") or ""),
         "surface": str(coordinate.get("surface") or ""),

@@ -218,6 +218,14 @@ lower output quality. Keep reviewer identity, time, reasons, source references,
 and prior decisions when correcting reviews; changing reviewer does not relabel
 an existing receipt as if another reviewer produced it.
 
+Implementation identities are descriptive, not sequential rubric versions:
+`thesis-scoring` is final assessment and `runtime-scoring` remains provisional.
+The unchanged formula has one owner in
+[scoring_contracts.py](</home/kevin/coding/tesis/core/scoring_contracts.py>).
+Original receipt identities and source/epoch gates remain intact; see
+[canonical contracts](</home/kevin/coding/tesis/docs/reference/canonical-contracts.md>).
+This identifier cutover does not amend the Chapter 3 rubric or authorize a launch.
+
 ### 7.2 Metric List
 
 Report optimal first-choice accuracy, method alignment, AKG path validity,

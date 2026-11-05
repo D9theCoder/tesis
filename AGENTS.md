@@ -31,6 +31,27 @@ sandbox experiments. Keep the research scope and containment rules below intact.
   Their commands, approvals, thresholds, and outstanding gaps are not standing
   instructions for unrelated work. Use this file for current work scope.
 
+## Canonical naming and historical compatibility
+
+- Keep one canonical, descriptive, unversioned implementation/contract for each
+  project-owned responsibility. Do not create sequential `v1`/`vX`, `.vN`, `_vN`,
+  `-vN` or equivalent names for modules, symbols, commands, schemas, prompts,
+  policies, configuration, tests or newly emitted labels. Parallel `new`/`latest`
+  implementations and executable forwarding aliases are not substitutes.
+- Migrate live producers and consumers together. Preserve rubric semantics,
+  evidence gates, weights, denominators and unavailable-value behavior. Use
+  source/content hashes and prospective epoch bindings to identify contract drift.
+- Preserve historical artifacts, frozen hashes, receipts and checkpoint identities.
+  Necessary historical decoding is read-only, explicit and separate from current
+  write paths; it must not execute obsolete scorers or weaken compatibility,
+  chronology, integrity or resume gates. External package/model/protocol versions
+  and measured numbers are facts, not project-authored naming violations.
+- Run `.venv/bin/python -m tesis.naming_guard` for naming-location linting. It
+  checks maintained source/tests and current configuration templates, not saved
+  artifacts, historical handoffs or external dependency trees. The lint must pass
+  after the coordinated cutover and before a final prospective source/policy
+  freeze. Never patch historical bindings to make a new launch gate pass.
+
 ## Commands
 
 Run from the repository root; `uv sync` installs the locked environment:

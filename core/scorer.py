@@ -34,13 +34,7 @@ from core.run_status import terminal_status
 #: The published ``Srun`` weights (see AGENTS.md: the formula is a research
 #: invariant, not a tunable). The per-method composite and the run-scope composite
 #: both read them from here so the two cannot drift apart.
-SCORE_WEIGHTS: dict[str, float] = {
-    "Smethod": 0.20,
-    "Spayload": 0.20,
-    "Sexploit": 0.30,
-    "Schain": 0.10,
-    "Soutput": 0.20,
-}
+from core.scoring_contracts import SCORE_WEIGHTS, THESIS_RUBRIC, RUNTIME_RUBRIC
 
 #: What each component of the run-scope composite is scoped to, recorded in the
 #: artifact so a run-scope number is never mistaken for a per-method one.
@@ -348,8 +342,8 @@ def scorer(state: dict) -> dict:
         ],
         "registered_methods": list(ALL_METHOD_AGENTS),
         "score_epoch": {
-            "runtime_provisional": "scoring.v2",
-            "thesis_final": "scoring.v4",
+            "runtime_provisional": RUNTIME_RUBRIC,
+            "thesis_final": THESIS_RUBRIC,
             "final_status": "pending_review",
         },
         "total_surfaces_tested": len(SURFACES),

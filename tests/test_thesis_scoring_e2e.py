@@ -11,6 +11,7 @@ telemetry overwrites before changing their implementation.
 """
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -20,7 +21,7 @@ from evaluation.reporter import write_json_report
 from tests.test_scoring_remediation_e2e import control
 
 
-ROOT = Path('results/validation/thesis-scoring-v4')
+ROOT = Path(os.environ.get('TESIS_THESIS_SCORING_EVIDENCE', 'results/validation/thesis-scoring'))
 
 
 def source(monkeypatch, selection='both', name='mixed_candidates'):
@@ -44,7 +45,7 @@ def grades(queue, mode, value=2):
         'reason': 'Reviewed candidate-linked execution evidence',
         'evidence_refs': row['evidence_refs'],
         'reviewer_id': 'offline/independent-judge' if mode == 'ai' else 'offline-reviewer',
-        'review_version': 'judge.v1' if mode == 'ai' else 'offline-v1',
+        'review_version': 'artifact-judge' if mode == 'ai' else 'manual-assessment',
         'timestamp': '2026-09-30T00:00:00+00:00',
     } for row in queue['candidates'] if row['status'] == 'pending_review']
 

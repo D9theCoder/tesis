@@ -13,6 +13,8 @@ cycle back through the payload pipeline.
 
 from __future__ import annotations
 
+from core.historical_contracts import read_contract
+
 import json
 from hashlib import sha256
 from typing import Any
@@ -29,7 +31,7 @@ from core.payload_policy import (
     TEMPLATE_REGISTRY_VERSION,
 )
 
-RECORDED_POLICY_SNAPSHOT_VERSION = "payload-policy-snapshot.v1"
+RECORDED_POLICY_SNAPSHOT_VERSION = 'payload-policy-snapshot'
 PROMPT_IDENTITY_FIELDS = (
     "version",
     "template_hash",
@@ -100,7 +102,7 @@ def verify_payload_policy_snapshot(snapshot: Any) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     if not isinstance(snapshot, dict):
         return [{"valid": False, "reason": "recorded_policy_not_an_object"}]
-    if snapshot.get("snapshot_version") != RECORDED_POLICY_SNAPSHOT_VERSION:
+    if not read_contract(snapshot.get("snapshot_version"), RECORDED_POLICY_SNAPSHOT_VERSION):
         issues.append({"valid": False, "reason": "recorded_policy_version_unsupported"})
     for field in ("policy_version", "payload_policy_version", "template_registry_version"):
         if not isinstance(snapshot.get(field), str) or not snapshot[field].strip():

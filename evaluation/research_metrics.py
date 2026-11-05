@@ -3,10 +3,10 @@
 Every metric is computed from retained artifact evidence when that evidence is
 sufficient, and is otherwise returned as ``None`` with a precise reason,
 numerator/denominator, population, origin and visit identity. Missing values are
-never filled with zero and nothing here changes the published v4 rubric, proof
+never filled with zero and nothing here changes the published thesis rubric, proof
 ceilings, final-method candidate denominator or the weighted formula.
 
-Runtime ``scoring.v2`` values remain provisional; they are exposed only inside
+Recorded runtime values remain provisional; they are exposed only inside
 ``provisional`` and never substitute for a final component.
 """
 from __future__ import annotations
@@ -33,15 +33,20 @@ from core.payload_policy import (
 from core.state import ALL_METHOD_AGENTS
 
 
-METRIC_SCHEMA_VERSION = 'research-metrics.v2'
-# v4.3 changes only the scoring-rule digest construction to the canonical
-# four-file function; the metric definitions themselves are unchanged. Stored
-# v4.2 documents and recorded epoch digests remain historical identity.
-SCORING_POLICY_VERSION = 'scoring-policy.v4.3'
+from core.scoring_contracts import (
+    RESEARCH_METRICS as METRIC_SCHEMA_VERSION, SCORING_POLICY as SCORING_POLICY_VERSION,
+    EVENT_RATES as RATE_DEFINITION_VERSION, THESIS_RUBRIC, RUNTIME_PROVISIONAL,
+    PROVISIONAL_SCORE as PROVISIONAL_LABEL, METHOD_ALIGNMENT, is_thesis_rubric,
+)
+from core.historical_contracts import HISTORICAL_LABELS
+
+# New writes pin the shared formula/contract owner as well as the evidence code.
+# Original four-file constructions stay independently anchored on read only.
 EXPERIMENT_ROLES = frozenset({'orchestrator', 'payload_generator'})
 CONTROL_IDENTITY_KINDS = frozenset({'probe_candidate', 'derived_control', 'independent_control', 'unresolved'})
-RATE_DEFINITION_VERSION = 'event-rates.v2'
 SCORING_SOURCE_FILES = (
+    'core/scoring_contracts.py',
+    'core/historical_contracts.py',
     'evaluation/thesis_scoring.py',
     'evaluation/scoring_evidence.py',
     'evaluation/research_metrics.py',
@@ -52,7 +57,6 @@ SCORING_SOURCE_FILES = (
 #: produced under a different construction; recorded artifact epochs stay
 #: untouched and are returned separately as historical identity.
 SCORING_RULE_DIGEST_DEFINITION = 'sha256(concat(per-file sha256 hexdigest for SCORING_SOURCE_FILES))'
-PROVISIONAL_LABEL = 'provisional_scoring.v2'
 
 DEFINITIONS = {
     'first_choice_accuracy': 'Binary accuracy of the first actual model-origin selection decision against the frozen ranking snapshot top set.',
@@ -67,12 +71,12 @@ DEFINITIONS = {
     'akg_routes_valid': 'Count of recorded routes passing the static-edge and prerequisite-evidence checks.',
     'payload_validity_rate': 'Validated exploit/bypass candidates divided by all validated queue rows (combined origins).',
     'model_payload_validity_rate': 'Validated model-origin candidates divided by parsed model-origin candidates.',
-    'payload_execution_success_rate': 'Executed and assessed candidates at confirmed tier divided by valid exploit/bypass candidates (v4 denominator).',
+    'payload_execution_success_rate': 'Executed and assessed candidates at confirmed tier divided by valid exploit/bypass candidates (eligible-candidate denominator).',
     'assessable_executed_confirmation_rate': 'Confirmed candidates divided by assessable executed candidates.',
     'payload_improvement_rate': 'Method visits where the best executed model candidate outperforms the best executed static baseline for the same method and visit.',
     'method_alignment_rate': 'Positive independent method-alignment verdicts divided by evidence-linked verdicts for executed assessed candidates; validation alone is not a verdict.',
-    'full_exploit_flag': 'Binary v4 flag: Sexploit >= 3, not a route count.',
-    'chain_enabled_exploit_flag': 'Binary v4 flag: Schain >= 3, not a route count.',
+    'full_exploit_flag': 'Binary graded flag: Sexploit >= 3, not a route count.',
+    'chain_enabled_exploit_flag': 'Binary graded flag: Schain >= 3, not a route count.',
     'chain_route_count': 'Count of independently verified completed chain routes.',
     'attempts_to_success': 'One-based position of the first confirmed candidate in distinct executed-candidate order.',
     'candidate_attempts': 'Distinct executed exploit/bypass candidate IDs; not a physical request count.',
@@ -112,14 +116,8 @@ DEFINITIONS = {
     'confirmed_model_candidates': 'Executed model-origin candidates at confirmed tier (>=3) with candidate-bound evidence.',
 }
 
-DEFINITION_VERSIONS = {name: 'research-metrics.v2' for name in DEFINITIONS}
-DEFINITION_VERSIONS.update({
-    'payload_validity_rate': 'research-metrics.v1',
-    'attempts_to_success': 'research-metrics.v1',
-    'full_exploit_flag': 'research-metrics.v1',
-    'chain_enabled_exploit_flag': 'research-metrics.v1',
-    'method_alignment_rate': 'method-alignment.v1',
-})
+DEFINITION_VERSIONS = {name: name.replace('_', '-') for name in DEFINITIONS}
+DEFINITION_VERSIONS['method_alignment_rate'] = METHOD_ALIGNMENT
 
 RESEARCH_METRIC_NAMES = tuple(DEFINITIONS)
 
@@ -156,7 +154,8 @@ def scoring_policy(artifact=None):
         'policy_version': SCORING_POLICY_VERSION,
         'metrics_epoch': METRIC_SCHEMA_VERSION,
         'rate_definition_version': RATE_DEFINITION_VERSION,
-        'rubric_version': (artifact.get('config') or {}).get('scoring_rubric_version'),
+        'rubric_version': THESIS_RUBRIC,
+        'recorded_rubric_version': (artifact.get('config') or {}).get('scoring_rubric_version'),
         'scoring_rule_sha256': _rule_hash(source_hashes),
         'digest_definition': SCORING_RULE_DIGEST_DEFINITION,
         'source_files': list(SCORING_SOURCE_FILES),
@@ -1369,7 +1368,7 @@ def _alignment_metric(metrics, artifact, method, executed):
         matching = [
             row for row in verdicts
             if isinstance(row, dict)
-            and row.get('definition_version') == 'method-alignment.v1'
+            and row.get('definition_version') in ({METHOD_ALIGNMENT} | HISTORICAL_LABELS['method_alignment'])
             and row.get('candidate_id') == candidate['candidate_id']
             and row.get('method') == method
             and row.get('visit_id') and row['visit_id'] in visits
@@ -1393,7 +1392,7 @@ def _alignment_metric(metrics, artifact, method, executed):
         coverage=_rate(assessed, len(candidates)),
         reason=('no_executed_candidate' if not executed else
                 'validator_does_not_record_separate_alignment_verdict'),
-        detail={'definition_version': 'method-alignment.v1',
+        detail={'definition_version': METHOD_ALIGNMENT,
                 'executed_assessable_candidates': len(candidates)},
     )
 
@@ -1717,7 +1716,7 @@ def _provisional(artifact):
     state = _state(artifact)
     return {
         'label': PROVISIONAL_LABEL,
-        'formula_note': 'Runtime scoring.v2 components are provisional and never substitute for final v4 values.',
+        'formula_note': 'Runtime components are provisional and never substitute for final thesis values.',
         'composite_scores': state.get('composite_scores', {}),
         'output_scores': state.get('output_scores', {}),
         'method_scores': state.get('method_scores', {}),
@@ -1725,45 +1724,23 @@ def _provisional(artifact):
     }
 
 
-def legacy_run_metrics(artifact, rows, components):
-    """Preserve the historical v3 metric readouts without relabeling them."""
-    state = _state(artifact)
-    valid = [r for r in rows if r.get('validation', {}).get('valid') is True and r.get('stage') in {'exploit', 'bypass'}]
-    executed = [r for r in rows if r.get('eligible')]
-    assessed = [r for r in executed if r.get('proof_ceiling') is not None]
-    successes = sum((r.get('proof_ceiling') or 0) >= 3 for r in assessed)
-    calls = artifact.get('llm_activity', {}).get('completed', 0) if isinstance(artifact.get('llm_activity'), dict) else 0
-    by_id = {r['candidate_id']: r for r in executed}
-    order = list(dict.fromkeys(r.get('candidate_id') for r in state.get('response_evidence', [])
-        if isinstance(r, dict) and r.get('candidate_id') in by_id and r.get('stage') in {'exploit', 'bypass'}))
-    attempts = next((i + 1 for i, cid in enumerate(order) if by_id[cid].get('proof_ceiling') is not None
-        and by_id[cid]['proof_ceiling'] >= 3), None) if set(order) == set(by_id) else None
-    values = {
-        'payload_validity_rate': sum(r.get('validation', {}).get('valid') is True for r in rows) / len(rows) if rows else None,
-        'payload_execution_success_rate': successes / len(valid) if valid and len(assessed) == len(executed) else None,
-        'full_exploit_rate': int(components['Sexploit'] >= 3) if components.get('Sexploit') is not None else None,
-        'attempts_to_success': attempts,
-        'chain_enabled_exploit_count': int(components['Schain'] >= 3) if components.get('Schain') is not None else None,
-        'invalid_json_rate': min(len(state.get('invalid_json_events', [])) / calls, 1) if calls else None,
-        'guardrail_activation_rate': min(len(state.get('guardrail_activations', [])) / calls, 1) if calls else None,
-        'fallback_rate': min(len(state.get('fallback_events', [])) / calls, 1) if calls else None,
-        'first_choice_accuracy': None, 'method_alignment_rate': None, 'akg_path_validity': None,
-        'token_cost_per_success': None,
-    }
-    reasons = {'first_choice_accuracy': 'no_preregistered_optimal_method_ranking',
-               'method_alignment_rate': 'validator_does_not_record_separate_alignment_verdict',
-               'akg_path_validity': 'selection_trace_is_not_an_edge_by_edge_graph_path',
-               'token_cost_per_success': 'no_frozen_token_price_schedule'}
+def _stored_metrics_or_unavailable(artifact, declared):
+    """Read original legacy metrics, never execute an obsolete metric/scorer path.
+
+    Absent stored proof is unavailable. Runtime vectors, caller components and
+    fabricated default rows cannot reconstruct a historical graded assessment.
+    """
+    stored = artifact.get('metrics')
+    if (isinstance(stored, dict) and isinstance(stored.get('values'), dict)
+            and isinstance(stored.get('availability'), dict)
+            and (declared is None or stored.get('rubric_version') == declared)):
+        return stored
     metrics = MetricSet()
-    for name, value in values.items():
-        metrics.put(name, value, reason=reasons.get(name, 'insufficient_evidence_or_not_applicable'))
-    for key, value in (('valid_exploit_candidates', len(valid)),
-                       ('executed_candidates', len(executed)),
-                       ('assessed_candidates', len(assessed)),
-                       ('returned_llm_outputs', calls)):
-        metrics.denominators[key] = value
-    document = metrics.document('scoring.v3', _provisional(artifact))
-    document['legacy_metric_epoch'] = 'scoring.v3'
+    for name in RESEARCH_METRIC_NAMES:
+        metrics.put(name, None, reason='historical_metric_bundle_unavailable')
+    document = metrics.document(None, _provisional(artifact))
+    document['recorded_rubric_version'] = declared
+    document['historical_read_only'] = True
     return document
 
 
@@ -1822,7 +1799,7 @@ def _derive_component_evidence(artifact, method, rows, view=None):
 
 
 def _legacy_runtime_components(artifact):
-    """Explicitly labeled runtime scoring.v2 vector; never graded evidence."""
+    """Explicitly labeled recorded runtime vector; never graded evidence."""
     report = artifact.get('report') if isinstance(artifact.get('report'), dict) else {}
     summary = report.get('summary') if isinstance(report.get('summary'), dict) else {}
     components = artifact.get('composite_components')
@@ -1836,12 +1813,15 @@ def _legacy_runtime_components(artifact):
                if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)}
     if not numeric:
         return None
+    recorded_epoch = artifact.get('score_epoch')
+    recorded_epoch = recorded_epoch if isinstance(recorded_epoch, dict) else {}
     return {
         'label': PROVISIONAL_LABEL,
-        'score_epoch': 'runtime_provisional_scoring.v2',
+        'score_epoch': RUNTIME_PROVISIONAL,
+        'recorded_score_epoch': recorded_epoch.get('runtime_provisional'),
         'source': source,
-        'note': ('Runtime scoring.v2 components are provisional; they are never '
-                 'graded v4 evidence and never substitute for a final component.'),
+        'note': ('Recorded runtime components are provisional; they are never '
+                 'graded thesis evidence and never substitute for a final component.'),
         'components': numeric,
         'flags': {
             'full_exploit_flag_legacy': float(int(numeric['Sexploit'] >= 3)) if 'Sexploit' in numeric else None,
@@ -1861,10 +1841,11 @@ def compute_run_metrics(artifact, *, rubric_version=None, rows=None, components=
     """
     if not isinstance(artifact, dict):
         raise ValueError('artifact must be a mapping')
-    rubric = rubric_version or (_config(artifact).get('scoring_rubric_version') or 'scoring.v3')
+    declared = rubric_version if rubric_version is not None else _config(artifact).get('scoring_rubric_version')
+    if not is_thesis_rubric(declared, allow_historical=True):
+        return _stored_metrics_or_unavailable(artifact, declared)
+    rubric = THESIS_RUBRIC
     method = _method(artifact)
-    if rubric != 'scoring.v4':
-        return legacy_run_metrics(artifact, rows or [], components or {})
     metrics = MetricSet()
     view = _candidate_view(artifact, method, rows)
     calls = _method_calls(artifact, method)

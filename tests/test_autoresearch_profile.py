@@ -81,9 +81,9 @@ def synthetic_profile(*, source_origin: str = "operator_fixture") -> dict:
         scenarios[f"{surface}:{level}"] = entries
     profile = {
         "profile_id": "offline-synthetic-schema-control",
-        "version": "ranking.synthetic.v1",
+        "version": 'synthetic-ranking-profile',
         "fixture_id": "synthetic-dwva",
-        "protocol_version": "offline.v1",
+        "protocol_version": 'offline-protocol',
         "frozen_at": FROZEN_AT,
         "candidate_budget": 5,
         "sources": [source],
@@ -124,9 +124,9 @@ def _artifact(profile: dict, method: str, plan: dict) -> dict:
         "run_id": "offline-synthetic-fixture",
         "selected_method": method,
         "validation_scope": FIXTURE_SCOPE,
-        "score_epoch": {"thesis_final": "scoring.v4"},
+        "score_epoch": {"thesis_final": "thesis-scoring"},
         "config": {
-            "scoring_rubric_version": "scoring.v4",
+            "scoring_rubric_version": "thesis-scoring",
             "scoring_mode": "human",
             "scoring_evaluator": {},
             "scoring_profile": profile,
@@ -234,7 +234,7 @@ def test_b3_review_queue_returns_numeric_smethod_without_ranking_unavailable(
 def _valid_schedule() -> dict:
     return {
         "schedule_id": "offline-synthetic-price",
-        "version": "prices.v1",
+        "version": 'token-prices',
         "currency": "USD",
         "effective_at": "2026-09-01T00:00:00+00:00",
         "prices": {
@@ -250,14 +250,14 @@ def _valid_schedule() -> dict:
         {"schedule_id": "missing-required-fields"},
         {
             "schedule_id": "bad-time",
-            "version": "prices.v1",
+            "version": 'token-prices',
             "currency": "USD",
             "effective_at": "not-a-timestamp",
             "prices": {"offline/fixture": {"input_per_million": 1.0, "output_per_million": 2.0}},
         },
         {
             "schedule_id": "empty-prices",
-            "version": "prices.v1",
+            "version": 'token-prices',
             "currency": "USD",
             "effective_at": "2026-09-01T00:00:00+00:00",
             "prices": {},
@@ -291,7 +291,7 @@ def test_f7_freeze_and_build_reject_empty_or_malformed_schedule(
 
 def test_f7_verify_plan_rejects_empty_schedule_before_any_plan_use(monkeypatch, tmp_path):
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("scoring_rubric_version: scoring.v4\n", encoding="utf-8")
+    config_path.write_text("scoring_rubric_version: thesis-scoring\n", encoding="utf-8")
     plan = {
         "artifact_type": "chapter3_research_plan",
         "plan_version": RESEARCH_PLAN_VERSION,
@@ -321,7 +321,7 @@ def test_f7_valid_schedule_freezes_and_embeds_resolved_prices(monkeypatch, tmp_p
     config = SimpleNamespace(
         token_price_schedule=_valid_schedule(),
         scoring_oracles=[_protocol_source()],
-        scoring_rubric_version="scoring.v4",
+        scoring_rubric_version="thesis-scoring",
         fixture_id=profile["fixture_id"],
         protocol_version=profile["protocol_version"],
         candidate_budget=profile["candidate_budget"],
@@ -334,7 +334,7 @@ def test_f7_valid_schedule_freezes_and_embeds_resolved_prices(monkeypatch, tmp_p
     prices_path.write_text(json.dumps(stale_schedule), encoding="utf-8")
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
-        "scoring_rubric_version: scoring.v4\ntoken_price_schedule: prices.json\n",
+        "scoring_rubric_version: thesis-scoring\ntoken_price_schedule: prices.json\n",
         encoding="utf-8",
     )
     candidate_path = tmp_path / "ranking-profile.json"
@@ -391,7 +391,8 @@ def _draft() -> dict:
     return copy.deepcopy(ranking_draft.load_draft(DRAFT_PATH))
 
 
-def test_ranking_draft_covers_registry_and_is_not_a_scoring_profile():
+def test_historical_draft_coverage_does_not_authorize_a_new_source_freeze():
+    original_bytes = DRAFT_PATH.read_bytes()
     draft = _draft()
     report = ranking_draft.assess_draft(draft, root=REPOSITORY_ROOT)
 
@@ -401,8 +402,14 @@ def test_ranking_draft_covers_registry_and_is_not_a_scoring_profile():
     assert report["coverage"]["confirmed_entries"] == 23
     assert report["coverage"]["pending_entries"] == 0
     assert report["coverage"]["deferred_entries"] == 4
-    assert report["freeze_readiness"]["ready"] is True
+    # Historical owner approval and registry coverage do not waive source pins.
+    # The current canonical state/contract owner differs from this original
+    # draft's pinned bytes; cleanup also removed some declared evidence files.
+    # Rebind a prospective copy, never patch the original to make it launchable.
+    assert report["freeze_readiness"]["ready"] is False
+    assert "method_registry_pin_mismatch" in report["freeze_readiness"]["blockers"]
     assert "owner_approval_missing" not in report["freeze_readiness"]["blockers"]
+    assert DRAFT_PATH.read_bytes() == original_bytes
 
     assert draft["status"] == "draft_approved_unfrozen"
     assert draft["not_a_scoring_profile"] is True

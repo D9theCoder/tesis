@@ -37,7 +37,7 @@ to manufacture a higher hit rate. Parallel coordinates still dispatch independen
 ## Metric contract
 
 New coordinate, per-role, and matrix summaries carry
-`cache_metrics_version: provider-input-tokens.v1`. Rates are fractions from 0 to 1;
+`cache_metrics_version: provider-input-tokens`. Rates are fractions from 0 to 1;
 multiply by 100 for display as a percentage.
 
 | Field | Meaning |
@@ -87,10 +87,14 @@ to obtain total input; normalized LangChain input totals already include them.
 
 ## Historical artifacts and provider evidence
 
-Artifacts without `cache_metrics_version: provider-input-tokens.v1` used
-`cache_hit_rate` for local saved-response hits. Do not relabel that historical
-number as a provider token rate. Original artifacts remain unchanged; recompute
-from their usage evidence only when it is available.
+The canonical `provider-input-tokens` label and the historical
+`provider-input-tokens.v1` label both identify provider input-token accounting.
+Older artifacts without either marker used `cache_hit_rate` for local
+saved-response hits. Do not relabel that historical number as a provider token
+rate. Original artifacts and identities remain unchanged; recompute from their
+usage evidence only when it is available. The
+[contract mapping](</home/kevin/coding/tesis/docs/reference/canonical-contracts.md>)
+records the prospective identifier cutover, not a change in the rate definition.
 
 Provider references:
 

@@ -1,7 +1,7 @@
 """Declared Chapter 3 research plan: declared blocks, frozen inputs, no pooling.
 
-The frozen ``evaluation/scoring_v4_matrix.py`` remains untouched. This module
-declares the *new* primary study described by the Chapter 3 handoff:
+The separate ``evaluation/method_matrix.py`` owns fixed-method coverage. This
+module declares the primary study described by the Chapter 3 handoff:
 
 * ``selection``: ``target_method=None`` so the model chooses a method;
 * ``forced``: every registered method is forced for payload/agent coverage.
@@ -40,8 +40,8 @@ from tesis.config_loader import (
     validate_provider,
 )
 
-RESEARCH_PLAN_VERSION = "chapter3-research-plan.v2"
-RESEARCH_CONFIG_VERSION = "chapter3-research-config.v1"
+RESEARCH_PLAN_VERSION = 'study-plan'
+RESEARCH_CONFIG_VERSION = 'study-config'
 MIN_REPEATS = 3
 PRIMARY_CONDITIONS: tuple[str, ...] = ("linear_hybrid", "akg_guided_hybrid")
 PRIMARY_PAYLOAD_MODE = "hybrid"
@@ -375,8 +375,8 @@ def _json_hash(value: Any) -> str:
     ).hexdigest()
 
 
-SOURCE_IDENTITY_VERSION = "chapter3-source-identity.v1"
-FIXTURE_RESTORATION_POLICY_VERSION = "fixture-restoration.v1"
+SOURCE_IDENTITY_VERSION = 'source-identity'
+FIXTURE_RESTORATION_POLICY_VERSION = 'fixture-restoration'
 FIXTURE_RESTORATION_KINDS: tuple[str, ...] = ("operator_attestation",)
 FIXTURE_RESTORATION_STATES: tuple[str, ...] = ("reset", "isolated_equivalent")
 FIXTURE_RESTORATION_REQUIRED_KEYS = (
@@ -1117,7 +1117,7 @@ def build_research_plan(
         "web_manifest": {
             "status": "emitted_at_run",
             "artifact_type": "experiment_manifest",
-            "schema_version": "artifact-manifest.v1",
+            "schema_version": 'artifact-manifest',
             "default_root": "results/runs",
             "expected_path": (
                 f"{declared_output_root}/experiment.manifest.json"
@@ -1697,7 +1697,7 @@ def run_research_plan(plan_path: str | Path, *, output_epoch: str | None = None)
         "manifest": None,
         "coordinate_reconciliation": reconciliations,
         "score_epoch": {
-            "runtime_provisional": "scoring.v2",
+            "runtime_provisional": "runtime-scoring",
             "thesis_final": plan["constraints"]["scoring_rubric_version"],
             "final_status": "pending_review",
         },

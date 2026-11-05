@@ -54,7 +54,7 @@ def format_graded_scores_table(data: Mapping[str, Any]) -> str | None:
             return None
     components = graded.get("components")
     if not isinstance(components, Mapping):
-        return (f"Graded thesis components ({graded.get('rubric_version') or 'scoring.v4'}): "
+        return (f"Graded thesis components ({graded.get('rubric_version') or 'thesis-scoring'}): "
                 f"unavailable ({graded.get('reason') or 'missing_components'})")
     pending = graded.get("component_pending_reasons")
     pending = pending if isinstance(pending, Mapping) else {}
@@ -64,7 +64,7 @@ def format_graded_scores_table(data: Mapping[str, Any]) -> str | None:
         reason = pending.get(key)
         rows.append([key, "N/A" if value is None else str(value),
                      "" if value is not None else str(reason or "missing_evidence")])
-    lines = [f"Graded thesis components ({graded.get('rubric_version') or 'scoring.v4'}):",
+    lines = [f"Graded thesis components ({graded.get('rubric_version') or 'thesis-scoring'}):",
              _as_table(["Component", "Score", "Pending reason"], rows)]
     workflows = graded.get("workflows")
     if isinstance(workflows, Mapping):
@@ -73,10 +73,8 @@ def format_graded_scores_table(data: Mapping[str, Any]) -> str | None:
             workflow = workflows.get(mode)
             if not isinstance(workflow, Mapping):
                 continue
-            if mode == "human":
-                label = "HUMAN workflow (human review required; provisional until final receipt)"
-            else:
-                label = "AI workflow (experimental/provisional; not final thesis human signoff)"
+            from core.scoring_contracts import WORKFLOW_LABELS
+            label = WORKFLOW_LABELS[mode]
             label = str(workflow.get("label") or label)
             detail = f"{label}: {workflow.get('status') or 'missing'}"
             if workflow.get("reason"):
@@ -153,7 +151,7 @@ def format_module_scores_table(
     if not rows:
         return graded or "No modules matched the provided filters."
 
-    headers = ["Module", "Runtime score (legacy scoring.v2)", "Label"]
+    headers = ["Module", "Runtime score (legacy runtime-scoring)", "Label"]
     if show_chains:
         headers.append("Chain")
 
@@ -192,7 +190,7 @@ def format_module_scores_table(
     for _name in UNAVAILABLE_METRICS:
         tail.append(f"{_name}: {format_metric(summary_map, _name)}")
     legacy_table = (
-        "Runtime module scores (legacy scoring.v2; not a graded thesis score):\n"
+        "Runtime module scores (legacy runtime-scoring; not a graded thesis score):\n"
         + _as_table(headers, rows)
     )
     primary = f"{graded}\n\n{legacy_table}" if graded else legacy_table
@@ -245,7 +243,7 @@ def format_provider_comparison_table(matrix_data: Mapping[str, Any]) -> str:
         for run in runs
     )
 
-    headers = [*_OBSERVATION_COLUMNS, "Module", "Runtime score (legacy scoring.v2)", "Label"]
+    headers = [*_OBSERVATION_COLUMNS, "Module", "Runtime score (legacy runtime-scoring)", "Label"]
     if any_evasion:
         headers.append("Evasion (legacy per-run)")
 
@@ -280,7 +278,7 @@ def format_provider_comparison_table(matrix_data: Mapping[str, Any]) -> str:
     from evaluation.metrics import UNAVAILABLE_METRICS, artifact_summary, format_metric
 
     tail: list[str] = [
-        "Every row is one run/module observation of legacy runtime_provisional_scoring.v2; "
+        "Every row is one run/module observation of legacy runtime-provisional; "
         "no best-of-N, no pooling across coordinates, and no de-duplication."
     ]
     for run in runs:

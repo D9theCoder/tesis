@@ -11,7 +11,7 @@ from zipfile import ZipFile
 
 
 ACCEPTANCE_GUIDANCE = (
-    'Status penerimaan scoring.v4 bersifat khusus per artefak: penerimaan hanya berlaku bila didukung oleh '
+    'Status penerimaan rubrik penilaian bersifat khusus per artefak: penerimaan hanya berlaku bila didukung oleh '
     'profil, oracle, dan bukti eksekusi yang terekam dan dapat dirujuk. Ketiadaan bukti tidak boleh '
     'ditafsirkan sebagai penerimaan. Contoh kondisi pada tabel bersifat ilustratif. Implementasi dan kontrol '
     'offline tercatat pada docs/completed/HANDOFF_SCORING_EVIDENCE_AND_RUBRIC_COMPLETION_2026-10-01.md. '
@@ -26,7 +26,7 @@ def _pinned_rubric_version():
 
 
 def rubric_tables(source):
-    """Parse the seven normative v4 rubric tables from Markdown.
+    """Parse the seven normative evidence-based rubric tables from Markdown.
 
     Accepts either the historical ``### 5.N`` handoff layout or the current
     ``docs/reference/thesis_scoring.md`` layout (``### Tabel 3.N:``). The
@@ -38,7 +38,7 @@ def rubric_tables(source):
         text, re.M | re.S,
     )
     if len(sections) != 7:
-        raise ValueError('Expected seven v4 rubric tables')
+        raise ValueError('Expected seven evidence-based rubric tables')
     tables = []
     for legacy_number, table_number, title, body in sections:
         number = table_number or str(int(legacy_number) + 4)
@@ -186,7 +186,7 @@ def update_document(source, handoff, output):
         template = next(p for p in reversed(paragraphs) if p.getElementsByTagName('w:t') and not p.getElementsByTagName('m:oMath'))
         section = next((n for n in body.childNodes if n.nodeName == 'w:sectPr'), None)
         heading = old_heading.cloneNode(True)
-        _replace_text(heading, 'Pembaruan rubrik scoring.v4 (revisi turunan 2026-10-28)')
+        _replace_text(heading, 'Pembaruan rubrik penilaian berbasis bukti (revisi turunan 2026-10-28)')
         heading_properties = document.createElement('w:pPr')
         heading_spacing = document.createElement('w:spacing')
         heading_spacing.setAttribute('w:before', '240')
@@ -226,7 +226,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path, help='original DOCX; never modified')
     parser.add_argument('handoff', type=Path,
-                        help='Markdown rubric source (v4 thesis_scoring.md or legacy handoff)')
+                        help='Markdown rubric source (thesis_scoring.md or historical handoff)')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--audit', type=Path, required=True)
     args = parser.parse_args()

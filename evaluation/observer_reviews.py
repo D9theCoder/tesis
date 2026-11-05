@@ -8,6 +8,7 @@ import math
 
 from evaluation.remaining_evidence import _check_grades
 from evaluation.research_metrics import SCORING_RULE_DIGEST_DEFINITION, SCORING_SOURCE_FILES
+from core.historical_contracts import HISTORICAL_LABELS, HISTORICAL_SCORING_SOURCE_FILES
 from evaluation.thesis_scoring import WEIGHTS, _validated_reviews, review_queue
 from tesis.artifact_repository import config_fingerprint
 from tesis.runtime_events import redact_secrets
@@ -47,11 +48,13 @@ def _source_bound_queue(entry, document, queue):
 
     Current-source validation is unchanged: a document matching the live queue
     digest is returned untouched. A differing digest is accepted only when the
-    raw source artifact independently records the same canonical four-file
-    source hashes and scoring epoch as the document policy.
+    raw source artifact independently records the exact admitted source-file
+    construction, hashes and epoch. Historical labels additionally require their
+    original four-file policy, not a suffix-based compatibility alias.
     """
     recorded = document.get("scoring_rule_sha256")
-    if recorded == queue.get("scoring_rule_sha256"):
+    historical = bool(queue.get("historical_read_only"))
+    if recorded == queue.get("scoring_rule_sha256") and not historical:
         return queue
     if not _hex64(recorded):
         return queue
@@ -60,15 +63,16 @@ def _source_bound_queue(entry, document, queue):
         raise ValueError("scoring_rule_epoch_anchor_missing")
     if policy.get("digest_definition") != SCORING_RULE_DIGEST_DEFINITION:
         raise ValueError("scoring_rule_epoch_definition_mismatch")
-    if policy.get("source_files") != list(SCORING_SOURCE_FILES):
+    source_files = HISTORICAL_SCORING_SOURCE_FILES if historical else SCORING_SOURCE_FILES
+    if policy.get("source_files") != list(source_files):
         raise ValueError("scoring_rule_epoch_source_files_mismatch")
     policy_hashes = policy.get("source_hashes")
-    if not isinstance(policy_hashes, dict) or set(policy_hashes) != set(SCORING_SOURCE_FILES):
+    if not isinstance(policy_hashes, dict) or set(policy_hashes) != set(source_files):
         raise ValueError("scoring_rule_epoch_source_hashes_missing")
-    if any(not _hex64(policy_hashes[path]) for path in SCORING_SOURCE_FILES):
+    if any(not _hex64(policy_hashes[path]) for path in source_files):
         raise ValueError("scoring_rule_epoch_source_hash_invalid")
     digest = sha256(
-        "".join(policy_hashes[path] for path in SCORING_SOURCE_FILES).encode()
+        "".join(policy_hashes[path] for path in source_files).encode()
     ).hexdigest()
     if policy.get("scoring_rule_sha256") != digest or recorded != digest:
         raise ValueError("scoring_rule_epoch_anchor_digest_mismatch")
@@ -79,7 +83,7 @@ def _source_bound_queue(entry, document, queue):
     source_hashes = source_identity.get("source_hashes")
     if not isinstance(source_hashes, dict):
         raise ValueError("source_identity_source_hashes_missing")
-    if any(source_hashes.get(path) != policy_hashes[path] for path in SCORING_SOURCE_FILES):
+    if any(source_hashes.get(path) != policy_hashes[path] for path in source_files):
         raise ValueError("source_identity_hash_mismatch")
     identity_digest = source_identity.get("source_hashes_sha256")
     if not _hex64(identity_digest) or identity_digest != _source_set_digest(source_hashes):
@@ -93,6 +97,33 @@ def _source_bound_queue(entry, document, queue):
         raise ValueError("scoring_epoch_digest_mismatch")
     anchored = dict(queue)
     anchored["scoring_rule_sha256"] = digest
+    if historical:
+        original = record.get("scoring_policy")
+        if not isinstance(original, dict):
+            raise ValueError("historical_policy_anchor_missing")
+        for field, role in (("policy_version", "scoring_policy"),
+                            ("metrics_epoch", "research_metrics"),
+                            ("rate_definition_version", "event_rates"),
+                            ("rubric_version", "thesis_rubric")):
+            value = policy.get(field)
+            if not isinstance(value, str) or value not in HISTORICAL_LABELS[role] or original.get(field) != value:
+                raise ValueError("historical_policy_identity_mismatch")
+        if (original.get("source_files") != list(source_files)
+                or original.get("source_hashes") != policy_hashes
+                or original.get("digest_definition") != SCORING_RULE_DIGEST_DEFINITION
+                or original.get("scoring_rule_sha256") != digest):
+            raise ValueError("historical_policy_source_mismatch")
+        if (document.get("rubric_version") != queue["rubric_version"]
+                or policy["rubric_version"] != queue["rubric_version"]
+                or score_epoch.get("thesis_final") != queue["rubric_version"]
+                or score_epoch.get("metrics_epoch") != policy["metrics_epoch"]
+                or score_epoch.get("scoring_policy_version") != policy["policy_version"]
+                or document.get("metrics_epoch") != policy["policy_version"]):
+            raise ValueError("historical_policy_epoch_mismatch")
+        # Read-only comparison identities are copied from independently anchored
+        # originals, never minted for a writer or used to skip numerical checks.
+        anchored["scoring_policy"] = dict(policy)
+        anchored["metrics"] = {**queue.get("metrics", {}), "metrics_epoch": policy["policy_version"]}
     return anchored
 
 

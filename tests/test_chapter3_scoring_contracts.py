@@ -1,4 +1,4 @@
-"""Chapter 3 v4 scoring and research-metric contract controls.
+"""Chapter 3 scoring and research-metric contract controls.
 
 These are deterministic offline controls: no live DVWA, provider, or matrix run.
 They cover required role/visit receipts, operational failure versus refusal,
@@ -28,8 +28,8 @@ def profile(surface='sqli'):
         'planned_request_count': 10, 'protocol_refs': ['protocol'],
         'allowed_plans': ['stop_after_target', 'stop_at_budget', 'continue_same_surface']}
         for m in METHODS_BY_SURFACE[surface]}
-    result = {'profile_id': 'offline-ranking', 'version': 'ranking.v1',
-        'fixture_id': 'synthetic-dwva', 'protocol_version': 'offline.v1',
+    result = {'profile_id': 'offline-ranking', 'version': 'ranking-profile',
+        'fixture_id': 'synthetic-dwva', 'protocol_version': 'offline-protocol',
         'frozen_at': '2026-09-01T00:00:00+00:00', 'candidate_budget': 5,
         'sources': [{'source_id': 'protocol', 'origin': 'offline_control',
             'document': document, 'sha256': evidence_hash(document)}],
@@ -44,12 +44,12 @@ def export(artifact, name):
     return path
 
 
-def v4_artifact(monkeypatch):
+def contract_artifact(monkeypatch):
     artifact, _, _ = control(monkeypatch, 'mixed_candidates')
     artifact['execution_id'] = uuid4().hex
-    artifact['config'].update(scoring_mode='both', scoring_rubric_version='scoring.v4',
+    artifact['config'].update(scoring_mode='both', scoring_rubric_version='thesis-scoring',
         scoring_profile=profile(), scoring_oracles=[], fixture_id='synthetic-dwva',
-        protocol_version='offline.v1', scoring_evaluator={'provider': 'offline',
+        protocol_version='offline-protocol', scoring_evaluator={'provider': 'offline',
         'model': 'independent-judge', 'max_attempts': 2, 'max_tokens': 512, 'timeout': 5})
     artifact['validation_scope'] = 'offline_synthetic_fixture'
     state = artifact['final_state']
@@ -63,7 +63,7 @@ def v4_artifact(monkeypatch):
     generator_calls = [r for r in artifact.get('llm_performance', [])
                        if isinstance(r, dict) and r.get('role') == 'payload_generator']
     artifact['llm_performance'] = [{'call_id': 'call:1', 'role': 'orchestrator',
-        'method': 'sqli_union', 'visit_id': selection['visit_id'], 'schema_version': 'orchestrator.v1',
+        'method': 'sqli_union', 'visit_id': selection['visit_id'], 'schema_version': 'method-selection-schema',
         'input': call_input, 'output': output, 'input_sha256': evidence_hash(call_input),
         'output_sha256': evidence_hash(output), 'parse_status': 'ok', 'validation_status': 'valid',
         'attempt': 1, 'provider': 'offline', 'model': 'fixture',
@@ -75,7 +75,7 @@ def v4_artifact(monkeypatch):
 
 def test_provider_failure_is_operational_not_a_model_refusal(monkeypatch):
     from evaluation.thesis_scoring import review_queue
-    artifact = v4_artifact(monkeypatch)
+    artifact = contract_artifact(monkeypatch)
     call = artifact['llm_performance'][0]
     artifact['llm_performance'].append({**deepcopy(call), 'call_id': 'gen:provider',
         'role': 'payload_generator', 'parse_status': 'provider_error',
@@ -87,28 +87,28 @@ def test_provider_failure_is_operational_not_a_model_refusal(monkeypatch):
 
 def test_chain_assessment_controls_zero_versus_unavailable(monkeypatch):
     from evaluation.thesis_scoring import review_queue
-    artifact = v4_artifact(monkeypatch)
+    artifact = contract_artifact(monkeypatch)
     state = artifact['final_state']
     state['weak_chain_opportunities'] = []
     state['chain_assessment'] = {'assessed': False, 'status': 'not_run',
         'reason': 'stop_before_chain_opportunity', 'edges': [], 'routes_evaluated': 0,
-        'policy_version': 'chain-assessment.v1'}
+        'policy_version': 'chain-assessment'}
     queue = review_queue(export(artifact, 'chain-not-run'))
     assert queue['components']['Schain'] is None
     assert queue['component_pending_reasons']['Schain'] == 'stop_before_chain_opportunity'
     state['chain_assessment'] = {'assessed': True, 'status': 'assessed', 'reason': 'no_opportunity',
-        'edges': [], 'routes_evaluated': 0, 'policy_version': 'chain-assessment.v1'}
+        'edges': [], 'routes_evaluated': 0, 'policy_version': 'chain-assessment'}
     queue = review_queue(export(artifact, 'chain-assessed-absence'))
     assert queue['components']['Schain'] == 0
 
 
 def test_cost_requires_usage_schedule_and_confirmed_success(monkeypatch):
     from evaluation.thesis_scoring import review_queue
-    artifact = v4_artifact(monkeypatch)
+    artifact = contract_artifact(monkeypatch)
     queue = review_queue(export(artifact, 'cost-without-schedule'))
     assert queue['metrics']['values']['token_cost'] is None
     assert queue['metrics']['unavailable_reason']['token_cost'] == 'token_price_schedule_missing'
-    schedule = {'schedule_id': 'offline-price', 'version': 'prices.v1',
+    schedule = {'schedule_id': 'offline-price', 'version': 'token-prices',
         'currency': 'USD', 'effective_at': '2026-09-01T00:00:00+00:00',
         'prices': {'offline/fixture': {'input_per_million': 1.0, 'output_per_million': 2.0}}}
     artifact['config']['token_price_schedule'] = schedule
@@ -129,10 +129,10 @@ def test_cost_requires_usage_schedule_and_confirmed_success(monkeypatch):
 def test_metrics_cover_every_family_and_never_zero_fill(monkeypatch):
     from evaluation.research_metrics import RESEARCH_METRIC_NAMES
     from evaluation.thesis_scoring import review_queue
-    artifact = v4_artifact(monkeypatch)
+    artifact = contract_artifact(monkeypatch)
     queue = review_queue(export(artifact, 'metric-coverage'))
     metrics = queue['metrics']
-    assert metrics['schema_version'] == 'research-metrics.v2'
+    assert metrics['schema_version'] == 'research-metrics'
     for name in RESEARCH_METRIC_NAMES:
         assert name in metrics['values'], name
         assert name in metrics['availability'], name
@@ -153,10 +153,10 @@ def test_metrics_cover_every_family_and_never_zero_fill(monkeypatch):
 
 def test_pending_component_never_produces_a_final_receipt(monkeypatch):
     from evaluation.thesis_scoring import review_queue, finalize_reviews
-    artifact = v4_artifact(monkeypatch)
+    artifact = contract_artifact(monkeypatch)
     state = artifact['final_state']
     state['chain_assessment'] = {'assessed': False, 'status': 'not_run', 'reason': 'no_chain_opportunity',
-        'edges': [], 'routes_evaluated': 0, 'policy_version': 'chain-assessment.v1'}
+        'edges': [], 'routes_evaluated': 0, 'policy_version': 'chain-assessment'}
     path = export(artifact, 'pending-chain')
     queue = review_queue(path)
     assert queue['components']['Schain'] is None
@@ -171,7 +171,7 @@ def test_pending_component_never_produces_a_final_receipt(monkeypatch):
 def test_smethod_uses_tri_state_not_known_nodes(monkeypatch):
     from evaluation.thesis_scoring import review_queue
     for value, expected in (('true', 4), ('false', 1), ('unknown', None)):
-        artifact = v4_artifact(monkeypatch)
+        artifact = contract_artifact(monkeypatch)
         selection = next(d for d in artifact['final_state']['scoring_decisions']
                          if d['dimension'] == 'Smethod')
         selection.update(preconditions=['union_select_possible'], known_nodes=[],
@@ -182,7 +182,7 @@ def test_smethod_uses_tri_state_not_known_nodes(monkeypatch):
 
 def test_strict_validation_rejection_grades_zero(monkeypatch):
     from evaluation.thesis_scoring import review_queue
-    artifact = v4_artifact(monkeypatch)
+    artifact = contract_artifact(monkeypatch)
     selection = next(d for d in artifact['final_state']['scoring_decisions']
                      if d['dimension'] == 'Smethod')
     call = artifact['llm_performance'][0]
@@ -198,7 +198,7 @@ def test_strict_validation_rejection_grades_zero(monkeypatch):
 
 def test_output_references_require_prompt_visible_seeds(monkeypatch):
     from evaluation.thesis_scoring import review_queue
-    artifact = v4_artifact(monkeypatch)
+    artifact = contract_artifact(monkeypatch)
     selection = next(d for d in artifact['final_state']['scoring_decisions']
                      if d['dimension'] == 'Smethod')
     visible = {'source_seed_id': 'seed-visible', 'candidate_id': 'seed-visible',
@@ -218,7 +218,7 @@ def test_output_references_require_prompt_visible_seeds(monkeypatch):
                                 'payload_or_logic': "1' AND 3=3-- -"}]}
         return {'call_id': generation_call_id, 'role': 'payload_generator',
             'method': 'sqli_union', 'visit_id': selection['visit_id'],
-            'schema_version': 'payload-variants.v3', 'provider': 'offline',
+            'schema_version': 'payload-variants', 'provider': 'offline',
             'model': 'fixture', 'started_at': '2026-10-01T00:00:00+00:00',
             'input': base_input, 'input_sha256': evidence_hash(base_input),
             'output': output, 'output_sha256': evidence_hash(output),
@@ -235,7 +235,7 @@ def test_output_references_require_prompt_visible_seeds(monkeypatch):
 
 def price_schedule(**overrides):
     schedule = {
-        'schedule_id': 'synthetic-price', 'version': 'prices.v1', 'currency': 'USD',
+        'schedule_id': 'synthetic-price', 'version': 'token-prices', 'currency': 'USD',
         'effective_at': '2026-09-01T00:00:00+00:00',
         'prices': {'openai/gpt-6-luna': {
             'input_per_million': 0.1, 'cache_read_per_million': 0.01,

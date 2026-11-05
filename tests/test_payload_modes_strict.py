@@ -70,7 +70,7 @@ def _fake_mutation_generator(payload: str, mutation_type: str = "encoding"):
                 "visit_id": state["selected_visit_id"],
                 "call_id": "call-mutation",
                 "prompt_id": "payload_generation.constrained_variant",
-                "schema_version": "payload-variants.v3",
+                "schema_version": 'payload-variants',
                 "origin_kind": "seed_mutation",
                 "policy_version": PAYLOAD_POLICY_VERSION,
                 "parsed_candidate_ids": [],

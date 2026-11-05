@@ -32,7 +32,7 @@ def lifecycle_alias(execution_status: str | None) -> str:
 
 
 def _security_evidence(source: Mapping) -> tuple[str, StatusReason | None]:
-    """Use existing scoring.v4 proof ceilings, without changing verifier rules."""
+    """Use existing thesis-scoring proof ceilings, without changing verifier rules."""
     from evaluation.scoring_evidence import candidate_base, oracle_negative_confirmed
     from evaluation.thesis_scoring import _resolve
 

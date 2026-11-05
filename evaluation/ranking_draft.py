@@ -15,6 +15,8 @@ No network, target, provider, runner, graph, or selector code is called here.
 
 from __future__ import annotations
 
+from core.historical_contracts import read_contract
+
 import argparse
 import json
 from collections.abc import Iterable, Mapping
@@ -28,7 +30,7 @@ from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS, SURFACES
 from evaluation.scoring_evidence import evidence_hash, validate_profile
 
 DRAFT_ARTIFACT_TYPE = "autoresearch_ranking_draft"
-DRAFT_VERSION = "ranking-draft.v1"
+DRAFT_VERSION = 'ranking-draft'
 DRAFT_STATUS = "draft_unapproved_unfrozen"
 APPROVED_DRAFT_STATUS = "draft_approved_unfrozen"
 DRAFT_STATUSES = frozenset({DRAFT_STATUS, APPROVED_DRAFT_STATUS})
@@ -387,7 +389,7 @@ def assess_draft(
         raise DraftValidationError(["ranking draft must be a JSON object"])
     if draft.get("artifact_type") != DRAFT_ARTIFACT_TYPE:
         errors.append(f"artifact_type must be {DRAFT_ARTIFACT_TYPE!r}")
-    if draft.get("draft_version") != DRAFT_VERSION:
+    if not read_contract(draft.get("draft_version"), DRAFT_VERSION):
         errors.append(f"draft_version must be {DRAFT_VERSION!r}")
     if draft.get("status") not in DRAFT_STATUSES:
         errors.append(f"draft status must be one of {sorted(DRAFT_STATUSES)}")
@@ -627,12 +629,17 @@ def assess_draft(
         except (DraftValidationError, ValueError) as exc:
             freeze_ready = False
             blockers.append(f"runtime_profile_validation_failed:{exc}")
+    historical_read_only = draft.get("draft_version") != DRAFT_VERSION
+    if historical_read_only:
+        freeze_ready = False
+        blockers.append("historical_draft_requires_prospective_binding")
     runtime_validation = "passed" if freeze_ready else "blocked"
 
     return {
         "draft_id": draft.get("draft_id"),
         "status": draft.get("status"),
         "not_a_scoring_profile": True,
+        "historical_read_only": historical_read_only,
         "runtime_selector_eligible": False,
         "coverage": {
             "complete": coverage_complete,
@@ -667,7 +674,7 @@ def project_profile(draft: Mapping[str, Any]) -> dict[str, Any]:
     owner = draft["owner_approval"]
     profile: dict[str, Any] = {
         "profile_id": f"{draft['draft_id']}-frozen",
-        "version": "ranking-draft-freeze.v1",
+        "version": 'ranking-draft-freeze',
         "fixture_id": draft["fixture_id"],
         "protocol_version": draft["protocol_version"],
         "candidate_budget": draft["candidate_budget"],

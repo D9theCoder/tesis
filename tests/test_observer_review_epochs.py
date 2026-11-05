@@ -37,18 +37,18 @@ def make_source(tmp_path, *, anchors=True, source_hashes=None, epoch_digest=None
         hashes = dict(source_hashes or HISTORICAL_HASHES)
         identity_digest = source_set_digest(hashes)
         artifact["source_identity"] = {
-            "identity_version": "chapter3-source-identity.v1",
+            "identity_version": 'source-identity',
             "source_hashes": hashes,
             "source_hashes_sha256": identity_digest,
             "config_sha256": "c" * 64,
         }
         artifact["source_hashes_sha256"] = identity_digest
         artifact["score_epoch"] = {
-            "runtime_provisional": "scoring.v2",
-            "thesis_final": "scoring.v4",
+            "runtime_provisional": "runtime-scoring",
+            "thesis_final": "thesis-scoring",
             "final_status": "pending_review",
-            "metrics_epoch": "research-metrics.v2",
-            "scoring_policy_version": "scoring-policy.v4.3",
+            "metrics_epoch": "research-metrics",
+            "scoring_policy_version": "scoring-policy",
             "scoring_rule_sha256": epoch_digest or HISTORICAL_DIGEST,
         }
     path = tmp_path / "source.json"
@@ -75,7 +75,7 @@ def decisions_for(queue):
         "reason": "Reviewed candidate-linked execution evidence",
         "evidence_refs": row["evidence_refs"],
         "reviewer_id": "offline-reviewer",
-        "review_version": "offline-v1",
+        "review_version": "manual-assessment",
         "timestamp": "2026-10-31T00:00:00+00:00",
     } for row in queue["candidates"] if row["status"] == "pending_review"]
 

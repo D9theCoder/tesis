@@ -6,7 +6,7 @@ import pytest
 from core.knowledge_graph import AttackKnowledgeGraph
 from evaluation import session_oracle
 from evaluation.scoring_evidence import attach_oracle_evidence, oracle_confirmed
-from tests.test_scoring_v4_permission_chain_e2e import FakeSession, chain_artifact
+from tests.test_permission_chain_e2e import FakeSession, chain_artifact
 
 
 def test_static_chain_rejects_unregistered_destination_agent():

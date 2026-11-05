@@ -16,11 +16,13 @@ from typing import Any
 
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
+from core.historical_contracts import HISTORICAL_LABELS
 from core.state import ARTIFACT_ONLY_STATE_FIELDS
 
 
 _AUDIT_FIELDS = ARTIFACT_ONLY_STATE_FIELDS | {"llm_call_receipts"}
-_REFERENCE = "tesis.checkpoint.audit.v1"
+_REFERENCE = "tesis.checkpoint.audit"
+_READ_FORMATS = (_REFERENCE, *sorted(HISTORICAL_LABELS["checkpoint_audit"]))
 
 
 class AuditCheckpointSerializer:
@@ -65,8 +67,17 @@ class AuditCheckpointSerializer:
         return {"format": _REFERENCE, "kind": "list" if isinstance(value, list) else "value",
             "entries": [self._store(entry) for entry in value] if isinstance(value, list) else [self._store(value)]}
 
-    def _restore(self, value: Any) -> Any:
-        if not isinstance(value, dict) or value.get("format") != _REFERENCE:
+    def _restore(self, value: Any, *, expected_format: str | None = None) -> Any:
+        if not isinstance(value, dict):
+            if expected_format is not None:
+                raise ValueError("Invalid checkpoint audit manifest")
+            return value
+        recorded_format = value.get("format")
+        if expected_format is not None and recorded_format != expected_format:
+            raise ValueError("Checkpoint audit format binding mismatch")
+        if recorded_format not in _READ_FORMATS:
+            if isinstance(recorded_format, str) and recorded_format.startswith(f"{_REFERENCE}."):
+                raise ValueError("Unsupported checkpoint audit format")
             return value
         if set(value) != {"format", "kind", "entries"} or not isinstance(value["entries"], list):
             raise ValueError("Invalid checkpoint audit manifest")
@@ -91,8 +102,12 @@ class AuditCheckpointSerializer:
 
     def loads_typed(self, data: tuple[str, bytes]) -> Any:
         kind, payload = data
-        if kind.startswith(f"{_REFERENCE}:"):
-            return self._restore(self.serde.loads_typed((kind[len(_REFERENCE) + 1:], payload)))
+        for recorded_format in _READ_FORMATS:
+            if kind.startswith(f"{recorded_format}:"):
+                manifest = self.serde.loads_typed((kind[len(recorded_format) + 1:], payload))
+                return self._restore(manifest, expected_format=recorded_format)
+        if kind.startswith(f"{_REFERENCE}."):
+            raise ValueError("Unsupported checkpoint audit format")
         value = self.serde.loads_typed(data)
         if isinstance(value, dict) and isinstance(value.get("channel_values"), dict):
             channels = dict(value["channel_values"])

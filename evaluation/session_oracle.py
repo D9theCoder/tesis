@@ -108,7 +108,7 @@ def collect_session_oracles(artifact, raw_state):
     """
     sources = artifact['config'].get('scoring_oracles', [])
     validate_sources(sources)
-    protocols = [s for s in sources if s['document'].get('oracle_protocol', {}).get('kind') == 'dvwa_candidate_session.v1'
+    protocols = [s for s in sources if s['document'].get('oracle_protocol', {}).get('kind') == 'dvwa_candidate_session'
         and s['document']['oracle_protocol'].get('enabled') is True and 'status' not in s['document']]
     if not protocols:
         return artifact

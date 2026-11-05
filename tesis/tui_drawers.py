@@ -1294,7 +1294,7 @@ class ReviewDrawer(BaseDrawer):
             'source_sha256': self.queue['source_sha256'], 'rubric_version': self.queue['rubric_version'],
             'scoring_mode': 'human', 'candidate_id': cid, 'score': grade,
             'reviewer_id': self.query_one("#review-reviewer", Input).value,
-            'reason': self.query_one("#review-reason", Input).value, 'review_version': 'human.v1',
+            'reason': self.query_one("#review-reason", Input).value, 'review_version': 'manual-assessment',
             'timestamp': datetime.now(timezone.utc).isoformat(), 'evidence_refs': row['evidence_refs']}
         if previous:
             decision['supersedes'] = previous['decision_id']

@@ -219,6 +219,14 @@ sendirinya menurunkan kualitas output. Simpan identitas penilai, waktu, alasan,
 referensi sumber, dan keputusan lama saat koreksi; pergantian penilai tidak
 merelabel receipt lama seolah dihasilkan penilai lain.
 
+Identitas implementasi bersifat deskriptif, bukan versi rubrik berurutan:
+`thesis-scoring` untuk penilaian final dan `runtime-scoring` tetap provisional.
+Rumus yang tidak berubah mempunyai satu pemilik di
+[scoring_contracts.py](</home/kevin/coding/tesis/core/scoring_contracts.py>).
+Identitas receipt asli serta gate sumber/epoch dipertahankan; lihat
+[kontrak kanonis](</home/kevin/coding/tesis/docs/reference/canonical-contracts.md>).
+Pergantian nama ini tidak mengubah rubrik Bab 3 atau mengizinkan peluncuran.
+
 ### 7.2 Metric List
 
 Laporkan optimal first-choice accuracy, method alignment, validitas jalur AKG,

@@ -21,6 +21,8 @@ No Textual (or other UI) dependency is imported here.
 
 from __future__ import annotations
 
+from core.historical_contracts import read_contract
+
 import logging
 import math
 import re
@@ -1663,7 +1665,7 @@ SECRET_FIELD_PATHS: tuple[str, ...] = tuple(spec.path for spec in secret_fields(
 SECRET_API_KEY_FIELDS = tuple(spec for spec in MODEL_FIELDS if spec.path.endswith(".api_key"))
 
 
-FIXTURE_RESTORATION_POLICY_VERSION = "fixture-restoration.v1"
+FIXTURE_RESTORATION_POLICY_VERSION = 'fixture-restoration'
 # Study-plan provenance belongs to the envelope, never to the attested document
 # that the readiness validator accepts.
 FIXTURE_PLAN_METADATA_KEYS = frozenset({"identity_sha256", "source_path", "sha256"})
@@ -1711,7 +1713,7 @@ def normalize_fixture_documents(value: Any) -> dict[str, dict[str, Any]]:
         return {}
     documents: dict[str, dict[str, Any]] = {}
     if isinstance(value, Mapping):
-        if str(value.get("policy_version") or "") == FIXTURE_RESTORATION_POLICY_VERSION:
+        if read_contract(value.get("policy_version"), FIXTURE_RESTORATION_POLICY_VERSION):
             document = _fixture_document(value)
             documents[str(document["security_level"])] = document
             return documents

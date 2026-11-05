@@ -12,14 +12,14 @@ from uuid import uuid4
 
 from evaluation.reporter import write_json_report
 from evaluation.thesis_scoring import finalize_reviews, review_queue
-from tests.test_scoring_evidence_v4_e2e import artifact_v4
+from tests.test_scoring_evidence_e2e import scoring_artifact
 from tests.test_thesis_scoring_e2e import grades
 
 
 def saved_reviews(monkeypatch, tmp_path):
     rows, initial, later = [], [], []
     for case in ('final', 'pending', 'no_eligible', 'not_assessable'):
-        artifact = artifact_v4(monkeypatch)
+        artifact = scoring_artifact(monkeypatch)
         artifact['config']['scoring_mode'] = 'ai'
         artifact['execution_id'] = case
         artifact['run_id'] = case
@@ -77,7 +77,7 @@ def test_saved_review_coverage_preserves_nulls_and_latest_receipt(monkeypatch, t
         assert indexed[case]['Spayload_final'] is None
     assert all(r['human_receipt'] is None for r in rows)
     reader.verify_unchanged()
-    write_json_report(Path('results/validation/scoring-v4-remediation-2026-10-12-capture-epoch1/review-round-controls') /
+    write_json_report(Path('results/validation/review-round-controls') /
         uuid4().hex / 'coverage.json', {'validation_scope': 'offline_synthetic_fixture',
             'rows': rows, 'source_hashes': reader.sources, 'fresh_provider_calls': 0,
             'fresh_http_calls': 0})

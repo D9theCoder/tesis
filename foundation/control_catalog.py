@@ -16,6 +16,8 @@ is quarantined instead of relabeled.
 
 from __future__ import annotations
 
+from core.historical_contracts import read_contract
+
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -31,9 +33,9 @@ from foundation.preconditions import (
     statuses_snapshot,
 )
 
-CATALOG_ID = "dvwa-control-catalog.v2"
-CATALOG_VERSION = "2.0.0"
-CONTROL_EVENT_POLICY_VERSION = "control-event.v1"
+CATALOG_ID = 'dvwa-control-catalog'
+CATALOG_VERSION = 'control-catalog'
+CONTROL_EVENT_POLICY_VERSION = 'control-event'
 
 CONTROL_CLASSES = ("fixture_setup", "detection", "candidate_verification", "independent_oracle")
 SAFETY_CLASSES = ("precondition_only", "sensitive_read", "exploit_equivalent")
@@ -246,8 +248,12 @@ def catalog_sha256(method: str, security_level: str = "low", *, phase: str = PHA
         "candidate_id", "control_id", "payload_or_logic", "method", "security_level",
         "phase", "purpose", "expected_signal", "safety_class", "request_budget",
         "physical_request_budget")} for row in rows]
-    return canonical_sha256({"catalog_id": CATALOG_ID, "catalog_version": CATALOG_VERSION,
-                          "controls": identity})
+    return _catalog_digest(identity, CATALOG_ID, CATALOG_VERSION)
+
+
+def _catalog_digest(identity, catalog_id, catalog_version):
+    return canonical_sha256({"catalog_id": catalog_id, "catalog_version": catalog_version,
+                             "controls": identity})
 
 
 def excluded_unsafe_controls(method: str, security_level: str = "low") -> list[dict]:
@@ -360,9 +366,9 @@ def validate_detection_controls(
     if not isinstance(snapshot, Mapping):
         return [_issue("probe_control_snapshot_missing")]
     issues: list[dict[str, Any]] = []
-    if str(snapshot.get("policy_version")) != CONTROL_POLICY_VERSION:
+    if not read_contract(snapshot.get("policy_version"), CONTROL_POLICY_VERSION):
         issues.append(_issue("probe_control_policy_unsupported"))
-    if str(snapshot.get("catalog_id")) != CATALOG_ID or str(snapshot.get("catalog_version")) != CATALOG_VERSION:
+    if not read_contract(snapshot.get("catalog_id"), CATALOG_ID) or not read_contract(snapshot.get("catalog_version"), CATALOG_VERSION):
         issues.append(_issue("probe_control_catalog_identity_mismatch"))
     phase = str(snapshot.get("phase") or "")
     if phase not in DETECTION_PHASES:
@@ -402,7 +408,12 @@ def validate_detection_controls(
     expected_identity = [{key: row.get(key) for key in identity_fields} for row in expected_rows]
     if actual_identity != expected_identity:
         issues.append(_issue("probe_control_catalog_mismatch"))
-    if str(snapshot.get("catalog_sha256")) != catalog_sha256(method, level, phase=phase):
+    catalog_identity = [{key: row[key] for key in (
+        "candidate_id", "control_id", "payload_or_logic", "method", "security_level",
+        "phase", "purpose", "expected_signal", "safety_class", "request_budget",
+        "physical_request_budget")} for row in expected_rows]
+    expected_catalog_hash = _catalog_digest(catalog_identity, snapshot.get("catalog_id"), snapshot.get("catalog_version"))
+    if str(snapshot.get("catalog_sha256")) != expected_catalog_hash:
         issues.append(_issue("probe_control_catalog_hash_mismatch"))
     if snapshot.get("quarantined"):
         issues.append(_issue("probe_control_quarantined",

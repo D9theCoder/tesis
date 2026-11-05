@@ -46,7 +46,7 @@ def _synthetic_attestation(commitment: dict, *, attestation_id: str = "att-synth
     entry = {
         "attestation_id": attestation_id,
         "source_id": commitment["source_id"],
-        "protocol_version": "ranking-session-acceptance.v1",
+        "protocol_version": _draft()["fixture"]["protocol_version"],
         "fixture_id": "dvwa-source-fee264766667580e5352",
         "epoch_id": "autoresearch-primary-2026-10-31",
         "identity": "synthetic alternate principal (test fixture)",

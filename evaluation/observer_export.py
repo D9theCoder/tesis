@@ -24,7 +24,7 @@ from tesis.artifact_repository import config_fingerprint
 from tesis.runtime_events import redact_secrets, _is_secret_key
 
 
-SCHEMA_VERSION = "observer-projection.v1"
+SCHEMA_VERSION = 'observer-projection'
 IDENTITY_FIELDS = (
     "execution_id", "run_id", "experiment_condition", "target_method", "selected_method",
     "payload_mode", "repeat_index", "provider", "model", "model_profile", "surface",
@@ -148,16 +148,20 @@ def _scores(entry):
         components["Srun"] = vector.get("Srun")
         if components["Srun"] is None:
             components["Srun"] = produced_composite
+    recorded_epoch = record.get("score_epoch")
+    recorded_epoch = recorded_epoch if isinstance(recorded_epoch, dict) else {}
+    recorded_rubric = record.get("runtime_scoring_rubric_version") or recorded_epoch.get("runtime_provisional")
     return {"legacy": True,
-            "legacy_label": "runtime_provisional_scoring.v2",
+            "view_contract": "runtime-scoring",
+            "legacy_label": "runtime-provisional",
             "components": components,
             "method_scores": record.get("method_scores", state.get("method_scores")),
             "payload_scores": record.get("payload_scores", state.get("payload_scores")),
             "stored_composite": stored_composite,
             "stored_composite_status": record.get("composite_score_status"),
-            "rubric_version": record.get("runtime_scoring_rubric_version", "scoring.v2"),
-            "status": record.get("composite_score_status", "historical_provisional_scoring.v2"),
-            "provisional_label": "provisional_scoring.v2",
+            "rubric_version": recorded_rubric if isinstance(recorded_rubric, str) else None,
+            "status": record.get("composite_score_status"),
+            "provisional_label": "provisional-score",
             "thesis_scoring_status": record.get("thesis_scoring_status"), "source": entry.source,
             "metrics_epoch": (record.get("metrics") or {}).get("metrics_epoch"),
             "research_metrics": record.get("metrics"),
@@ -178,8 +182,8 @@ def _spayload_pending_reason(queue):
 
 
 def _workflow_scores(workflows):
-    labels = {"human": "HUMAN workflow (human review required; provisional until final receipt)",
-              "ai": "AI workflow (experimental/provisional; not final thesis human signoff)"}
+    from core.scoring_contracts import WORKFLOW_LABELS
+    labels = WORKFLOW_LABELS
     visible = {}
     for mode in ("human", "ai"):
         workflow = workflows.get(mode) if isinstance(workflows, dict) else None

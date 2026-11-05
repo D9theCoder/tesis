@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # --------------------------------------------------------------------------- #
 
 
-def test_scoring_policy_returns_the_canonical_four_file_digest():
+def test_scoring_policy_pins_every_rulebook_source_and_shared_formula():
     policy = scoring_policy()
     expected = sha256(''.join(
         sha256((ROOT / path).read_bytes()).hexdigest() for path in SCORING_SOURCE_FILES
@@ -47,7 +47,7 @@ def test_scoring_policy_returns_the_canonical_four_file_digest():
 def test_scoring_policy_keeps_the_recorded_epoch_digest_as_history():
     recorded = 'a' * 64
     policy = scoring_policy({
-        'config': {'scoring_rubric_version': 'scoring.v4'},
+        'config': {'scoring_rubric_version': 'thesis-scoring'},
         'score_epoch': {'scoring_rule_sha256': recorded},
     })
     assert policy['recorded_scoring_rule_sha256'] == recorded
@@ -63,7 +63,7 @@ def test_scoring_policy_keeps_the_recorded_epoch_digest_as_history():
 
 def counters(**overrides):
     document = {
-        'policy_version': 'http-accounting.v1',
+        'policy_version': 'http-accounting',
         'scope': 'run',
         'total_requests': 200,
         'by_phase': {'recon': 0, 'destination': 0, 'method': 0,
@@ -84,7 +84,7 @@ def counters(**overrides):
 
 def artifact(*, state=None, config=None, **top_level):
     document = {
-        'config': {'scoring_rubric_version': 'scoring.v4', **(config or {})},
+        'config': {'scoring_rubric_version': 'thesis-scoring', **(config or {})},
         'final_state': {'selected_method': None, **(state or {})},
     }
     document.update(top_level)
@@ -161,7 +161,7 @@ def test_runtime_components_are_labeled_legacy_and_never_graded():
     assert metrics['unavailable_reason']['full_exploit_flag'] == 'exploit_evidence_unavailable'
     legacy = metrics['legacy_runtime_components']
     assert legacy['label'] == PROVISIONAL_LABEL
-    assert legacy['score_epoch'] == 'runtime_provisional_scoring.v2'
+    assert legacy['score_epoch'] == 'runtime-provisional'
     assert legacy['source'] == 'artifact.composite_components'
     assert legacy['components']['Sexploit'] == 4
     assert legacy['flags']['full_exploit_flag_legacy'] == 1.0

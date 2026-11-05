@@ -11,7 +11,7 @@ def test_run_provider_matrix_zero_success_avg_score_is_null(monkeypatch):
     def failed_engagement(**kwargs):
         """Supports regression tests for test evaluation multi llm runner."""
         return {
-            "schema_version": "stage8.v1",
+            "schema_version": 'matrix-execution',
             "run_id": "openai_compatible-sqli-low-0",
             "status": "error",
             "config": {"provider": "openai_compatible", "surface": "sqli", "security_level": "low"},

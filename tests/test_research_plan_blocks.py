@@ -36,7 +36,7 @@ LUNA_PROFILE = "openai_codex_auth"
 def _schedule() -> dict[str, Any]:
     return {
         "schedule_id": "offline-planner-control",
-        "version": "prices.v1",
+        "version": 'token-prices',
         "currency": "USD",
         "effective_at": "2026-09-01T00:00:00+00:00",
         "prices": {
@@ -68,7 +68,7 @@ def _resolved_config(
         payload_mode="hybrid",
         scoring_profile=profile,
         scoring_oracles=[_protocol_source()],
-        scoring_rubric_version="scoring.v4",
+        scoring_rubric_version="thesis-scoring",
         scoring_mode="ai",
         fixture_id=profile["fixture_id"],
         protocol_version=profile["protocol_version"],
@@ -97,6 +97,8 @@ def _write_config(tmp_path: Path) -> Path:
 
 def _study_document(**overrides: Any) -> dict[str, Any]:
     document: dict[str, Any] = json.loads(STUDY_PATH.read_text(encoding="utf-8"))
+    # Fresh synthetic launch input, not a rewrite of the dated source.
+    document["research_config_version"] = research_plan.RESEARCH_CONFIG_VERSION
     document["fixture_restoration"] = None
     document.update(overrides)
     return document
@@ -132,6 +134,10 @@ def _build(monkeypatch, tmp_path, config_path, *, study=None, output_epoch=None,
     study_path = study
     if study is not None:
         document = json.loads(Path(study).read_text(encoding="utf-8"))
+        if Path(study).resolve() == STUDY_PATH.resolve():
+            # A fresh launch fixture may reuse declared axes, not an original
+            # historical namespace. Explicit custom/invalid schemas stay intact.
+            document["research_config_version"] = research_plan.RESEARCH_CONFIG_VERSION
         # The synthetic repository has no operator fixture documents; the
         # evidence-binding path is covered separately against real files.
         document["fixture_restoration"] = None
@@ -475,7 +481,7 @@ def _summary_plan(block_names: list[str]) -> dict[str, Any]:
         "epoch_id": "offline-run",
         "blocks": {name: [{"block": name}] for name in block_names},
         "planned_counts": {**{name: 1 for name in block_names}, "total": len(block_names)},
-        "constraints": {"scoring_rubric_version": "scoring.v4"},
+        "constraints": {"scoring_rubric_version": "thesis-scoring"},
         "output_root": None,
     }
 
@@ -554,7 +560,7 @@ def test_runner_rejects_symlinked_plan_output_root(monkeypatch, offline):
             "forced": [{"block": "forced"}],
         },
         "planned_counts": {"selection": 1, "forced": 1, "total": 2},
-        "constraints": {"scoring_rubric_version": "scoring.v4"},
+        "constraints": {"scoring_rubric_version": "thesis-scoring"},
         "output_root": f"results/runs/{EPOCH}",
     }
     calls: list[str] = []

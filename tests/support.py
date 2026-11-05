@@ -1,7 +1,7 @@
 """Explicit runtime readiness receipt for direct node tests."""
 
 READY_RECEIPT = {
-    "policy_version": "readiness.v1",
+    "policy_version": 'readiness',
     "status": "ready",
     "requested_level": "low",
     "observed_level": "low",

@@ -15,9 +15,9 @@ def artifact() -> dict[str, Any]:
     return {
         'run_id': 'offline-run', 'execution_id': 'offline-execution',
         'validation_scope': 'offline_synthetic_fixture',
-        'config': {'scoring_mode': 'human', 'scoring_rubric_version': 'scoring.v4',
+        'config': {'scoring_mode': 'human', 'scoring_rubric_version': 'thesis-scoring',
                    'scoring_profile': {}, 'scoring_oracles': []},
-        'score_epoch': {'thesis_final': 'scoring.v4',
+        'score_epoch': {'thesis_final': 'thesis-scoring',
                         'scoring_rule_sha256': 'recorded-source-policy'},
         'final_state': {},
     }
@@ -29,15 +29,15 @@ def export(tmp_path, document, name='execution.json'):
     return path
 
 
-@pytest.mark.parametrize('version', ['scoring.v2', 'scoring.v3', 'scoring.v5', None])
+@pytest.mark.parametrize('version', ['scoring.v2', 'scoring.v3', 'unsupported-rubric', None])
 def test_artifact_cannot_choose_a_legacy_or_unknown_rubric(tmp_path, version):
     document = artifact()
     document['config']['scoring_rubric_version'] = version
-    with pytest.raises(ValueError, match='requires scoring.v4'):
+    with pytest.raises(ValueError, match='requires thesis-scoring'):
         review_queue(export(tmp_path, document))
 
 
-@pytest.mark.parametrize('version', ['scoring.v3', 'scoring.v5', None])
+@pytest.mark.parametrize('version', ['scoring.v3', 'unsupported-rubric', None])
 def test_score_epoch_must_agree_with_pinned_rubric(tmp_path, version):
     document = artifact()
     document['score_epoch']['thesis_final'] = version
@@ -55,7 +55,7 @@ def test_deleting_config_version_never_recovers_legacy_selection_credit(tmp_path
     original = review_queue(path)
     del document['config']['scoring_rubric_version']
     changed = review_queue(export(tmp_path, document))
-    assert original['rubric_version'] == changed['rubric_version'] == 'scoring.v4'
+    assert original['rubric_version'] == changed['rubric_version'] == 'thesis-scoring'
     assert original['components']['Smethod'] is changed['components']['Smethod'] is None
     assert original['component_pending_reasons']['Smethod'] == changed['component_pending_reasons']['Smethod']
 
@@ -103,7 +103,7 @@ def test_reviewed_payload_mean_survives_missing_selection_profile(tmp_path):
          'scoring_mode': 'human', 'score': index + 1, 'reason': 'Synthetic partial evidence',
          'source_sha256': queue['source_sha256'], 'run_id': queue['run_id'],
          'rubric_version': queue['rubric_version'], 'reviewer_id': 'fixture-reviewer',
-         'review_version': 'fixture.v1', 'timestamp': '2026-10-31T00:00:00+00:00',
+         'review_version': 'fixture-review', 'timestamp': '2026-10-31T00:00:00+00:00',
          'evidence_refs': row['evidence_refs']}
         for index, row in enumerate(queue['candidates'])]
     result = finalize_reviews(path, decisions, output_dir=tmp_path / 'derived', isolated_output=True)

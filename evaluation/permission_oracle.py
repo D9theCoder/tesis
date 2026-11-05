@@ -37,7 +37,7 @@ def _body_hash(response) -> str:
 
 def _protocol_source(sources: list[dict]) -> dict | None:
     matches = [source for source in sources if source["document"].get("oracle_protocol", {}).get("kind")
-        == "dvwa_candidate_permission.v1" and source["document"]["oracle_protocol"].get("enabled") is True
+        == 'dvwa_candidate_permission' and source["document"]["oracle_protocol"].get("enabled") is True
         and "status" not in source["document"]]
     if not matches:
         return None

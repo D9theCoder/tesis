@@ -183,7 +183,7 @@ def manual_scoring_rows(artifact: dict[str, Any]) -> list[dict[str, Any]]:
             "exploitation_score_0_4": None,
             "chain_score_0_4": None,
             "runtime_legacy": {
-                "score_epoch": "runtime_provisional_scoring.v2",
+                "score_epoch": "runtime-provisional",
                 "payload_score_0_4": score,
                 "method_score_0_4": final_state.get("method_scores", {}).get(details.get("method")),
                 "exploitation_score_0_4": final_state.get("exploitation_scores", {}).get(details.get("method")),

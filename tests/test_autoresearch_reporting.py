@@ -5,6 +5,7 @@ No UI, provider call, graph execution or live experiment is exercised here.
 import json
 from pathlib import Path
 
+from core.historical_contracts import HISTORICAL_LABELS
 from evaluation.manual_scoring_sheet import manual_scoring_rows
 from evaluation.observer_export import _graded_scores, build_projection
 from tesis.artifact_catalog import ArtifactCatalog
@@ -19,22 +20,22 @@ def write_artifact(path: Path, record: dict) -> Path:
 
 
 def run_record(execution_id: str, **fields) -> dict:
-    return {"schema_version": "tui.v1", "execution_id": execution_id,
+    return {"schema_version": 'execution', "execution_id": execution_id,
             "run_id": f"run-{execution_id}", "status": "success",
             "config": {"surface": "sqli", "security_level": "low"},
             "final_state": {}, "report": {}, **fields}
 
 
-def v4_artifact(execution_id: str = "exec-graded") -> dict:
+def graded_artifact(execution_id: str = "exec-graded") -> dict:
     return {
-        "schema_version": "tui.v1",
+        "schema_version": 'execution',
         "execution_id": execution_id,
         "run_id": "run-graded",
         "status": "success",
         "execution_status": "completed",
         "config": {
             "scoring_mode": "human",
-            "scoring_rubric_version": "scoring.v4",
+            "scoring_rubric_version": "thesis-scoring",
             "scoring_profile": {},
             "scoring_oracles": [],
             "scoring_evaluator": {},
@@ -49,10 +50,10 @@ def v4_artifact(execution_id: str = "exec-graded") -> dict:
             "weak_chain_opportunities": [],
             "model_call_requirements": [],
         },
-        "score_epoch": {"thesis_final": "scoring.v4"},
+        "score_epoch": {"thesis_final": "thesis-scoring"},
         "llm_performance": [],
         "composite_score": None,
-        "composite_score_status": "runtime_provisional_scoring.v2",
+        "composite_score_status": "runtime-provisional",
     }
 
 
@@ -81,14 +82,31 @@ def test_catalogue_and_repository_exclude_superseded_trees(tmp_path):
 def test_never_run_composite_zero_is_not_published_as_srun(tmp_path):
     write_artifact(tmp_path / "skipped.json", run_record(
         "skipped", status="skipped", composite_score=0,
-        composite_score_status="runtime_provisional_scoring.v2"))
+        composite_score_status="runtime-provisional"))
     projection = build_projection(ArtifactCatalog({"source": tmp_path}, {}))
     run = projection["runs"][0]
     assert run["runtime_scores"]["components"]["Srun"] is None
     assert run["runtime_scores"]["stored_composite"] == 0
     assert run["runtime_scores"]["legacy"] is True
-    assert run["runtime_scores"]["legacy_label"] == "runtime_provisional_scoring.v2"
+    assert run["runtime_scores"]["legacy_label"] == "runtime-provisional"
     assert run["graded_scores"]["status"] == "unavailable"
+
+
+def test_runtime_projection_preserves_original_identity_without_inventing_missing_labels(tmp_path):
+    original_label = next(iter(HISTORICAL_LABELS['runtime_rubric']))
+    original = write_artifact(tmp_path / 'historical.json', run_record('historical',
+        validation_scope='offline_synthetic_fixture', score_epoch={'runtime_provisional': original_label}))
+    unknown = write_artifact(tmp_path / 'unknown.json', run_record('unknown',
+        validation_scope='offline_synthetic_fixture'))
+    before = {path: path.read_bytes() for path in (original, unknown)}
+    catalog = ArtifactCatalog({'source': tmp_path}, {})
+    runs = {run['identity']['execution_id']: run for run in build_projection(catalog)['runs']}
+    assert runs['historical']['runtime_scores']['rubric_version'] == original_label
+    assert runs['historical']['runtime_scores']['view_contract'] == 'runtime-scoring'
+    assert runs['unknown']['runtime_scores']['rubric_version'] is None
+    assert runs['unknown']['runtime_scores']['status'] is None
+    assert all(path.read_bytes() == content for path, content in before.items())
+    catalog.verify_unchanged()
 
 
 def test_cancelled_partial_runtime_score_requires_execution_evidence(tmp_path):
@@ -107,9 +125,9 @@ def test_cancelled_partial_runtime_score_requires_execution_evidence(tmp_path):
 
 
 def test_projection_publishes_graded_vector_and_keeps_workflows_distinct(tmp_path):
-    artifact = v4_artifact()
+    artifact = graded_artifact()
     artifact["metrics"] = {
-        "schema_version": "research-metrics.v2", "metrics_epoch": "recorded-epoch",
+        "schema_version": next(iter(HISTORICAL_LABELS['research_metrics'])), "metrics_epoch": "recorded-epoch",
         "values": {"token_cost": 1.25}, "availability": {"token_cost": True},
         "unavailable_reason": {}, "denominators": {"token_cost": None},
     }
@@ -119,14 +137,14 @@ def test_projection_publishes_graded_vector_and_keeps_workflows_distinct(tmp_pat
     projection = build_projection(catalog)
     run = projection["runs"][0]
     graded = run["graded_scores"]
-    assert graded["rubric_version"] == "scoring.v4"
+    assert graded["rubric_version"] == "thesis-scoring"
     assert graded["components"] == {
         "Smethod": None, "Spayload": None, "Sexploit": None, "Schain": 0, "Soutput": None}
     assert graded["component_pending_reasons"]["Smethod"].startswith("ranking_unavailable")
     assert graded["component_pending_reasons"]["Spayload"] == "no_eligible_candidate"
     assert set(graded["workflows"]) == {"human", "ai"}
     assert graded["workflows"]["human"]["label"].startswith("HUMAN workflow")
-    assert "not final thesis human signoff" in graded["workflows"]["ai"]["label"]
+    assert graded["workflows"]["ai"]["label"] == "AI workflow (manual assessment; final only with validated receipt)"
     assert run["runtime_scores"]["legacy"] is True
 
     # Current queue recomputation is exposed separately; recorded artifact
@@ -161,7 +179,7 @@ def test_projection_publishes_graded_vector_and_keeps_workflows_distinct(tmp_pat
 
 
 def test_human_report_tables_put_graded_first_and_label_runtime_legacy():
-    graded = {"rubric_version": "scoring.v4",
+    graded = {"rubric_version": "thesis-scoring",
               "components": {"Smethod": None, "Spayload": None, "Sexploit": 3,
                              "Schain": 0, "Soutput": 3},
               "component_pending_reasons": {"Smethod": "ranking_unavailable:no_profile",
@@ -179,18 +197,18 @@ def test_human_report_tables_put_graded_first_and_label_runtime_legacy():
            "report": {"module_scores": {"sqli_union": {"score": 3, "label": "confirmed"}}},
            "graded_scores": graded}
     text = format_module_scores_table({"runs": [run]})
-    assert text.index("Graded thesis components") < text.index("Runtime module scores (legacy scoring.v2")
+    assert text.index("Graded thesis components") < text.index("Runtime module scores (legacy runtime-scoring")
     assert "ranking_unavailable:no_profile" in text
-    assert "Runtime score (legacy scoring.v2)" in text
-    assert "HUMAN workflow (human review required; provisional until final receipt): pending" in text
-    assert "AI workflow (experimental/provisional; not final thesis human signoff): missing" in text
+    assert "Runtime score (legacy runtime-scoring)" in text
+    assert "HUMAN workflow (manual assessment; final only with validated receipt): pending" in text
+    assert "AI workflow (manual assessment; final only with validated receipt): missing" in text
     assert "Smethod=N/A (ranking_unavailable:no_profile)" in text
     assert "Sexploit=3" in text and "Spayload mean: N/A (pending_candidate_grades)" in text
 
     runtime_only = format_module_scores_table({"runs": [
         {"config": {}, "report": {"module_scores": {"sqli_union": {"score": 3, "label": "confirmed"}}}}]})
     assert "Graded thesis components" not in runtime_only
-    assert "Runtime module scores (legacy scoring.v2" in runtime_only
+    assert "Runtime module scores (legacy runtime-scoring" in runtime_only
 
 
 def test_provider_table_keeps_every_run_observation_and_identity():
@@ -217,7 +235,7 @@ def test_provider_table_keeps_every_run_observation_and_identity():
     assert "hybrid" in text and "static_only" in text
     assert "1/4 (n=2)" not in text
     assert "no de-duplication" in text and "best-of-N" in text
-    assert "Runtime score (legacy scoring.v2)" in text
+    assert "Runtime score (legacy runtime-scoring)" in text
     assert "Evasion (legacy per-run)" not in text
 
 
@@ -247,7 +265,7 @@ def test_manual_scoring_sheet_does_not_prefill_reviewer_scores():
         assert row[key] is None, key
     assert row["scoring_reason"] == ""
     assert row["runtime_legacy"] == {
-        "score_epoch": "runtime_provisional_scoring.v2",
+        "score_epoch": "runtime-provisional",
         "payload_score_0_4": 3,
         "method_score_0_4": 2,
         "exploitation_score_0_4": 4,

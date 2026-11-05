@@ -723,7 +723,7 @@ def _model_probe_checks(config: EngagementConfig) -> list[DoctorCheck]:
                         system_message="Return the requested health-check JSON only.",
                         user_message='Return exactly {"status":"ok"}.',
                         schema=schema,
-                        schema_version="doctor-probe.v1",
+                        schema_version='doctor-probe',
                         validator=validate,
                         max_tokens=budget,
                     )

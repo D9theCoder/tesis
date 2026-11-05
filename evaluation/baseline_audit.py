@@ -1,6 +1,6 @@
 """Offline audit of the retained 2026-10-30 baseline artifacts.
 
-The audit reads saved execution artifacts and the ``scoring.v4`` review queue,
+The audit reads saved execution artifacts and the ``thesis-scoring`` review queue,
 accounts for every graded deduction and null with either a closed-list cause or
 an explicit evidence gap, and writes one evidence document.  It never executes a
 target, provider, graph, payload or review; it never rewrites an artifact.
@@ -60,7 +60,7 @@ from evaluation.scoring_evidence import (
 from evaluation.thesis_scoring import review_queue
 
 
-AUDIT_VERSION = 'baseline-audit.v1'
+AUDIT_VERSION = 'baseline-audit'
 DEFAULT_SOURCE = 'results/validation/remediation-2026-10-30/full-2026-10-30'
 DEFAULT_OUTPUT = ('results/validation/autoresearch-2026-10-31/nonexecution/audit/'
                   'baseline-audit.json')
@@ -1206,7 +1206,7 @@ def audit_baseline(sources=DEFAULT_SOURCE, *, receipts=None, output=None):
     document = {
         'audit_version': AUDIT_VERSION,
         'generated_at': _now(),
-        'rubric_version': 'scoring.v4',
+        'rubric_version': 'thesis-scoring',
         'rubric_authority': {
             'docx': RUBRIC_DOCX,
             'extract': RUBRIC_EXTRACT,

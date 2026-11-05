@@ -150,7 +150,7 @@ class EngagementProgressReporter:
         graded = report.get("graded_scores") if isinstance(report, dict) else None
         components = graded.get("components") if isinstance(graded, Mapping) else None
         if isinstance(graded, Mapping) and isinstance(components, Mapping):
-            table = Table(title=f"Final Graded Thesis Components ({graded.get('rubric_version') or 'scoring.v4'})")
+            table = Table(title=f"Final Graded Thesis Components ({graded.get('rubric_version') or 'thesis-scoring'})")
             table.add_column("Component", style="bold")
             table.add_column("Score")
             table.add_column("Pending reason")
@@ -184,7 +184,7 @@ class EngagementProgressReporter:
             self.console.print(f"Graded thesis components unavailable: {reason or 'missing_components'}")
         module_scores = report.get("module_scores", {}) if isinstance(report, dict) else {}
         if module_scores:
-            table = Table(title="Final Runtime Module Scores (legacy scoring.v2)")
+            table = Table(title="Runtime Module Scores (provisional)")
             table.add_column("Module", style="bold")
             table.add_column("Runtime score (legacy)")
             table.add_column("Label")

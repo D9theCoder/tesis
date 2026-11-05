@@ -459,7 +459,7 @@ def write_matrix_reports(output_dir: str | Path, run_id: str, aggregate: dict) -
     out_dir.mkdir(parents=True, exist_ok=True)
 
     payload = {
-        "schema_version": aggregate.get("schema_version", "stage6.v1"),
+        "schema_version": aggregate.get("schema_version", "matrix-execution"),
         "artifact_type": "matrix_aggregate",
         "generated_at": aggregate.get("generated_at", datetime.now(timezone.utc).isoformat()),
         **aggregate,

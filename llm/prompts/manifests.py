@@ -15,9 +15,9 @@ from typing import Any, TypedDict
 
 from core.payload_policy import TEMPLATE_PROMPT_ID
 
-MANIFEST_VERSION = "2.1.0"
-VALIDATOR_VERSION = "validator.v1"
-EVAL_SUITE_VERSION = "prompt-eval.v1"
+MANIFEST_VERSION = 'prompt-manifests'
+VALIDATOR_VERSION = 'prompt-validator'
+EVAL_SUITE_VERSION = 'prompt-evaluation'
 
 ORCHESTRATOR_PROMPT_ID = "orchestrator.method_selection"
 PAYLOAD_PROMPT_ID = "payload_generation.constrained_variant"

@@ -28,6 +28,8 @@ called.  Everything here is filesystem reads and hashing.
 
 from __future__ import annotations
 
+from core.historical_contracts import read_contract
+
 import argparse
 import json
 from collections.abc import Mapping
@@ -41,7 +43,7 @@ import yaml
 from evaluation.scoring_evidence import evidence_hash, timestamp, validate_sources
 
 DRAFT_ARTIFACT_TYPE = "autoresearch_oracle_preregistration_draft"
-DRAFT_VERSION = "oracle-preregistration-draft.v1"
+DRAFT_VERSION = 'oracle-preregistration-draft'
 DRAFT_STATUS = "draft_not_preregistered"
 PREREGISTERED_STATUS = "preregistered"
 DRAFT_STATUSES = frozenset({DRAFT_STATUS, PREREGISTERED_STATUS})
@@ -570,7 +572,7 @@ def assess_draft(
 
     if draft.get("artifact_type") != DRAFT_ARTIFACT_TYPE:
         errors.append(f"artifact_type must be {DRAFT_ARTIFACT_TYPE!r}")
-    if draft.get("draft_version") != DRAFT_VERSION:
+    if not read_contract(draft.get("draft_version"), DRAFT_VERSION):
         errors.append(f"draft_version must be {DRAFT_VERSION!r}")
     if not _nonempty(draft.get("draft_id")):
         errors.append("draft_id must be a non-empty string")
@@ -758,6 +760,7 @@ def assess_draft(
         "draft_id": draft.get("draft_id"),
         "status": status,
         "not_a_preregistration": claimed_draft,
+        "historical_read_only": draft.get("draft_version") != DRAFT_VERSION,
         "created_at": draft.get("created_at"),
         "created_at_basis": draft.get("created_at_basis"),
         "validation_scope": scope,

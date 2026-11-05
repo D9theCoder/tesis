@@ -470,6 +470,13 @@ def resolve_recorded_payload_policy(snapshot: Any) -> dict[str, Any] | None:
             "payload_policy_snapshot invalid: "
             + ", ".join(str(issue.get("reason")) for issue in issues)
         )
+    current = recorded_payload_policy_snapshot()
+    identity_fields = ("snapshot_version", "policy_version", "payload_policy_version",
+        "control_policy_version", "budget_policy_version", "experiment_policy_version",
+        "mutation_schema_version", "template_schema_version", "template_registry_version",
+        "prompt_manifest_version")
+    if any(snapshot.get(field) != current.get(field) for field in identity_fields):
+        raise ValueError("Historical payload contract identities are read-only; a new live run requires canonical bindings")
     return deepcopy(snapshot)
 
 
@@ -726,7 +733,7 @@ def run_single_engagement(
     experiment_id: str | None = None,
     scoring_mode: str = "human",
     scoring_evaluator: dict[str, Any] | None = None,
-    scoring_rubric_version: str = "scoring.v4",
+    scoring_rubric_version: str = "thesis-scoring",
     scoring_profile: dict[str, Any] | None = None,
     scoring_oracles: list[dict[str, Any]] | None = None,
     scoring_policy_epoch: dict[str, Any] | None = None,
@@ -908,7 +915,7 @@ def run_single_engagement(
 
     def _resume_error(reason: str) -> dict:
         return {
-            "schema_version": "tui.v1",
+            "schema_version": 'execution',
             "execution_id": execution_id,
             "run_id": run_id,
             "status": "error",
@@ -988,7 +995,7 @@ def run_single_engagement(
                     # A replay request is a receipt, not another primary run
                     # with the original execution ID and different source bytes.
                     write_json_report(Path(output_dir) / f"{execution_id}.resume.json", {
-                        "schema_version": "checkpoint-resume.v1", "artifact_type": "checkpoint_resume_receipt",
+                        "schema_version": 'checkpoint-resume', "artifact_type": "checkpoint_resume_receipt",
                         "request_execution_id": execution_id,
                         "source_execution_id": resumed.get("execution_id"),
                         "checkpoint_thread_id": checkpoint_thread_id,
@@ -1774,7 +1781,7 @@ def run_single_engagement(
     )
 
     artifact = {
-        "schema_version": "tui.v1",
+        "schema_version": 'execution',
         "workflow": workflow_progress(final_state),
         "execution_id": execution_id,
         "run_id": run_id,
@@ -1991,7 +1998,7 @@ def run_single_engagement(
     artifact["config"].update(scoring_rubric_version=scoring_rubric_version, scoring_profile=scoring_profile,
         scoring_oracles=scoring_oracles, fixture_id=fixture_id, protocol_version=protocol_version)
     try:
-        if scoring_rubric_version == 'scoring.v4' and scoring_oracles:
+        if scoring_rubric_version == 'thesis-scoring' and scoring_oracles:
             from evaluation.session_oracle import collect_session_oracles
             from evaluation.scoring_evidence import attach_oracle_evidence
             from foundation.http_client import request_scope
@@ -2038,13 +2045,13 @@ def run_single_engagement(
     artifact["config"]["scoring_evaluator"] = redact_secrets(scoring_evaluator or {})
     artifact["scoring_mode"] = scoring_mode
     artifact["thesis_scoring_status"] = "pending_review"
-    artifact["composite_score_status"] = "runtime_provisional_scoring.v2"
+    artifact["composite_score_status"] = "runtime-provisional"
     from evaluation.research_metrics import scoring_policy as _scoring_policy
 
     canonical_policy = _scoring_policy(artifact)
     artifact["scoring_policy"] = canonical_policy
     artifact["score_epoch"] = {
-        "runtime_provisional": "scoring.v2",
+        "runtime_provisional": "runtime-scoring",
         "thesis_final": scoring_rubric_version,
         "final_status": "pending_review",
         "scoring_policy_epoch": scoring_policy_epoch,
@@ -2087,7 +2094,7 @@ def run_single_engagement(
     events = list(runtime_events)
     if enriched_reporting:
         rich_payload = {
-            "schema_version": "stage7.rich.v1",
+            "schema_version": 'enriched-execution',
             "run_id": run_id,
             "execution_id": execution_id,
             "status": status,

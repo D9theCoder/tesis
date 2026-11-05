@@ -14,7 +14,7 @@ from typing import Any, Iterable, Mapping
 
 from core.knowledge_graph import get_attack_knowledge_graph
 
-PRECONDITION_POLICY_VERSION = "preconditions.v1"
+PRECONDITION_POLICY_VERSION = "method-preconditions"
 PRECONDITION_STATUSES = ("true", "false", "unknown")
 
 # Facts that describe the fixture/session rather than a method precondition.

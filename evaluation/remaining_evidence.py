@@ -215,6 +215,11 @@ def audit_score_coverage(reader, manifest_path, rounds):
         selected_round = latest[item['execution_id']]
         status_path = Path(selected_round['status_path'])
         status = reader.read(status_path)
+        # Reuse the strict read-only source/epoch adapter, never an old scorer.
+        # Local import avoids the existing observer -> grade-auditor import edge.
+        from types import SimpleNamespace
+        from evaluation.observer_reviews import _source_bound_queue
+        queue = _source_bound_queue(SimpleNamespace(record=artifact), status, queue)
         require(status['source_sha256'] == item['sha256'] and status['method'] == queue['method']
                 and status['rubric_version'] == queue['rubric_version']
                 and status['scoring_rule_sha256'] == queue['scoring_rule_sha256'],
@@ -572,7 +577,7 @@ def build_audit(root, forward_manifest):
                           ('matrix-aggregate.json', 'matrix_aggregate_sha256')]:
         reader.raw(root / 'matrix' / filename, retry_plan['source_matrix'][key])
     reader.verify_unchanged()
-    summary = {'kind': 'scoring_v4_remaining_evidence_audit', 'validation_scope': 'offline_saved_artifact_audit',
+    summary = {'kind': 'remaining_scoring_evidence_audit', 'validation_scope': 'offline_saved_artifact_audit',
         'fresh_provider_calls': 0, 'fresh_live_http_calls': 0, 'retry_rows': len(retries), 'scoring_rows': len(coverage),
         'scoring_classifications': dict(counts), 'original_nine_dispositions': dict(Counter(r['disposition'] for r in originals)),
         'retry_mechanisms': dict(Counter(r['observed_mechanism'] for r in retries)),

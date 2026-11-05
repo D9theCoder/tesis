@@ -34,7 +34,7 @@ from foundation.payload_library import (
     target_param_for_method,
 )
 
-TEMPLATE_VERSION = "v1"
+TEMPLATE_VERSION = 'neutral-template'
 SECURITY_LEVELS: tuple[str, ...] = ("low", "medium", "high")
 
 # Closed key set for a template record.  Anything else is a confidentiality

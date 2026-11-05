@@ -18,7 +18,7 @@ def _control(control_id: str, **overrides) -> dict:
         "status": "sent",
         "establishes_exploit": False,
         "signal_detected": False,
-        "policy_version": "detection-controls.v2",
+        "policy_version": 'detection-controls',
     }
     row.update(overrides)
     return row
@@ -28,7 +28,7 @@ def _control(control_id: str, **overrides) -> dict:
 #: the run principal: an access-control probe executes as the low-privilege user.
 _PROBE_SCOPE = {
     "fixture_id": "dvwa-test-fixture",
-    "protocol_version": "ranking-session-acceptance.v1",
+    "protocol_version": 'ranking-session-acceptance',
     "security_level": "high",
     "principal_id": "gordonb",
     "session_fingerprint": "probe-fingerprint",
@@ -58,7 +58,7 @@ def _ac_state(facts: list[dict] | None = None, **overrides) -> dict:
         "current_surface": "access_control",
         "security_level": "high",
         "fixture_id": "dvwa-test-fixture",
-        "protocol_version": "ranking-session-acceptance.v1",
+        "protocol_version": 'ranking-session-acceptance',
         "readiness": {"session": {"principal": "admin", "fingerprint": "run-fingerprint"}},
         "attempted_agents": [],
         "viable_methods": [],

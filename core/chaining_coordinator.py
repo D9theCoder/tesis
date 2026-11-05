@@ -59,7 +59,7 @@ def _find_next_unvisited(viable: list[str], attempted: list[str], blocked: list[
     return None
 
 
-CHAIN_ASSESSMENT_POLICY_VERSION = "chain-assessment.v1"
+CHAIN_ASSESSMENT_POLICY_VERSION = 'chain-assessment'
 
 
 def _derive_surface_confirmed(confirmed: set[str]) -> set[str]:
@@ -650,7 +650,8 @@ def chaining_router_node(state: dict) -> dict:
     existing = {(row.get("source"), row.get("target"), row.get("target_agent"), row.get("reason"))
         for row in state.get("chain_history", []) if row.get("status") == "infeasible"}
     rejected = [row for row in rejected if (row["source"], row["target"], row["target_agent"], row["reason"]) not in existing]
-    if state.get('scoring_rubric_version') == 'scoring.v4':
+    from core.scoring_contracts import is_thesis_rubric
+    if is_thesis_rubric(state.get('scoring_rubric_version'), allow_historical=True):
         from evaluation.scoring_evidence import weak_opportunity_update
         updates.update(weak_opportunity_update(state))
     decision = state.get("verifier_decision") or {}

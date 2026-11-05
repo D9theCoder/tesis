@@ -1,4 +1,4 @@
-"""Frozen plan and explicit launcher for the scoring.v4 fresh matrix.
+"""Frozen fixed-method coverage plan and explicit matrix launcher.
 
 Planning is offline. The separate ``run`` command verifies the frozen inputs
 again before delegating the fixed 108-coordinate design to multi_llm_runner.
@@ -25,13 +25,13 @@ from tesis.config_loader import load_and_resolve_config, load_yaml_config
 from tesis.runtime_events import redact_secrets
 
 
-SCHEMA_VERSION = "scoring-v4-fresh-matrix-plan.v1"
+SCHEMA_VERSION = "method-matrix-plan"
 PROVIDER = "openai_compatible"
 CONDITIONS = ("akg_guided_hybrid", "linear_hybrid")
 SURFACES = ("access_control", "brute_force", "sqli")
 LEVELS = ("high", "low", "medium")
 PAYLOAD_MODES = ("hybrid", "llm_mutation_only")
-OUTPUT_PREFIX = "scoring-v4-remediation-"
+OUTPUT_PREFIX = "method-matrix-"
 SOURCE_ROOTS = ("agents", "core", "evaluation", "foundation", "llm", "tesis")
 SOURCE_SUFFIXES = {".py", ".yaml", ".yml", ".json", ".txt", ".toml", ".md"}
 TOP_LEVEL_SOURCES = ("pyproject.toml", "uv.lock")
@@ -194,8 +194,8 @@ def _validate_config(config) -> dict:
         raise ValueError("Config target_method must be unset for the nine-method matrix")
     if not config.matrix:
         raise ValueError("Config must explicitly select matrix mode")
-    if config.scoring_mode != "ai" or config.scoring_rubric_version != "scoring.v4":
-        raise ValueError("Fresh matrix requires AI review with the scoring.v4 rubric")
+    if config.scoring_mode != "ai" or config.scoring_rubric_version != "thesis-scoring":
+        raise ValueError("Fresh matrix requires AI review with the thesis-scoring rubric")
     if not config.fixture_id or not config.protocol_version:
         raise ValueError("Config must pin fixture_id and protocol_version")
 
@@ -322,7 +322,7 @@ def _validate_output_epoch(path: Path, repository_root: Path, *, must_not_exist:
     except ValueError as exc:
         raise ValueError("Output epoch must be under results/validation") from exc
     if not relative.parts or not relative.parts[0].startswith(OUTPUT_PREFIX):
-        raise ValueError("Output epoch must use a new scoring-v4-remediation-* root")
+        raise ValueError("Output epoch must use a new method-matrix-* root")
     if must_not_exist and path.exists():
         raise ValueError("Output epoch already exists; choose a new epoch to preserve prior artifacts")
     return path
@@ -345,7 +345,7 @@ def create_plan(config_path: Path, output_epoch: Path,
     )
     plan = {
         "schema_version": SCHEMA_VERSION,
-        "artifact_type": "scoring_v4_fresh_matrix_pre_run_manifest",
+        "artifact_type": "method_matrix_pre_run_manifest",
         "status": "planned",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "repository_root": str(repository_root),
@@ -385,7 +385,7 @@ def _verify_plan(manifest_path: Path) -> tuple[dict, object, Path]:
     except (json.JSONDecodeError, OSError) as exc:
         raise ValueError("Cannot read frozen pre-run manifest") from exc
     if not isinstance(plan, dict) or plan.get("schema_version") != SCHEMA_VERSION or plan.get("status") != "planned":
-        raise ValueError("Manifest is not an unused scoring.v4 fresh-matrix plan")
+        raise ValueError("Manifest is not an unused fixed-method coverage plan")
     root = Path(plan.get("repository_root", "")).resolve()
     output_epoch = _validate_output_epoch(Path(plan.get("output_epoch", "")), root, must_not_exist=False)
     if manifest_path != output_epoch / "pre-run-manifest.json":
@@ -475,14 +475,14 @@ def run_plan(manifest_path: Path) -> dict:
 
     started_at = datetime.now(timezone.utc).isoformat()
     write_json_report(output_epoch / "matrix-run-start.json", {
-        "artifact_type": "scoring_v4_matrix_start", "status": "started",
+        "artifact_type": "method_matrix_start", "status": "started",
         "started_at": started_at, "matrix_execution_id": plan["matrix_execution_id"],
         "plan_sha256": plan["plan_sha256"], "planned_coordinates": 108,
         "fixture_policy_sha256": plan["fixture_policy_evidence"]["sha256"],
         "security_php_sha256": plan["fixture_policy_evidence"]["security_php_sha256"],
     })
     layout = ExperimentArtifactLayout(root=output_epoch, mode="matrix", created_at=started_at)
-    run_summary = {"artifact_type": "scoring_v4_matrix_run_summary", "plan_sha256": plan["plan_sha256"]}
+    run_summary = {"artifact_type": "method_matrix_run_summary", "plan_sha256": plan["plan_sha256"]}
     try:
         artifacts, aggregate = run_provider_matrix(**_run_kwargs(config, plan, layout))
         layout.write_manifest(config={
@@ -512,7 +512,7 @@ def run_plan(manifest_path: Path) -> dict:
     except BaseException as exc:
         run_summary.update({"status": "error", "error_type": type(exc).__name__})
         write_json_report(output_epoch / "matrix-run-end.json", {
-            "artifact_type": "scoring_v4_matrix_end", "status": "error",
+            "artifact_type": "method_matrix_end", "status": "error",
             "ended_at": datetime.now(timezone.utc).isoformat(),
             "matrix_execution_id": plan["matrix_execution_id"],
             "error_type": type(exc).__name__, "plan_sha256": plan["plan_sha256"],
@@ -521,7 +521,7 @@ def run_plan(manifest_path: Path) -> dict:
         raise
     write_json_report(output_epoch / "matrix-run-summary.json", run_summary)
     write_json_report(output_epoch / "matrix-run-end.json", {
-        "artifact_type": "scoring_v4_matrix_end", "status": run_summary["status"],
+        "artifact_type": "method_matrix_end", "status": run_summary["status"],
         "ended_at": datetime.now(timezone.utc).isoformat(),
         "matrix_execution_id": plan["matrix_execution_id"],
         **{key: run_summary.get(key) for key in STATUS_FIELDS},
@@ -531,13 +531,13 @@ def run_plan(manifest_path: Path) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Freeze or launch the scoring.v4 108-coordinate DVWA matrix")
+    parser = argparse.ArgumentParser(description="Freeze or launch the fixed-method 108-coordinate DVWA coverage matrix")
     subparsers = parser.add_subparsers(dest="command", required=True)
     plan_parser = subparsers.add_parser("plan", help="write an offline pre-run manifest")
     plan_parser.add_argument("--config", type=Path, required=True,
         help="explicit config containing the pinned profile, oracles, fixture, and protocol")
     plan_parser.add_argument("--output-epoch", type=Path, required=True,
-        help="new results/validation/scoring-v4-remediation-* directory")
+        help="new results/validation/method-matrix-* directory")
     plan_parser.add_argument("--fixture-policy-evidence", type=Path, required=True,
         help="source-hash-bound deployed security.php policy evidence")
     plan_parser.add_argument("--evaluator-max-tokens", type=int,

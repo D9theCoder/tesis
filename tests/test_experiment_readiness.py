@@ -34,9 +34,9 @@ def _profile_digest(profile: dict) -> str:
 def _frozen_profile(*, profile_id: str = "ranking-approved", candidate_budget: int = 27) -> dict:
     profile = {
         "profile_id": profile_id,
-        "version": "ranking-draft-freeze.v1",
+        "version": 'ranking-draft-freeze',
         "fixture_id": "fixture-local",
-        "protocol_version": "protocol.v1",
+        "protocol_version": 'fixture-protocol',
         "frozen_at": "2026-10-30T00:00:00+00:00",
         "candidate_budget": candidate_budget,
         "sources": [],
@@ -51,7 +51,7 @@ def _policy_draft(profile: dict, *, epoch_id: str = "epoch-1") -> dict:
     return {
         "intended_epoch": {"epoch_id": epoch_id},
         "policy": {
-            "rubric_version": "scoring.v4",
+            "rubric_version": "thesis-scoring",
             "scoring_profile": {
                 "status": "present_frozen_before_selection",
                 "profile_id": profile["profile_id"],
@@ -85,7 +85,7 @@ def _policy_config(profile: dict, *, epoch_id: str = "epoch-1") -> dict:
         "scoring_oracles_sha256": evidence_hash(oracles),
         "scoring_oracle_source_ids": ["oracle-1"],
         "scoring_mode": "ai",
-        "scoring_rubric_version": "scoring.v4",
+        "scoring_rubric_version": "thesis-scoring",
     }
 
 

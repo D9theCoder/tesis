@@ -24,7 +24,7 @@ def _invoke(runtime: LLMRuntime, context):
         system_message="system",
         user_message="user",
         schema=_SCHEMA,
-        schema_version="diagnostics.v1",
+        schema_version='diagnostics',
         validator=lambda value: value,
         max_tokens=32,
     )

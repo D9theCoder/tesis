@@ -71,7 +71,7 @@ def _coordinate(monkeypatch, *, streaming, native=False, text='{"answer":346}', 
 
 def _invoke(runtime, context):
     return runtime.invoke(context=context, role="orchestrator", system_message="Return JSON",
-        user_message="Return answer 346", schema=SCHEMA, schema_version="trace-test.v1",
+        user_message="Return answer 346", schema=SCHEMA, schema_version='trace-test',
         validator=lambda value: value, max_tokens=512)
 
 

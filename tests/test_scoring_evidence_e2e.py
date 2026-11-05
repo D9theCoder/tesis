@@ -1,4 +1,4 @@
-"""Artifact E2E controls declared before v4 implementation.
+"""Artifact E2E controls for the canonical evidence-based rubric.
 
 Failure inventory: M1-M9 ranking/snapshots; P1-P5 candidate/use attribution;
 A1-A3 permission oracles; B1-B3 fresh sessions; E1-E2 final-method boundary;
@@ -14,6 +14,7 @@ DOCX controls depend on an untracked local source.
 """
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,7 +25,7 @@ from core.state import METHODS_BY_SURFACE
 from evaluation.reporter import write_json_report
 from tests.test_scoring_remediation_e2e import control
 
-ROOT = Path('results/validation/scoring-evidence-v4')
+ROOT = Path(os.environ.get('TESIS_SCORING_EVIDENCE', 'results/validation/scoring-evidence'))
 
 
 def digest(value):
@@ -38,8 +39,8 @@ def profile(surface='sqli'):
         'planned_request_count': 10, 'protocol_refs': ['protocol'],
         'allowed_plans': ['stop_after_target', 'stop_at_budget', 'continue_same_surface']}
         for m in METHODS_BY_SURFACE[surface]}
-    p = {'profile_id': 'offline-ranking', 'version': 'ranking.v1',
-        'fixture_id': 'synthetic-dvwa', 'protocol_version': 'offline.v1',
+    p = {'profile_id': 'offline-ranking', 'version': 'ranking-profile',
+        'fixture_id': 'synthetic-dvwa', 'protocol_version': 'offline-protocol',
         'frozen_at': '2026-09-01T00:00:00+00:00', 'candidate_budget': 5,
         'sources': [{'source_id': 'protocol', 'origin': 'offline_control',
             'document': doc, 'sha256': digest(doc)}],
@@ -54,12 +55,12 @@ def export(artifact, name):
     return path
 
 
-def artifact_v4(monkeypatch):
+def scoring_artifact(monkeypatch):
     artifact, _, _ = control(monkeypatch, 'mixed_candidates')
     artifact['execution_id'] = uuid4().hex
-    artifact['config'].update(scoring_mode='both', scoring_rubric_version='scoring.v4',
+    artifact['config'].update(scoring_mode='both', scoring_rubric_version='thesis-scoring',
         scoring_profile=profile(), scoring_oracles=[], fixture_id='synthetic-dvwa',
-        protocol_version='offline.v1', scoring_evaluator={'provider': 'offline',
+        protocol_version='offline-protocol', scoring_evaluator={'provider': 'offline',
         'model': 'independent-judge', 'max_attempts': 2, 'max_tokens': 512, 'timeout': 5})
     artifact['validation_scope'] = 'offline_synthetic_fixture'
     state = artifact['final_state']
@@ -74,7 +75,7 @@ def artifact_v4(monkeypatch):
     generator_calls = [r for r in artifact.get('llm_performance', [])
                        if isinstance(r, dict) and r.get('role') == 'payload_generator']
     artifact['llm_performance'] = [{'call_id': 'call:1', 'role': 'orchestrator',
-        'method': 'sqli_union', 'visit_id': selection['visit_id'], 'schema_version': 'orchestrator.v1',
+        'method': 'sqli_union', 'visit_id': selection['visit_id'], 'schema_version': 'method-selection-schema',
         'input': call_input, 'output': output, 'input_sha256': digest(call_input),
         'output_sha256': digest(output), 'parse_status': 'ok', 'validation_status': 'valid',
         'attempt': 1, 'provider': 'offline', 'model': 'fixture',
@@ -83,15 +84,15 @@ def artifact_v4(monkeypatch):
     return artifact
 
 
-def test_real_runner_freezes_v4_configuration(monkeypatch):
+def test_real_runner_freezes_scoring_configuration(monkeypatch):
     from evaluation.runner import run_single_engagement
     # Establish the existing contained HTTP/provider fixture and actual graph.
     control(monkeypatch, 'mixed_candidates')
     a = run_single_engagement(target_url='http://localhost/dvwa', security_level='low',
         llm_provider='openai_compatible', target_method='sqli_union', payload_mode='hybrid',
-        scoring_rubric_version='scoring.v4', scoring_profile=profile(), fixture_id='synthetic-dvwa',
-        protocol_version='offline.v1', execution_id='v4-runner', output_dir=str(ROOT / 'runner'))
-    assert a['config']['scoring_rubric_version'] == 'scoring.v4'
+        scoring_rubric_version='thesis-scoring', scoring_profile=profile(), fixture_id='synthetic-dvwa',
+        protocol_version='offline-protocol', execution_id='scoring-runner', output_dir=str(ROOT / 'runner'))
+    assert a['config']['scoring_rubric_version'] == 'thesis-scoring'
     assert a['config']['scoring_profile']['sha256'] == profile()['sha256']
     assert all(r.get('input_sha256') and r.get('schema_version') and r.get('method')
         for r in a['llm_performance'])
@@ -101,7 +102,7 @@ def test_real_runner_freezes_v4_configuration(monkeypatch):
 
 
 def oracle_artifact(monkeypatch, method):
-    a = artifact_v4(monkeypatch)
+    a = scoring_artifact(monkeypatch)
     state = a['final_state']
     surface = 'access_control' if method.startswith('ac_') else 'brute_force'
     a['selected_method'] = state['selected_method'] = method
@@ -123,7 +124,7 @@ def oracle_artifact(monkeypatch, method):
         'run_id': a['run_id'], 'execution_id': a['execution_id'],
         'method': method, 'visit_id': row['visit_id'], 'candidate_id': row['candidate_id'],
         'evidence_id': row['evidence_id'], 'response_sha256': row['response_sha256'],
-        'fixture_id': 'synthetic-dvwa', 'protocol_version': 'offline.v1',
+        'fixture_id': 'synthetic-dvwa', 'protocol_version': 'offline-protocol',
         'timestamp': '2026-10-01T00:00:01+00:00', 'principal_id': 'user-1',
         'session_fingerprint': '1'*64, 'initial_session_fingerprint': '2'*64,
         'object_id': 'account-2', 'action': 'read', 'expected_allowed': False,
@@ -136,7 +137,7 @@ def oracle_artifact(monkeypatch, method):
         controls = [{**att, **change, 'expected_confirmed': False} for change in (
             {'new_session': False}, {'credentials_valid': False},
             {'session_fingerprint': att['initial_session_fingerprint']}, {'principal_id': 'other'})]
-    doc = {'fixture_id': 'synthetic-dvwa', 'protocol_version': 'offline.v1',
+    doc = {'fixture_id': 'synthetic-dvwa', 'protocol_version': 'offline-protocol',
         'attestations': [att], 'controls': controls}
     a['config']['scoring_oracles'] = [{'source_id': 'oracle', 'origin': 'offline_control',
         'document': doc, 'sha256': digest(doc)}]
@@ -149,7 +150,7 @@ def oracle_artifact(monkeypatch, method):
 
 def test_offline_sources_cannot_grade_unmarked_execution(monkeypatch):
     from evaluation.thesis_scoring import review_queue
-    ranking = artifact_v4(monkeypatch)
+    ranking = scoring_artifact(monkeypatch)
     ranking.pop('validation_scope')
     assert review_queue(export(ranking, 'unmarked-ranking'))['components']['Smethod'] is None
     oracle, row, _ = oracle_artifact(monkeypatch, 'ac_idor')
@@ -162,7 +163,7 @@ def test_all_pending_repeats_remain_visible(monkeypatch):
     from evaluation.thesis_scoring import review_queue, finalize_reviews, compare_receipts
     files = []
     for i in range(2):
-        path = export(artifact_v4(monkeypatch), f'all-pending-{i}')
+        path = export(scoring_artifact(monkeypatch), f'all-pending-{i}')
         q = review_queue(path)
         finalize_reviews(path, [])
         files.append(str(path.parent / 'reviews' / f"{q['execution_id']}.review-status.json"))

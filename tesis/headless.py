@@ -153,7 +153,7 @@ def _cancelled_result(
             "recorded_payload_policy": recorded_payload_policy_snapshot(),
         }
         return {
-            "schema_version": "stage8.v1",
+            "schema_version": 'matrix-execution',
             "execution_id": execution_id,
             "run_id": f"matrix-{execution_id[:12]}",
             "status": "cancelled",
@@ -197,7 +197,7 @@ def _cancelled_result(
         "recorded_payload_policy": recorded_payload_policy_snapshot(),
     }
     return {
-        "schema_version": "tui.v1",
+        "schema_version": 'execution',
         "execution_id": execution_id,
         "run_id": run_id,
         "status": "cancelled",

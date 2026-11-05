@@ -37,8 +37,8 @@ def profile(surface='sqli'):
         for method in METHODS_BY_SURFACE[surface]
     }
     result = {
-        'profile_id': 'offline-ranking', 'version': 'ranking.v1',
-        'fixture_id': 'synthetic-dwva', 'protocol_version': 'offline.v1',
+        'profile_id': 'offline-ranking', 'version': 'ranking-profile',
+        'fixture_id': 'synthetic-dwva', 'protocol_version': 'offline-protocol',
         'frozen_at': '2026-09-01T00:00:00+00:00', 'candidate_budget': 5,
         'sources': [{'source_id': 'protocol', 'origin': 'offline_control',
                      'document': document, 'sha256': evidence_hash(document)}],
@@ -54,13 +54,13 @@ def artifact(execution_id='e1', **overrides):
         'execution_id': execution_id,
         'validation_scope': 'offline_synthetic_fixture',
         'config': {
-            'scoring_mode': 'human', 'scoring_rubric_version': 'scoring.v4',
+            'scoring_mode': 'human', 'scoring_rubric_version': 'thesis-scoring',
             'scoring_profile': {}, 'scoring_oracles': [],
             'experiment_condition': 'linear_hybrid', 'model': 'model-a',
             'provider': 'provider-a', 'surface': 'sqli', 'security_level': 'low',
             'repeat_index': 0,
         },
-        'score_epoch': {'thesis_final': 'scoring.v4', 'scoring_rule_sha256': 'recorded'},
+        'score_epoch': {'thesis_final': 'thesis-scoring', 'scoring_rule_sha256': 'recorded'},
         'final_state': {},
     }
     document.update(overrides)
@@ -101,7 +101,7 @@ def full_artifact(execution_id='full', *, scoring_mode='human'):
     document = artifact(
         execution_id,
         config={
-            'scoring_mode': scoring_mode, 'scoring_rubric_version': 'scoring.v4',
+            'scoring_mode': scoring_mode, 'scoring_rubric_version': 'thesis-scoring',
             'scoring_profile': ranking, 'scoring_oracles': [],
             'fixture_id': ranking['fixture_id'], 'protocol_version': ranking['protocol_version'],
             'candidate_budget': ranking['candidate_budget'],
@@ -124,7 +124,7 @@ def full_artifact(execution_id='full', *, scoring_mode='human'):
         }],
         'chain_assessment': {'assessed': True, 'status': 'assessed', 'reason': 'no_opportunity',
                              'edges': [], 'routes_evaluated': 0,
-                             'policy_version': 'chain-assessment.v1'},
+                             'policy_version': 'chain-assessment'},
     }
     state.update(candidate_state())
     document['final_state'] = state
@@ -138,7 +138,7 @@ def full_artifact(execution_id='full', *, scoring_mode='human'):
 
 def review_decisions(queue, mode='human'):
     reviewer = 'human-1' if mode == 'human' else 'offline/judge'
-    version = 'review.v1' if mode == 'human' else 'judge.v1'
+    version = 'manual-assessment' if mode == 'human' else 'artifact-judge'
     return [{
         'decision_id': f'decision-{index}', 'candidate_id': row['candidate_id'],
         'scoring_mode': mode, 'score': 2, 'reason': 'Synthetic review evidence',
@@ -153,7 +153,7 @@ def test_graded_vector_reports_all_five_dimensions_and_pending_payload(tmp_path)
     document = artifact('e1')
     document['final_state']['chain_assessment'] = {
         'assessed': True, 'status': 'assessed', 'reason': 'no_opportunity',
-        'edges': [], 'routes_evaluated': 0, 'policy_version': 'chain-assessment.v1',
+        'edges': [], 'routes_evaluated': 0, 'policy_version': 'chain-assessment',
     }
     write_doc(tmp_path, 'e1.json', document)
     ledger = build_ledger(tmp_path)
@@ -182,7 +182,7 @@ def test_reviewed_numeric_payload_survives_pending_srun_and_blocks_phase_a(tmp_p
     document['final_state'].update(candidate_state())
     document['final_state']['chain_assessment'] = {
         'assessed': True, 'status': 'assessed', 'reason': 'no_opportunity',
-        'edges': [], 'routes_evaluated': 0, 'policy_version': 'chain-assessment.v1',
+        'edges': [], 'routes_evaluated': 0, 'policy_version': 'chain-assessment',
     }
     document['llm_performance'] = [{
         'call_id': 'call:1', 'role': 'orchestrator', 'method': 'sqli_union',
@@ -648,7 +648,7 @@ def test_prior_ledger_can_be_replaced_but_artifacts_cannot(tmp_path):
     output = source / 'fidelity-ledger.json'
     build_ledger(source, output=output)
     second = build_ledger(source, output=output)
-    assert second['ledger_version'] == 'fidelity-ledger.v1'
+    assert second['ledger_version'] == 'fidelity-ledger'
     notes = source / 'notes.json'
     notes.write_text('{"not": "a ledger"}')
     with pytest.raises(ValueError, match='overwrite an input'):
@@ -724,7 +724,7 @@ def test_ungraded_artifact_is_reported_and_blocks_phase_a(tmp_path):
     ledger = build_ledger(tmp_path)
     run = ledger['runs'][0]
     assert run['graded']['available'] is False
-    assert 'requires scoring.v4' in run['graded']['reason']
+    assert 'requires thesis-scoring' in run['graded']['reason']
     assert run['dimensions']['Smethod']['state'] == 'ungraded'
     assert ledger['fidelity']['F8']['value'] == 0.0
     assert ledger['phase_a']['complete'] is False

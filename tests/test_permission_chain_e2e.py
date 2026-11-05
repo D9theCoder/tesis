@@ -83,7 +83,7 @@ def permission_protocol():
         "fixture_id": FIXTURE,
         "protocol_version": PROTOCOL,
         "oracle_protocol": {
-            "kind": "dvwa_candidate_permission.v1",
+            "kind": 'dvwa_candidate_permission',
             "enabled": True,
             "resource": "DVWA user manager and its read API",
             "policy": "The existing fixture page states that only admin may access it.",
@@ -100,14 +100,14 @@ def permission_protocol():
 
 def session_protocol():
     document = {"fixture_id": FIXTURE, "protocol_version": PROTOCOL,
-        "oracle_protocol": {"kind": "dvwa_candidate_session.v1", "enabled": True}}
+        "oracle_protocol": {"kind": 'dvwa_candidate_session', "enabled": True}}
     return {"source_id": "fixture-session", "origin": "operator_fixture",
         "document": document, "sha256": evidence_hash(document)}
 
 
 def dependency_protocol():
     document = {"fixture_id": FIXTURE, "protocol_version": PROTOCOL,
-        "oracle_protocol": {"kind": "dvwa_causal_dependency.v1", "enabled": True}}
+        "oracle_protocol": {"kind": 'dvwa_causal_dependency', "enabled": True}}
     return {"source_id": "fixture-dependency", "origin": "operator_fixture",
         "document": document, "sha256": evidence_hash(document)}
 
@@ -165,7 +165,7 @@ def chain_artifact():
         "run_id": "run:chain", "execution_id": "execution:chain",
         "selected_method": "ac_idor", "fixture_id": FIXTURE, "protocol_version": PROTOCOL,
         "config": {"target_url": TARGET, "fixture_id": FIXTURE, "protocol_version": PROTOCOL,
-            "security_level": "low", "scoring_rubric_version": "scoring.v4",
+            "security_level": "low", "scoring_rubric_version": "thesis-scoring",
             "scoring_oracles": [permission_protocol(), session_protocol(), dependency_protocol()]},
         "final_state": {
             "response_evidence": [source, dest],

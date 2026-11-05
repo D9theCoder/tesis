@@ -5,10 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.knowledge_graph import get_attack_knowledge_graph
-from core.state import METHODS_BY_SURFACE
-
-
-WORKFLOW_PROTOCOL_VERSION = "workflow.v2"
+from core.state import METHODS_BY_SURFACE, WORKFLOW_PROTOCOL_VERSION
 ITERATION_UNIT = "method_visit"
 
 

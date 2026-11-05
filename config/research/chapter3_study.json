@@ -1,5 +1,5 @@
 {
-  "research_config_version": "chapter3-research-config.v1",
+  "research_config_version": "study-config",
   "epoch_id": "chapter3-2026-10-28",
   "primary_conditions": [
     "linear_hybrid",
@@ -42,8 +42,8 @@
     "pooling": "no pooling across block, condition, target, model, level, surface, fixture, protocol, epoch, rubric or grader"
   },
   "scoring": {
-    "rubric_version": "scoring.v4",
-    "runtime_provisional": "scoring.v2",
+    "rubric_version": "thesis-scoring",
+    "runtime_provisional": "runtime-scoring",
     "final_source": "thesis_score_receipt only"
   },
   "frozen_inputs_required": [

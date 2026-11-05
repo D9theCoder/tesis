@@ -35,7 +35,7 @@ def test_fixture_restoration_evidence_is_validated_and_kept() -> None:
     from tesis.model_config import EngagementConfig
 
     valid = {
-        "policy_version": "fixture-restoration.v1",
+        "policy_version": 'fixture-restoration',
         "evidence_id": "fixture-reset-1",
         "kind": "operator_attestation",
         "fixture_id": "fixture-1",

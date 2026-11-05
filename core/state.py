@@ -46,7 +46,8 @@ def _replace_value(a, b):
     return b
 
 
-SCORING_RUBRIC_VERSION = "scoring.v2"
+from core.scoring_contracts import RUNTIME_RUBRIC as SCORING_RUBRIC_VERSION, THESIS_RUBRIC
+WORKFLOW_PROTOCOL_VERSION = "method-workflow"
 
 
 def score_decision(state: dict, dimension: str, method: str, score: int | float,
@@ -325,14 +326,14 @@ def _default_state_template() -> dict[str, Any]:
         "repeat_index": 0,
         "stop_policy": "impact",
         "coverage_target": 0.70,
-        "workflow_protocol_version": "workflow.v2",
+        "workflow_protocol_version": WORKFLOW_PROTOCOL_VERSION,
         "workflow_stop_reason": None,
         "llm_skip_reason": None,
         "run_id": "",
         "execution_id": "",
         "fixture_id": None,
         "protocol_version": None,
-        "scoring_rubric_version": "scoring.v4",
+        "scoring_rubric_version": THESIS_RUBRIC,
         "scoring_profile": {},
         "scoring_oracles": [],
         "endpoints": [],
@@ -435,8 +436,8 @@ def new_default_state() -> dict[str, Any]:
     return deepcopy(_default_state_template())
 
 
-STATE_SCHEMA_VERSION = "state.v3"
-CHECKPOINT_SCHEMA_VERSION = "checkpoint.v2"
+STATE_SCHEMA_VERSION = "exploitation-state"
+CHECKPOINT_SCHEMA_VERSION = "execution-checkpoint"
 
 # The metadata receipt retains PERSISTENT_STATE_FIELDS. Durable graph
 # checkpoints use AuditCheckpointSerializer to store large audit entries once

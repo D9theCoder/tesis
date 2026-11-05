@@ -1,7 +1,7 @@
 """Dedicated offline tests for the Chapter 3 study plan and analysis modules.
 
 No provider call, no HTTP request, no live DVWA, and no test of the frozen
-``scoring_v4_matrix`` design. Score grouping is stubbed at the scorer boundary so
+``method_matrix`` design. Score grouping is stubbed at the scorer boundary so
 these tests exercise study-owned logic only: declared axes, planned statuses,
 coordinate matching, fixture-epoch eligibility, pairing, statistics policy, and
 null-with-reason behaviour.
@@ -47,8 +47,8 @@ class FakeEntry:
         self.ambiguous = False
 
 
-def _receipt(condition, mode, *, base=2.0, rubric="scoring.v4", rule=RULE,
-             metrics_epoch="scoring-policy.v4.2", **components):
+def _receipt(condition, mode, *, base=2.0, rubric="thesis-scoring", rule=RULE,
+             metrics_epoch="scoring-policy", **components):
     vector = {
         "Smethod": components.get("Smethod", base),
         "Spayload": components.get("Spayload", base),
@@ -72,13 +72,13 @@ def _receipt(condition, mode, *, base=2.0, rubric="scoring.v4", rule=RULE,
             "candidate_id": "candidate-1",
             "scoring_mode": mode,
             "reviewer_id": "ai/independent-judge" if mode == "ai" else "human-reviewer-a",
-            "review_version": "judge.v1" if mode == "ai" else "human.v1",
+            "review_version": "artifact-judge" if mode == "ai" else "manual-assessment",
         }],
         "config": {
             "experiment_condition": condition,
             "scoring_profile": {"sha256": "profile"},
             "fixture_id": "dvfx",
-            "protocol_version": "protov1",
+            "protocol_version": 'fixture-protocol',
             "candidate_budget": 3,
         },
         "metrics": {"metrics_epoch": metrics_epoch},
@@ -112,7 +112,7 @@ def _reviews(*, receipt=None, modes=("human",), pending_reason=None):
 
 
 def _record(condition, repeat, *, block="selection", target=None, epoch="chapter3-2026-10-28",
-            fixture="dvfx", protocol="protov1", budget=3, provider="profile-a", model="model-a",
+            fixture="dvfx", protocol='fixture-protocol', budget=3, provider="profile-a", model="model-a",
             readiness=True, status="completed", profile="profile"):
     readiness_receipt = {
         "status": "ready",
@@ -152,7 +152,7 @@ def _coordinate(condition, repeat, *, block="selection", target=None, epoch="cha
         "security_level": "low", "payload_mode": "hybrid",
         "experiment_condition": condition, "target_method": target,
         "repeat_index": repeat, "candidate_budget": 3,
-        "fixture_id": "dvfx", "protocol_version": "protov1",
+        "fixture_id": "dvfx", "protocol_version": 'fixture-protocol',
         "policy_epoch_id": epoch, "status": "planned",
     }
     row["coordinate_id"] = plan_mod._coordinate_id(row)
@@ -162,10 +162,10 @@ def _coordinate(condition, repeat, *, block="selection", target=None, epoch="cha
 def _plan(coordinates, *, repeats=3):
     return {
         "artifact_type": "chapter3_research_plan",
-        "plan_version": "chapter3-research-plan.v2",
+        "plan_version": 'study-plan',
         "plan_sha256": "p" * 64,
         "epoch_id": "chapter3-2026-10-28",
-        "policy_versions": {"experiment": "chapter3-flow.v2"},
+        "policy_versions": {"experiment": 'experiment-flow'},
         "policy_epoch": {"epoch_id": "chapter3-2026-10-28"},
         "source_hashes_sha256": "h",
         "constraints": {
@@ -173,9 +173,9 @@ def _plan(coordinates, *, repeats=3):
             "payload_mode": "hybrid",
             "repeats": repeats,
             "fixture_id": "dvfx",
-            "protocol_version": "protov1",
+            "protocol_version": 'fixture-protocol',
             "candidate_budget": 3,
-            "scoring_rubric_version": "scoring.v4",
+            "scoring_rubric_version": "thesis-scoring",
             "scoring_profile_sha256": "profile",
         },
         "blocks": {"selection": [c for c in coordinates if c["block"] == "selection"],
@@ -257,14 +257,14 @@ def test_analysis_counts_planned_missing_and_matched(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 def _pair_records(monkeypatch, *, left_base=3.0, right_base=1.0, readiness=True,
-                  rubric_left="scoring.v4"):
+                  rubric_left="thesis-scoring"):
     coordinates, entries, documents = [], [], {}
     for repeat in range(3):
         for condition, base in (("linear_hybrid", left_base), ("akg_guided_hybrid", right_base)):
             coordinates.append(_coordinate(condition, repeat))
             receipt = _receipt(
                 condition, "human", base=base,
-                rubric=rubric_left if condition == "linear_hybrid" else "scoring.v4",
+                rubric=rubric_left if condition == "linear_hybrid" else "thesis-scoring",
             )
             record = _record(condition, repeat, readiness=readiness)
             record["_reviews"] = _reviews(receipt=receipt)

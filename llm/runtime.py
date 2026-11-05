@@ -31,7 +31,7 @@ from llm.reasoning_evidence import reasoning_evidence
 from llm.rate_limit import RateLimitPolicy
 
 
-ORCHESTRATOR_SCHEMA_VERSION = "orchestrator.v2"
+ORCHESTRATOR_SCHEMA_VERSION = 'method-selection-schema'
 # PAYLOAD_SCHEMA_VERSION and PAYLOAD_TEMPLATE_SCHEMA_VERSION are owned by
 # ``core.payload_policy`` and re-exported here for the prompt manifests and
 # generation call sites.

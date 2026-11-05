@@ -4,6 +4,7 @@ Inventory: results/validation/scoring-remediation-2026-09-29/failure-inventory.j
 Each control retains graph inputs, transport receipts, decisions and real exports.
 """
 import json
+import os
 from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,7 +22,7 @@ from llm.runtime import LLMRuntime
 from tests.test_method_agents_e2e import Fixture
 
 
-ROOT = Path('results/validation/scoring-remediation-2026-09-29')
+ROOT = Path(os.environ.get('TESIS_SCORING_CONTROL_EVIDENCE', 'results/validation/scoring-remediation'))
 
 
 def frozen_test_profile():
@@ -42,9 +43,9 @@ def frozen_test_profile():
         }
     profile = {
         'profile_id': 'offline-remediation-controls',
-        'version': 'ranking.v1',
+        'version': 'ranking-profile',
         'fixture_id': 'synthetic-dvwa',
-        'protocol_version': 'offline.v1',
+        'protocol_version': 'offline-protocol',
         'frozen_at': '2026-09-01T00:00:00+00:00',
         'candidate_budget': 5,
         'sources': [{'source_id': 'protocol', 'origin': 'offline_control',
@@ -221,8 +222,8 @@ def control(monkeypatch, name, *, automatic=False, condition='linear_hybrid', me
         llm_role_configs={r: {'structured_output': 'off'} for r in ('orchestrator', 'payload_generator')})
     if ranked:
         profile: dict[str, Any] = frozen_test_profile()
-        config.update(scoring_mode='human', scoring_rubric_version='scoring.v4',
-            scoring_profile=profile, fixture_id='synthetic-dvwa', protocol_version='offline.v1')
+        config.update(scoring_mode='human', scoring_rubric_version='thesis-scoring',
+            scoring_profile=profile, fixture_id='synthetic-dvwa', protocol_version='offline-protocol')
         if name == 'mixed_candidates':
             # The synthetic positive SQLi target exposes every predicate in the
             # frozen ranking scenario. Seed those fixture observations before

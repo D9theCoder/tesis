@@ -1,5 +1,7 @@
-"""scoring.v4 evidence checks. No target or provider I/O and no routing input."""
+"""thesis-scoring evidence checks. No target or provider I/O and no routing input."""
 from __future__ import annotations
+
+from core.historical_contracts import read_contract
 
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -20,7 +22,7 @@ from core.payload_policy import (
 )
 from core.state import METHODS_BY_SURFACE
 
-RUBRIC_VERSION = 'scoring.v4'
+from core.scoring_contracts import THESIS_RUBRIC as RUBRIC_VERSION
 STATIC_ORIGIN_KINDS = frozenset({'static_seed'})
 CONTROL_IDENTITY_KINDS = frozenset({
     'probe_candidate', 'derived_control', 'independent_control', 'unresolved',
@@ -107,8 +109,8 @@ def validate_profile(profile):
 
 
 def validate_evidence_config(version, profile, oracles):
-    if version not in {'scoring.v3', RUBRIC_VERSION}:
-        raise ValueError('Supported final rubrics are scoring.v3 and scoring.v4')
+    if version != RUBRIC_VERSION:
+        raise ValueError('Live scoring configuration requires the canonical thesis-scoring rubric')
     validate_profile(profile)
     validate_sources(oracles)
     for source in oracles:
@@ -717,7 +719,7 @@ def _template_output_references_valid(record, _inputs, template):
     not accepted as a clean output.
     """
     from core.payload_policy import PAYLOAD_TEMPLATE_SCHEMA_VERSION
-    if str(record.get('schema_version') or '') != PAYLOAD_TEMPLATE_SCHEMA_VERSION:
+    if not read_contract(record.get('schema_version'), PAYLOAD_TEMPLATE_SCHEMA_VERSION):
         return False
     # A Template prompt/schema never carries a seed-backed profile or seed rows.
     if isinstance(_inputs, dict) and any(

@@ -26,7 +26,7 @@ def evidence_artifact(method='sqli_union', decision='not_confirmed', signal='no_
     return dict(status='success', run_id='unit', execution_id='unit-execution',
         selected_method=method, target_method=method, final_state=state, response_evidence=[row],
         config=dict(provider='offline', surface='sqli', security_level='low', payload_mode='static_only',
-            scoring_rubric_version='scoring.v4', scoring_profile={}, scoring_oracles=[],
+            scoring_rubric_version='thesis-scoring', scoring_profile={}, scoring_oracles=[],
             scoring_mode='human', scoring_evaluator={}))
 
 

@@ -415,7 +415,11 @@ START → recon → orchestrator → payload_candidate_builder → payload_valid
 
 ## Method verification and replay
 
-Workflow control uses `workflow.v2`, `state.v3`, `checkpoint.v2`, and `graph.v2`.
+Workflow control uses `method-workflow`, `exploitation-state`,
+`execution-checkpoint`, and `execution-graph`. The
+[canonical-contract mapping](</home/kevin/coding/tesis/docs/reference/canonical-contracts.md>)
+records historical names and read-only decoding. Removing a suffix does not
+make an old checkpoint compatible with a new source epoch.
 An iteration reserves one method visit before payload preparation, including
 direct chain and fallback selections. Execution does not charge a second visit.
 Preparation failure consumes its reservation and is recorded in
@@ -533,7 +537,10 @@ traversal; the separate branch is recorded in `current_chain` and the route's
 
 ## Scoring evidence and route completion
 
-Rubric `scoring.v2` uses the existing scorer and six-dimensional formula. Common
+The `runtime-scoring` contract uses the existing provisional scorer, five
+component dimensions and weighted `Srun`. The published weights and contract
+identities have one owner in [scoring_contracts.py](</home/kevin/coding/tesis/core/scoring_contracts.py>);
+final `thesis-scoring` receipts remain independently evidence-gated. Common
 selection grading records forced, model/orchestrator, deterministic fallback and
 AKG route origins before execution, with destination-surface viability and a
 visit ID. Agents emit candidate-specific verified grades at their existing
@@ -556,8 +563,11 @@ Terminal exports retain sanitized chain, credential, attempt and payload inputs,
 scoring decisions, verifier history and response/timing evidence. Route metadata
 uses telemetry `payload`. Manual rows point to the receipt and verifier earning
 a candidate maximum, with later decisions separate. Fresh diagnostic replay rows
-remain limited to fresh evidence. `evaluation.scoring_repair` links pure repairs
-to source hashes and explicitly retains missing legacy terminal inputs as gaps.
+remain limited to fresh evidence. Historical derived repairs remain linked to
+source hashes in their saved artifacts, with missing legacy terminal inputs
+explicitly retained as gaps. The archived-only alternate rescoring implementation
+was removed on 2026-11-05; historical reading uses the maintained artifact and
+receipt readers, not execution of the old repair algorithm.
 
 Error SQLi recognizes the complete DVWA `<pre>` duplicate-entry envelope for
 `dvwa0` or `dvwa1` and `group_key`, alongside XPath and structured credential
@@ -645,7 +655,7 @@ and [the Indonesian contract](summary_id.md#status-eksekusi-dan-hasil-keamanan).
 
 ## Chapter 3 epoch and evidence fields (2026-10-28)
 
-New execution artifacts add a non-rewriting identity layer. The root carries `experiment_block` (`selection|forced`), `policy_epoch` (`epoch_id`, policy/payload/control/budget/workflow/graph/state/schema versions, optional `source_hashes_sha256`), `payload_policy_version`, `control_policy_version`, `budget_policy_version`, `experiment_policy_version`, `readiness`, `candidate_lifecycle`, `candidate_budget_receipts`, `selection_rejections`, `model_call_requirements`, `chain_assessment`, `control_events`, `quarantined_visits`, `payload_generation_opportunities`, `scoring_policy`, and `score_epoch`. The frozen `config` repeats the block, scoring policy epoch, token price schedule, source hash, policy versions, `scoring_policy_version`, and `metrics_epoch`. `timing` separates `wall_time_ms`, `summed_role_call_duration_ms`, and `non_call_overhead_ms`. Root `composite_score_status` is `runtime_provisional_scoring.v2`; `thesis_scoring_status` remains `pending_review` until a separate final v4 receipt exists. No historical artifact is rewritten or silently upgraded.
+New execution artifacts add a non-rewriting identity layer. The root carries `experiment_block` (`selection|forced`), `policy_epoch` (`epoch_id`, policy/payload/control/budget/workflow/graph/state/schema versions, optional `source_hashes_sha256`), `payload_policy_version`, `control_policy_version`, `budget_policy_version`, `experiment_policy_version`, `readiness`, `candidate_lifecycle`, `candidate_budget_receipts`, `selection_rejections`, `model_call_requirements`, `chain_assessment`, `control_events`, `quarantined_visits`, `payload_generation_opportunities`, `scoring_policy`, and `score_epoch`. The frozen `config` repeats the block, scoring policy epoch, token price schedule, source hash, policy versions, `scoring_policy_version`, and `metrics_epoch`. `timing` separates `wall_time_ms`, `summed_role_call_duration_ms`, and `non_call_overhead_ms`. Root `composite_score_status` is `runtime-provisional`; `thesis_scoring_status` remains `pending_review` until a separate validated final thesis receipt exists. No historical artifact is rewritten or silently upgraded.
 
 `readiness` is a fail-closed receipt with requested/observed level, authentication, endpoints/token, fixture/protocol, session, setup state, structured reasons, and fixture-restoration equivalence. `candidate_lifecycle` is append-only (`generated|valid|queued|executed|stopped_before_execution|budget_excluded|rejected`) and `candidate_budget_receipts` is derived per method/visit; detection/verification controls have their own request budgets. `selection_rejections` records a rejected forced/automatic choice with `decision_origin` and `candidate_set_source`. `model_call_requirements` binds required roles to method/visit/call, and `chain_assessment` separates `not_run`/`insufficient_evidence` from a proved absence. `observation_facts` and derived `precondition_status` keep scoped history; endpoint discovery alone is not proof.
 
@@ -653,7 +663,7 @@ Matrix aggregates never average across conditions, blocks, payload modes, target
 
 Offline validation is limited to configuration, graph/AKG compilation, payload-mode contracts, template coverage, and prompt/schema manifests. Live readiness, DVWA state, provider availability, and fixture restoration require separate authorized evidence. `token_price_schedule` accepts `input_per_million`/`output_per_million` and optional cache categories, is validated by `evaluation.research_metrics.validate_token_price_schedule`, and is never inferred from a historical epoch.
 
-The two-block study is declared by `config/research/chapter3_study.json` and operated by `evaluation/research_plan.py` (`freeze-profile`, `plan`, `run`) with `evaluation/research_analysis.py` (`chapter3-analysis.v3`, `compare_receipts` grouping, paired statistics). The same commands are exposed as `python -m tesis study …`. Plans freeze config/profile/oracle/price/policy/source/fixture/protocol identities, refuse drift, and never modify `evaluation/scoring_v4_matrix.py` or historical artifacts.
+The two-block study is declared by `config/research/chapter3_study.json` and operated by `evaluation/research_plan.py` (`freeze-profile`, `plan`, `run`) with `evaluation/research_analysis.py` (`chapter3-analysis.v3`, `compare_receipts` grouping, declared exploratory condition/model Mann–Whitney comparisons and supplementary paired statistics). The same commands are exposed as `python -m tesis study …`. Plans freeze config/profile/oracle/price/policy/source/fixture/protocol identities and refuse drift. The separate fixed-method coverage planner is [method_matrix.py](</home/kevin/coding/tesis/evaluation/method_matrix.py>); its two-payload-mode design is not the declared two-model primary experiment. Historical artifacts remain unchanged.
 
 The 2026-10-31 primary-study declaration
 `config/research/autoresearch-primary-study-2026-10-31.json` declares only the
@@ -679,18 +689,23 @@ Every normal runner/headless artifact carries `source_identity` from the shared 
 
 Artifacts also carry `recorded_payload_policy` (payload policy version plus the hash-pinned `template.<method>.<level>` registry snapshot), on the artifact root, `final_state`, and each frozen `method_execution_inputs[*].state`. Historical replay validation consumes that recorded snapshot; a missing snapshot is a precise unavailable result, never a re-validation against today's mutable registry. `payload_generation_opportunities` is filtered to `role="payload_generator"` and `receipt_stage="generation"`; `payload_generation_opportunity_coverage` distinguishes recorded coverage from `generation_receipt_missing`, so validation-only evidence is never read as a measured zero opportunities. `http_request_counters` (policy `http-accounting.v1`) carries actual physical request/retry/redirect/failure totals by phase/role/method; evidence-row counts are separate. `payload_generation_opportunities` is generation-stage only and deduplicated by `opportunity_id`; `payload_validation_opportunities` is separate.
 
-Matrix aggregation groups by provider, model, surface, level, mode, condition, block, target, guardrail policy, fixture, protocol, policy versions, source hash, and frozen price-schedule hash. Runtime module-score sums and means appear only under `legacy_runtime` (`mean_module_score_sum`, `score_epoch="runtime_provisional_scoring.v2 (legacy)"`); empty groups use null with `legacy_runtime.unavailable_reason="no_completed_runs"`. Provider-only rollups and the overall `totals` object are operational counts only (`score_aggregation="not_computed_pooled_coordinates"`), with no pooled metric means. Oracle/verification HTTP is tagged `phase="verification"` with `candidate_verification` or `independent_control` roles inside the same run-scoped counter. Doctor checks only configured single/matrix coordinates; the all-registry template/prompt audit is separate. The derived DOCX replaces only rubric Tables 3.5–3.11; the Markdown revision is the full methodology and DOCX visual layout is unverified.
+Matrix aggregation groups by provider, model, surface, level, mode, condition, block, target, guardrail policy, fixture, protocol, policy versions, source hash, and frozen price-schedule hash. Runtime module-score sums and means appear only under `legacy_runtime` (`mean_module_score_sum`, `score_epoch="runtime-provisional (legacy)"`); empty groups use null with `legacy_runtime.unavailable_reason="no_completed_runs"`. Provider-only rollups and the overall `totals` object are operational counts only (`score_aggregation="not_computed_pooled_coordinates"`), with no pooled metric means. Oracle/verification HTTP is tagged `phase="verification"` with `candidate_verification` or `independent_control` roles inside the same run-scoped counter. Doctor checks only configured single/matrix coordinates; the all-registry template/prompt audit is separate. The derived DOCX replaces only rubric Tables 3.5–3.11; the Markdown revision is the full methodology and DOCX visual layout is unverified.
 
 ### Offline score reporting and fidelity (2026-10-31)
 
-Saved-artifact review is pinned to `scoring.v4`, rejecting conflicting rubric
-declarations instead of selecting the legacy viable-flag scorer. Runtime
-decision receipts remain v2. `scoring-policy.v4.3` uses one canonical four-file
-digest including the verifier; the original artifact digest remains historical
-provenance, separate from the current review digest.
+New grading is pinned to `thesis-scoring`, rejecting conflicting declarations
+instead of selecting an obsolete viable-flag scorer. Known original
+`scoring.v4` sources retain a read-only view; neither evaluator nor finalizer may
+write under that historical identity. Runtime decisions remain provisional.
+Current `scoring-policy` writes pin six ordered source files, including the
+shared formula/identity owner, historical-fact registry and verifier. Historical
+four-file policies retain their original independent source/epoch anchors;
+labels alone never prove compatibility. Original artifact digests remain
+separate historical provenance. See the
+[contract map](</home/kevin/coding/tesis/docs/reference/canonical-contracts.md>).
 
 `observer_export` publishes primary `graded_scores` and separate legacy
-`runtime_scores`, with Human and experimental AI workflows kept distinct.
+`runtime_scores`, with Human and AI manual-assessment workflows kept distinct.
 Recomputed review metrics/policy are labelled `review_queue_current_sources`;
 the original artifact's metric/policy documents remain `recorded_artifact`.
 Validated pending workflows can expose their reviewed payload mean without a

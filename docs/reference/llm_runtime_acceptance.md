@@ -1,9 +1,11 @@
 # LLM Runtime Acceleration Acceptance
 
 This is historical validation evidence. Its cache-hit counts refer to local
-saved-response reuse. New `cache_metrics_version: provider-input-tokens.v1`
+saved-response reuse. Current `cache_metrics_version: provider-input-tokens`
 summaries use `cache_hit_rate` for provider cache-read input / total input and
-`response_cache_hit_rate` for local reuse. See [LLM caching](llm_caching.md).
+`response_cache_hit_rate` for local reuse. The earlier token-accounting label
+`provider-input-tokens.v1` remains an unchanged historical identity. See
+[LLM caching](llm_caching.md); the measured runs below are not relabelled.
 
 This record compares the authorized 18-coordinate `akg_guided_hybrid` matrix
 before and after the runtime acceleration changes. The coordinate axes were

@@ -110,7 +110,7 @@ def cache_performance_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     else:
         status = "complete" if total_input else "zero_input_tokens"
     return {
-        "cache_metrics_version": "provider-input-tokens.v1",
+        "cache_metrics_version": "provider-input-tokens",
         "cache_hit_rate": observed_rate if complete else None,
         "provider_input_tokens": total_input if complete else None,
         "provider_cached_input_tokens": cached_input if complete else None,

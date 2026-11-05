@@ -28,7 +28,7 @@ from hashlib import md5, sha256
 import re
 from typing import Any, Iterable, Mapping
 
-DERIVATION_POLICY_VERSION = "credential-derivation.v1"
+DERIVATION_POLICY_VERSION = 'credential-derivation'
 DERIVATION_METHOD = "md5_declared_corpus_v1"
 DERIVATION_ALGORITHM = "md5"
 MAX_CANDIDATES = 64

@@ -19,8 +19,8 @@ from tests.test_method_agents_e2e import run_control
 
 
 ROOT = Path(os.environ.get(
-    'TESIS_SCORING_V4_PROBE_REPLAY_EVIDENCE',
-    'results/validation/scoring-v4-probe-replay-2026-10-11/offline',
+    'TESIS_PROBE_REPLAY_EVIDENCE',
+    'results/validation/probe-replay/offline',
 ))
 
 

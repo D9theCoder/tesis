@@ -56,7 +56,7 @@ def _validator(payload):
     return {"value": payload["value"]}
 
 
-def _invoke(runtime, context, *, schema_version="v1"):
+def _invoke(runtime, context, *, schema_version='schema-control'):
     return runtime.invoke(
         context=context,
         role="orchestrator",
@@ -102,7 +102,7 @@ def test_invalid_output_is_not_cached_and_schema_version_invalidates(monkeypatch
         with pytest.raises(LLMOutputError):
             _invoke(runtime, context)
         assert _invoke(runtime, context).parsed == {"value": "ok"}
-        assert _invoke(runtime, context, schema_version="v2").parsed == {"value": "new"}
+        assert _invoke(runtime, context, schema_version='schema-alternate-shape').parsed == {"value": "new"}
     assert client.calls == 3
 
 

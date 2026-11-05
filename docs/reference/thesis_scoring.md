@@ -1,4 +1,4 @@
-# Thesis scoring v4
+# Thesis scoring
 
 ## Methodology authority and scorer terminology
 
@@ -30,11 +30,12 @@ record their original tasks, not new work required for every scoring change.
 
 > **Thesis-report scope (owner decision, 2026-10-31, superseding the 2026-10-29
 > human-evaluator decision):** The current study selects the AI scorer
-> (`scoring_mode: ai`) under `scoring.v4`. Selecting the AI scorer requires no
+> (`scoring_mode: ai`) under the canonical `thesis-scoring` contract (the same
+> evidence rubric previously labelled `scoring.v4`). Selecting the AI scorer requires no
 > human scorer, human verifier or manual artifact signoff: the frozen evaluator's
 > decisions are accepted only after the machine checks below, and a complete
 > validated AI workflow finalizes the run's thesis receipt. A preliminary vector
-> — runtime `scoring.v2` components, or the frozen review-queue components before
+> — provisional `runtime-scoring` components, or the frozen review-queue components before
 > candidate decisions exist — is not a thesis score; only a validated final
 > receipt is. Human (`human`) and dual (`both`) workflows remain supported
 > options that emit their own separate receipts, and Template payload mode
@@ -46,12 +47,17 @@ record their original tasks, not new work required for every scoring change.
 > configurations are unchanged, and the implementation and receipt descriptions
 > below document the software's actual capabilities.
 
-New CLI/TUI and runner API launches select `scoring_rubric_version: scoring.v4`.
-The saved-artifact reviewer is hard-pinned to v4: an explicit non-v4 config
-declaration or disagreeing `score_epoch.thesis_final` is refused. An omitted
-config version cannot select the legacy viable-flag scorer. Historical v3
-records remain unchanged; they are not silently regraded or relabelled.
-Runtime decisions and composites remain explicitly provisional `scoring.v2`.
+New CLI/TUI and runner API launches select `scoring_rubric_version: thesis-scoring`.
+New decisions use the `artifact-judge` identity; rubric names do not select an
+alternate implementation. A disagreeing `score_epoch.thesis_final` is refused,
+and omitting a declaration cannot recover legacy viable-flag credit.
+Original `scoring.v4` sources have an explicit read-only view with their recorded
+identities, source bytes and evidence checks intact. They cannot enter evaluator
+or finalizer write paths, even through an older serialized queue without the new
+read-only flag. Stored receipts are reused, not relabelled or regraded. Obsolete
+rubrics cannot select a grader; stored legacy metrics remain readable, and missing
+legacy metric bundles are unavailable rather than recomputed by an old algorithm.
+Runtime decisions and composites remain explicitly provisional `runtime-scoring`.
 Review never rewrites execution artifacts or performs DVWA requests. Human and AI review share validation and
 proof ceilings, but emit separate vectors and `Srun_final` receipts from one
 execution. Either selected mode finalizes independently; an AI receipt never
@@ -77,12 +83,20 @@ partial arithmetic against the source-bound decision ledger. Reviewer score
 columns are blank, not prefilled from the runtime grades; those historical
 values appear only under `runtime_legacy`.
 
-`scoring-policy.v4.3` names the corrected digest construction: SHA-256 of the
-ordered per-file SHA-256 strings for `thesis_scoring.py`, `scoring_evidence.py`,
-`research_metrics.py`, and `foundation/verifier.py`. Queue, policy and receipt
-digests agree. The original artifact digest is retained separately as
-`source_scoring_rule_sha256` / `recorded_scoring_rule_sha256`; it is not compared
-as if its historical digest construction were identical.
+The historical `scoring-policy.v4.3` construction used the ordered per-file
+SHA-256 strings for the four original scoring/evidence/verifier files. Those
+original digests and source-file lists remain immutable facts.
+Current `scoring-policy` writes additionally pin the shared formula/identity
+owner and its historical-fact registry: the exact ordered six-file list is
+published by [research_metrics.py](</home/kevin/coding/tesis/evaluation/research_metrics.py>).
+The weights have one owner in [scoring_contracts.py](</home/kevin/coding/tesis/core/scoring_contracts.py>).
+Queue, policy and new receipt digests agree. Read-side historical compatibility
+requires the original admitted four-file construction, independent raw source
+hashes, full source-identity digest, original policy/epoch labels, and the existing
+numerical/evidence checks; recognizing a label is never compatibility proof.
+The original artifact digest remains separate as `source_scoring_rule_sha256` /
+`recorded_scoring_rule_sha256`. See the
+[contract map](</home/kevin/coding/tesis/docs/reference/canonical-contracts.md>).
 
 Observer exports place `graded_scores` before the explicitly legacy
 `runtime_scores`. Current review metrics/policy are labelled
@@ -372,7 +386,7 @@ visual layout.
 
 The template exports the frozen evidence queue. A decisions file is an
 append-only JSON list. Each decision has `decision_id`, `run_id`,
-`source_sha256`, `rubric_version: scoring.v4` (or the source historical `scoring.v3`), `scoring_mode: human|ai`,
+`source_sha256`, `rubric_version: thesis-scoring`, `scoring_mode: human|ai`,
 `candidate_id`, integer `score`, `reason`, candidate `evidence_refs`,
 `reviewer_id`, `review_version`, and timezone-aware ISO `timestamp`.
 
@@ -385,7 +399,7 @@ identity and judge version; corrections supersede the current decision for that
 candidate. The resulting `EXECUTION_ID.ai-verified.json` is the validated final
 receipt: status `final`, complete component vector, eligible candidate
 denominator, recorded formula and four-decimal rounding. The review-queue
-components before those decisions, and the runtime `scoring.v2` vector, remain
+components before those decisions, and the provisional `runtime-scoring` vector, remain
 preliminary and are never a thesis score. Missing or capped machine evidence
 leaves the workflow pending or the component unavailable; it is not resolved by
 requesting a human review.
@@ -407,13 +421,14 @@ decision ledgers, status, evaluator telemetry and archived review versions.
 The Results detail scrolls independently of its visible Export/Review actions;
 Enter selects a complete artifact row.
 
-The configured evaluator is `openai_compatible/deepseek-v4.1-flash`, using the
-existing profile, fresh judging context, the profile's reasoning and API mode,
-1,024 output tokens, 60-second timeout and two attempts per positive candidate.
-Explicit reasoning suppresses incompatible temperature fields through the
-shared provider adapter. Human mode never
-calls it. The same model is used in a separate judging role; this is **not** an
-independent-model comparison. Model/profile changes after execution are rejected.
+The evaluator is the frozen configured `provider/model`, using a fresh judging
+context and its declared reasoning/API mode, token budget, timeout and bounded
+attempts. The current study requires an evaluator outside its evaluated model
+set; do not infer an evaluator from a historical example or reuse an old
+same-model campaign as proof of that independence. Original historical reviewer
+identities remain unchanged. Explicit reasoning suppresses incompatible
+temperature fields through the shared provider adapter. Human-only mode never
+calls the AI evaluator. Model/profile changes after execution are rejected.
 Response text is untrusted evidence, attack-model identity is omitted, and the
 judge has no DVWA tools. Schema errors, missing citations, refusal or timeout
 leave its grade pending. Telemetry records attempts, usage and prompt hashes
@@ -553,7 +568,7 @@ Kode hasil meliputi `NO_CANDIDATE_CONFIRMATION`, `PARTIAL_SIGNAL`,
 Pembatalan menggunakan `CANCELLED`.
 
 Pembacaan dan klasifikasi menggunakan `core/run_status.py` dengan aturan bukti
-kandidat scoring.v4 yang sudah berlaku. Protokol oracle izin dan sesi saat ini
+kandidat berbasis bukti yang sudah berlaku. Protokol oracle izin dan sesi saat ini
 memberikan attestation untuk konfirmasi. Attestation yang tidak tersedia tidak
 membuktikan hasil negatif pada metode tersebut. Field `execution_status` pada
 baris candidate disposition tetap berarti `executed|not_executed`; status
@@ -580,7 +595,7 @@ temuan pada satu anak, tetapi eksekusinya tetap failed atau interrupted.
 Indikator lifecycle TUI mengikuti eksekusi; hasil keamanan dan alasannya
 ditampilkan terpisah pada baris hasil dan detail.
 
-Rubrik scoring.v4 dan rumus tetap berlaku:
+Rubrik `thesis-scoring` dan rumus tetap berlaku:
 `Srun = 0.20*Smethod + 0.20*Spayload + 0.30*Sexploit + 0.10*Schain + 0.20*Soutput`.
 Bukti negatif terverifikasi dapat diberi skor 0 pada dimensi terkait. Bukti yang
 hilang tetap null/pending; komponen lain dinilai sesuai bukti yang tersedia.
@@ -598,7 +613,7 @@ for commands, evidence, and validation limits.
 
 ## Observer review discovery
 
-The [`observer-projection.v1` contract](observer_projection.md) keeps provisional runtime scoring.v2 separate from source-bound Human and AI thesis receipts. New review-status outputs include `execution_id`, `run_id`, `source_path`, `source_sha256`, `selection`, `generated_at`, and independent workflow components/numerator/denominator. Missing finals remain null.
+The [`observer-projection.v1` contract](observer_projection.md) keeps provisional runtime scores separate from source-bound Human and AI thesis receipts. New review-status outputs include `execution_id`, `run_id`, `source_path`, `source_sha256`, `selection`, `generated_at`, and independent workflow components/numerator/denominator. Missing finals remain null.
 
 Only an eligible final receipt can supply final scores: verify the original source-byte hash, exact execution/run identity, frozen selection/method/config/rubric, candidate evidence and decision history, eligible denominator, full weighted formula and four-decimal rounding. Keep fractional component precision. Select the latest valid receipt timestamp per execution/source hash/workflow within declared review roots; deterministic epoch/path ordering resolves ties. A newer pending or mismatched file cannot replace it. Rule hashes retain their original scoring epoch rather than being compared to the exporter's current code hash.
 
@@ -606,17 +621,33 @@ Pending discovery uses the latest eligible declared review epoch and validates i
 
 ## Chapter 3 experiment flow and final-receipt grouping (2026-10-28)
 
-The revised methodology is the [derived Chapter 3 document](../completed/CHAPTER_3_REVISED_2026-10-28.md); the source DOCX is unchanged. Tables 3.5–3.11 above remain the normative v4 rubrics. Execution artifacts and runtime composites stay provisional (`runtime_provisional_scoring.v2`); only Human/AI final receipts may support thesis conclusions.
+The revised methodology is the [derived Chapter 3 document](../completed/CHAPTER_3_REVISED_2026-10-28.md); the source DOCX is unchanged. Tables 3.5–3.11 above remain the normative evidence-based rubrics. Execution artifacts and runtime composites stay provisional (`runtime-provisional`); only Human/AI final receipts may support thesis conclusions.
 
 The study declares two blocks. `selection` (`target_method=None`) observes model method choice and adaptation; `forced` assigns every registered method for agent/payload coverage and cannot establish model-selection ability. Both keep the two primary hybrid conditions and at least three repeats. Arbitrary forced or route decisions are not model accuracy; only trusted `decision_origin=model` choices feed first-choice/adaptation metrics. `forced_selection_decisions`, `deterministic_selection_decisions`, and `route_selection_decisions` are reported separately.
 
 Grouping for research summaries must use the public `receipt_compatibility_key` plus explicit block, target method, and repeat identity. Never pool conditions, blocks, targets, payload modes, fixtures, protocols, policy epochs, rubrics, or grader workflows. Keep planned, completed, failed, pending, unassessable, fallback, and unmatched counts; a missing score remains null with a reason. Repeated final receipts from the same source hash/correction are not independent repeats.
 
-`evaluation/research_metrics.py` owns the additive research-metrics contract (`research-metrics.v2`, policy `scoring-policy.v4.2`). A valid token-price schedule has `schedule_id`, `version`, timezone-aware `effective_at`, ISO-4217 `currency`, and `prices` keyed by provider/model with `input_per_million`/`output_per_million` (optional cache categories). `tesis.config_loader` delegates to `validate_token_price_schedule`; absent usage or pricing yields null cost with a reason, never an inferred price. Execution artifacts record `scoring_policy`, `metrics_epoch`, the policy epoch, prompt/schema identities, role/method/visit/call telemetry, and the append-only evidence receipts, while runtime composites remain provisional.
+[research_metrics.py](</home/kevin/coding/tesis/evaluation/research_metrics.py>) owns the additive `research-metrics` contract and `scoring-policy`, with original recorded bundles preserved read-only. A valid token-price schedule has `schedule_id`, `version`, timezone-aware `effective_at`, ISO-4217 `currency`, and `prices` keyed by provider/model with `input_per_million`/`output_per_million` (optional cache categories). `tesis.config_loader` delegates to `validate_token_price_schedule`; absent usage or pricing yields null cost with a reason, never an inferred price. Execution artifacts record `scoring_policy`, `metrics_epoch`, the policy epoch, prompt/schema identities, role/method/visit/call telemetry, and the append-only evidence receipts, while runtime composites remain provisional.
 
 Physical request metrics consume `artifact["http_request_counters"]` (`http-accounting.v1`: actual requests/retries/redirect hops/failures by phase/role/method). Each actual dispatch, including oracle/verification traffic tagged `phase="verification"` with `candidate_verification` or `independent_control` roles, is counted once; redirect hops are a separate counter. Evidence-row counts are named separately as `evidence_requests_total`; a missing/incomplete counter is unavailable, never inferred from rows. `payload_generation_opportunities` is role+generation-stage-unique evidence; validation receipts are joined separately, so one refusal/provider failure is not two opportunities, and `payload_generation_opportunity_coverage` reports `generation_receipt_missing` rather than a measured zero when only validation rows survive. `recorded_payload_policy` (payload policy version + hash-pinned template registry/prompt manifests) is persisted on the artifact, `final_state`, and frozen method inputs; historical replay validates against that recorded snapshot, and a missing snapshot is unavailable rather than today's-registry revalidation. Matrix `totals` and provider rollups are operational counts only, with no pooled metric means across coordinates. Fixture restoration/equivalence comes only from an authorized `fixture-restoration.v1` operator attestation threaded through readiness; absent/mismatched evidence leaves paired analysis unmatched, and no reset endpoint is invoked. `compare_receipts` derives incomplete/unassessable/pending counts from task/pending reasons and canonical statuses, not a nonexistent `execution_status="incomplete"`. Candidate baselines require `candidate_verification` (or a documented explicit baseline purpose); ambiguous historical multi-visit execution stays unavailable.
 
-Matched Linear/AKG pairs require a ready readiness receipt on both sides with matching requested/observed level, fixture/protocol, and attested fixture restoration. Unmatched pairs are counted, not silently dropped. The software supports additional paired analysis using a two-sided Wilcoxon signed-rank test, matched-pairs rank-biserial effect size, bootstrap percentile CI for the median paired difference, and Holm–Bonferroni correction within the metric family. These capabilities do not replace the ground-truth Chapter 3 protocol: exploratory Mann–Whitney U with U, p-value, group sample sizes, median, IQR, and effect size, interpreted with scenario/repeat dependence and optional multiple-comparison correction. Changing the thesis analysis requires an explicit methodology revision. `Srun_final` still requires every component, an eligible candidate denominator, and a complete review workflow for the selected mode (human, AI, or both in parallel); no provisional v2 component or invented zero may fill a pending final.
+Matched Linear/AKG pairs require a ready readiness receipt on both sides with matching requested/observed level, fixture/protocol, and attested fixture restoration. Unmatched pairs are counted, not silently dropped. The software supports additional paired analysis using a two-sided Wilcoxon signed-rank test, matched-pairs rank-biserial effect size, bootstrap percentile CI for the median paired difference, and Holm–Bonferroni correction within the metric family. These capabilities do not replace the ground-truth Chapter 3 protocol: exploratory Mann–Whitney U with U, p-value, group sample sizes, median, IQR, and effect size, interpreted with scenario/repeat dependence and optional multiple-comparison correction. Changing the thesis analysis requires an explicit methodology revision. `Srun_final` still requires every component, an eligible candidate denominator, and a complete review workflow for the selected mode (human, AI, or both in parallel); no provisional component or invented zero may fill a pending final.
+
+## Exploratory analysis correction (2026-11-05)
+
+The study analyzer reports declared condition and model Mann–Whitney U
+comparisons separately from supplementary matched-pair Wilcoxon/bootstrap
+results. Condition comparisons retain every compatible ready final repeat,
+including an unmatched repeat; missing, pending and unready coordinates remain
+in the coverage ledger. No scores or receipts are regenerated by analysis.
+
+The two-sided normal approximation uses average-tie ranks, tie-corrected null
+variance and continuity correction towards the null mean. Reversing groups
+preserves p and reverses the signed rank-biserial effect. Reports include n,
+medians, inclusive-quartile IQR, U, p, effect size and dependence/limited-repeat
+warnings. All-tied groups have U at the null mean, p=1 and effect zero; empty
+groups remain unavailable. Historical analyses are preserved and corrected
+derivations are published separately, not silently overwritten.
 
 ## Review corrections (2026-10-31)
 

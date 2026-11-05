@@ -23,8 +23,8 @@ from core.knowledge_graph import AttackKnowledgeGraph
 from tesis.runtime_events import RunEvent, RuntimeEventSink
 
 
-SCHEMA_VERSION: str = "runtime-descriptor.v1"
-AKG_SNAPSHOT_VERSION: str = "akg-snapshot.v1"
+SCHEMA_VERSION: str = "runtime-descriptor"
+AKG_SNAPSHOT_VERSION: str = "akg-snapshot"
 
 ACTIVE_STATUS: str = "active"
 
@@ -226,7 +226,13 @@ def write_descriptor(
 ) -> Path:
     """Persist ``descriptor`` atomically (temp file + ``os.replace``)."""
 
+    if descriptor.schema_version != SCHEMA_VERSION:
+        raise ValueError("Historical or unsupported runtime descriptors are read-only")
     target = Path(path) if path is not None else descriptor_path(descriptor.experiment_dir)
+    if target.exists():
+        recorded = json.loads(target.read_bytes())
+        if not isinstance(recorded, dict) or recorded.get("schema_version") != SCHEMA_VERSION:
+            raise ValueError("Refusing to overwrite a historical or unsupported runtime descriptor")
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(descriptor.as_dict(), indent=2, sort_keys=True) + "\n"
 

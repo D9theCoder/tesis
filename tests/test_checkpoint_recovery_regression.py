@@ -21,7 +21,7 @@ from core.checkpoint_store import (
     stable_thread_id,
     validate_resume,
 )
-from core.state import new_default_state
+from core.state import WORKFLOW_PROTOCOL_VERSION, new_default_state
 
 
 def _coordinate(**overrides):
@@ -34,8 +34,8 @@ def _coordinate(**overrides):
     finally:
         runtime.close()
     base = {
-        "effective_llm_runtime": identity, "workflow_protocol_version": "workflow.v2",
-        "scoring_rubric_version": "scoring.v3", "scoring_profile": {}, "scoring_oracles": [],
+        "effective_llm_runtime": identity, "workflow_protocol_version": WORKFLOW_PROTOCOL_VERSION,
+        "scoring_rubric_version": "thesis-scoring", "scoring_profile": {}, "scoring_oracles": [],
         "scoring_mode": "human", "scoring_evaluator": {}, "fixture_id": None, "protocol_version": None,
         "evasion_max_retries": 3, "evasion_cooldown_threshold": 5,
         "target_url": "http://localhost/dvwa",

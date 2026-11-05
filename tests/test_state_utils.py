@@ -58,11 +58,11 @@ def test_duplicate_payload_values_keep_their_distinct_candidate_identity():
             {"candidate_id": "static-duplicate", "method": "sqli_union", "stage": "exploit",
              "payload_or_logic": "same-value", "source": "static_seed",
              "origin_kind": "static_seed", "visit_id": "sqli_union:visit:1",
-             "policy_version": "payload-policy.v2"},
+             "policy_version": 'payload-policy'},
             {"candidate_id": "llm-duplicate", "method": "sqli_union", "stage": "exploit",
              "payload_or_logic": "same-value", "source": "llm_generated",
              "origin_kind": "seed_mutation", "visit_id": "sqli_union:visit:1",
-             "policy_version": "payload-policy.v2"},
+             "policy_version": 'payload-policy'},
         ]},
         "payload_validation_results": {"sqli_union": [
             {"candidate_id": "static-duplicate", "valid": True, "reason": "ok",
