@@ -392,6 +392,23 @@ replace the acceptance clauses above.
   (Access Control has no `Srun_final`), 36 metric rows with U, p, n, median,
   IQR, effect size, Holm adjustment and dependence limitations.
 
+**Methodology revision and the revised scoring epoch (owner-authorised)**
+
+The owner authorised changing how Access Control selection is scored and revising
+the Sexploit level-4 and Spayload rules. Applied in `1e61a79`, then re-scored over
+the *same* 54 executions in a separate scoring epoch (`777b64c`); no receipt was
+retrofitted or relabelled.
+
+- Revised-epoch receipts: **41 final, 13 pending, 0 failed**.
+- **Access Control low now has numeric scores**: six final receipts, each
+  `Srun_final = 2.2` from Smethod 2, Spayload 1.5, Sexploit 3, Schain 0, Soutput 3.
+- Access Control medium: `ranking_no_rankable_method` — `force_browse_endpoints_visible`
+  was measured **false**, so no method has a proven reference fit.
+- Access Control high: no viable method and no candidates.
+- Revised-epoch F3: **168/270 = 0.6222**, 102 unresolved; exploratory analysis
+  covers **7 of 9 strata** (both unsupported strata are Access Control).
+- Original corrected epoch stays at 35 final / F3 162/270 and is preserved unchanged.
+
 **Not achieved, and why**
 
 - **Numeric Access-Control scores do not exist.** `Smethod` is unavailable for
