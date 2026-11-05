@@ -359,3 +359,46 @@ No runtime code, configuration, scorer execution, experiment artifacts, or DOCX
 files are changed by this handoff. No tests, dry runs, E2E, target requests, or
 provider calls were run to create it. Move it to `docs/completed/` only after its
 required work and requested acceptance checks have evidence, and update links.
+
+## Corrected epoch executed (2026-11-06) — measured status
+
+This section records what the corrected epoch actually produced. It supplements
+the requirement ledger in
+[SCORING_COMPLETION_PROGRESS.md](SCORING_COMPLETION_PROGRESS.md) and does not
+replace the acceptance clauses above.
+
+**Completed with evidence**
+
+- Repository-wide canonical naming cutover finished; `.venv/bin/python -m
+  tesis.naming_guard` reports 0 violations.
+- Obsolete scorer paths removed; historical identities remain readable through an
+  explicit read-only decoder and cannot authorize a live launch, plan, checkpoint,
+  resume, payload origin or snapshot adoption.
+- Prospective bindings reconciled: approved ranking profile recovered verbatim
+  (four Access-Control fits still null), epoch re-frozen, canonical oracle
+  protocol declaration authored, fixture restoration measured and bound.
+- Readiness reached `ready_for_execution`, `execution_authorized: true`, 0
+  blockers, 54/54 coordinates (single evaluated model by owner decision).
+- Corrected matrix executed with `fixture_equivalence: attested` in all 54 runs:
+  53 completed, 1 failed (retained: `run-024`, provider transport timeout),
+  48 confirmed, 6 unconfirmed, 0 containment failures.
+- Receipts finalized with the selected AI manual scorer: **33 final, 21 pending**.
+- Superseding F3 for this epoch: **162/270 = 0.6**, 108 unresolved
+  (Spayload 48, Schain 24, Sexploit 24, Smethod 12, Soutput 0).
+- Exploratory Mann–Whitney reporting: 6 of 9 strata analysed, 3 unsupported
+  (Access Control has no `Srun_final`), 36 metric rows with U, p, n, median,
+  IQR, effect size, Holm adjustment and dependence limitations.
+
+**Not achieved, and why**
+
+- **Numeric Access-Control scores do not exist.** `Smethod` is unavailable for
+  all 18 AC runs because four AC low/medium reference fits are null by owner
+  decision (option A: broad anonymous exposure is not method-specific evidence).
+  AC high additionally produced no assessable candidates. `Srun_final` is 0 at
+  every AC level.
+- Sexploit level 4 is unreachable under the documented rule because the assessed
+  method is the last executed method, not the dependency source.
+- The historical oracle preregistration draft no longer pins the shipped sources;
+  a prospective preregistration for this epoch is still missing.
+- Acceptance therefore cannot be claimed and this handoff is **not** moved to
+  `docs/completed/`.
