@@ -624,3 +624,40 @@ Required fix: scope the floor check to the current scoring epoch (compare the
 decision's recorded rubric/rule digest with the current one before enforcing it),
 then re-run the re-score. Until that is done, Access-Control numeric receipts are
 **not** produced, and no number above should be read as a final AC score.
+
+### 22 — Revised-rubric scoring epoch: Access Control now has numeric scores
+
+Owner-authorised methodology revision applied (`1e61a79`) and a new **scoring**
+epoch produced over the unchanged executions (`777b64c`). Receipts of the earlier
+scoring epoch are untouched; nothing was retro-fitted or relabelled.
+
+Re-score result — [revised-rubric-rescoring.json](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/revised-rubric-rescoring.json>):
+**41 final, 0 failed** (the pre-revision set was 35 final). Every run wrote to its
+own `reviews-revised` epoch directory.
+
+Access-Control availability by level (6 runs each):
+
+| Level | Smethod | Spayload | Sexploit | Schain | Soutput | **Srun_final** |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| low | 6 | 6 | 6 | 6 | 6 | **6** |
+| medium | 0 | 6 | 6 | 6 | 6 | 0 |
+| high | 0 | 0 | 0 | 6 | 0 | 0 |
+
+- **Access-Control low now scores numerically**: six final receipts, each
+  `Srun_final = 2.2` (Smethod 2, Sexploit 3, Schain 3, Soutput 3, Spayload 3.0 →
+  0.20·2 + 0.20·3 + 0.30·3 + 0.10·3 + 0.20·3 = 2.2).
+- Access-Control medium stays pending because `force_browse_endpoints_visible`
+  was measured **false**, so no method has a proven reference fit
+  (`ranking_no_rankable_method`). That is a measured negative, not a gap.
+- Access-Control high stays pending: no viable method, no candidates.
+
+Observed levels across the 41 finals: Smethod {2, 3}, Spayload {0.75, 1.5, 3.0},
+Sexploit {3}, Schain {0, 1, 3}, Soutput {0, 1, 3}. Requirement 5e is satisfied in
+the sense that the rubric can express and does emit multiple distinct levels with
+the revised rules; the remaining unobserved levels are fixture properties
+documented in §19.
+
+Two scoring-epoch identities now exist and must not be mixed: the original
+corrected epoch (35 final) and the revised-rubric epoch (41 final). Analysis and
+F3 figures in §16 belong to the original epoch; a revised-epoch F3/analysis can be
+recomputed from the same executions without touching either receipt set.
