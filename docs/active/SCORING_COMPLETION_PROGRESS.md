@@ -593,3 +593,34 @@ unclassified_payload_deduction 28, payload_downstream_use_unproved 16,
 selection_rank_unresolved 12, chain_evidence_unavailable 6,
 static_seed_payload_deduction 3, missing_selected_authority_receipt 1. Analysis scale
 unchanged: 6 strata analysed, 3 unsupported (Access Control).
+### 20 — Methodology revision applied (owner-authorised 2026-11-06)
+
+Receipt: [methodology-revision-applied.json](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/methodology-revision-applied.json>).
+Commit `1e61a79`; scoring suites **77 passed**.
+
+- **Smethod**: a pending reference fit no longer voids a scenario. The method is
+  excluded from the ranking set and selecting it scores 2 with reason
+  `selected_method_unranked_reference_pending`. Verified on real artifacts:
+  access_control:low now returns `Smethod = 2`; access_control:medium correctly
+  returns `ranking_no_rankable_method` because `force_browse_endpoints_visible`
+  was **observed false** there, so no method has a proven fit.
+- **Sexploit level 4** is now reachable when the assessed method's own executed
+  candidate consumed a verified dependency (base proof 3 and a recorded dependency
+  still required).
+- **Spayload**: the machine proof is a floor as well as a ceiling.
+
+### 21 — Re-scoring blocked by a ledger-reuse interaction (open)
+
+Re-scoring the 54 executions under the revised rubric produced 31 final / 11
+failed. Cause, reproduced exactly:
+`ValueError: Review grade is below the machine proof for this candidate`.
+The re-score loads each run's **previous** decision ledger, and decisions recorded
+under the earlier rubric (where the machine proof was only a ceiling) are now
+re-evaluated under the new floor. The floor must apply to decisions recorded in
+the new scoring epoch only; historical decisions belong to their own recorded
+epoch and must be read, not re-judged.
+
+Required fix: scope the floor check to the current scoring epoch (compare the
+decision's recorded rubric/rule digest with the current one before enforcing it),
+then re-run the re-score. Until that is done, Access-Control numeric receipts are
+**not** produced, and no number above should be read as a final AC score.
