@@ -203,6 +203,25 @@ expand existing execution scope; follow repository execution/verification rules.
       rubric while preserving the published semantics; do not satisfy coverage
       by inventing evidence or relabelling an existing grade.
 
+> **Scope amendments (owner decisions, 2026-11-06).** The clauses above describe
+> the original two-model, 108-coordinate design. Two later owner decisions change
+> what this epoch must satisfy, and they supersede those numbers **for this
+> epoch only**:
+>
+> 1. The second evaluated model was dropped because its provider credits were
+>    exhausted, so the executed design is **54 coordinates** (one model × two
+>    conditions × three surfaces × three levels × three repeats). The original
+>    108-coordinate two-model design remains the declared design for any future
+>    epoch and is not retracted.
+> 2. The owner authorised a methodology revision (pending-reference handling in
+>    `Smethod`, downstream attribution for `Sexploit` level 4, and a machine-proof
+>    floor for `Spayload`). Every component can express levels 0–4; which levels a
+>    fixture actually exhibits is a measured property, recorded in the progress
+>    ledger §19, not a rubric defect.
+> 3. The owner reviewed the Access-Control result and directed that this handoff
+>    stay in `docs/active/`; the 12 medium/high Access-Control coordinates remain
+>    unfinished and acceptance is **not** claimed.
+
 Acceptance: each of the 108 coordinates is accounted for by a valid final receipt
 or a justified unavailable/failed status. Every final component rubric supports
 all five levels. Reuse compatible valid receipts; a human regrade of all 108 is
