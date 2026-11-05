@@ -644,8 +644,12 @@ Access-Control availability by level (6 runs each):
 | high | 0 | 0 | 0 | 6 | 0 | 0 |
 
 - **Access-Control low now scores numerically**: six final receipts, each
-  `Srun_final = 2.2` (Smethod 2, Sexploit 3, Schain 3, Soutput 3, Spayload 3.0 →
-  0.20·2 + 0.20·3 + 0.30·3 + 0.10·3 + 0.20·3 = 2.2).
+  `Srun_final = 2.2`, from the verified components Smethod 2, Spayload 1.5,
+  Sexploit 3, Schain 0, Soutput 3 →
+  0.20·2 + 0.20·1.5 + 0.30·3 + 0.10·0 + 0.20·3
+  = 0.4 + 0.3 + 0.9 + 0 + 0.6 = **2.2**. Re-checked against each receipt; an
+  earlier draft of this paragraph listed the wrong Schain/Spayload values and was
+  corrected before being relied on.
 - Access-Control medium stays pending because `force_browse_endpoints_visible`
   was measured **false**, so no method has a proven reference fit
   (`ranking_no_rankable_method`). That is a measured negative, not a gap.
