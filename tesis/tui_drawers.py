@@ -1324,7 +1324,7 @@ class ReviewDrawer(BaseDrawer):
                 config = load_and_resolve_config(config_path=str(tui_state.CONFIG_PATH), cli_args={})
                 judged = evaluate_queue(queue, config.scoring_evaluator)
                 save_evaluator_telemetry(self.source, judged, output_dir=self.output_dir)
-                decisions = append_evaluator_decisions(decisions, judged['decisions'])
+                decisions = append_evaluator_decisions(decisions, judged['decisions'], queue=queue)
             updated = decisions + additions
             result = finalize_reviews(self.source, updated, output_dir=self.output_dir)
             self.post_message(self.Loaded(queue, updated, result))
