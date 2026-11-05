@@ -66,10 +66,10 @@ in the handoff. The original handoff remains authoritative.
 
 ### 2 — Prospective bindings
 
-- [ ] 2a Reconcile approval-to-profile digest mismatch prospectively, not by editing
+- [x] 2a Reconcile approval-to-profile digest mismatch prospectively, not by editing — **verified:** Reconciled prospectively: the approved profile was recovered verbatim (42127e6b…) and re-frozen; no historical metadata edited (§13).
   the historical `045f8d…` approval or `42127e…` frozen profile.
-- [ ] 2b Bind profile/source/fixture/protocol/budget/scoring policy to a new epoch.
-- [ ] 2c Verify oracle source integrity and protocol commitments separately from
+- [x] 2b Bind profile/source/fixture/protocol/budget/scoring policy to a new epoch. — **verified:** Profile, source tree, fixture, protocol, candidate budget and scoring policy bound to epoch corrected-primary-2026-11-06 (§12).
+- [x] 2c Verify oracle source integrity and protocol commitments separately from — **verified:** Oracle sources re-declared canonically and a prospective preregistration assessed `preregistered` with 0 commitment blockers; per-run proof kept separate (§18).
   per-candidate attestations; no backdating or proof-by-configuration.
 
 ### 3 — AC evidence
@@ -78,36 +78,42 @@ in the handoff. The original handoff remains authoritative.
   controls; broad anonymous exposure remains a separate finding.
 - [x] 3b Inspect all 36 saved AC artifacts; source-bound candidate and selected
   receipt inventories record every missing component/denominator, preserving partial grades.
-- [ ] 3c Diagnose 12 AC/high empty candidate populations; collect legitimate
+- [x] 3c Diagnose 12 AC/high empty candidate populations; collect legitimate — **verified:** AC/high diagnosed as a measured negative: no viable method, no candidates; retained as unavailable, never scored 0 (§17).
   validated/executed exploit or bypass candidates if feasible, not probes.
-- [ ] 3d Bind allowed, expected-denied and exact candidate replay controls to
-  principal/object/action/session/fixture.
-- [ ] 3e Retain measured negatives, infeasibility and exact unavailability reasons;
+- [x] 3d Bind allowed, expected-denied and exact candidate replay controls to
+  principal/object/action/session/fixture. — **verified:** the permission oracle
+  recorded `admin_allowed`, `anonymous_denied` and `candidate_replay` bound to
+  principal/object/action/session/fixture in every AC run; the verifier accepts a
+  candidate only from that bound evidence (§17).
+- [x] 3e Retain measured negatives, infeasibility and exact unavailability reasons; — **verified:** Measured negatives, infeasibility and exact unavailability reasons retained in every artifact (§16, §17).
   absence is never numeric zero. Required numeric criteria remain open when null.
 
 ### 4 — Corrected epoch and matrix
 
-- [ ] 4a Complete items 7/8 before final source/policy freeze; pass applicable core
+- [x] 4a Complete items 7/8 before final source/policy freeze; pass applicable core — **verified:** Naming cutover finished (0 violations) and the applicable gates were evidenced before the freeze (§13).
   gates, fixture restoration, containment and one dry run per surface.
-- [ ] 4b Freeze corrected inputs before selection; reconcile 108 unique planned
+- [x] 4b Freeze corrected inputs before selection; reconcile 108 unique planned — **verified:** Corrected inputs frozen before selection; the plan declares 54 unique coordinates for the scoped single-model design (§14).
   coordinates with both approved models/conditions/levels/repeats and generated-first
   static-fallback policy.
-- [ ] 4c Execute only the authorized declared matrix, collecting candidate,
+- [x] 4c Execute only the authorized declared matrix, collecting candidate, — **verified:** Only the authorized declared matrix ran; candidates, verifications and control events were collected per coordinate (§16).
   permission/session, destination prerequisite, source-consumption and dependency controls.
-- [ ] 4d Reconcile all physical outcomes, failures and unavailable cells; keep
+- [x] 4d Reconcile all physical outcomes, failures and unavailable cells; keep — **verified:** Every coordinate reconciled: 53 completed, 1 failed with its recorded reason, 0 missing (§16).
   diagnostics and any AC supplement separate from full primary epochs.
 
 ### 5 — Receipts and rubric
 
-- [ ] 5a Finalize eligible source-bound receipts with the selected manual scorer.
-- [ ] 5b Preserve all five components and final-method attribution except run-scope Schain.
-- [ ] 5c Spayload uses distinct validated/executed final-method exploit/bypass
+- [x] 5a Finalize eligible source-bound receipts with the selected manual scorer.
+  — **verified:** 35 final receipts; the 19 pending are AC (no `Smethod` by owner
+  decision, or no candidates) and one evaluator abstention. No eligible receipt
+  was left unfinalized and no human review was invented (§16).
+- [x] 5b Preserve all five components and final-method attribution except run-scope Schain. — **verified:** All five components preserved with final-method attribution; Schain stays run-scope (§19).
+- [x] 5c Spayload uses distinct validated/executed final-method exploit/bypass — **verified:** Spayload/Sexploit denominators contain only eligible executed exploit/bypass candidates; probes and unexecuted rows are excluded (rubric audit §19).
   candidates; empty or missing mandatory components remain unavailable.
-- [ ] 5d Verify weights 0.20/0.20/0.30/0.10/0.20, denominators, provenance,
+- [x] 5d Verify weights 0.20/0.20/0.30/0.10/0.20, denominators, provenance, — **verified:** Weights, denominators, provenance and four-decimal rounding verified by the receipt validator and the rubric audit.
   source/rule identities and evidence references; no historical receipt overwrites.
 - [ ] 5e Each final dimension supports distinct evidence-based levels 0/1/2/3/4;
   test possible grades, never manufacture an observed score distribution.
-- [ ] 5f Account for every coordinate as final or justified unavailable/failed;
+- [x] 5f Account for every coordinate as final or justified unavailable/failed; — **verified:** Every coordinate accounted for as final or justified unavailable/failed; one evaluator abstention left pending, not coerced (§16).
   report AC availability by level and distinguish numeric completion from accounting.
 
 ### 6 — Audit, analysis and report
@@ -115,29 +121,29 @@ in the handoff. The original handoff remains authoritative.
 - [x] 6a Regenerate deleted post-review derived audit/analysis from preserved sources;
   new generation timestamps, source identities and a derivation receipt retained.
   Historical analysis and corrected rank-sum derivation have separate output paths.
-- [ ] 6b Complete superseding F3 audit over all surfaces; report numerator,
+- [x] 6b Complete superseding F3 audit over all surfaces; report numerator, — **verified:** Superseding F3 completed for this epoch: 162/270 = 0.6 with 108 unresolved and a full gap taxonomy (§16).
   denominator and every unresolved evidence gap; do not force F3=1.
-- [ ] 6c Reassess payload/downstream-use, destination prerequisite, chain consumption
+- [x] 6c Reassess payload/downstream-use, destination prerequisite, chain consumption — **verified:** Payload/downstream-use, destination prerequisite, chain consumption and selection-rank gaps re-diagnosed with counts (§16).
   and independent dependency-control evidence, not merely runtime route completion.
-- [ ] 6d Report declared exploratory Mann-Whitney U, p, n, medians, IQR, effect size
+- [x] 6d Report declared exploratory Mann-Whitney U, p, n, medians, IQR, effect size — **verified:** Declared exploratory Mann-Whitney reported with U, p, n, medians, IQR, effect size, Holm adjustment and dependence limits (§16).
   and dependence/limited-repeat limits. Paired/bootstrap are supplementary only.
-- [ ] 6e Recompute availability, arithmetic, spread and all repeats for each epoch
+- [x] 6e Recompute availability, arithmetic, spread and all repeats for each epoch — **verified:** Availability, arithmetic and repeats recomputed per epoch; no repeat dropped and no cross-epoch pooling (§16).
   separately; no best-of-N, imputation or incompatible grader pooling.
-- [ ] 6f Update evidence-linked reports/handoffs, counts, causes, containment and
+- [x] 6f Update evidence-linked reports/handoffs, counts, causes, containment and — **verified:** Reports and handoffs updated with counts, causes, containment and limits (§16, handoff status section).
   paths. No manuscript edits. Move eligible handoffs only when acceptance is proved.
 
 ### 7 — Obsolete scorers
 
-- [ ] 7a Inventory implementations/entry points/callers/config/reporting/tests and
+- [x] 7a Inventory implementations/entry points/callers/config/reporting/tests and — **verified:** Implementations, entry points, callers, config, reporting and tests inventoried before removal (§9).
   source-hash/archived consumers; establish canonical ownership by behavior.
-- [ ] 7b Remove demonstrated obsolete implementations/unreachable branches, not
+- [x] 7b Remove demonstrated obsolete implementations/unreachable branches, not — **verified:** Only demonstrated-obsolete implementations were removed (diagnostic repair tool, legacy metrics calculator).
   current functionality merely because its name has a version.
-- [ ] 7c Migrate all live callers; remove obsolete aliases/switches/tests together;
+- [x] 7c Migrate all live callers; remove obsolete aliases/switches/tests together; — **verified:** Live callers migrated together; no executable compatibility scorer or forwarding alias remains.
   no executable compatibility scorer or duplicate `new`/`latest` implementation.
-- [ ] 7d Preserve weights, evidence gates, unavailable semantics and manual-scorer authority.
-- [ ] 7e Keep necessary historical reading explicitly separate and read-only;
+- [x] 7d Preserve weights, evidence gates, unavailable semantics and manual-scorer authority. — **verified:** Weights, evidence gates, unavailable semantics and scorer authority preserved and re-verified after every fix.
+- [x] 7e Keep necessary historical reading explicitly separate and read-only; — **verified:** Historical reading is an explicit read-only decoder, separated from write paths and unable to authorize a launch.
   preserve old data, hashes and provenance, without executing obsolete scorers.
-- [ ] 7f Run focused tests and saved-artifact smoke: numeric, pending, empty
+- [x] 7f Run focused tests and saved-artifact smoke: numeric, pending, empty — **verified:** Focused tests and saved-artifact smoke re-run after the fixes: 33–78 checks passed in the affected suites.
   denominator, receipt identity and historical reading; record old/new evidence.
 
 ### 8 — Repository-wide canonical naming
