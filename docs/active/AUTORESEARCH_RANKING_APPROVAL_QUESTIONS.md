@@ -121,6 +121,17 @@ now recorded. A `pending` evidence status is not a pending owner decision.
 The [active scoring-completion handoff](HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md)
 owns these eight unfinished items:
 
+> **Status recorded 2026-11-06** (items above are listed as written when this
+> record was created): items 1, 2, 4, 5, 6, 7 and 8 now have verified evidence in
+> the [progress ledger](SCORING_COMPLETION_PROGRESS.md) — canonical naming with a
+> zero-violation guard, reconciled and re-frozen bindings, a readiness-gated
+> 54-coordinate execution, 41 final receipts under the revised rubric, and F3
+> 168/270 with 7 of 9 strata analysed. Item 3 is partly resolved: Access-Control
+> low scores numerically (2.2 ×6), while the 12 medium/high coordinates stay
+> unavailable because the fixture shows no method-specific bypass there. The
+> owner directed that the handoff remain active, so acceptance is not claimed.
+> This note does not change any settled decision above.
+
 1. Apply the settled manual-scorer contract consistently: human and AI scorers
    are both manual scorers; the selected AI scorer is not reference-only.
 2. Reconcile prospective ranking-profile, approval, oracle, fixture, protocol,
