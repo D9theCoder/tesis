@@ -294,6 +294,125 @@ remaining prerequisites found by the gate.
 - Three independent read-only audits are still running (historical compatibility,
   rubric 0–4 coverage, F3/analysis reproduction) and are not yet integrated.
 
+### 13 — Owner decisions applied and the gate cleared (2026-11-06)
+
+Owner decisions this round: **commit authorised**; **evaluate DeepSeek-V4.1-Flash-1017
+only** because the second model's provider credits are exhausted.
+
+Applied, each verified:
+
+- Design reduced from 108 to **54** model-selected coordinates (1 model × 2
+  conditions × 3 surfaces × 3 levels × 3 repeats). The readiness gate previously
+  hard-coded "exactly the two requested models" and `expected_coordinates == 108`;
+  it now takes the declared design from the draft while keeping the registered
+  model allowlist, the axis-product equality and a required
+  `design.scope_decision` for any reduction, so an accidental shrink still fails
+  ([gate change](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/scoped-design-gate.json>)).
+  The full two-model draft still validates unchanged.
+- The three model/audit defects that could silently break a live epoch were fixed
+  ([fix receipt](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/audit-defect-fixes-applied.json>)):
+  the shipped oracle protocols no longer matched any collector (a new canonical
+  declaration was authored and the historical file kept untouched,
+  [receipt](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/canonical-protocol-declaration.json>));
+  live detection controls and fixture attestations had begun accepting historical
+  labels; snapshot adoption compared too few fields.
+- Rubric coverage: `verified_permission_candidate` had no proof tier, which made
+  Access-Control levels 1–2 unreachable; it is now tier 2 with the existing
+  oracle branch to 3. A missing selection surface is unavailable instead of a
+  graded 0.
+- Deferred to the owner (recorded, not changed): Sexploit level 4 requires the
+  assessed method to be the dependency source while the assessed method is the
+  last executed one; the Spayload reviewer bound is one-sided; Access-Control and
+  Brute-Force have no emitted level-1 evidence class.
+- Epoch source committed: `6f8db42` (coordinated cutover) and `c1139d9`
+  (measured attestations + gate fixes). No push. `GOAL_PROMPT.md` was not part of
+  either commit; it no longer exists in the worktree.
+- Readiness: **`ready_for_execution`, `execution_authorized: true`, 0 blockers,
+  54/54 unique coordinates**
+  ([report](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/readiness-gate/readiness-report.json>)),
+  live probe all five checks passed including the DeepSeek provider.
+- Frozen plan: `plan_sha256 dbd9119c…`, `selection: 54`, `total: 54`
+  (`results/runs/corrected-primary-2026-11-06/research-plan.json`).
+
+### 14 — Authorized matrix execution
+
+`run_research_plan` launched against the frozen 54-coordinate plan. Execution
+status is reported from the artifacts, not assumed; coordinates, failures and
+unavailable outcomes are retained. No receipt, score or F3 figure is claimed
+until the run finishes and each receipt validates.
+
+### 15 — Matrix executed (measured counts)
+
+The authorized 54-coordinate matrix ran to completion under the frozen plan and
+config. Counts read from the artifacts after the process exited:
+
+- planned 54, executed **54**, `completed` 54, `failed` 0, `interrupted` 0,
+  not started 0, execution-unknown 0.
+- security outcome: **47 confirmed, 7 unconfirmed**, 0 errors.
+- containment: 0 failures; 270 out-of-scope navigation links were discarded and
+  recorded rather than followed.
+- fallback events 16, guardrail activations 0, invalid-JSON events 0.
+- aggregate: `results/runs/corrected-primary-2026-11-06/selection/`
+  `corrected-primary-2026-11-06-selection.matrix.json`, whose totals explicitly
+  carry `score_aggregation: not_computed_pooled_coordinates` and a pooling
+  warning — no cross-condition average exists.
+
+Not yet done, and not claimed: final thesis receipts (the selected AI scorer has
+not yet graded the pending candidates), the superseding F3 audit for this epoch,
+the exploratory Mann–Whitney reporting for this epoch, and the handoff updates.
+Numeric Access-Control scores therefore still do not exist.
+
+### 16 — Attested rerun, receipts, analysis and F3 (verified numbers)
+
+The first execution was complete but analytically unusable: the study declaration
+omitted `fixture_restoration`, so every run recorded an advisory
+`fixture_restoration_invalid` and the analysis refused each receipt as unready.
+That declaration and the run root are preserved as
+`_superseded_study_without_attestation.json` and
+`results/runs/_superseded_corrected-primary-2026-11-06_unattested/`; nothing was
+deleted or overwritten. The owner authorised one corrected rerun.
+
+**Corrected rerun (attested epoch)** — `results/runs/corrected-primary-2026-11-06`:
+
+- plan `f715371b…`, 54 declared / 54 planned, prerequisites
+  `fixture_restoration_attestation: frozen` with `missing_levels: []`.
+- all 54 runs record `fixture_equivalence: attested` with 3 evidence references.
+- executed 54: **53 completed, 1 failed**. The failure is retained, not replaced:
+  `run-024` (brute_force:high, `bf_spray`) → `LLM_RUNTIME_FAILURE`
+  `transport_timeout` on the payload generator after 60 s.
+- security outcome: **48 confirmed, 6 unconfirmed**, 0 containment failures.
+- receipts (selected AI scorer, 62 evaluator calls): **33 final, 21 pending** —
+  12 AC low/medium `missing_component_evidence`, 6 AC high
+  `no_assessable_candidates`, 3 `pending_candidate_grades`.
+
+**AC availability by level** (available runs of 6 per level):
+low `Smethod 0, Spayload 6, Sexploit 6, Schain 6, Soutput 6`;
+medium the same; high `0, 0, 0, 6, 0`. `Srun_final` **0 at every level**.
+`Smethod` is unavailable for all 18 AC runs because the four Access-Control
+low/medium reference fits are null by the owner's option A; that is a recorded
+decision, not a missing observation.
+
+**Superseding F3 for this epoch** —
+[audit](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/corrected-primary-attested-analysis/baseline-audit.json>):
+**162 / 270 = 0.6** attribution completeness, 108 unresolved
+(Spayload 48, Schain 24, Sexploit 24, Smethod 12, Soutput 0).
+Causes of the 162 attributed components: fixture_infeasible 72,
+model_output_quality 84, harness_scoring 6.
+Unresolved gaps: destination_precondition_unproved 42, unclassified_payload_deduction
+27, payload_downstream_use_unproved 15, selection_rank_unresolved 12,
+chain_evidence_unavailable 6, missing_selected_authority_receipt 3,
+static_seed_payload_deduction 3 (sum 108).
+Population: 54 accepted/graded/reviewed, 45 payload-reviewed, 48 runtime-scored.
+
+**Exploratory analysis** —
+[analysis](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/corrected-primary-attested-analysis/analysis.json>):
+9 declared strata, **6 analysed, 3 unsupported** (the AC strata, because no
+`Srun_final` exists), 36 analysed metric rows. Every row carries U, p, n per
+group, median, inclusive-quartile IQR, signed rank-biserial effect, Holm-adjusted
+p, `independent: false` and the dependence/limited-repeat limitation. Paired
+Wilcoxon/bootstrap remains supplementary; nothing was pooled and no repeat was
+dropped.
+
 ## Findings and resumable command log
 
 ### Entry inspection
