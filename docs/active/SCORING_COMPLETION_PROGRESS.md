@@ -559,3 +559,21 @@ truthful for the document — the epoch's per-run permission/session/dependency
 attestations live in the run artifacts, not in this preregistration. The
 historical draft is preserved unchanged and still reports
 `configured_oracle_source_mismatch`, which the test suite now asserts explicitly.
+
+### 19 — Observed rubric level coverage (33 final receipts)
+
+| Component | Observed levels/counts | Levels not observed |
+| --- | --- | --- |
+| Smethod | 2 ×17, 3 ×16 | 0, 1, 4 |
+| Spayload | 0.25 ×1, 0.5 ×2, 0.75 ×2, 1.5 ×5, 2.0 ×5, 2.5 ×3, 3.0 ×15 | 0 (exact), 4 |
+| Sexploit | 3 ×33 | 0, 1, 2, 4 |
+| Schain | 0 ×9, 1 ×16, 3 ×8 | 2, 4 |
+| Soutput | 0 ×1, 1 ×2, 3 ×30 | 2, 4 |
+
+Reading this correctly: the rubric can express 0–4 for every component, and the
+code paths for those levels exist, but this epoch's fixtures exercised only part
+of each scale. That is a property of the data, not of the scale. Two exceptions
+are structural rather than empirical and stay open as owner/methodology items:
+Sexploit level 4 requires the assessed method to be the dependency source while
+the assessed method is the last executed one, and the Spayload reviewer bound is
+one-sided. Neither is repaired by re-running.
