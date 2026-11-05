@@ -381,9 +381,11 @@ deleted or overwritten. The owner authorised one corrected rerun.
   `run-024` (brute_force:high, `bf_spray`) → `LLM_RUNTIME_FAILURE`
   `transport_timeout` on the payload generator after 60 s.
 - security outcome: **48 confirmed, 6 unconfirmed**, 0 containment failures.
-- receipts (selected AI scorer, 62 evaluator calls): **33 final, 21 pending** —
-  12 AC low/medium `missing_component_evidence`, 6 AC high
-  `no_assessable_candidates`, 3 `pending_candidate_grades`.
+- receipts (selected AI scorer): **35 final, 19 pending** — 12 AC low/medium
+  `missing_component_evidence`, 6 AC high `no_assessable_candidates`, 1 brute-force low
+  where the evaluator abstained twice (`evaluator_abstained`, not coerced).
+  A bounded targeted re-evaluation recovered two of the three ungraded candidates
+  ([receipt](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/targeted-reevaluation.json>)).
 
 **AC availability by level** (available runs of 6 per level):
 low `Smethod 0, Spayload 6, Sexploit 6, Schain 6, Soutput 6`;
@@ -577,3 +579,9 @@ are structural rather than empirical and stay open as owner/methodology items:
 Sexploit level 4 requires the assessed method to be the dependency source while
 the assessed method is the last executed one, and the Spayload reviewer bound is
 one-sided. Neither is repaired by re-running.
+
+Updated F3 and analysis for the 35-final set: [final analysis](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/corrected-primary-final-analysis/analysis.json>) and [final audit](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/corrected-primary-final-analysis/baseline-audit.json>): F3 162/270 = 0.6, 108 unresolved; gaps destination_precondition_unproved 42,
+unclassified_payload_deduction 28, payload_downstream_use_unproved 16,
+selection_rank_unresolved 12, chain_evidence_unavailable 6,
+static_seed_payload_deduction 3, missing_selected_authority_receipt 1. Analysis scale
+unchanged: 6 strata analysed, 3 unsupported (Access Control).

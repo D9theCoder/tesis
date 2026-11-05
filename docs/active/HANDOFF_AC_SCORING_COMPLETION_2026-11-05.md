@@ -382,7 +382,10 @@ replace the acceptance clauses above.
 - Corrected matrix executed with `fixture_equivalence: attested` in all 54 runs:
   53 completed, 1 failed (retained: `run-024`, provider transport timeout),
   48 confirmed, 6 unconfirmed, 0 containment failures.
-- Receipts finalized with the selected AI manual scorer: **33 final, 21 pending**.
+- Receipts finalized with the selected AI manual scorer: **35 final, 19 pending** —
+  12 AC low/medium (no `Smethod`), 6 AC high (no candidates), 1 brute-force low where
+  the independent evaluator **abstained** twice, which is a recorded scorer decision
+  and is not coerced.
 - Superseding F3 for this epoch: **162/270 = 0.6**, 108 unresolved
   (Spayload 48, Schain 24, Sexploit 24, Smethod 12, Soutput 0).
 - Exploratory Mann–Whitney reporting: 6 of 9 strata analysed, 3 unsupported
