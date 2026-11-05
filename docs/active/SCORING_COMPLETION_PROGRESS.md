@@ -46,13 +46,16 @@ in the handoff. The original handoff remains authoritative.
 - [x] E1 Locate and read repository instructions and both requested documents;
   both retain their original active paths. Read linked completed epoch handoff.
 - [x] E2 Establish persistent checklist and preserve settled approval record.
-- [ ] E3 Delegate independent file-disjoint work in parallel on requested route;
-  inspect/review every returned code change and integrate fixes in parent.
-- [ ] E4 Inventory current versus superseding evidence with reproducible hashes.
+- [x] E3 Delegated three file-disjoint audits on the requested route (`river-ai`,
+  DeepSeek-V4.1-Flash-1017, max reasoning) once the route became available; every
+  finding was reviewed and the sensitive fixes were made in the parent (§9, §14).
+- [x] E4 Current versus superseding evidence inventoried with hashes; superseded
+  attempts are retained under `_superseded_*` names and never overwritten (§10, §13, §16).
 
 ### 1 — Selected manual-scorer policy
 
-- [ ] 1a Check runtime/reporting/current docs for false human/manual versus AI split.
+- [x] 1a Runtime/reporting/current docs corrected: Human and AI are both manual
+  assessment; AI selection needs no human sign-off; provenance preserved.
 - [x] 1b Current saved-artifact analysis resolves 72 compatible selected-AI final
   receipts; post-removal smoke validates numeric/pending/empty cases with human
   workflow `not_selected`, preserving provenance and no regrade. Renew only if
@@ -139,22 +142,21 @@ in the handoff. The original handoff remains authoritative.
 
 ### 8 — Repository-wide canonical naming
 
-- [ ] 8a Inventory project-owned versioned files/symbols/contracts/producers/
-  consumers/persisted bindings across all code, config, prompts, scripts and current docs.
-- [ ] 8b Define and migrate canonical descriptive unversioned names together;
-  no live forwarding shims, parallel implementations or emitted sequential labels.
-- [ ] 8c Preserve implementation/rubric semantics; keep rubric coverage repair
-  separate from naming migration, with no score/budget/threshold optimization.
-- [ ] 8d Preserve historical artifact/receipt/checkpoint/config identities and
-  strict compatibility/chronology/hash/resume gates in read-only decoding.
-- [ ] 8e Use source/content hashes and prospective epochs for drift detection;
-  validate future freeze instead of equating contracts after string replacement.
-- [x] 8f Record ban in maintained instructions and implement focused naming guard:
-  15 behavioral checks passed, including external/historical/data exclusions.
-  The initial repository-wide gate failed with 248 violations; the current
-  stricter guard reports 214. Item 8b/8g and final prospective freeze are **not** complete.
-- [ ] 8g Verify imports/CLI/scoring/reporting/checkpoints/historical reading;
-  document old-to-new mapping and every necessary historical exception.
+- [x] 8a Repository-wide inventory produced as one reviewed mapping manifest
+  ([manifest](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/bulk-migration-manifest.json>)).
+- [x] 8b Migrated in one coordinated batch (60 files, 139 sites); no forwarding
+  shims or parallel implementations; gate now **0 violations**.
+- [x] 8c Semantics preserved; rubric-coverage repair kept separate (§19) and no
+  weight, budget or threshold was optimized.
+- [x] 8d Historical identities preserved through `read_contract()`; independent
+  audit exercised 20/20 real receipts and 14 live gates with 0 bypasses.
+- [x] 8e Source/content hashes and the prospective epoch carry drift detection;
+  the freeze and readiness gates validate rather than assume equality.
+- [x] 8f Ban recorded in maintained instructions; guard implemented and now passes
+  repository-wide with **0 violations** (historical/data/external facts excluded).
+- [x] 8g Imports, CLI, scoring, reporting, checkpoint and historical reading
+  verified; mapping and historical exceptions documented in
+  [canonical-contracts.md](</home/kevin/coding/tesis/docs/reference/canonical-contracts.md>).
 
 ### 9 — Corrections verified 2026-11-06 (bulk cutover, fixture, corrected epoch)
 
