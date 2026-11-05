@@ -688,3 +688,16 @@ are never mixed.
 Epoch map, to prevent mixing: original corrected epoch (§16) 35 final,
 F3 162/270, 6 strata analysed; revised-rubric epoch (§22–23) 41 final,
 F3 168/270, 7 strata analysed. Both derive from the same 54 executions.
+
+### 24 — Owner decision on handoff status and regression coverage
+
+- The owner reviewed the Access-Control result and directed that the handoff
+  **stays in `docs/active/`**: the 12 remaining Access-Control coordinates (medium
+  and high) are treated as unfinished, even though medium and high cannot be scored
+  without different fixture evidence or a further methodology change. The handoff
+  is not moved to `docs/completed/` and acceptance is not claimed.
+- Two regression tests now lock the fixes that produced the revised epoch:
+  a re-scoring epoch reads only its own ledger (`include_source_ledger=False`,
+  also enforced inside `finalize_reviews`), and an evaluator grade below the
+  machine proof is dropped so the candidate stays pending instead of being
+  clamped. Verified: **67 passed** across the four scoring suites.

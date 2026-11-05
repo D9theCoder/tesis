@@ -159,3 +159,44 @@ def test_shared_formula_source_changes_invalidate_the_rule_digest(tmp_path, monk
     before = research_metrics.scoring_rule_hash()
     (root / 'core/scoring_contracts.py').write_text('changed offline formula bytes')
     assert research_metrics.scoring_rule_hash() != before
+
+
+def test_rescoring_epoch_does_not_merge_the_source_ledger(tmp_path):
+    """A revised-rubric epoch must judge only its own decisions."""
+    from evaluation.thesis_scoring import JUDGE_VERSION, load_review_decisions
+    source = tmp_path / 'exec.json'
+    source.write_text('{}')
+    ledger_dir = source.parent / 'reviews'
+    ledger_dir.mkdir()
+    queue = {'execution_id': 'exec-fixture', 'run_id': 'run-fixture',
+             'source_sha256': 'a' * 64, 'rubric_version': 'thesis-scoring',
+             'source_path': str(source), 'selection': 'ai',
+             'evaluator': {'provider': 'fixture-provider', 'model': 'fixture-model'},
+             'candidates': [{'candidate_id': 'candidate-a', 'status': 'pending_review',
+                             'proof_ceiling': 3, 'base_proof': 0,
+                             'evidence_refs': ['#/final_state/response_evidence/0'],
+                             'method': 'sqli_union', 'stage': 'exploit'}]}
+    (ledger_dir / f"{source.stem}.decisions.json").write_text(json.dumps([{
+        'decision_id': 'old', 'candidate_id': 'candidate-a', 'scoring_mode': 'ai',
+        'score': 0, 'reason': 'recorded under the earlier rubric',
+        'source_sha256': queue['source_sha256'], 'run_id': queue['run_id'],
+        'rubric_version': queue['rubric_version'], 'reviewer_id': 'fixture-provider/fixture-model',
+        'review_version': JUDGE_VERSION, 'timestamp': '2026-10-31T00:00:00+00:00',
+        'evidence_refs': ['#/final_state/response_evidence/0']}]))
+    isolated = tmp_path / 'revised'
+    isolated.mkdir()
+    assert load_review_decisions(str(source), queue=queue, output_dir=str(isolated),
+                                 include_source_ledger=False) == []
+    merged = load_review_decisions(str(source), queue=queue, output_dir=str(isolated))
+    assert [d['decision_id'] for d in merged] == ['old']
+
+
+def test_evaluator_grade_below_the_machine_proof_is_not_recorded():
+    """The machine proof is a floor: a contradictory grade leaves it pending."""
+    from evaluation.thesis_scoring import append_evaluator_decisions
+    queue = {'candidates': [{'candidate_id': 'candidate-a', 'base_proof': 3}]}
+    decision = {'decision_id': 'd', 'candidate_id': 'candidate-a',
+                'scoring_mode': 'ai', 'score': 2, 'reason': 'below floor'}
+    assert append_evaluator_decisions([], [decision], queue=queue) == []
+    legal = dict(decision, score=3)
+    assert [d['score'] for d in append_evaluator_decisions([], [legal], queue=queue)] == [3]
