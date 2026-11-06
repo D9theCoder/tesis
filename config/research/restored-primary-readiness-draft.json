@@ -2589,7 +2589,7 @@
     "rubric_version": "thesis-scoring",
     "scoring_oracles": {
       "detail": "Canonical operator protocol declarations; not a preregistration.",
-      "sha256": "c522f4fb99c8cbf64514e586d7c5137754279d87dee29b00c6f2ede292e7b452",
+      "sha256": "b857316a4b5a0333e59403f685da1bf59e7dbe60cabed49a43879437b5512d1e",
       "source_count": 3,
       "source_ids": [
         "dvwa-session-protocol",
