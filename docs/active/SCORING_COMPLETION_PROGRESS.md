@@ -1337,3 +1337,32 @@ recorded label is a declared historical name for `study-plan`, and keeps the gen
 unknown labels. The gate still refuses execution; only the reason is precise. Two regression tests
 derive the label from `HISTORICAL_CONTRACT_NAMES` rather than a literal, so the naming guard stays at
 zero violations.
+
+## 45. Receipt-to-source integrity and document drift
+
+```bash
+.venv/bin/python results/validation/two-model-restoration-2026-11-06/verify_doc_numbers.py
+```
+
+- The scoring-source digest recomputed from the working tree is
+  `34b55600aff65c6a215aaea383a25e7dd1df90887b085d71566354268b85b350`, identical to the
+  `scoring_rule_sha256` recorded by all 96 receipts, and every receipt's per-file `source_hashes`
+  match the current files. The post-scoring changes in this epoch were confined to
+  `core/run_status.py`, `evaluation/research_plan.py`, tests and documents, none of which is a
+  scoring-source file, so the receipts still bind to current code.
+- `verify_doc_numbers.py` recomputes the headline numbers and asserts the documents state them:
+  108 planned, 108 reconciled, 96 final receipts, 0 component gaps, F3 0.6630 (358/540), F1 0.8876,
+  F6 0.1111, 541 containment events, 76 below-credit payload candidates, 16 analysed strata.
+  Ten checks, zero drift across the handoff, the progress ledger and the approval record.
+
+### Deferred to the next prospective freeze
+
+These are real auditability defects, deliberately not fixed now because each lives in a
+`SCORING_SOURCE_FILES` member; editing one changes `scoring_rule_sha256` and detaches this epoch's 96
+receipts from the current source. They belong to the next freeze, not to a post-hoc edit.
+
+1. `append_evaluator_decisions` drops a decision that contradicts the machine proof floor without
+   recording the rejection, so the floor only appears as a pending reason elsewhere.
+2. Receipts carry `scoring_policy` and source hashes but no epoch identifier, so two epochs scored
+   under the same rule are distinguishable only by their directory and execution id.
+3. Several scorer guards rely on `assert`, which vanishes under `python -O`.

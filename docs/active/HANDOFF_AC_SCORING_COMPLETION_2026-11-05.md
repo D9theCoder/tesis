@@ -822,6 +822,11 @@ fix. Re-reading a frozen artifact through `tesis review` still returns the recor
   be pooled with the AC low/medium means.
 - `Sexploit` level 4, the payload attribution gap in F3, and the historical readers for
   `scoring.v4` / `fixture-restoration.v1` stand as recorded gaps.
+- Three auditability defects in scoring-source files are deferred to the next prospective freeze:
+  `append_evaluator_decisions` drops a below-floor decision without recording it, receipts carry no
+  epoch identifier, and some scorer guards are `assert`-only. Editing those files now would change
+  the frozen `scoring_rule_sha256` and detach this epoch's receipts from current source, so they are
+  recorded in the progress ledger §45 instead.
 - The anonymous control still proves a login redirect rather than an endpoint-level refusal, and
   `change_user_details.php` remains reachable without a DVWA session. Extending the oracle to cover it
   would change the frozen oracle hash, so it cannot be applied to this epoch and is left as pending
