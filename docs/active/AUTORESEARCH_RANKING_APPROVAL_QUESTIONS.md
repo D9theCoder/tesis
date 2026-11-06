@@ -263,3 +263,41 @@ state-changing privileged action. Both entries keep `action: read`.
 profile at `reasoning_effort: max` completed and returned the requested JSON
 (`results/validation/two-model-restoration-2026-11-06/luna-availability-*.json`). That establishes the
 model is reachable again; it is not a study run and does not by itself constitute matrix readiness.
+
+### 3.1c The ranking rule was applied in a full declared epoch (2026-11-06)
+
+The owner's rubric authorization ("i authorize rubric changes", "proceed all including the rubric change
+if needed") was used for one change only: `Smethod` now grades reference fit (fit 3/2/1 graded 3/2/1,
+eligible-but-unranked graded 2) instead of the within-cell ranked position, which had demoted a uniquely
+confirmed method. Weights, denominators, evidence gates and unavailable-value behaviour are unchanged.
+
+The rule was then exercised on the whole declared design, not on a pilot cell:
+
+- 108 coordinates executed and reconciled, 0 failed (`results/runs/restored-primary-2026-11-06/`).
+- 96 receipts reached `final`; every one carries all five components.
+- `Smethod` came out 3 in 60 receipts and 2 in 36, matching the oracle's reference fits: AC low/medium
+  and brute force grade 3, sqli grades 2.
+- The 12 `access_control` `high` coordinates produce no candidate at all. Each artifact records
+  `measured_negative.complete = true` with every required precondition measured false, so those
+  coordinates stay **unavailable** rather than being scored 0 or dropped.
+
+**Consequences for the questions in this record.**
+
+- Question 1 (AC ranking preference) is answered by measurement, not preference: at low and medium all
+  three AC methods confirm with reference fit 3, so the ranking does not separate them and `Smethod` is 3
+  for each. No owner choice between `ac_idor`, `ac_vertical_escalation` and `ac_force_browse` can change
+  a score in those cells.
+- Question 2 (which fits to publish) is answered for low/medium by the 9-entry re-derived measurement. The
+  three `access_control:high` entries keep fit 1 (explicit non-admin denial) and are additionally backed
+  by per-run measured negatives.
+- The provisional `medium 6/6, mean 2.44` figure is retracted; it was produced under the previous rule and
+  the ungated fixture. The AC medium mean in this epoch is 2.4-2.5 depending on the cell, computed from 12
+  receipts.
+- One label defect surfaced and is fixed at the producer: a complete measured negative was still written
+  as `NO_CANDIDATE_CONFIRMATION` ("missing proof"). `core/run_status.py` now returns
+  `no_finding`/`VERIFIED_NEGATIVE` for that case, with regression tests. This epoch's artifacts keep the
+  old label, because frozen evidence is not rewritten; the audit reports the 12 disagreements for this
+  epoch and they do not recur in later artifacts.
+
+Nothing in this record authorises a new matrix run, a new target, or a new provider. The epoch above is
+the single corrected run the owner authorised.
