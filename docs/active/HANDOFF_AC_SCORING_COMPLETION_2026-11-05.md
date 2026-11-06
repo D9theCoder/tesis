@@ -189,6 +189,13 @@ reasons. Numeric completion is not achieved by inventing fit values or controls.
       and the frozen generated-first/static-fallback policy: 108 coordinates.
 - [ ] Collect needed candidate, permission/session, destination-prerequisite,
       source-consumption, and dependency-control evidence during execution.
+      Collected in the restored epoch: candidate provenance and lifecycle for every
+      candidate, per-level permission/session controls from the frozen oracle, 18 runs with
+      recorded source consumption and an oracle-bound dependency control. Destination-
+      prerequisite evidence is the one part the fixture does not yield (78 items stay
+      `destination_precondition_unproved`). Closing this requires a destination surface inside
+      the authorized scope, which is an owner decision plus a new prospective freeze, not
+      something this epoch can supply.
 - [x] For one corrected, comparable 108-run dataset, use a fresh full epoch when
       treatment/profile changes require rerunning. An AC-only diagnostic or
       supplement must remain separate, not be silently pooled with the old 72.
@@ -411,6 +418,11 @@ provider calls were run to create it. Move it to `docs/completed/` only after it
 required work and requested acceptance checks have evidence, and update links.
 
 ## Corrected epoch executed (2026-11-06) — measured status
+
+> **Superseded for all ranking and contrast statements** by "Restored primary epoch executed
+> and scored (2026-11-06)" at the end of this document. The figures below describe the
+> `corrected-primary-2026-11-06` epoch, which used the ungated fixture and the previous
+> `Smethod` rule. They remain as history and must not be cited as current results.
 
 This section records what the corrected epoch actually produced. It supplements
 the requirement ledger in
