@@ -1102,3 +1102,55 @@ epoch is bound to a content hash rather than a commit; that stays open unless th
 commit for the epoch identity.
 
 The matrix has not been executed for this epoch, and no earlier receipt may be pooled into it.
+
+### 35 — Independent audit: four critical defects; the launch was stopped (2026-11-06)
+
+An independent read-only audit of the whole goal span (`68bd244..HEAD`) returned 29 findings, four
+critical. It caught a launch I had just started, and the run was killed immediately. **No run
+artifacts were produced** (`exec-*.json` count 0) and nothing was spent on the second attempt.
+
+**Critical.**
+
+1. *Readiness authorised execution while its own inputs declared open blockers.* `declared_blockers`
+   is only a required-keys entry in `evaluation/experiment_readiness.py:91`; it never feeds the
+   blocker list, so `status: ready_for_execution` coexisted with two open draft blockers, 10 missing
+   oracle controls, `final_scoring_available: false`, and both models
+   `unverified_no_provider_request`.
+2. *The frozen config has no single identity.* `config.frozen.yaml` hashes `8eac8a26…`, the freeze
+   receipt records `d22cfc19…`, the plan records `2278679f…`. `verify_plan` would raise
+   "config.yaml changed after the plan was frozen" (`evaluation/research_plan.py:1336-1337`). Cause:
+   `align_epoch_identities.py` rewrote the config, study contract and draft *after* the freeze
+   receipt, and its `re.subn` result was printed but never asserted.
+3. *The shipped `Smethod` rule is looser than the recorded revision.* The applied-revision record
+   says an unranked method scores 2; the shipped code exempts
+   `ranking_basis == 'reference_pending_availability'` and lets it reach 3/4, so the revised and
+   canonical `Smethod 3` receipts grade methods whose profile entries are `pending`/`null`. That
+   second relaxation was never recorded as a methodology decision.
+4. *Fixture-identity split blocks every permission attestation.* `config.yaml` now declares
+   `dvwa-authenticated-object-…` while `scoring_oracles` still points at protocol documents
+   declaring `dvwa-source-…`; `foundation/verifier.py:38-40` requires all three to agree, so
+   `oracle_confirmed()` is always False and AC candidates cap at proof tier 2 in the new epoch.
+
+**High, and material to the documents.** The handoff still says the fixture change is impossible and
+the four fits stay null (it was not updated, only the approval record was); the anonymous control
+proves DVWA's login redirect rather than endpoint denial and is identical at every level, so the
+flip from `null` to 3 is attributable to the gate rather than to new candidate-specific evidence;
+`change_user_details.php` is still unauthenticated and is outside the protocol's `fixture_sources`,
+so "broad anonymous exposure no longer exists" is false; the recorded `run-015` cause is wrong for
+the second attempt and was never recorded with an exception message; the Sexploit level-4 branch
+inspects the dependency's source rather than its consumer and level 4 remains unreached; two
+availability tables contradict their own artifact and the 65/90 numerator; historical `scoring.v4`
+and `fixture-restoration.v1` artifacts no longer validate through `verify_plan`.
+
+**Confirmed clean.** Protocol/collector/measurement hash binding; the fit-3/fit-1 classification
+from recorded controls; no receipt file shared across epoch directories; all quoted F3 arithmetic
+except the per-level table; every canonical-epoch statistic; and the fixture-census re-measurement.
+
+**Remediation order, before any launch.** (1) Make `declared_blockers` gate readiness and re-run the
+gate honestly; (2) freeze once, after every input is final, and assert the rewrite count so one
+config identity exists; (3) decide and record the `Smethod` pending-availability rule explicitly, or
+revert to the recorded "unranked scores 2" and re-score; (4) regenerate the oracle source with the
+new `fixture_id`/`protocol_version` so permission attestations can bind; (5) extend the reference
+protocol to `change_user_details.php` and add a control that distinguishes endpoint denial from the
+login redirect; (6) repair the handoff's stale claims and the availability table; (7) only then
+re-freeze, re-run readiness and execute.
