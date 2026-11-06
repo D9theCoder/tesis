@@ -239,6 +239,9 @@ expand existing execution scope; follow repository execution/verification rules.
 >    conditions × three surfaces × three levels × three repeats). The original
 >    108-coordinate two-model design remains the declared design for any future
 >    epoch and is not retracted.
+>    **Reversed the same day:** the owner reported the quota refilled and directed
+>    that the experiment keep its two-model design, so the restored epoch executed
+>    the full **108 coordinates** (see "Restored primary epoch executed and scored").
 > 2. The owner authorised a methodology revision (pending-reference handling in
 >    `Smethod`, downstream attribution for `Sexploit` level 4, and a machine-proof
 >    floor for `Spayload`). Every component can express levels 0–4; which levels a
@@ -568,6 +571,11 @@ current rule, each into its own `reviews-canonical` directory with an isolated l
 
 ### Open checklist items (audited 2026-11-06)
 
+> **Historical.** This list describes the `corrected-primary-2026-11-06` epoch. Items 168, 170, 173
+> and 175, and the AC/high candidate populations, are resolved or re-characterised by the restored
+> epoch at the end of this document; the current per-requirement status is the checklist in
+> [SCORING_COMPLETION_PROGRESS.md](SCORING_COMPLETION_PROGRESS.md) §41.
+
 23 of the 37 requirement boxes are ticked against verified evidence. The 14 that remain open,
 with the exact condition that keeps each one open:
 
@@ -591,8 +599,9 @@ with the exact condition that keeps each one open:
   medium, so a candidate-specific allowed/denied/candidate triple cannot be formed.
 - **168** frozen inputs before selection — the rule changed after the earlier epochs were graded,
   which is exactly why all 54 executions were re-scored into a fresh epoch.
-- **170**, **175** the 108-coordinate two-model design — the executed design is 54 coordinates with
-  one evaluated model by owner decision; the 108-run comparable dataset does not exist.
+- **170**, **175** the 108-coordinate two-model design — at the time of this audit the executed
+  design was 54 coordinates with one evaluated model. The restored epoch later executed the full
+  108-coordinate two-model design, so the comparable dataset now exists.
 - **173** candidate, permission/session, destination-prerequisite, source-consumption and
   dependency evidence — these are the four unresolved dimensions of the six AC/high runs.
 - **185** AC scores finalised "after the evidence gates are satisfied" — the values are final at low
