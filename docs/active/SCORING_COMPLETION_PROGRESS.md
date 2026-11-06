@@ -402,6 +402,10 @@ medium the same; high `0, 0, 0, 6, 0`. `Srun_final` **0 at every level**.
 low/medium reference fits are null by the owner's option A; that is a recorded
 decision, not a missing observation.
 
+> Superseded by section 28: after the owner-authorised methodology change, low is 6/6
+> numeric, medium is 5/6 numeric, and high stays the recorded measured negative. The four
+> fits themselves still stay null.
+
 **Superseding F3 for this epoch** —
 [audit](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/corrected-primary-attested-analysis/baseline-audit.json>):
 **162 / 270 = 0.6** attribution completeness, 108 unresolved
@@ -653,7 +657,9 @@ Access-Control availability by level (6 runs each):
 - Access-Control medium stays pending because `force_browse_endpoints_visible`
   was measured **false**, so no method has a proven reference fit
   (`ranking_no_rankable_method`). That is a measured negative, not a gap.
+  *(Superseded by section 28: medium now scores 5 of 6 runs.)*
 - Access-Control high stays pending: no viable method, no candidates.
+  *(Stands: high is the accepted measured negative, now authorised explicitly.)*
 
 Observed levels across the 41 finals: Smethod {2, 3}, Spayload {0.75, 1.5, 3.0},
 Sexploit {3}, Schain {0, 1, 3}, Soutput {0, 1, 3}. Requirement 5e is satisfied in
