@@ -456,8 +456,9 @@ Re-scored the 18 Access-Control runs with `--isolated-ledger` into per-run
 | high | 0/6 | — | measured negative, `no_assessable_candidates` |
 
 Access-Control F3 for this stratum: **65/90 = 0.7222**. Availability per level: low
-`Smethod 6, Spayload 6, Sexploit 6, Schain 6, Soutput 6`; medium `6, 6, 6, 6, 6`; high
-`0, 0, 6, 0, 0`.
+`Smethod 6, Spayload 6, Sexploit 6, Schain 6, Soutput 6`; medium `6, 5, 6, 6, 6`
+(`Spayload` 5 because `run-015` stayed pending); high `0, 0, 0, 6, 0` (`Schain` is the only
+available dimension there).
 
 `run-015` remains pending with its cause identified: both evaluator attempts scored 3 but
 cited `#/config/scoring_oracles/5/document/document/candidate_replay`, a doubled `document/`
@@ -472,14 +473,15 @@ not a proof-floor clamp, and the value is left unavailable rather than filled.
   or `[]`), so no method has a proven reference fit and the approved entries are fit-1
   measured negatives. That outcome is the one V4 §9.4 accepted and is now recorded for this
   epoch rather than described as a missing proof.
-- **The fixture/attack-scope expansion cannot be executed from this environment.** The
-  host fixture is mounted read-only (`9p ... ro,nosuid,nodev,noatime` on `/mnt/c`), and
-  `vulnerabilities/authbypass/get_user_data.php` in that tree contains no
-  `dvwaPageStartup`, `isAdmin` or `SESSION` call, so the broad anonymous exposure the
-  permission oracle measures is inherent to the fixture build. Making IDOR and vertical
-  escalation candidate-specific needs an owner-side change to the host fixture. The four
-  `AC-LOW-IDOR`, `AC-LOW-VERT`, `AC-MED-IDOR` and `AC-MED-VERT` reference fits therefore
-  stay `null`, exactly as the owner ruled, and broad exposure stays a separate finding.
+- **The fixture/attack-scope expansion was later executed; this paragraph is superseded.**
+  `/mnt/c` is read-only for the workspace, but the Windows host is reachable, so the gate was
+  added through the host under an approval prompt: `get_user_data.php` now opens with
+  `dvwaPageStartup( array( 'authenticated' ) )`, with every level's authorisation untouched. A
+  protocol declared before measurement then re-derived all nine Access Control fits from three
+  repeats and three principals (`ac-reference-measurement.json`); the approval record section
+  3.1b carries the numbers. Two limitations survive that re-derivation: the anonymous control
+  proves a login redirect rather than endpoint refusal, and `change_user_details.php` is still
+  unauthenticated and outside the protocol's fixture sources.
 - Sexploit level 4 is unreachable under the documented rule because the assessed
   method is the last executed method, not the dependency source.
 - The historical oracle preregistration draft no longer pins the shipped sources;

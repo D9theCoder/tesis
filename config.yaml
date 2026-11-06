@@ -259,7 +259,7 @@ models:
 scoring_mode: ai
 scoring_rubric_version: thesis-scoring
 scoring_profile: {}
-scoring_oracles: config/oracles/dvwa-candidate-protocols-fee264766667580e5352.json
+scoring_oracles: config/oracles/dvwa-candidate-protocols-a000f969edb8d78a5c5d.json
 # Frozen cost accounting for the requested epoch. DeepSeek is billed through
 # the River API; GPT-6 Luna uses an OAuth-authenticated route whose published
 # API rates are recorded as an API-equivalent estimate, never as a verified

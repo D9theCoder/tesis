@@ -909,7 +909,9 @@ Summary: `ac-epoch-summary.json`.
 
 Access-Control F3 for this stratum: **65/90 = 0.7222** (was 59/90 before the six `Smethod`
 cells filled). Component availability per level: low `Smethod 6, Spayload 6, Sexploit 6,
-Schain 6, Soutput 6`; medium `6, 6, 6, 6, 6`; high `0, 0, 6, 0, 0`.
+Schain 6, Soutput 6`; medium `6, 5, 6, 6, 6`; high `0, 0, 0, 6, 0`.
+*(Corrected 2026-11-06: the earlier `6,6,6,6,6` / `0,0,6,0,0` rows disagreed with
+`ac-epoch-summary.json`. The 65/90 numerator was unaffected.)*
 
 **`run-015` stays pending, with its cause identified.** Both judge attempts returned
 `score 3`, but cited `#/config/scoring_oracles/5/document/document/candidate_replay` — a
