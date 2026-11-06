@@ -265,7 +265,7 @@ scoring_oracles: config/oracles/dvwa-candidate-protocols-a000f969edb8d78a5c5d.js
 # API rates are recorded as an API-equivalent estimate, never as a verified
 # OAuth invoice. Prices are USD per million tokens, observed 2026-10-31.
 token_price_schedule:
-  schedule_id: corrected-primary-2026-11-06-prices
+  schedule_id: restored-primary-2026-11-06-prices
   version: token-price-schedule
   effective_at: '2026-10-31T00:00:00+00:00'
   currency: USD
@@ -274,7 +274,7 @@ token_price_schedule:
     DeepSeek via the River API at published API rates; GPT-6 Luna via the
     existing OAuth account, normalized to published API list rates for
     API-equivalent accounting only. Not a verified billed OAuth invoice.
-  epoch_id: corrected-primary-2026-11-06
+  epoch_id: restored-primary-2026-11-06
   sources:
     - url: https://console.river.ai/api/public/pricing
       observed_at: '2026-10-31T00:00:00+00:00'
