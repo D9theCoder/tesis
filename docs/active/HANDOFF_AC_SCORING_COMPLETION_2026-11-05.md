@@ -528,8 +528,13 @@ with the exact condition that keeps each one open:
 
 - **116** terminology audit — no recorded audit result of runtime, reporting and handoff wording
   exists; the settled-policy paragraph is a rule, not an outcome.
-- **129** approval-to-freeze identity — the approved draft digest and the frozen profile have not
-  been reconciled, and the fit-1 provenance defect is unresolved.
+- **129** approval-to-freeze identity — the epoch side is reconciled and recorded: the recovered
+  candidate differs from the recorded epoch profile only by the documented identity and
+  canonical-label changes, with `fits_invented: false` and `sources_rewritten: false`
+  (`recovered-approved-ranking-profile-provenance.json`). The draft's `045f8d…` cannot be
+  recomputed because the pilot profile document itself was deleted by the authorised
+  2026-11-04 cleanup and survives only inline in the epoch artifact, so that half of the
+  identity chain stays unproven; the fit-1 provenance defect is also unresolved.
 - **133** profile/source/fixture/protocol/budget/policy binding for a future epoch — the fixture
   term cannot be bound because the host fixture is read-only from this workspace.
 - **136** oracle source integrity and prospective commitments — the preregistration for this epoch

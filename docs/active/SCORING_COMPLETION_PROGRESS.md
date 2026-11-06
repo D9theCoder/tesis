@@ -1024,3 +1024,17 @@ mapping and cutover check), and then performed the one audit the list still need
 
 Ticking a box records that a requirement is met; it does not assert the research claim. The
 handoff stays in `docs/active/` and acceptance is not claimed.
+
+### 32 — Why approval item 129 stays open (verified, not assumed)
+
+Checked the two named digests rather than the earlier note. `config/research/autoresearch-primary-draft-2026-10-31.json`
+records `045f8d…` only as approval metadata (`policy.scoring_profile`, `policy.ranking_profile`) and does
+**not** embed the profile document, so the digest cannot be recomputed or compared. The provenance
+record confirms the pilot document itself was deleted by the authorised 2026-11-04 cleanup and
+survives only inline in the epoch artifact.
+
+What is proven: the recovered candidate (`93058f4c…`) differs from the recorded epoch profile
+(`42127e…`) only by the documented identity and canonical-label changes, with `fits_invented: false`,
+`sources_rewritten: false`, and the four `null` reference entries named explicitly. So the
+epoch-side identity is reconciled; the draft-side digest chain is unrecoverable. Item 129 keeps its
+box unticked for that reason, and no historical approval metadata was rewritten to close it.
