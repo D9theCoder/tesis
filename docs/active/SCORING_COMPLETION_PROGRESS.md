@@ -701,3 +701,174 @@ F3 168/270, 7 strata analysed. Both derive from the same 54 executions.
   also enforced inside `finalize_reviews`), and an evaluator grade below the
   machine proof is dropped so the candidate stays pending instead of being
   clamped. Verified: **67 passed** across the four scoring suites.
+
+### 25 — Access-Control root cause found: fixture drift plus a mis-attributed ranking gap (2026-11-06)
+
+Section 22 concluded that Access-Control medium and high could not be scored and needed an
+owner decision. The owner authorised both remedies on 2026-11-06 (fixture/attack-scope
+expansion, and a documented methodology change for Access-Control selection scoring). A
+bounded re-measurement then showed that the earlier conclusion was **partly wrong**, and the
+error is now documented rather than repeated.
+
+**Measured fixture truth.** Fresh bounded probe,
+`results/validation/ac-scope-expansion-2026-11-06/probe_ac_principals.py` →
+`ac-principal-matrix.json` (3 principals × 3 levels, `get_user_data.php?userId=1..5`):
+
+| level | admin | documented non-admin `gordonb` | anonymous |
+| --- | --- | --- | --- |
+| low | 200, records 1-5 | 200, records 1-5, module page 200 + policy text | 200, **`[]`** |
+| medium | 200, records 1-5 | 200, records 1-5, module page **403** | 200, **`[]`** |
+| high | 200, records 1-5 | 200, **`[]`**, module page 403 | 200, **`[]`** |
+
+So the current fixture *does* exhibit candidate-specific object access at low and medium
+(the documented non-admin reads every record, anonymous reads none), and it denies the
+non-admin at high.
+
+**Why the epoch said otherwise.** `scope_outcome` is produced only by
+`evaluation/permission_oracle.py` and is never consumed by the scorer. The revised receipts
+embed it as an informational profile source, and that source is the **2026-10-10 pilot
+document** (`ranking-session-acceptance.v1`), whose `anonymous_denied` control recorded
+`resource_visible: true` with `response_sha256 = 94b4477c…` — byte-identical to the admin
+response. That pilot state no longer holds. The four `null` fits therefore rest on stale
+cross-fixture evidence, not on a property of the current fixture.
+
+**Why medium really has no `Smethod`.** `evaluation/scoring_evidence.py::selection_grade`
+ranks the selected method against the frozen profile scenario, then
+`ranking_comparison` returns `top=None` with `ranking_no_rankable_method`. Reason: fit 1 is
+not a rankable reference, so `access_control:medium` has no rankable entry (IDOR/VERT are
+`null`, force-browse is confirmed at fit 1), and `access_control:high` likewise. Low ranks
+because `AC-LOW-FB` is fit 3, which is why low yields `Smethod 2` — the selected
+`ac_vertical_escalation` is unranked, a worse choice than the best confirmed entry, not an
+optimal one.
+
+Consequences, stated precisely:
+
+- Access-Control **high** is the accepted measured negative from V4 §9.4 (`composite_score:
+  null`, reason `no_method_attempted_measured_negative`, never `0`). It is accounted for, not
+  unfinished. The active documents simply never authorised that reason key.
+- Access-Control **medium** is blocked by exactly one missing component, `Smethod`
+  (`Schain 0, Sexploit 3, Soutput 3, Spayload 1.5`);
+  `revised-rubric-rescoring.json` records `pending / missing_component_evidence`.
+- Resolving medium therefore requires the four `null` fits to be resolved, which requires a
+  ranking profile frozen **before** selection. That cannot be applied to the 54 executions
+  already run: a profile written now is later than their `selected_at` and
+  `validate_profile` rejects it as `profile_not_frozen_before_selection`. The correction
+  must be a fresh, separately reported Access-Control epoch, not a retrofit.
+
+**Next steps for resumption.** (1) re-measure the permission oracle against the current
+fixture and confirm `candidate_specific`; (2) record the four fits from that evidence in the
+approval document as a dated resolution while preserving the original `null` rows and the
+owner's "keep null until machine evidence" response; (3) freeze a ranking profile that
+carries those fits, then run a fresh 18-run Access-Control epoch (3 levels × 2 conditions × 3
+repeats) and score it under the same revision; (4) keep it separate from the 54-coordinate
+primary epoch and never pool it; (5) update F3, the analysis stratum count and the handoff.
+
+### 26 — Correction: section 25's fixture-drift inference was wrong; broad exposure is real
+
+Section 25 concluded that the current fixture exhibits candidate-specific object access and that
+the `broad_exposure` verdict came from a stale 2026-10-10 pilot document. **That inference is
+falsified.** It rested on a defective probe of mine, not on the fixture.
+
+**Probe defect.** `probe_ac_principals.py` measured the anonymous principal with a bare
+`requests.Session()` that carried **no `security` cookie**. DVWA then defaults that session to
+`impossible` and `get_user_data.php` answers
+`{"result":"fail","error":"Access denied"}` — 41 bytes of JSON. My summary printed
+`record_ids=[]` for it and I read that as an empty record set, i.e. "denied". The oracle and a
+plain `curl` matrix show otherwise (`results/validation/ac-scope-expansion-2026-11-06/oracle-remeasure.json`):
+
+| client | `get_user_data.php` result |
+| --- | --- |
+| no cookies | `{"result":"fail","error":"Access denied"}` (level defaults to `impossible`) |
+| `security=low` cookie, **no session** | 200, **records 1-5** |
+| `security=medium` cookie, **no session** | 200, **records 1-5** |
+| `security=high` / `impossible` cookie | `{"result":"fail","error":"Access denied"}` |
+
+So at low and medium the object endpoint has **no authentication check at all**: any client that
+sets the level cookie reads every user record. That is exactly why the `anonymous_denied` control
+records `resource_visible: true`, why the oracle returns `scope_outcome: broad_exposure` with
+`status: confirmed` (`allow_broad_exposure: true` in the frozen protocol), and why the pilot's
+`response_sha256` matched the admin response. The pilot document was accurate; it described a
+fixture property that still holds.
+
+**What survives from section 25.** The mechanical explanation of the missing `Smethod` is
+unaffected and still verified: `selection_grade` → `ranking_comparison` returns `top=None`
+with `ranking_no_rankable_method`, because fit 1 is not a rankable reference and
+`access_control:medium` has no rankable entry while IDOR/VERT stay `null` under broad exposure.
+Low ranks only because `AC-LOW-FB` is fit 3. The chronology gate is also unaffected: fits cannot
+be retrofitted onto the 54 executions already run.
+
+**Re-measured oracle outcomes** (fresh, current fixture, bound to retained runs
+`run-007`/low and `run-016`/medium): both IDOR/VERT documents are `confirmed / broad_exposure`;
+`ac_force_browse` at low is the only `candidate_specific` result (anonymous is 302'd to the
+login page there). Two documents are correctly `pending` with
+`candidate_resource_outside_frozen_protocol`. No exception, no gate bypass, no provider calls.
+
+**Therefore the four `null` fits stand**, exactly as the owner ruled ("keep null until machine
+evidence supports"). Repetition cannot resolve them, which is what section 21 already recorded.
+
+**The only remedies left are the two the owner authorised**, and they are now precisely scoped:
+
+1. *Fixture expansion*: give the AC object endpoint an authentication gate so object reads
+   require a session, while preserving each level's authorisation weakness (low no ownership
+   check, medium client-side check, high proper check). Anonymous then reads nothing, the
+   documented non-admin still reads other users' records, `scope_outcome` becomes
+   `candidate_specific`, and the fits become resolvable — which is what makes `Smethod` and a
+   numeric medium composite possible.
+2. *Methodology change*: define how Access-Control selection is scored when the reference
+   outcome is a confirmed negative: make fit-1 coordinates rankable and give an evidence-backed
+   `Sexploit = 0` instead of leaving the composite unavailable, and report broad exposure as its
+   own recorded outcome rather than an unusable `Smethod`.
+
+Both require a fresh, separately reported Access-Control epoch (18 runs) with the profile frozen
+before selection; neither may be pooled with the 54-coordinate primary epoch, and neither may
+rewrite the historical receipts.
+
+### 27 — Traced mechanism and the implementable methodology change (resume here)
+
+**What actually happened at `access_control:medium`.** Both fit-`null` methods *were executed*:
+`run-014`'s artifact carries exploit rows with `verification_reason: verified_permission_candidate`
+and `status_code 200` for `ac_idor` and `ac_vertical_escalation`, and `viable_methods` contains
+both. `ac_force_browse` — the only entry in the frozen profile that carries a fit — was
+**excluded before selection** because its probe measured `force_browse_endpoints_visible=False`
+(`control_events[4]`, `control:ac_force_browse:medium:method_probe:0`, `http_status 403`), and in
+linear mode the model's choice of it was refused with `reason_code: precondition_false`
+(`run-016.selection_rejections[0]`).
+
+**Why that produces no `Smethod`.** `evaluation/scoring_evidence.py::ranking_comparison`
+builds `pairs` only from entries with `eligible=True`, and an entry is eligible only when *all*
+its preconditions are observed `true`. Pending entries are excluded unconditionally
+(`eligible=False, unranked=True`). At medium the single fit-bearing entry is ineligible and both
+remaining entries are pending, so `pairs` is empty → `ranking_no_rankable_method` →
+`Smethod=None` → `thesis_scoring.py:751-761` classifies `missing_component_evidence` and skips
+the receipt. At low, `AC-LOW-FB` is confirmed fit 3 and eligible, so `pairs` is non-empty; the
+selected `ac_vertical_escalation` loses to it and scores 2 — a *worse choice*, not an optimal one.
+
+**The methodology change to implement (owner-authorised).** When no eligible entry carries a
+confirmed fit but at least one eligible entry exists with `reference_status: pending`, rank those
+eligible entries by `planned_request_count` and record the reason
+`reference_pending_availability_ranking`, instead of declaring the coordinate unrankable. This
+uses measured evidence (preconditions observed true) in place of unavailable reference data; it
+does not invent a fit, does not relax the `eligible` predicate, does not rescue entries whose
+observation is `unknown` (that must keep returning `ranking_observation_unknown`), and leaves
+fit-based ordering untouched wherever a fit exists. Low is therefore unaffected (fit 3 still
+wins), medium becomes rankable with the executed method on top, and high stays unrankable
+because all three entries remain ineligible — which is exactly the accepted measured negative.
+
+Implementation points (single change, one file): `ranking_comparison` at
+`evaluation/scoring_evidence.py:348-369`; the empty-`pairs` return at line 367; the detail keys
+consumed by `selection_grade` at :406-420 and by `evaluation/research_metrics.py:1029,1051`.
+
+**Then re-score the Access-Control stratum only**, in its own epoch: one
+`python -m tesis review <exec> --evaluate --config results/studies/corrected-primary-2026-11-06/config.frozen.yaml --output-dir <run>/reviews-revised-ac --isolated-ledger`
+per run for the 18 AC runs, never reusing `results/reviews/corrected-primary-revised/`
+(`rescore_revised_rubric.py` must not be re-run as-is: its `assert not p.exists()` fails after
+doing the work). Each medium run has one pending candidate and typically one judge call.
+
+**Separate integrity finding to record, not fix by relabelling.** The approved fit-1 rows for
+`AC-MED-FB`/`AC-HIGH-*` rest on frozen `operator_fixture` records in
+`config/research/autoresearch-ranking-draft-2026-10-31.json` (source
+`ranking-completion-2026-10-11-epoch2`, records 15-17) whose own `status` is `inconclusive`,
+while the draft entry declaring them is `reference_status: confirmed, reference_fit: 1`. No code
+in the repository can reproduce those rows. The mismatch must be reported in the approval
+document as a provenance defect of the approved labels; it must not be silently re-labelled, and
+it does not license refilling the four `null` fits.
