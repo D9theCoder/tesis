@@ -1085,3 +1085,20 @@ models again and documents that both request max reasoning. This is reachability
 **Still required before a 108-coordinate matrix may run:** a readiness draft declaring 108
 coordinates across both models, the freeze of that epoch, and the readiness gates themselves. The
 matrix has not been executed in this epoch, and nothing from earlier epochs is pooled into it.
+
+### 34 — Next step for the 108-coordinate epoch (recipe, not executed)
+
+`results/validation/scoring-completion-2026-11-05/author_corrected_readiness_draft.py` builds the
+readiness draft's model block from `config["providers"]`, which now lists both evaluated models, so
+the generator is the supported route to a 108-coordinate draft. It asserts its output path does not
+exist, so the new epoch needs its own path and epoch id (`restored-primary-2026-11-06`), with
+`design.scope_decision` empty (no reduction) and `expected_coordinates` equal to the axis product
+2 models x 2 conditions x 3 surfaces x 3 levels x 3 repeats = 108.
+
+Before any run: freeze the epoch (profile, policy epoch, token price schedule for both routes),
+run `python -m evaluation.experiment_readiness check --draft <new draft> --config config.yaml`, and
+collect the live readiness probe. `declared_blockers` in the corrected draft also records that the
+epoch is bound to a content hash rather than a commit; that stays open unless the owner authorises a
+commit for the epoch identity.
+
+The matrix has not been executed for this epoch, and no earlier receipt may be pooled into it.
