@@ -109,7 +109,7 @@ matrix: false
 # Keep providers and levels nonempty when matrix mode is enabled.
 providers:
   - river-ai__deepseek-ai-deepseek-v4-1-flash-1017_15efb2abf693
-  # - opencode__gpt-5-6-luna_e33230db3dd7
+  - openai_codex_auth
 
 levels:
   - low
@@ -226,9 +226,9 @@ api_providers:
 # API-key provider/model pairs above expand into models automatically.
 # Keep standalone profiles here for Gemini or openai_codex_auth.
 models:
-  # ChatGPT sign-in profile for the second evaluated model (gpt-6-luna), used by
-  # the coordinate you authorised on 2026-10-30. Reasoning effort is low per that
-  # authorisation, which is a documented deviation from the v4 study's 'max'.
+  # ChatGPT sign-in profile for the second evaluated model (gpt-6-luna).
+  # The owner restored the two-model design on 2026-11-06; both models request
+  # max reasoning. A successful bounded Luna call is retained before freezing.
   openai_codex_auth:
     provider: openai_codex_auth
     model_name: gpt-6-luna

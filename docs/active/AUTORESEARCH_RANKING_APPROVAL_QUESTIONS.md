@@ -90,6 +90,11 @@ now recorded. A `pending` evidence status is not a pending owner decision.
 
 #### 3.1a Dated resolution (2026-11-06) — the four nulls stand; how selection is scored
 
+> **Superseded later the same day** by section 3.1b: the owner directed re-deriving the
+> inconclusive fit-1 records and authorised the host fixture change, so the four fits are now
+> confirmed from fresh candidate-specific evidence. The reasoning below stays as the record of
+> what was true before that measurement.
+
 The owner authorised both remaining remedies on 2026-11-06: a fixture/attack-scope
 expansion capable of method-specific evidence, and a further documented methodology change
 for how Access-Control selection is scored. Both were pursued. The table above is
@@ -200,3 +205,61 @@ receipt, historical profile retrofit, or backdated preregistration. The linked
 handoff records current unfinished work; old draft-status fields above are not a
 claim that the executed epoch had no frozen profile. These documentation changes
 make no runtime, configuration, artifact, or DOCX changes.
+
+#### 3.1b Re-derived reference fits (2026-11-06, owner-authorised)
+
+The owner directed re-deriving the inconclusive fit-1 records, authorised adding authentication to the
+host fixture's object endpoint while preserving each level's authorisation weakness, authorised rubric
+changes, and asked for the GPT-6 Luna model to be retried so the study keeps its two-model design.
+
+**Fixture change.** `vulnerabilities/authbypass/get_user_data.php` now begins with
+`dvwaPageStartup( array( 'authenticated' ) )`. Its existing high/impossible admin-only branch is
+untouched, and no level-specific authorisation logic was changed. The host mount is read-only from the
+workspace, so the edit went through the Windows host with a normal approval prompt.
+
+**Protocol declared before measuring.** `results/validation/two-model-restoration-2026-11-06/ac-reference-protocol.json`
+fixes the levels, methods, three repeats, the candidate rule, the fixture source hashes, and the
+fit rules before any request. Its `collector_sha256` and fixture hashes are re-checked at collection
+time and the collection aborts if either moved.
+
+**Measurement.** `ac-reference-measurement.json`: 360 bounded requests, 0 provider calls, 0 primary-study
+runs. Every entry is three repeats of one validated static exploit candidate, with three principals:
+verified admin, the fixture's documented non-admin, and an anonymous session carrying only the requested
+level cookie.
+
+| level | admin | documented non-admin | anonymous | fit |
+| --- | --- | --- | --- | --- |
+| low | 200, records visible | 200, records visible | redirected to login, no records | 3 |
+| medium | 200, records visible | 200, records visible | redirected to login, no records | 3 |
+| high | 200, records visible | explicit access-denied envelope | redirected to login, no records | 1 |
+
+`ac_force_browse` follows the page rather than the API: 200 with the admin-only policy text at low
+(fit 3), 403 at medium and high (fit 1). All nine Access Control entries are **confirmed at 3/3**;
+none is pending.
+
+**What this settles.**
+
+- The four former `null` fits — `AC-LOW-IDOR`, `AC-LOW-VERT`, `AC-MED-IDOR`, `AC-MED-VERT` — are
+  now confirmed at fit 3 from candidate-specific evidence. Broad anonymous exposure no longer exists
+  in the fixture, so option A's own condition is met rather than overridden.
+- The fit-1 labels on `AC-MED-FB` and the three `AC-HIGH-*` entries are **reproduced independently**
+  rather than inherited: the same rule returns 1 on fresh 3/3 evidence, so the earlier
+  `inconclusive` provenance defect is repaired by re-derivation, not by relabelling.
+- The five Access Control entries that already carried numeric fits return the same values as the
+  original approval. That agreement is the check that the new protocol measures the same thing.
+
+**Prospective profile.** `config/research/autoresearch-ranking-candidate-2026-11-06.json` carries the
+re-derived entries plus the measurement as an embedded `operator_fixture` source, and
+`validate_profile` accepts it: 27 entries, 0 pending, 0 null, fits 16×3 / 3×2 / 8×1. The historical
+`autoresearch-ranking-candidate-2026-10-31.json` and every frozen profile are unchanged, and the new
+`fixture_id` reflects the changed endpoint, so the two epochs cannot be confused.
+
+**Scope limitation, recorded.** IDOR and vertical escalation both read the same API and the fixture
+exposes no per-object ownership rule, so what is proven is a principal/object policy breach by a
+non-admin against an admin-only resource, not parameter-sensitive ownership enforcement and not a
+state-changing privileged action. Both entries keep `action: read`.
+
+**Model restoration.** One bounded inference on the configured `openai_codex_auth` / `gpt-6-luna`
+profile at `reasoning_effort: max` completed and returned the requested JSON
+(`results/validation/two-model-restoration-2026-11-06/luna-availability-*.json`). That establishes the
+model is reachable again; it is not a study run and does not by itself constitute matrix readiness.
