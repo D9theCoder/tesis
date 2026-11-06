@@ -1263,3 +1263,22 @@ evaluated model set. Receipts: `results/reviews/restored-primary-2026-11-06/`.
   not retroactive.
 - `Sexploit` level 4 remains unreached in every retained epoch; the level is implemented and the evidence
   is absent.
+
+## 41. Requirement checklist for the restored epoch
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Declared matrix executed once, all coordinates retained | Met: 108/108 reconciled, 0 failed, no repeats selected | `results/runs/restored-primary-2026-11-06/research-run-summary.json` |
+| Readiness passed before execution | Met: 6 checks, 0 blockers, `execution_authorized: true` | `results/epochs/restored-primary-2026-11-06/live-readiness.json` |
+| Frozen inputs bound before selection | Met: one config identity, frozen oracle, receipt and plan agree | `results/studies/restored-primary-2026-11-06/` |
+| Receipts finalized with all components | Met: 96 final, 0 missing any component, provenance AI | `results/reviews/restored-primary-2026-11-06/` |
+| Unavailable outcomes kept, never zeroed | Met: 12 AC high coordinates carry `measured_negative` and no `Srun` | `analysis/baseline-audit.json` `population`, `accounting` |
+| AC ranking gap resolved | Met: reference-fit rule reproduced; `Smethod` 3 in all AC low/medium receipts | `analysis/analysis.json`, receipts `components.Smethod` |
+| AC permission/control gap resolved | Met: per-level admin-allowed / anonymous-denied oracle, 9/9 entries 3/3 repeats | `config/oracles/dvwa-candidate-protocols-a000f969edb8d78a5c5d.json` |
+| Component rubrics reachable 0-4 | Met for implementation; `Sexploit` 4 unobserved because no run produced a downstream outcome | `evaluation/thesis_scoring.py`, handoff limitations |
+| Derived reports regenerated | Met: analysis + fidelity audit for this epoch | `results/validation/two-model-restoration-2026-11-06/analysis/` |
+| Declared Mann-Whitney analysis recorded | Met: 16 analyzed rows with U, p, n, medians, IQR, rank-biserial, multiplicity and dependence limits | `analysis/analysis.json -> condition_contrasts` |
+| Attribution (F3) reported with gaps | Met as a report: 358/540, 182 unresolved, gaps by code and dimension | `analysis/baseline-audit.json -> fidelity.F3`, `accounting` |
+| F6 label disagreement closed | Fixed at the producer; this epoch's frozen artifacts keep the old label and are reported as 12 disagreements | `core/run_status.py`, `tests/test_measured_negative_verdicts.py` |
+| Project naming guard | Met: 0 violations | `.venv/bin/python -m tesis.naming_guard` |
+| Numeric score for every coordinate | **Not met**: 12 AC high coordinates are unavailable by evidence | handoff, section "What is still not claimed" |
