@@ -975,3 +975,29 @@ corruption, but it means the 54-coordinate dataset can no longer be analysed as 
 epoch from the older receipts. The remaining honest route to a single-epoch 54-run analysis is a
 fresh re-score of all 54 runs under the current rule, which also repairs `sqli/low`,
 `sqli/medium` and the reduced Brute Force cells. That re-score has not been run.
+
+### 30 — Canonical scoring epoch: one consistent 54-run dataset (2026-11-06)
+
+`results/validation/ac-scope-expansion-2026-11-06/rescore_full_epoch.py` re-scored all 54
+executions under the current rule into per-run `reviews-canonical` directories with isolated
+ledgers. Driver receipt `rescore-full-epoch.json`; summary `canonical-epoch-summary.json`:
+**54 runs, 48 final, 6 pending, 0 failed**.
+
+- Pending = the six Access Control high runs, all `no_assessable_candidates` (measured
+  negative). One run artifact is recorded `error` in the analysis (`run-024`, the retained
+  provider transport failure), which is why the analysis reports 47 final + 1 error.
+- Per-level numeric `Srun_final`: AC low 2.2 ×6; AC medium 2.4, 2.4, 2.4, 2.7, 2.3, 2.4;
+  BF high 2.5, 2.5, 2.8, 2.8, 2.5, 2.8; BF low 2.8, 2.8, 2.8, 2.8, 2.4, 2.8; BF medium 2.5,
+  2.5, 2.8, 2.8, 1.9, 2.8; SQLi high 2.8, 2.8, 2.8, 2.5, 2.5, 2.5; SQLi low 2.8, 2.8, 2.8,
+  2.5, 2.1, 2.5; SQLi medium 2.35, 2.35, 2.35, 2.05, 2.5, 2.05.
+- F3: **246/270 = 0.9111**; the 24 unresolved cells are the four non-`Schain` dimensions of
+  the six Access Control high runs.
+- Analysis (`canonical-epoch-analysis.json`, all 54 runs from this one epoch, one
+  `scoring_rule_sha256` per stratum): **8 analysed, 1 unsupported**. Only
+  `access_control:high` is unsupported, with `linear_hybrid:no_ready_final_receipts`.
+  SQLi `Schain` separates most: `U = 0`, `p = 0.046854`, Holm 0.281, rank-biserial −1.0,
+  linear median 0 vs AKG median 3 at all three levels. Nothing survives Holm at α = 0.05.
+
+The earlier epochs (original 35 final, revised 41 final, AC remediation 11 final) are kept
+unchanged as chronological records. This canonical epoch supersedes them for analysis because
+it is the only one whose receipts all validate under the current rule.

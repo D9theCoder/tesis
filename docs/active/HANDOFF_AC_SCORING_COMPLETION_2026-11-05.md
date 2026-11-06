@@ -491,3 +491,32 @@ not a proof-floor clamp, and the value is left unavailable rather than filled.
   four `null` fits.
 - Acceptance therefore cannot be claimed and this handoff is **not** moved to
   `docs/completed/`.
+
+**Canonical scoring epoch (the dataset of record)**
+
+A scoring-source change re-binds receipts, so the three earlier epochs cannot be
+analysed together: the revised epoch's receipts now fail `_source_bound_queue` with
+`source_identity_hash_mismatch`, and the original epoch loses the receipts graded below
+the binding machine proof. All 54 executions were therefore re-scored once under the
+current rule, each into its own `reviews-canonical` directory with an isolated ledger:
+**48 final, 6 pending, 0 failed** (`rescore-full-epoch.json`).
+
+- Every stratum except Access Control high carries six numeric receipts. Access Control
+  medium resolves to **6/6** (2.4, 2.4, 2.4, 2.7, 2.3, 2.4); the earlier 5/6 holdout was a
+  judge citation defect that did not recur, and neither the rule nor any artifact was
+  changed to obtain it.
+- The six pending receipts are the Access Control high runs, all `no_assessable_candidates`:
+  the accepted measured negative.
+- Superseding F3: **246/270 = 0.9111**. The 24 unresolved cells are exactly the four
+  non-`Schain` dimensions of those six negative runs.
+- Analysis over this single epoch: **8 of 9 strata analysed**; only Access Control high is
+  unsupported. Every stratum is 3 vs 3 except Brute Force high (linear n = 2, `run-024`
+  failed at execution). Access Control low ties exactly (`U = 4.5`, `p = 1`, all medians
+  identical, IQR 0); Access Control medium `Srun_final` `U = 4.5`, `p = 1`, medians 2.4 vs
+  2.4, with `Spayload` `U = 7.5`, `p = 0.187632`, rank-biserial 0.6667.
+- Largest separation: SQLi `Schain` at all three levels, linear median 0 vs AKG median 3,
+  `U = 0`, `p = 0.046854`, Holm-adjusted **0.281**, rank-biserial −1.0. `sqli:high`
+  `Srun_final` likewise `U = 0`, `p = 0.046854`, Holm 0.281, medians 2.5 vs 2.8.
+- Nothing survives Holm at α = 0.05. The analysis remains the declared exploratory
+  Mann–Whitney U with `independent: false`, three repeats, and the recorded dependence
+  limitation; no paired or bootstrap figure replaces it.
