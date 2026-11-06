@@ -113,7 +113,7 @@ audit verification. This documentation change does not re-audit or alter scores.
 
 ### 1. Apply the settled manual-scorer contract consistently
 
-- [ ] Check runtime, reporting, and handoff terminology for a false split between
+- [x] Check runtime, reporting, and handoff terminology for a false split between
       manual scoring and the selected AI implementation of the manual scorer.
 - [x] Keep valid receipts from the selected scorer eligible; do not require a
       second human receipt, human verification, or human sign-off.
@@ -554,3 +554,14 @@ with the exact condition that keeps each one open:
 
 Ticking a box means that requirement is satisfied by evidence. It does not assert the research
 claim is complete: acceptance is still not claimed and this handoff stays in `docs/active/`.
+
+**Terminology audit for item 116 (performed 2026-11-06).** Checked maintained runtime,
+reporting and handoff wording for a false split between human and AI scoring. Result: no such
+split exists. `core/scoring_contracts.py` defines the workflow labels so that **both** `human`
+and `ai` read "manual assessment; final only with validated receipt"; neither document presents
+the AI scorer as a separate scoring role, and both state the settled contract explicitly
+("Manual scorer includes both human and AI scorers"; "Never introduce wording that says the
+study uses an AI scorer, AI reviewer, or AI-assisted assessment"). Reporting and rubric-document
+code carry no competing scoring-role vocabulary. The remaining "AI review" strings are internal
+evaluator error and CLI help text describing the workflow that produces a receipt, which is
+provenance, not a scoring-role claim.
