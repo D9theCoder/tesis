@@ -1282,3 +1282,22 @@ evaluated model set. Receipts: `results/reviews/restored-primary-2026-11-06/`.
 | F6 label disagreement closed | Fixed at the producer; this epoch's frozen artifacts keep the old label and are reported as 12 disagreements | `core/run_status.py`, `tests/test_measured_negative_verdicts.py` |
 | Project naming guard | Met: 0 violations | `.venv/bin/python -m tesis.naming_guard` |
 | Numeric score for every coordinate | **Not met**: 12 AC high coordinates are unavailable by evidence | handoff, section "What is still not claimed" |
+
+## 42. Payload attribution closed against saved evidence
+
+```bash
+.venv/bin/python results/validation/two-model-restoration-2026-11-06/attribute_payload_deductions.py
+```
+
+Read-only over the 96 final receipts and their artifacts; no score changes.
+`results/validation/two-model-restoration-2026-11-06/payload-attribution.json`:
+
+- 76 candidates were graded below 3 of 3. 74 were validated, selected and executed but never
+  produced their recorded `expected_signal` (`grade_origin: signal_gate`, score 0); 2 hit a proof
+  ceiling of 1-2. Each row cites candidate id, disposition, expected signal and response refs.
+- The audit's 50 `unclassified_payload_deduction` runs are all covered: 50 of 50 have an attributed
+  candidate cause.
+- The remaining 46 Spayload items withhold nothing: 37 are the unreached level 4 (component 3.0,
+  no downstream payload use) and 9 record credit earned by a static seed rather than model output.
+- `Sexploit` 43 and `Schain` 43 are the same downstream-use limitation; `destination_precondition_unproved`
+  78 remains the largest single gap.

@@ -723,10 +723,23 @@ F3 unresolved by dimension: `Spayload` 96, `Sexploit` 43, `Schain` 43, `Smethod`
 `Soutput` 0. Gaps by code: `destination_precondition_unproved` 78,
 `unclassified_payload_deduction` 50, `payload_downstream_use_unproved` 37,
 `static_seed_payload_deduction` 9, `chain_evidence_unavailable` 4,
-`missing_dependency_attestation` 4. Every `Spayload` deduction in this epoch is
-unattributed: the artifact records that payload credit was withheld but not which candidate
-origin, decision or proof ceiling caused it. That is the largest remaining attribution gap
-and it is a recording gap, not a scoring dispute.
+`missing_dependency_attestation` 4.
+
+The 96 `Spayload` items are now resolved into their causes
+(`results/validation/two-model-restoration-2026-11-06/payload-attribution.json`):
+
+- 50 runs with a withheld credit are attributed candidate by candidate. 76 candidates were
+  graded below 3 of 3: 74 were validated and executed but never produced their recorded
+  `expected_signal` (the machine signal gate scored them 0), and 2 were capped by a proof
+  ceiling of 1 or 2. Both causes cite the candidate, its disposition and its response refs.
+- 37 items carry component 3.0 and are the unreached `Spayload` level 4 (no payload was
+  consumed downstream in a chain). They withhold nothing; the gap is level 4 evidence.
+- 9 items carry component 3.0 and record that the credit was earned by a static seed rather
+  than model output, so it cannot be attributed to model quality.
+
+`Sexploit` 43 and `Schain` 43 are the same downstream-use limitation seen from the
+exploitation and chain dimensions; `destination_precondition_unproved` (78) is the largest
+single gap and is a recorded evidence limitation of this fixture, not an arithmetic dispute.
 
 F6's single code is `measured_negative_described_as_missing_proof`, exactly the 12 AC
 `high` artifacts: the artifact records a complete measured negative while
