@@ -2498,9 +2498,9 @@
   "created_at": "2026-11-06T06:04:23.464594+00:00",
   "declared_blockers": [
     {
-      "detail": "The epoch source identity is the content hash of the current tree; not a commit identity.",
+      "detail": "The epoch tree is committed at 317a1d9; the frozen config, receipt and plan share identity c303afaf.",
       "id": "source_tree_not_commit_bound",
-      "status": "open"
+      "status": "closed"
     }
   ],
   "design": {
