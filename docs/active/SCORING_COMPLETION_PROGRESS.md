@@ -35,6 +35,25 @@ These are **regenerated historical counts**, not a new experiment. See the
 Corrected prospective matrix: declared design 108; frozen 0, executed 0, final 0,
 failed 0, not started 108. No target/provider calls made in this session yet.
 
+**Current accounting (restored epoch, 2026-11-06 18:55).** The two paragraphs above are earlier
+session snapshots and no longer describe the workspace: the corrected inputs were frozen, the
+declared matrix ran, and it was scored. Current numbers, each with its artifact:
+
+| Item | Value |
+| --- | --- |
+| Epoch | `restored-primary-2026-11-06`, one config identity across receipt, census, policy epoch and plan |
+| Planned / executed / reconciled | 108 / 108 / 108 |
+| Failed / interrupted / unknown | 0 / 0 / 0 |
+| Final receipts | 96 |
+| Pending, with reason | 12 (`access_control` high, measured negatives) |
+| Final receipts missing a component | 0 |
+| Scoring-source digest | `34b55600…`, identical to every receipt's recorded digest |
+| F3 | 0.6630 (358/540), 182 unresolved |
+| Analysis | 18 contrast rows, 16 analysed, 2 unsupported |
+
+Evidence: §38 (execution), §39 (scoring), §40 (analysis and F3), §42 (payload attribution),
+§43 (chains), §45 (receipt-to-source integrity and deferred defects).
+
 ## Requirement-by-requirement checklist
 
 `[x]` means verified within the stated scope only. Open items stay open even if
@@ -519,6 +538,22 @@ dropped.
   subtask closure changes those research outcomes.
 
 ## Resume boundaries
+
+**Resume point at 2026-11-06 18:55.** Nothing in §1-§37 is still runnable work: the matrix ran, the
+96 receipts exist, the analysis and audit are regenerated, and the payload and chain attribution are
+recorded (§38-§45). Three things remain, and none of them is a repository task:
+
+1. A destination surface inside the authorised scope, which would let the 78
+   `destination_precondition_unproved` items be proved. Needs an owner decision plus a new prospective
+   freeze; this epoch cannot supply it.
+2. Whether `Sexploit` level 4 should credit the selected method's chain participation. Observed chains
+   always credited the consuming `bf_dictionary` visit, so the level is implemented but unreachable as
+   the design stands. Methodology decision, not a code defect.
+3. The three scoring-source auditability defects in §45, which must wait for the next prospective freeze
+   because editing those files changes the epoch's frozen rule digest.
+
+Historical sections keep their original numbers. Where they conflict with the restored epoch (§38-§45)
+or with the supersession notes in the handoff and the approval record, the restored epoch wins.
 
 Do not start duplicate scoring/provider calls or a matrix based on narrative.
 Check live tool job state and artifact receipts first. Continue implementation,
