@@ -1154,3 +1154,34 @@ new `fixture_id`/`protocol_version` so permission attestations can bind; (5) ext
 protocol to `change_user_details.php` and add a control that distinguishes endpoint denial from the
 login redirect; (6) repair the handoff's stale claims and the availability table; (7) only then
 re-freeze, re-run readiness and execute.
+
+### 36 — Audit remediation, first two fixes (2026-11-06)
+
+**Readiness now gates on declared blockers** (`evaluation/experiment_readiness.py`). Each
+`declared_blockers` entry still marked `open` becomes a gate blocker
+(`declared_blocker_open:<id>`). Re-running the gate for `restored-primary-2026-11-06` now reports
+**5 blockers, `execution_authorized: false`, `status: blocked`**, including
+`declared_blocker_open:live_readiness_unverified` and
+`declared_blocker_open:source_tree_not_commit_bound`. The earlier green light was therefore wrong and
+can no longer be produced.
+
+**The `Smethod` rule is back to the recorded revision** (`evaluation/scoring_evidence.py`). The
+availability ordering still keeps a pending-only scenario rankable, but an unranked method no longer
+escapes the strict branch: `selection_grade` returns **2** with
+`selected_method_unranked_reference_pending` for such methods. Verified directly on the retained
+artifacts — `run-014`, `run-016` and `run-007` now all grade 2, where `run-014`/`run-016` had been
+graded 3 by the unrecorded relaxation. My own control test encoded that relaxation and was corrected
+to assert the recorded rule.
+
+**Consequence for recorded numbers.** The revised-epoch and canonical-epoch Access-Control medium
+receipts carry `Smethod 3` from the relaxation, against profiles whose entries were
+`pending`/`null`. Under the restored rule those receipts no longer reproduce and must be re-scored
+before any medium or high composite is quoted again. The `6/6 numeric, mean 2.44` statement in
+section 30 is superseded by that requirement and is not current.
+
+**Still open from the audit.** One config identity per epoch (the frozen config, freeze receipt and
+plan recorded three different hashes, and the epoch must be re-frozen from final inputs with the
+rewrite asserted); regenerating the oracle source for the new `fixture_id` so permission attestations
+can bind; extending the reference protocol to `change_user_details.php`; a denial control that
+separates endpoint refusal from DVWA's login redirect; and the stale handoff claims and availability
+table.

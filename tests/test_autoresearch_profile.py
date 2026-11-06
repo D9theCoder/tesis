@@ -526,7 +526,7 @@ def _pending_profile(*, pending_only: bool = True) -> dict:
     return profile
 
 
-def test_reference_pending_availability_ranks_eligible_methods_by_planned_cost():
+def test_reference_pending_availability_ranks_without_awarding_top_rank():
     profile = _pending_profile()
     entries = profile["scenarios"]["access_control:low"]
     cheapest = min(entries, key=lambda name: entries[name]["planned_request_count"])
@@ -535,8 +535,10 @@ def test_reference_pending_availability_ranks_eligible_methods_by_planned_cost()
 
     grade, detail = selection_grade(artifact, cheapest)
 
-    assert grade == 3
-    assert detail["reason"] == "top_ranked_reference_pending_availability"
+    # Availability ordering keeps the scenario rankable, but an unproven fit can
+    # never earn top-ranked credit: the recorded revision scores it 2.
+    assert grade == 2
+    assert detail["reason"] == "selected_method_unranked_reference_pending"
     assert detail["top_methods"] == [cheapest]
     assert all(entry["reference_fit"] is None for entry in entries.values())
 

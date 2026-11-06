@@ -1329,6 +1329,18 @@ def analyse_scope(draft: Mapping[str, Any], configured: Mapping[str, Any], *,
     result["live_target_access_performed"] = bool(live.get("present"))
     result["provider_access_performed"] = bool(live.get("present"))
     blockers.extend(live_blockers)
+    # A draft that still declares an open blocker cannot be authorised. The
+    # declaration is a required input, so it must also gate the verdict rather
+    # than being recorded and ignored.
+    for entry in draft.get("declared_blockers") or []:
+        if not isinstance(entry, Mapping):
+            continue
+        if str(entry.get("status") or "").strip().lower() in {"open", "blocked"}:
+            blockers.append(_blocker(
+                f"declared_blocker_open:{entry.get('id')}", "readiness",
+                str(entry.get("detail") or "the draft declares an open blocker"),
+                severity="gate",
+            ))
     return result, blockers
 
 

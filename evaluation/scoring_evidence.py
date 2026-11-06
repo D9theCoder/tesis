@@ -423,11 +423,12 @@ def selection_grade(artifact, method):
         return None, {**result, 'reason': reason, **{k: v for k, v in detail.items()
             if k in ('unranked_methods', 'reference_reason')}}
     entries = config['scoring_profile']['scenarios'][f"{surface}:{config.get('security_level')}"]
-    if (method in (detail.get('unranked_methods') or [])
-            and detail.get('ranking_basis') != 'reference_pending_availability'):
+    if method in (detail.get('unranked_methods') or []):
         # The selected method has no proven reference fit while a confirmed entry
         # exists: that is a worse choice than the best confirmed entry, never an
-        # optimal one, and never a claim that the method is unexploitable.
+        # optimal one, and never a claim that the method is unexploitable. The
+        # availability ordering that keeps an unranked scenario rankable must not
+        # upgrade this grade: an unproven fit cannot earn top-ranked credit.
         return 2, {**result, 'status': 'assessed', 'top_methods': top,
                    'comparison': detail.get('comparison'),
                    'reason': 'selected_method_unranked_reference_pending'}
