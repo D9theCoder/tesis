@@ -200,6 +200,11 @@ konseptual sampai konsumsi session sumber dan verifikasi tujuan tersedia dan ter
 Referensi ranking hanya input evaluator, bukan selector. Prasyarat unknown atau
 bukti referensi hilang tidak boleh diberi ranking buatan. Ranking awal memakai
 biaya protokol referensi, bukan jumlah request yang baru diketahui setelah eksekusi.
+Bila suatu skenario tidak memiliki fit referensi yang terkonfirmasi tetapi masih
+memiliki metode yang prasyaratnya terukur benar, metode tersebut diurutkan menurut
+biaya protokol referensi dan dasar tersebut dicatat sebagai ketersediaan referensi
+tertunda; fit yang masih tertunda tidak diisi, dan skenario tanpa entri eligible
+tetap tidak memberi ranking apa pun.
 
 Atribusikan metode/payload/exploit/output ke metode final selected/last executed;
 simpan bukti chain pada scope run serta temuan sebelumnya secara terpisah.

@@ -198,7 +198,11 @@ consumption and destination verification are implemented and evidenced.
 
 A reference ranking is evaluator input, never selector input. Unknown prerequisites
 or missing reference proof cannot be assigned invented rankings. Initial ranking
-uses reference protocol costs, not requests observed after execution.
+uses reference protocol costs, not requests observed after execution. When a scenario
+holds no confirmed reference fit but does hold methods whose prerequisites were
+measured true, those methods are ordered by reference protocol cost and the basis is
+recorded as reference-pending availability; the pending fits stay unfilled, and a
+scenario whose eligible entries are all absent still ranks nothing.
 
 Attribute method/payload/exploit/output dimensions to the final selected/last
 executed method; retain run-scope chain evidence and earlier findings separately.

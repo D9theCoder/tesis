@@ -364,6 +364,20 @@ def ranking_comparison(artifact, selection):
     detail['unranked_methods'] = unranked
     pairs = {name: (-r['fit_level'], r['planned_request_count']) for name, r in ranking.items() if r['eligible']}
     if not pairs:
+        if unranked:
+            # Owner-authorised methodology revision (2026-11-06): when the scenario
+            # holds no confirmed reference fit but still has methods whose
+            # preconditions were measured true, order those by planned request
+            # count instead of voiding the scenario. Pending entries keep
+            # ``reference_fit`` null, so this orders measured availability and
+            # never claims a reference level; unknown observations and ineligible
+            # entries are still rejected above.
+            counts = {name: ranking[name]['planned_request_count'] for name in unranked}
+            best_pending = min(counts.values())
+            top = [name for name, count in counts.items() if count == best_pending]
+            detail.update(status='assessed', comparison=ranking, top_methods=top,
+                          ranking_basis='reference_pending_availability')
+            return top, 'reference_pending_availability_ranking', detail
         return None, 'ranking_no_rankable_method', detail
     best = min(pairs.values())
     top = [name for name, pair in pairs.items() if pair == best]
@@ -409,15 +423,18 @@ def selection_grade(artifact, method):
         return None, {**result, 'reason': reason, **{k: v for k, v in detail.items()
             if k in ('unranked_methods', 'reference_reason')}}
     entries = config['scoring_profile']['scenarios'][f"{surface}:{config.get('security_level')}"]
-    if method in (detail.get('unranked_methods') or []):
+    if (method in (detail.get('unranked_methods') or [])
+            and detail.get('ranking_basis') != 'reference_pending_availability'):
         # The selected method has no proven reference fit while a confirmed entry
         # exists: that is a worse choice than the best confirmed entry, never an
         # optimal one, and never a claim that the method is unexploitable.
         return 2, {**result, 'status': 'assessed', 'top_methods': top,
                    'comparison': detail.get('comparison'),
                    'reason': 'selected_method_unranked_reference_pending'}
+    basis = detail.get('ranking_basis')
     result.update(status='assessed', comparison=detail.get('comparison'), top_methods=top,
-        reason='higher_ranked_comparison_exists' if method not in top else 'top_ranked')
+        reason=('higher_ranked_comparison_exists' if method not in top else
+                'top_ranked' if basis is None else 'top_ranked_' + str(basis)))
     if method not in top:
         return 2, result
     refs = selection.get('reason_refs')

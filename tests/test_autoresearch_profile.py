@@ -506,3 +506,71 @@ def test_ranking_draft_synthetic_source_cannot_confirm_a_reference():
 
     with pytest.raises(ranking_draft.DraftValidationError, match="cannot confirm"):
         ranking_draft.assess_draft(draft, root=REPOSITORY_ROOT)
+
+
+def _pending_profile(*, pending_only: bool = True) -> dict:
+    """A synthetic profile whose ``access_control:low`` entries are pending.
+
+    ``pending_only`` leaves every entry pending; otherwise only the first entry
+    stays pending so the confirmed-fit path can be exercised beside it.
+    """
+    profile = synthetic_profile()
+    entries = profile["scenarios"]["access_control:low"]
+    for index, (name, entry) in enumerate(entries.items()):
+        if pending_only or index == 0:
+            entry["reference_status"] = "pending"
+            entry["reference_fit"] = None
+            entry["reference_reason"] = "reference fit awaiting machine evidence"
+        entry["planned_request_count"] = 5 + 3 * index
+    profile["sha256"] = evidence_hash({k: v for k, v in profile.items() if k != "sha256"})
+    return profile
+
+
+def test_reference_pending_availability_ranks_eligible_methods_by_planned_cost():
+    profile = _pending_profile()
+    entries = profile["scenarios"]["access_control:low"]
+    cheapest = min(entries, key=lambda name: entries[name]["planned_request_count"])
+    artifact = _artifact(profile, cheapest, {"kind": "stop_at_budget"})
+    artifact["final_state"]["scoring_decisions"][0]["reason_refs"] = []
+
+    grade, detail = selection_grade(artifact, cheapest)
+
+    assert grade == 3
+    assert detail["reason"] == "top_ranked_reference_pending_availability"
+    assert detail["top_methods"] == [cheapest]
+    assert all(entry["reference_fit"] is None for entry in entries.values())
+
+
+def test_pending_reference_does_not_displace_a_confirmed_fit():
+    profile = _pending_profile(pending_only=False)
+    entries = profile["scenarios"]["access_control:low"]
+    confirmed = [name for name, entry in entries.items() if entry["reference_status"] == "confirmed"]
+    pending = [name for name, entry in entries.items() if entry["reference_status"] == "pending"]
+    assert confirmed and pending
+    artifact = _artifact(profile, confirmed[0], {"kind": "stop_at_budget"})
+    artifact["final_state"]["scoring_decisions"][0]["reason_refs"] = []
+
+    grade, detail = selection_grade(artifact, confirmed[0])
+
+    assert grade == 3
+    assert detail["reason"] == "top_ranked"
+    assert "ranking_basis" not in detail
+    assert detail["top_methods"] == [confirmed[0]]
+    assert not set(pending) & set(detail["top_methods"])
+
+
+def test_measured_false_prerequisites_grade_one_before_any_ranking():
+    profile = _pending_profile()
+    entries = profile["scenarios"]["access_control:low"]
+    method = next(iter(entries))
+    artifact = _artifact(profile, method, {"kind": "stop_at_budget"})
+    selection = artifact["final_state"]["scoring_decisions"][0]
+    for entry in entries.values():
+        for key in entry["preconditions"]:
+            selection["observations"][key] = False
+            selection["precondition_status"][key] = "false"
+
+    grade, detail = selection_grade(artifact, method)
+
+    assert grade == 1
+    assert detail["reason"] == "prerequisites_not_proved_at_selection"

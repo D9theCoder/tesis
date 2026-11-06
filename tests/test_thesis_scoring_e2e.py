@@ -41,7 +41,8 @@ def grades(queue, mode, value=2):
         'decision_id': f'{mode}:{row["candidate_id"]}:1',
         'run_id': queue['run_id'], 'source_sha256': queue['source_sha256'],
         'rubric_version': queue['rubric_version'], 'scoring_mode': mode,
-        'candidate_id': row['candidate_id'], 'score': min(value, row['proof_ceiling']),
+        'candidate_id': row['candidate_id'],
+        'score': max(row.get('base_proof') or 0, min(value, row['proof_ceiling'])),
         'reason': 'Reviewed candidate-linked execution evidence',
         'evidence_refs': row['evidence_refs'],
         'reviewer_id': 'offline/independent-judge' if mode == 'ai' else 'offline-reviewer',
@@ -72,7 +73,9 @@ def test_execution_review_independent_receipts_and_fractional_mean(monkeypatch):
     ai = grades(queue, 'ai', 2)
     result = finalize_reviews(path, human + ai, output_dir=ROOT / 'dual')
     assert set(result['receipts']) == {'human', 'ai'}
-    assert json.loads(Path(result['receipts']['ai']).read_text())['Spayload_final'] == 1.0
+    # The revised rubric makes the machine proof a binding floor, so a lower AI grade is
+    # dropped rather than clamped and both graders land on the same fractional mean.
+    assert json.loads(Path(result['receipts']['ai']).read_text())['Spayload_final'] == 1.5
     assert path.read_bytes() == before
     assert result['fresh_http_calls'] == result['fresh_provider_calls'] == 0
 
