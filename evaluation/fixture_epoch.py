@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from evaluation.research_plan import source_identity
+from tesis.config_loader import load_runtime_inputs
 
 CENSUS_MODULE = "evaluation.fixture_census"
 LEVELS = ("low", "medium", "high")
@@ -230,6 +231,16 @@ def build_attestations(
     config_path: Path,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    # The fixture identity belongs to the resolved configuration, which is the
+    # single owner of the fixture this census actually observed. A hard-coded
+    # identifier would mislabel evidence collected against a changed endpoint.
+    identity_config = load_runtime_inputs(config_path=str(config_path.resolve()), cli_args={})
+    fixture_id = identity_config.get("fixture_id")
+    protocol_version = identity_config.get("protocol_version")
+    if not isinstance(fixture_id, str) or not fixture_id.strip():
+        raise ValueError("Resolved configuration declares no fixture_id for this census epoch")
+    if not isinstance(protocol_version, str) or not protocol_version.strip():
+        raise ValueError("Resolved configuration declares no protocol_version for this census epoch")
     first_path = output_dir / "census-before.json"
     second_path = output_dir / "census-after.json"
     before = _run_census(first_path, config_path)
@@ -300,8 +311,8 @@ def build_attestations(
             "policy_version": 'fixture-restoration',
             "evidence_id": f"fixture-restoration:dvwa:{level}:{epoch_id}",
             "kind": "operator_attestation",
-            "fixture_id": "dvwa-source-fee264766667580e5352",
-            "protocol_version": 'ranking-session-acceptance',
+            "fixture_id": fixture_id,
+            "protocol_version": protocol_version,
             "security_level": level,
             "epoch_id": epoch_id,
             "source_hashes_sha256": identity["source_hashes_sha256"],

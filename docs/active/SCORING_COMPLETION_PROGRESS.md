@@ -1038,3 +1038,50 @@ What is proven: the recovered candidate (`93058f4c…`) differs from the recorde
 `sources_rewritten: false`, and the four `null` reference entries named explicitly. So the
 epoch-side identity is reconciled; the draft-side digest chain is unrecoverable. Item 129 keeps its
 box unticked for that reason, and no historical approval metadata was rewritten to close it.
+
+### 33 — Owner decisions executed: re-derived fits, authenticated fixture, Luna restored (2026-11-06)
+
+**The fixture identity regression was fixed first.** `evaluation/fixture_epoch.py` hard-coded
+`fixture_id` and `protocol_version`, so a census of the changed endpoint would have been labelled
+with the old fixture identity. It now takes both from the resolved configuration and fails closed
+when either is absent. One census was generated before that fix and its attestations carried the old
+id; it is retained under `_superseded_mislabelled_fixture-restoration` rather than deleted, and the
+replacement carries the new identity.
+
+**Fixture change.** `vulnerabilities/authbypass/get_user_data.php` now opens with
+`dvwaPageStartup( array( 'authenticated' ) )`. The high/impossible admin-only branch is untouched and
+no level's authorisation logic changed. `/mnt/c` is `ro` for the workspace, so the edit went through
+the Windows host under a normal approval prompt.
+
+**Fresh evidence.** `ac-reference-protocol.json` was declared before any request (levels, methods,
+three repeats, candidate rule, source hashes, fit rules) and its hashes are re-checked at collection.
+`ac-reference-measurement.json`: 360 bounded requests, 0 provider calls, 0 primary-study runs. Every
+one of the nine Access Control entries is **confirmed at 3/3**:
+
+| level | admin | documented non-admin | anonymous | fit |
+| --- | --- | --- | --- | --- |
+| low | allowed | reads records | login redirect, denied | 3 |
+| medium | allowed | reads records | login redirect, denied | 3 |
+| high | allowed | explicit access-denied | login redirect, denied | 1 |
+
+`ac_force_browse` follows the page: 200 with policy text at low (3), 403 at medium and high (1).
+The four former `null` fits resolve to 3; the fit-1 labels are reproduced independently instead of
+inherited, which repairs the `inconclusive` provenance by re-derivation. The five entries that
+already had numeric fits return the same values, which is the agreement check for the new protocol.
+
+**Prospective profile.** `config/research/autoresearch-ranking-candidate-2026-11-06.json` embeds the
+measurement as an `operator_fixture` source; `validate_profile` accepts it with 27 entries, 0 pending,
+0 null (fits 16×3 / 3×2 / 8×1). Historical candidates and frozen profiles are untouched, and the new
+`fixture_id` keeps the epochs distinguishable.
+
+**Fixture census for the new epoch.** `restored-primary-2026-11-06`: two censuses per level,
+`identical: true`, `source_hashes_sha256 37df7cc5…`, zero non-admin session errors. `config.yaml` now
+carries that attestation block and the new `fixture_id`; no historical attestation was edited.
+
+**Model restoration.** One bounded inference on the configured `openai_codex_auth` / `gpt-6-luna`
+profile at `reasoning_effort: max` returned the requested JSON. `config.yaml` lists both evaluated
+models again and documents that both request max reasoning. This is reachability, not readiness.
+
+**Still required before a 108-coordinate matrix may run:** a readiness draft declaring 108
+coordinates across both models, the freeze of that epoch, and the readiness gates themselves. The
+matrix has not been executed in this epoch, and nothing from earlier epochs is pooled into it.
