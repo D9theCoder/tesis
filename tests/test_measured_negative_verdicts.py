@@ -120,3 +120,29 @@ def test_another_surface_is_not_judged_by_access_control_evidence():
     state = _ac_state(current_surface="brute_force")
     assert measured_negative_verdicts(state) == {}
     assert measured_negative_summary(state)["complete"] is False
+
+
+def test_complete_measured_negative_classifies_as_no_finding_not_missing_proof():
+    """A bounded control measured every precondition false: that is a negative
+    result, so the run must not be labelled as absent candidate proof."""
+    from core.run_status import terminal_status
+
+    summary = measured_negative_summary(_ac_state())
+    assert summary["complete"] is True
+    artifact = {
+        "final_state": _ac_state(),
+        "measured_negative": summary,
+        "method_verdicts": {"ac_idor": {"method": "ac_idor", "status": "not_confirmed"}},
+    }
+    status = terminal_status(artifact, classify=True)
+    assert status["security_outcome"] == "no_finding"
+    assert status["security_outcome_reason"]["code"] == "VERIFIED_NEGATIVE"
+    assert status["security_outcome_reason"]["evidence_refs"] == ["#/method_verdicts/ac_idor"]
+
+
+def test_absent_candidate_proof_without_a_measured_negative_stays_unconfirmed():
+    from core.run_status import terminal_status
+
+    status = terminal_status({"final_state": _ac_state()}, classify=True)
+    assert status["security_outcome"] == "unconfirmed"
+    assert status["security_outcome_reason"]["code"] == "NO_CANDIDATE_CONFIRMATION"

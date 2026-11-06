@@ -96,6 +96,20 @@ def _security_evidence(source: Mapping) -> tuple[str, StatusReason | None]:
         return "no_finding", reason("VERIFIED_NEGATIVE", "Assessed candidates have linked negative verifier evidence.", negative_refs)
     if partial:
         return "unconfirmed", reason("PARTIAL_SIGNAL", "Candidate evidence is below the confirmation threshold.", partial)
+    measured = source.get("measured_negative")
+    if not isinstance(measured, Mapping):
+        measured = state.get("measured_negative")
+    if isinstance(measured, Mapping) and measured.get("complete") is True and not measured.get("methods_missing_verdict"):
+        # Bounded controls measured every required precondition false. That is a
+        # measured negative, not absent candidate proof, so the outcome must not
+        # fall through to the missing-proof label.
+        verdicts = source.get("method_verdicts") or state.get("method_verdicts") or {}
+        refs = [f"#/method_verdicts/{name}" for name in verdicts] or ["#/measured_negative"]
+        return "no_finding", reason(
+            "VERIFIED_NEGATIVE",
+            "Bounded controls measured every required precondition false; no candidate was eligible.",
+            refs,
+        )
     return "unconfirmed", reason("NO_CANDIDATE_CONFIRMATION", "Missing or ambiguous candidate proof cannot establish presence or absence.")
 
 
