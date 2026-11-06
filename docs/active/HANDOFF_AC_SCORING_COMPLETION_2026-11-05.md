@@ -126,14 +126,21 @@ is settled; consistency checks remain, not a new scorer-selection decision.
 
 ### 2. Reconcile ranking-profile and oracle bindings
 
-- [ ] Reconcile prospective approval-to-freeze identity. The completed handoff
+- [x] Reconcile prospective approval-to-freeze identity. Reconciled 2026-11-06: the restored
+      epoch was frozen through the supported path and its receipt, census, policy epoch and
+      plan agree on one config identity (`results/studies/restored-primary-2026-11-06/`).
+      The completed handoff
       records approved draft digest `045f8d…` versus frozen profile `42127e…`,
       rejected by `ranking_profile_digest_mismatch` and
       `scoring_policy_epoch_ranking_digest_mismatch`.
-- [ ] Bind the correct profile, source, fixture, protocol, budget, and scoring
+- [x] Bind the correct profile, source, fixture, protocol, budget, and scoring
       policy to a separately identified future epoch; do not rewrite historical
-      approval metadata to make a new readiness gate pass.
-- [ ] Check oracle source integrity and prospective protocol commitments.
+      approval metadata to make a new readiness gate pass. Bound as
+      `restored-primary-2026-11-06`; the earlier approval metadata is untouched.
+- [x] Check oracle source integrity and prospective protocol commitments.
+      The frozen oracle is `config/oracles/dvwa-candidate-protocols-a000f969edb8d78a5c5d.json`
+      with 9/9 entries confirmed over 3 repeats; readiness recomputes the digest from the
+      configuration's own oracle definition and reported 0 blockers.
       Distinguish preregistration from later candidate-specific attestations;
       a configured oracle or approved protocol is not collected proof.
 
@@ -142,20 +149,30 @@ Existing approvals are not reopened and preregistration is never backdated.
 
 ### 3. Resolve AC ranking, candidate, and control evidence
 
-- [ ] Resolve the four low/medium IDOR and vertical-escalation reference fits
-      using method-specific candidate evidence. Keep them null until supported;
+- [x] Resolve the four low/medium IDOR and vertical-escalation reference fits
+      using method-specific candidate evidence. All four now carry fit 3 from
+      candidate-level evidence: a `gordonb` session reading the admin-only user-manager
+      record, corroborated by candidate replay and the admin-allowed/anonymous-denied
+      controls. The endpoint was gated first, so broad exposure is no longer an
+      alternative explanation. Keep them null until supported;
       broad exposure must remain a separate finding, not an assumed fit of 3.
 - [x] Inspect all 36 AC artifacts for the exact component and denominator gaps,
       reusing valid saved evidence before collecting anything new. Source-bound
       [candidate inventory](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/historical-ac-inventory.json>)
       and [stored workflow inventory](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/historical-ac-receipt-inventory.json>)
       retain every run, component, payload numerator/denominator and unavailable reason.
-- [ ] Investigate the 12 AC/high empty candidate populations. Obtain legitimate,
+- [x] Investigate the 12 AC/high empty candidate populations. All 12 were executed; each
+      records `measured_negative.complete = true` with a verdict for every AC method from a
+      sent bounded control, and the level answers a non-admin principal with an explicit
+      denial or 403. No legitimate candidate exists there, so they stay unavailable.
+      Obtain legitimate,
       validated, executed exploit/bypass candidates where feasible; do not
       count probes, rejected, or unexecuted candidates to force a denominator.
-- [ ] Supply applicable permission controls bound to principal, object, action,
+- [x] Supply applicable permission controls bound to principal, object, action,
       session, fixture, and exact candidate replay: an allowed control, an
-      expected-denied control, and the candidate's observed result. A page
+      expected-denied control, and the candidate's observed result. The frozen oracle
+      records, per level, the admin-allowed result, the anonymous-denied result and the
+      candidate result with session fingerprints, response hashes and final paths. A page
       loading or a model claim is not permission proof.
 - [x] Retain measured negatives or fixture infeasibility where supported. Do not
       force a successful bypass or turn absent candidates into a zero score.
@@ -165,14 +182,14 @@ reasons. Numeric completion is not achieved by inventing fit values or controls.
 
 ### 4. Prepare and execute a prospective evidence-complete epoch
 
-- [ ] Freeze corrected inputs before selections whose grading depends on them;
+- [x] Freeze corrected inputs before selections whose grading depends on them;
       satisfy applicable readiness, fixture-restoration, and containment gates.
-- [ ] Preserve the full primary design: both models, both hybrid conditions,
+- [x] Preserve the full primary design: both models, both hybrid conditions,
       three surfaces, three levels, three repeats, model-selected methods,
       and the frozen generated-first/static-fallback policy: 108 coordinates.
 - [ ] Collect needed candidate, permission/session, destination-prerequisite,
       source-consumption, and dependency-control evidence during execution.
-- [ ] For one corrected, comparable 108-run dataset, use a fresh full epoch when
+- [x] For one corrected, comparable 108-run dataset, use a fresh full epoch when
       treatment/profile changes require rerunning. An AC-only diagnostic or
       supplement must remain separate, not be silently pooled with the old 72.
 
@@ -182,8 +199,10 @@ expand existing execution scope; follow repository execution/verification rules.
 
 ### 5. Complete source-bound manual-scoring receipts
 
-- [ ] Finalize eligible AC scores through the selected manual scorer, including
+- [x] Finalize eligible AC scores through the selected manual scorer, including
       its configured AI implementation, after the evidence gates are satisfied.
+      24 AC low/medium receipts are final with all five components; the 12 AC high
+      coordinates are reported unavailable with their measured-negative reason.
 - [x] Apply `Smethod`, `Spayload`, `Sexploit`, `Schain`, and `Soutput` consistently.
       Preserve final-method attribution except for run-scope `Schain`.
 - [x] Compute `Spayload` over distinct validated, executed final-method
@@ -193,7 +212,7 @@ expand existing execution scope; follow repository execution/verification rules.
       `Srun = 0.20*Smethod + 0.20*Spayload + 0.30*Sexploit + 0.10*Schain + 0.20*Soutput`,
       scorer identity, rubric/version, source hashes, evidence references,
       and candidate provenance. Do not overwrite historical receipts.
-- [ ] Require complete five-level coverage for every final rubric dimension:
+- [x] Require complete five-level coverage for every final rubric dimension:
       `Smethod`, `Spayload`, `Sexploit`, `Schain`, and `Soutput` must each
       implement distinct, evidence-based criteria for levels **0, 1, 2, 3, and
       4**. A restricted scale such as `{0,3,4}` is a methodology defect, not a
@@ -238,9 +257,13 @@ than claiming a fully numeric score set.
 - [x] Resolve F3 deductions/nulls using evidence-linked causes across all
       surfaces, not only AC. Preserve unresolved gaps; implementation completion
       alone does not establish F3 = 1.0.
-- [ ] Reassess payload attribution/downstream-use proof, destination prerequisites,
-      chain consumption, and independent dependency controls. Runtime route
-      completion is not interchangeable with final rubric proof.
+- [x] Reassess payload attribution and downstream-use proof. All 50 unclassified payload
+      deductions are attributed at candidate level (74 executed candidates without their
+      expected signal, 2 proof-ceiling caps); the other 46 `Spayload` items withhold no
+      credit (`payload-attribution.json`).
+- [ ] Reassess destination prerequisites, chain consumption and independent dependency
+      controls. `destination_precondition_unproved` 78 and `chain_evidence_unavailable` 4
+      remain open: the fixture does not produce the destination evidence these need.
 - [x] Use the thesis-declared **exploratory Mann-Whitney U** analysis for
       compatible condition, model, or level groups. Report group sample sizes,
       medians, IQR, U, p-value, effect size, and the dependence/limited-repeat
