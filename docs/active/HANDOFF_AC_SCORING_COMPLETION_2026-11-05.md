@@ -115,9 +115,9 @@ audit verification. This documentation change does not re-audit or alter scores.
 
 - [ ] Check runtime, reporting, and handoff terminology for a false split between
       manual scoring and the selected AI implementation of the manual scorer.
-- [ ] Keep valid receipts from the selected scorer eligible; do not require a
+- [x] Keep valid receipts from the selected scorer eligible; do not require a
       second human receipt, human verification, or human sign-off.
-- [ ] Preserve manual-scoring terminology in DOCX files. Any later requested
+- [x] Preserve manual-scoring terminology in DOCX files. Any later requested
       manuscript sync must keep that terminology and the owner's red-text rule.
 
 Acceptance: the scorer policy above is respected without changing score values,
@@ -157,7 +157,7 @@ Existing approvals are not reopened and preregistration is never backdated.
       session, fixture, and exact candidate replay: an allowed control, an
       expected-denied control, and the candidate's observed result. A page
       loading or a model claim is not permission proof.
-- [ ] Retain measured negatives or fixture infeasibility where supported. Do not
+- [x] Retain measured negatives or fixture infeasibility where supported. Do not
       force a successful bypass or turn absent candidates into a zero score.
 
 Acceptance: AC components have source-bound evidence or precise unavailability
@@ -184,12 +184,12 @@ expand existing execution scope; follow repository execution/verification rules.
 
 - [ ] Finalize eligible AC scores through the selected manual scorer, including
       its configured AI implementation, after the evidence gates are satisfied.
-- [ ] Apply `Smethod`, `Spayload`, `Sexploit`, `Schain`, and `Soutput` consistently.
+- [x] Apply `Smethod`, `Spayload`, `Sexploit`, `Schain`, and `Soutput` consistently.
       Preserve final-method attribution except for run-scope `Schain`.
-- [ ] Compute `Spayload` over distinct validated, executed final-method
+- [x] Compute `Spayload` over distinct validated, executed final-method
       exploit/bypass candidates. Empty denominators or missing mandatory
       components leave the composite unavailable, not zero.
-- [ ] Preserve the formula
+- [x] Preserve the formula
       `Srun = 0.20*Smethod + 0.20*Spayload + 0.30*Sexploit + 0.10*Schain + 0.20*Soutput`,
       scorer identity, rubric/version, source hashes, evidence references,
       and candidate provenance. Do not overwrite historical receipts.
@@ -235,23 +235,23 @@ than claiming a fully numeric score set.
       [Regenerated audit](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/recovered/baseline-audit.json>)
       and [corrected exploratory analysis](</home/kevin/coding/tesis/results/validation/scoring-completion-2026-11-05/corrected-analysis/analysis.json>)
       are new derivations, not recovery of deleted bytes or retroactive evidence.
-- [ ] Resolve F3 deductions/nulls using evidence-linked causes across all
+- [x] Resolve F3 deductions/nulls using evidence-linked causes across all
       surfaces, not only AC. Preserve unresolved gaps; implementation completion
       alone does not establish F3 = 1.0.
 - [ ] Reassess payload attribution/downstream-use proof, destination prerequisites,
       chain consumption, and independent dependency controls. Runtime route
       completion is not interchangeable with final rubric proof.
-- [ ] Use the thesis-declared **exploratory Mann-Whitney U** analysis for
+- [x] Use the thesis-declared **exploratory Mann-Whitney U** analysis for
       compatible condition, model, or level groups. Report group sample sizes,
       medians, IQR, U, p-value, effect size, and the dependence/limited-repeat
       limitations. Holm-Bonferroni may accompany multiple comparisons.
       Software-provided paired tests and bootstrap intervals are supplementary;
       they do not replace the documented Mann-Whitney analysis without an
       explicit methodology revision.
-- [ ] Recompute coordinate availability, scoring arithmetic, and outcome spread
+- [x] Recompute coordinate availability, scoring arithmetic, and outcome spread
       for the resulting epoch. Keep all repeats and missing outcomes; no
       best-of-N, epoch pooling, or null filling.
-- [ ] Update reports with final/pending counts, reasons, provenance, containment,
+- [x] Update reports with final/pending counts, reasons, provenance, containment,
       and evidence paths. Update manuscript numbers or interpretations only when
       requested; retain manual-scoring terminology and color changes red.
 
@@ -264,28 +264,28 @@ completion.
 
 ### 7. Remove obsolete scorer systems without changing current behavior
 
-- [ ] Inventory scorer implementations, entry points, imports, configuration
+- [x] Inventory scorer implementations, entry points, imports, configuration
       switches, reporting paths, tests, and historical artifact readers. Identify
       the current canonical scorer and distinguish obsolete implementations from
       active functionality using callers and behavior, not version names.
-- [ ] Remove genuinely obsolete scorer implementations and unreachable branches,
+- [x] Remove genuinely obsolete scorer implementations and unreachable branches,
       including old v2/v3/v4-labelled paths where obsolescence is demonstrated.
       Preserve the behavior of the current rubric while moving it to its
       canonical unversioned name under item 8. A versioned name alone is not
       evidence that the underlying functionality should be deleted.
-- [ ] Migrate every live caller of removed code to the canonical implementation.
+- [x] Migrate every live caller of removed code to the canonical implementation.
       Remove obsolete aliases, switches, tests, and comments together; do not
       introduce a second scorer or retain dead execution paths as compatibility
       shims. Do not delete unrelated user work.
-- [ ] Preserve score dimensions, weights, evidence gates, denominators,
+- [x] Preserve score dimensions, weights, evidence gates, denominators,
       unavailable-value semantics, selected manual-scorer authority, and current
       scoring/reporting behavior. Coordinate the required identifier migration
       with item 8 rather than retaining live versioned identifiers.
-- [ ] Keep historical artifacts readable without executing obsolete scorers.
+- [x] Keep historical artifacts readable without executing obsolete scorers.
       Retain only necessary read-only historical parsing/labels with an explicit
       reason; never rewrite old artifacts, hashes, or receipts. Investigate
       existing source-hash and archived-script consumers before deleting files.
-- [ ] Verify current scoring/reporting behavior with the smallest relevant
+- [x] Verify current scoring/reporting behavior with the smallest relevant
       existing checks and a saved-artifact smoke covering numeric components,
       pending/empty-denominator cases, receipt identity, and historical reading.
       Update affected documentation. Record removed paths, migrated callers,
@@ -306,34 +306,34 @@ freeze process, never patch historical hashes or bypass readiness checks.
 
 ### 8. Remove arbitrary version naming across the entire codebase
 
-- [ ] Inventory all project-owned versioned names and contract identifiers:
+- [x] Inventory all project-owned versioned names and contract identifiers:
       evaluation/scorers, runtime, providers, CLI/TUI, prompts, schemas, policies,
       configuration, checkpoints, reports, tests, scripts, and current docs.
       Identify each producer, consumer, persisted binding, and historical reader.
-- [ ] Define one canonical unversioned descriptive name per responsibility and
+- [x] Define one canonical unversioned descriptive name per responsibility and
       migrate every live caller, import, command, configuration value, emitted
       schema/policy identifier, fixture, and current documentation together.
       No parallel version implementations, deprecated aliases, or forwarding
       shims may remain as live entry points.
-- [ ] Preserve intended implementation behavior and rubric semantics. This is a
+- [x] Preserve intended implementation behavior and rubric semantics. This is a
       naming and obsolete-code cutover, not a reason to change weights, ceilings,
       thresholds, budgets, or results. Do not erase required 0-4 rubric levels
       while removing version labels; complete missing coverage under item 5.
-- [ ] Preserve exact historical identities when reading saved artifacts,
+- [x] Preserve exact historical identities when reading saved artifacts,
       receipts, checkpoints, and frozen configurations. Keep necessary
       read-only historical decoding separate from the canonical write path;
       never relabel old data as newly emitted canonical data. Do not weaken
       compatibility, chronology, hash, or resume gates.
-- [ ] Use source/content hashes and explicit prospective epoch bindings to
+- [x] Use source/content hashes and explicit prospective epoch bindings to
       detect contract drift. Update future freeze inputs and validate them
       before execution; do not blindly equate artifacts because version
       suffixes have been removed.
-- [ ] Record the repository-wide ban in the maintained contributor/agent
+- [x] Record the repository-wide ban in the maintained contributor/agent
       instructions and naming conventions. Add a focused lint/static guard
       against reintroducing project-owned version suffixes and emitted version
       labels. Scope it to naming locations so it does not reject payload data,
       historical records, dependencies, model identifiers, or numeric literals.
-- [ ] Verify the coordinated cutover with relevant existing checks and actual
+- [x] Verify the coordinated cutover with relevant existing checks and actual
       import/CLI/scoring/reporting smoke scenarios, including historical
       artifact reading and required checkpoint compatibility. Record old-to-new
       mappings, any retained historical decoding, and verification evidence.
@@ -520,3 +520,37 @@ current rule, each into its own `reviews-canonical` directory with an isolated l
 - Nothing survives Holm at α = 0.05. The analysis remains the declared exploratory
   Mann–Whitney U with `independent: false`, three repeats, and the recorded dependence
   limitation; no paired or bootstrap figure replaces it.
+
+### Open checklist items (audited 2026-11-06)
+
+23 of the 37 requirement boxes are ticked against verified evidence. The 14 that remain open,
+with the exact condition that keeps each one open:
+
+- **116** terminology audit — no recorded audit result of runtime, reporting and handoff wording
+  exists; the settled-policy paragraph is a rule, not an outcome.
+- **129** approval-to-freeze identity — the approved draft digest and the frozen profile have not
+  been reconciled, and the fit-1 provenance defect is unresolved.
+- **133** profile/source/fixture/protocol/budget/policy binding for a future epoch — the fixture
+  term cannot be bound because the host fixture is read-only from this workspace.
+- **136** oracle source integrity and prospective commitments — the preregistration for this epoch
+  is missing and may never be backdated.
+- **145** the four AC low/medium IDOR and vertical-escalation fits — owner ruled keep `null`; the
+  read-only fixture cannot yield candidate-specific evidence.
+- **153** the AC/high candidate populations — still empty; no validated executed candidates exist.
+- **156** bound permission controls — the expected-denied control reads the object at low and
+  medium, so a candidate-specific allowed/denied/candidate triple cannot be formed.
+- **168** frozen inputs before selection — the rule changed after the earlier epochs were graded,
+  which is exactly why all 54 executions were re-scored into a fresh epoch.
+- **170**, **175** the 108-coordinate two-model design — the executed design is 54 coordinates with
+  one evaluated model by owner decision; the 108-run comparable dataset does not exist.
+- **173** candidate, permission/session, destination-prerequisite, source-consumption and
+  dependency evidence — these are the four unresolved dimensions of the six AC/high runs.
+- **185** AC scores finalised "after the evidence gates are satisfied" — the values are final at low
+  and medium, but the fit-1 provenance defect leaves that clause unmet.
+- **196** five-level coverage of every dimension — Sexploit level 4 stays unreachable because the
+  assessed method is the last executed method, not the dependency source.
+- **241** downstream-use and dependency attribution — blocked by the same level-4 rule, and the
+  analysis records `independent: false`.
+
+Ticking a box means that requirement is satisfied by evidence. It does not assert the research
+claim is complete: acceptance is still not claimed and this handoff stays in `docs/active/`.
