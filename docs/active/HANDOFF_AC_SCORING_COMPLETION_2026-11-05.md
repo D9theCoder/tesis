@@ -421,23 +421,73 @@ retrofitted or relabelled.
 - Revised-epoch receipts: **41 final, 13 pending, 0 failed**.
 - **Access Control low now has numeric scores**: six final receipts, each
   `Srun_final = 2.2` from Smethod 2, Spayload 1.5, Sexploit 3, Schain 0, Soutput 3.
-- Access Control medium: `ranking_no_rankable_method` — `force_browse_endpoints_visible`
-  was measured **false**, so no method has a proven reference fit.
-- Access Control high: no viable method and no candidates.
+- Access Control medium: `ranking_no_rankable_method` in this epoch — the only
+  fit-bearing entry (`ac_force_browse`, fit 1) was ineligible because
+  `force_browse_endpoints_visible` was measured **false**, while the two methods
+  that actually executed carried `null` reference fits. Superseded by the
+  remediation epoch below.
+- Access Control high: no viable method and no candidates; a measured negative.
 - Revised-epoch F3: **168/270 = 0.6222**, 102 unresolved; exploratory analysis
   covers **7 of 9 strata** (both unsupported strata are Access Control).
 - Original corrected epoch stays at 35 final / F3 162/270 and is preserved unchanged.
 
+**Access-Control remediation epoch (owner-authorised 2026-11-06)**
+
+The owner authorised both remaining remedies: a fixture/attack-scope expansion, and a
+further documented methodology change for how Access-Control selection is scored.
+
+The methodology change is applied in `evaluation/scoring_evidence.py`. When a scenario
+holds no confirmed reference fit but does hold methods whose preconditions were measured
+true, ranking orders those by `planned_request_count` and records
+`reference_pending_availability_ranking`; `selection_grade` then reports
+`top_ranked_reference_pending_availability` instead of withholding `Smethod`. Pending
+entries keep `reference_fit: null`, unknown comparison observations still fail closed,
+ineligible entries are still excluded, and fit-based ordering is untouched. Low proves the
+no-regression case: it still grades `Smethod 2` for an unranked choice against the
+confirmed `AC-LOW-FB` fit 3.
+
+Re-scored the 18 Access-Control runs with `--isolated-ledger` into per-run
+`reviews-revised-ac` directories: **11 final, 0 failed** (`rescore-ac-epoch.json`).
+
+| level | numeric `Srun_final` | values | status |
+| --- | --- | --- | --- |
+| low | 6/6 | 2.2 ×6 | unchanged |
+| medium | **5/6** | 2.4, 2.4, 2.7, 2.3, 2.4 (mean 2.44) | `Smethod 3` on all six runs |
+| high | 0/6 | — | measured negative, `no_assessable_candidates` |
+
+Access-Control F3 for this stratum: **65/90 = 0.7222**. Availability per level: low
+`Smethod 6, Spayload 6, Sexploit 6, Schain 6, Soutput 6`; medium `6, 6, 6, 6, 6`; high
+`0, 0, 6, 0, 0`.
+
+`run-015` remains pending with its cause identified: both evaluator attempts scored 3 but
+cited `#/config/scoring_oracles/5/document/document/candidate_replay`, a doubled `document/`
+segment that does not resolve. The decision was refused twice; it is judge output quality,
+not a proof-floor clamp, and the value is left unavailable rather than filled.
+
 **Not achieved, and why**
 
-- **Numeric Access-Control scores do not exist.** `Smethod` is unavailable for
-  all 18 AC runs because four AC low/medium reference fits are null by owner
-  decision (option A: broad anonymous exposure is not method-specific evidence).
-  AC high additionally produced no assessable candidates. `Srun_final` is 0 at
-  every AC level.
+- **Access Control numeric scores exist at low and medium, not at high.** High holds no
+  assessable candidates because the fixture closes it: the documented non-admin receives
+  the same empty JSON as an anonymous client (`{"result":"fail","error":"Access denied"}`
+  or `[]`), so no method has a proven reference fit and the approved entries are fit-1
+  measured negatives. That outcome is the one V4 §9.4 accepted and is now recorded for this
+  epoch rather than described as a missing proof.
+- **The fixture/attack-scope expansion cannot be executed from this environment.** The
+  host fixture is mounted read-only (`9p ... ro,nosuid,nodev,noatime` on `/mnt/c`), and
+  `vulnerabilities/authbypass/get_user_data.php` in that tree contains no
+  `dvwaPageStartup`, `isAdmin` or `SESSION` call, so the broad anonymous exposure the
+  permission oracle measures is inherent to the fixture build. Making IDOR and vertical
+  escalation candidate-specific needs an owner-side change to the host fixture. The four
+  `AC-LOW-IDOR`, `AC-LOW-VERT`, `AC-MED-IDOR` and `AC-MED-VERT` reference fits therefore
+  stay `null`, exactly as the owner ruled, and broad exposure stays a separate finding.
 - Sexploit level 4 is unreachable under the documented rule because the assessed
   method is the last executed method, not the dependency source.
 - The historical oracle preregistration draft no longer pins the shipped sources;
   a prospective preregistration for this epoch is still missing.
+- The approved fit-1 labels for `AC-MED-FB` and the three `AC-HIGH-*` entries rest on
+  frozen `operator_fixture` records whose own `status` is `inconclusive`, and no code in
+  this repository reproduces them. The mismatch is recorded as a provenance defect of the
+  approved labels; it is not silently re-labelled and it does not license refilling the
+  four `null` fits.
 - Acceptance therefore cannot be claimed and this handoff is **not** moved to
   `docs/completed/`.

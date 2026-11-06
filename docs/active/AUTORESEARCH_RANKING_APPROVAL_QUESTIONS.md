@@ -88,6 +88,45 @@ now recorded. A `pending` evidence status is not a pending owner decision.
 | `AC-MED-IDOR` | `access_control:medium` | `ac_idor` | **null** (proposed 3) | `pending` | 23 | `object_ids_enumerable` | `COMP /records/9-11` | 3/3 records inconclusive for candidate-specific access: non-admin **and** anonymous expected-denied control both see the object. | **A — KEEP NULL; machine evidence required** |
 | `AC-MED-VERT` | `access_control:medium` | `ac_vertical_escalation` | **null** (proposed 3) | `pending` | 23 | `role_based_access_present` | `COMP /records/12-14` | Same broad-exposure gap as `AC-MED-IDOR`; candidate-specific permission behavior unproven. | **A — KEEP NULL; machine evidence required** |
 
+#### 3.1a Dated resolution (2026-11-06) — the four nulls stand; how selection is scored
+
+The owner authorised both remaining remedies on 2026-11-06: a fixture/attack-scope
+expansion capable of method-specific evidence, and a further documented methodology change
+for how Access-Control selection is scored. Both were pursued. The table above is
+unchanged; the outcomes are recorded here.
+
+**The four `null` fits stay `null`.** Re-measuring the permission oracle against the current
+fixture reproduces `scope_outcome: broad_exposure` with `status: confirmed` for both
+`ac_idor` and `ac_vertical_escalation` at low and medium. The reason is a fixture property,
+not a stale record: with the level cookie and no session at all, `get_user_data.php` returns
+all five user records, so the anonymous expected-denied control genuinely reads the object.
+Only `ac_force_browse` at low is `candidate_specific`. Option A therefore remains satisfied
+on its own terms — broad exposure is not method-specific evidence — and the four entries
+stay `pending` with `reference_fit: null`.
+
+**The fixture expansion is not executable from the workspace.** The host fixture is mounted
+read-only (`9p ... ro,nosuid,nodev,noatime` on `/mnt/c`), and
+`vulnerabilities/authbypass/get_user_data.php` in that tree contains no `dvwaPageStartup`,
+`isAdmin` or `SESSION` call. Producing candidate-specific IDOR or vertical evidence needs an
+owner-side change to the host fixture; it cannot be done by changing this repository.
+
+**The methodology change is applied and does not touch these fits.**
+`evaluation/scoring_evidence.py` now orders eligible methods by `planned_request_count` and
+records `reference_pending_availability_ranking` when a scenario holds no confirmed reference
+fit but does hold methods whose preconditions were measured true. `reference_fit` is never
+invented, pending entries stay pending, unknown comparison observations still fail closed, and
+fit-based ordering is unchanged where a fit exists. Re-scoring the 18 Access-Control runs in
+an isolated epoch (`reviews-revised-ac`, 11 final, 0 failed) gives numeric scores at low (6/6,
+`Srun_final` 2.2) and medium (**5/6**, 2.3-2.7, `Smethod 3` throughout), with high left as the
+accepted measured negative (0/6, `no_assessable_candidates`).
+
+**One provenance defect is recorded rather than repaired.** The fit-1 labels on `AC-MED-FB`
+and the three `AC-HIGH-*` entries rest on frozen `operator_fixture` records
+(`ranking-completion-2026-10-11-epoch2`, records 15-17) whose own `status` is `inconclusive`,
+while the draft declares them `confirmed`. No code in this repository reproduces those
+records. The labels are reported as they stand; they are neither re-derived nor used to fill
+the four `null` fits.
+
 ### 3.2 Brute Force — 6 entries (all confirmed)
 
 | Review ID | Scenario | Method | Actual `reference_fit` | Status | `planned_request_count` | Prereq / fit predicate `= true` | Evidence refs | Basis / decision note | Owner response |

@@ -872,3 +872,68 @@ while the draft entry declaring them is `reference_status: confirmed, reference_
 in the repository can reproduce those rows. The mismatch must be reported in the approval
 document as a provenance defect of the approved labels; it must not be silently re-labelled, and
 it does not license refilling the four `null` fits.
+
+### 28 — Access-Control remediation epoch: medium scores numerically (2026-11-06)
+
+**Change.** `evaluation/scoring_evidence.py::ranking_comparison` now orders eligible
+methods by `planned_request_count` and records `reference_pending_availability_ranking`
+when a scenario holds **no confirmed reference fit** but does hold methods whose
+preconditions were measured true. `selection_grade` reports
+`top_ranked_reference_pending_availability` for that case and no longer applies the
+"worse choice than a confirmed entry" grade when no confirmed entry exists. Nothing else
+moved: entries whose comparison observations are not booleans still return
+`ranking_observation_unknown`, ineligible entries are still excluded, pending entries keep
+`reference_fit: null`, and fit-based ordering is unchanged wherever a fit exists.
+
+Directly verified before re-scoring, on the retained artifacts:
+`run-007` (low) still grades **2** with `selected_method_unranked_reference_pending`;
+`run-014`/`run-016` (medium) now grade **3** with `top_ranked_reference_pending_availability`;
+`run-001` (high) still has no selection decision at all.
+
+**Epoch.** `results/validation/ac-scope-expansion-2026-11-06/rescore_ac_epoch.py` re-scored
+the 18 Access-Control runs with `--isolated-ledger` into per-run `reviews-revised-ac`
+directories. Driver receipt: `rescore-ac-epoch.json` — 18 runs, **11 final, 0 failed**.
+Summary: `ac-epoch-summary.json`.
+
+| level | numeric `Srun_final` | values | note |
+| --- | --- | --- | --- |
+| low | 6/6 | 2.2 ×6 | unchanged from the revised epoch |
+| medium | **5/6** | 2.4, 2.4, 2.7, 2.3, 2.4 (mean 2.44) | `Smethod` now **3** on all six runs |
+| high | 0/6 | — | `no_assessable_candidates`, the accepted measured negative |
+
+Access-Control F3 for this stratum: **65/90 = 0.7222** (was 59/90 before the six `Smethod`
+cells filled). Component availability per level: low `Smethod 6, Spayload 6, Sexploit 6,
+Schain 6, Soutput 6`; medium `6, 6, 6, 6, 6`; high `0, 0, 6, 0, 0`.
+
+**`run-015` stays pending, with its cause identified.** Both judge attempts returned
+`score 3`, but cited `#/config/scoring_oracles/5/document/document/candidate_replay` — a
+doubled `document/` segment, so the reference does not resolve and the decision was
+rejected. `workflows.ai` records `pending_candidate_grades` with `Spayload: null`. This is
+judge output quality, retried once and refused both times; it is not a proof-floor clamp and
+not a harness defect. Reported as pending, never filled.
+
+**Fixture expansion is not executable in this environment.** `/mnt/c` is mounted `ro`
+(`9p ... ro,nosuid,nodev,noatime`), so `C:\xampp\htdocs\DVWA` cannot be modified from here,
+and `vulnerabilities/authbypass/get_user_data.php` contains no `dvwaPageStartup`/`isAdmin`/
+`SESSION` call at all — the broad exposure measured by the oracle is inherent to this
+fixture build. Making IDOR/vertical evidence candidate-specific therefore needs an owner
+side change on the host fixture, not a repository change. Access-Control **high** continues
+to rest on the approved fit-1 measured negative, now explicitly authorised below.
+
+**Verification for the remediation epoch.** New controls in
+`tests/test_autoresearch_profile.py` cover the three cases the change can be wrong about:
+pending-only scenarios rank eligible methods by planned cost and grade 3
+(`top_ranked_reference_pending_availability`), a confirmed fit still wins and the basis key
+is absent, and measured-false prerequisites still grade 1 before any ranking runs. Full
+offline suite: **618 passed, 0 failed** (`results/validation/junit-ac-epoch.xml`). Naming
+guard: **0 violations**.
+
+Four tests in that suite were failing **before** this change; the same four fail with
+`evaluation/scoring_evidence.py` reverted, so they were not regressions. They were stale
+fixtures left by two earlier authorised rules: the grade stub in
+`tests/test_thesis_scoring_e2e.py` ignored the now-binding machine-proof floor, and
+`tests/test_evaluator_profile_config.py` built a queue without a rubric identity, so the
+historical read-only guard fired before the evaluator-mismatch guard it intends to assert.
+All four now pass, with the AI-grade expectation updated to the floor behaviour (a
+below-floor grade is dropped, never clamped) and the queue carrying the current rubric
+identity so the intended guard is the one under test.
