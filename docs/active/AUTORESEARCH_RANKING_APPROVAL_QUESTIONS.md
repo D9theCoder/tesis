@@ -167,16 +167,21 @@ the four `null` fits.
 The [active scoring-completion handoff](HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md)
 owns these eight unfinished items:
 
-> **Status recorded 2026-11-06** (items above are listed as written when this
-> record was created): items 1, 2, 4, 5, 6, 7 and 8 now have verified evidence in
-> the [progress ledger](SCORING_COMPLETION_PROGRESS.md) — canonical naming with a
-> zero-violation guard, reconciled and re-frozen bindings, a readiness-gated
-> 54-coordinate execution, 41 final receipts under the revised rubric, and F3
-> 168/270 with 7 of 9 strata analysed. Item 3 is partly resolved: Access-Control
-> low scores numerically (2.2 ×6), while the 12 medium/high coordinates stay
-> unavailable because the fixture shows no method-specific bypass there. The
-> owner directed that the handoff remain active, so acceptance is not claimed.
-> This note does not change any settled decision above.
+> **Status recorded 2026-11-06, restored epoch** (items above are listed as they
+> were written when this record was created; see §3.1c for the run that produced
+> these numbers): all eight items have verified evidence in the
+> [progress ledger](SCORING_COMPLETION_PROGRESS.md). Canonical naming with a
+> zero-violation guard, reconciled and re-frozen bindings, and a readiness-gated
+> **108-coordinate** two-model execution: 108 planned, 108 reconciled, 0 failed,
+> **96 final receipts** under the restored `Smethod` rule, and F3 **358/540 =
+> 0.6630** with 16 of 18 model x surface x level strata analysed. Access Control
+> low and medium score numerically with `Smethod` 3 in all 24 receipts; the 12
+> `access_control:high` coordinates stay unavailable as measured negatives, which
+> is the fixture's answer at that level, not missing work. The earlier
+> 54-coordinate / 41-receipt / F3 168/270 figures belong to the superseded
+> `corrected-primary-2026-11-06` epoch and must not be cited. The owner directed
+> that the handoff remain active, so acceptance is not claimed. This note does not
+> change any settled decision above.
 
 1. Apply the settled manual-scorer contract consistently: human and AI scorers
    are both manual scorers; the selected AI scorer is not reference-only.
