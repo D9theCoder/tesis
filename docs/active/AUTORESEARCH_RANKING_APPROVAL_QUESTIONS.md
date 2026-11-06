@@ -118,7 +118,9 @@ invented, pending entries stay pending, unknown comparison observations still fa
 fit-based ordering is unchanged where a fit exists. Re-scoring the 18 Access-Control runs in
 an isolated epoch (`reviews-revised-ac`, 11 final, 0 failed) gives numeric scores at low (6/6,
 `Srun_final` 2.2) and medium (**5/6**, 2.3-2.7, `Smethod 3` throughout), with high left as the
-accepted measured negative (0/6, `no_assessable_candidates`).
+accepted measured negative (0/6, `no_assessable_candidates`). The subsequent canonical epoch, which re-scores all 54 executions once
+under the same rule, resolves medium to **6/6** and reports **F3 246/270 = 0.9111**;
+the earlier 5/6 holdout was a judge citation defect, not a rule limit.
 
 **One provenance defect is recorded rather than repaired.** The fit-1 labels on `AC-MED-FB`
 and the three `AC-HIGH-*` entries rest on frozen `operator_fixture` records
