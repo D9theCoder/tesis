@@ -397,7 +397,9 @@ def review_queue(source: str | Path) -> dict:
         # when the assessed method is the dependency source *or* when its own
         # executed candidate consumed a verified dependency. Either way the base
         # proof must already be 3 and a dependency must be recorded.
-        consumes_dependency = any(d.get('source', {}).get('candidate_id') == cid
+        # The consumer of a dependency is the destination candidate, recorded as
+        # ``candidate_id``; ``source_candidate_id`` names the producer it consumed.
+        consumes_dependency = any(d.get('candidate_id') == cid
                                   for d in dependencies)
         ceiling = 4 if base == 3 and (
             any(d['source'].get('candidate_id') == cid and d['source'].get('agent_id') == method

@@ -1187,3 +1187,22 @@ rewrite asserted); regenerating the oracle source for the new `fixture_id` so pe
 can bind; extending the reference protocol to `change_user_details.php`; a denial control that
 separates endpoint refusal from DVWA's login redirect; and the stale handoff claims and availability
 table.
+
+### 37 — Level-4 consumer branch corrected (2026-11-06)
+
+`evaluation/thesis_scoring.py` computed `consumes_dependency` from
+`d['source']['candidate_id']`, i.e. the dependency's *producer*, while the consumer of a dependency
+is its destination candidate, recorded as `d['candidate_id']` (see the bindings in
+`evaluation/scoring_evidence.py:602-603`). The second branch therefore only re-stated the first and
+dropped the `agent_id == method` condition instead of recognising a consumer. It now tests the
+destination candidate, so the shipped rule matches the comment and the authorised revision.
+
+This does not by itself make level 4 reachable in any retained epoch: no receipt in the four
+existing epochs records `Sexploit == 4`, so the handoff's "level 4 unreachable" statement stays
+accurate for those datasets. What changed is that the rule is now the one it claims to be; whether
+it can reach 4 has to be observed on a re-score rather than asserted.
+
+Also recorded this round, from the same audit: the oracle declaration now binds to the authenticated
+fixture identity so permission attestations can validate (`ef5db1f`), and the two availability rows
+that contradicted `ac-epoch-summary.json` plus the superseded fixture paragraph were corrected in
+the handoff and this ledger.
