@@ -3,7 +3,7 @@
  "fixture_id": "dvwa-authenticated-object-a000f969edb8d78a5c5d",
  "frozen_at": "2026-11-06T05:49:05.727583+00:00",
  "profile_id": "autoresearch-ranking-candidate-2026-11-06",
- "protocol_version": "ranking-session-acceptance.v1",
+ "protocol_version": "ranking-session-acceptance",
  "scenarios": {
   "access_control:high": {
    "ac_force_browse": {
@@ -688,7 +688,7 @@
    }
   }
  },
- "sha256": "ef3649d70c842b1ce74e07c7c0977bdb2f4ad453873dbafe9d7e45362e6d8c3c",
+ "sha256": "99504956ca48b6162cfc1fb566b9ffd1db1f617c20d65d19a5f1fbe695dbf5b7",
  "sources": [
   {
    "document": {
