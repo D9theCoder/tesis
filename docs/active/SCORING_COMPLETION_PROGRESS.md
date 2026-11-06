@@ -1301,3 +1301,23 @@ Read-only over the 96 final receipts and their artifacts; no score changes.
   no downstream payload use) and 9 record credit earned by a static seed rather than model output.
 - `Sexploit` 43 and `Schain` 43 are the same downstream-use limitation; `destination_precondition_unproved`
   78 remains the largest single gap.
+
+## 43. Chain, dependency and destination reassessment
+
+Read-only over the 96 scored artifacts, their receipts and the frozen oracle's dependency controls.
+
+- 18 runs record a verified dependency: chain `credentials_extracted` -> `bf_dictionary`, each
+  bound to `#/config/scoring_oracles/4/document/dependencies/0` with derivation
+  `md5_declared_corpus_v1`. Their receipts grade `Schain` 3.
+- In all 18, `credited_method` is `bf_dictionary` (the consuming destination) while the selected
+  method was `sqli_boolean_blind` (11) or `sqli_time_blind` (7). The dependency source was
+  `sqli_union`. So the graded candidates were never dependency endpoints, and `Sexploit` level 4
+  could not be reached in this topology. The level is implemented: `proof_ceiling` becomes 4 when
+  the base proof is 3 and the graded candidate is the dependency source or the consumer. It stays
+  unobserved because no run put the selected method at either end of the chain.
+- 78 unresolved items (39 `Sexploit`, 39 `Schain`) are `destination_precondition_unproved`: a
+  statically supported edge whose destination precondition is not proved. 56 of the 78 carry full
+  component credit 3, so this limits a level-4/chain claim rather than withholding a score.
+  4 further items are `chain_evidence_unavailable`: no dependency exists in that run.
+- Conclusion recorded in the handoff: level 4 is reachable by rule and absent by evidence. Nothing
+  in this reassessment changes a score.

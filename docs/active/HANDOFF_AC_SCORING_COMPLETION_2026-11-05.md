@@ -261,9 +261,17 @@ than claiming a fully numeric score set.
       deductions are attributed at candidate level (74 executed candidates without their
       expected signal, 2 proof-ceiling caps); the other 46 `Spayload` items withhold no
       credit (`payload-attribution.json`).
-- [ ] Reassess destination prerequisites, chain consumption and independent dependency
-      controls. `destination_precondition_unproved` 78 and `chain_evidence_unavailable` 4
-      remain open: the fixture does not produce the destination evidence these need.
+- [x] Reassess destination prerequisites, chain consumption and independent dependency
+      controls. Reassessed 2026-11-06 against saved evidence. 18 of the 96 scored runs carry
+      a verified dependency (`credentials_extracted` -> `bf_dictionary`), each bound to a
+      dependency control declared in the frozen oracle; in every one the chain credits
+      `bf_dictionary` as the consuming destination while the selected method was
+      `sqli_boolean_blind` (11 runs) or `sqli_time_blind` (7), so no graded candidate was a
+      dependency endpoint and `Sexploit` level 4 was unreachable by topology, not by a
+      recognition defect. 78 items (39 `Sexploit`, 39 `Schain`) record a statically supported
+      edge whose destination precondition is unproved; 56 of them carry full credit 3, so the
+      gap limits a level-4/chain claim rather than withholding a score. 4 further items have
+      no dependency at all. These stay recorded as evidence limitations, not as tasks.
 - [x] Use the thesis-declared **exploratory Mann-Whitney U** analysis for
       compatible condition, model, or level groups. Report group sample sizes,
       medians, IQR, U, p-value, effect size, and the dependence/limited-repeat
