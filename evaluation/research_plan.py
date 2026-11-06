@@ -30,6 +30,7 @@ from core.payload_policy import (
     PAYLOAD_POLICY_VERSION,
     REASON_ATTESTATION_MISSING,
 )
+from core.historical_contracts import read_contract
 from core.state import METHODS_BY_SURFACE, SECURITY_LEVELS, SURFACES
 from evaluation.scoring_evidence import evidence_hash, validate_evidence_config, validate_profile
 from foundation.payload_snapshot import payload_policy_snapshot, verify_payload_policy_snapshot
@@ -1327,7 +1328,16 @@ def verify_plan(plan_path: str | Path) -> dict[str, Any]:
     """Re-hash a plan's frozen inputs; refuse execution after drift."""
     path = Path(plan_path)
     plan = json.loads(path.read_bytes())
-    if plan.get("artifact_type") != "chapter3_research_plan" or plan.get("plan_version") != RESEARCH_PLAN_VERSION:
+    if plan.get("artifact_type") != "chapter3_research_plan":
+        raise ValueError("not a supported Chapter 3 research plan")
+    if plan.get("plan_version") != RESEARCH_PLAN_VERSION:
+        recorded = plan.get("plan_version")
+        if read_contract(recorded, "study-plan"):
+            # A recognised historical plan stays readable and is still refused for
+            # execution: the recorded label only classifies the input.
+            raise ValueError(
+                f"historical research plan version {recorded!r} is readable but not executable"
+            )
         raise ValueError("not a supported Chapter 3 research plan")
     expected = {k: v for k, v in plan.items() if k != "plan_sha256"}
     if plan.get("plan_sha256") != _json_hash(expected):

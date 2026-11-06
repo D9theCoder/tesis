@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from core.historical_contracts import HISTORICAL_CONTRACT_NAMES
 from core.state import METHODS_BY_SURFACE
 from evaluation import research_plan
 from evaluation.research_plan import (
@@ -636,3 +637,25 @@ def test_epoch_manifest_aggregate_resolves_to_real_block_file(
     assert catalog.resolve(reference, owner=manifest_path) == selection_aggregate.resolve()
     assert not (epoch / "offline-run-selection.matrix.json").exists()
 
+
+
+def test_historical_plan_version_is_readable_but_not_executable(tmp_path):
+    """A recognised historical plan label must not look like an unknown artifact."""
+    historical = sorted(HISTORICAL_CONTRACT_NAMES["study-plan"])[0]
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps({
+        "artifact_type": "chapter3_research_plan",
+        "plan_version": historical,
+    }))
+    with pytest.raises(ValueError, match="readable but not executable"):
+        verify_plan(plan_path)
+
+
+def test_unknown_plan_label_stays_unsupported(tmp_path):
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps({
+        "artifact_type": "chapter3_research_plan",
+        "plan_version": "unsupported-plan-label",
+    }))
+    with pytest.raises(ValueError, match="not a supported Chapter 3 research plan"):
+        verify_plan(plan_path)

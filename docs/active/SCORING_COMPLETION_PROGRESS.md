@@ -1321,3 +1321,19 @@ Read-only over the 96 scored artifacts, their receipts and the frozen oracle's d
   4 further items are `chain_evidence_unavailable`: no dependency exists in that run.
 - Conclusion recorded in the handoff: level 4 is reachable by rule and absent by evidence. Nothing
   in this reassessment changes a score.
+
+## 44. Historical plan readability
+
+```bash
+.venv/bin/python -m pytest -q tests/test_research_plan_blocks.py
+.venv/bin/python -m tesis.naming_guard
+```
+
+`verify_plan` used one generic refusal for every non-current plan version, so a plan whose label is
+already declared historical in `core/historical_contracts.py` was indistinguishable from an unknown
+artifact. It now refuses with
+`historical research plan version 'chapter3-research-plan.v2' is readable but not executable` when the
+recorded label is a declared historical name for `study-plan`, and keeps the generic refusal for
+unknown labels. The gate still refuses execution; only the reason is precise. Two regression tests
+derive the label from `HISTORICAL_CONTRACT_NAMES` rather than a literal, so the naming guard stays at
+zero violations.
