@@ -943,3 +943,35 @@ historical read-only guard fired before the evaluator-mismatch guard it intends 
 All four now pass, with the AI-grade expectation updated to the floor behaviour (a
 below-floor grade is dropped, never clamped) and the queue carrying the current rubric
 identity so the intended guard is the one under test.
+
+### 29 — Access-Control epoch analysis, and a cross-epoch consequence of the scoring change
+
+Analysis artifact: `results/validation/ac-scope-expansion-2026-11-06/ac-epoch-analysis.json`
+(`chapter3_research_analysis`, planned 54). Each stratum draws receipts from exactly one scoring
+epoch — Access Control from the remediation epoch (`reviews-revised-ac`, rule `5151ca9c…`),
+SQLi and Brute Force from the original epoch (rule `5cbc0a23…`) — verified by exactly one
+`scoring_rule_sha256` per stratum. Status: **6 analysed, 3 unsupported**.
+
+- `access_control/low` **analysed** (3 vs 3): every outcome ties exactly, `U = 4.5`, `p = 1`,
+  `Srun_final` median 2.2 vs 2.2, IQR 0 vs 0, rank-biserial 0.
+- `access_control/medium` **analysed** (linear 3 vs akg 2, since `run-015` is pending):
+  `Srun_final U = 3`, `p = 1`, median 2.4 vs 2.4, IQR 0.2 vs 0; `Spayload U = 5`,
+  `p = 0.317311`, median 3 vs 1.5, rank-biserial 0.6667; `Soutput U = 2`, `p = 0.683091`.
+- `access_control/high` **unsupported** — `linear_hybrid:no_ready_final_receipts`; its six
+  coordinates are `pending_review` / `no_assessable_candidates`, the accepted measured negative.
+- `sqli/low` and `sqli/medium` **unsupported**: their original-epoch receipts were rejected by
+  the current rule (sub-machine-proof grades), not by missing execution.
+
+No paired or bootstrap figure is quoted; the tool's own `paired` block is unused. Duplicate
+resolution was established before running: receipts are pooled across roots and the newest
+`generated_at` wins (`evaluation/observer_reviews.py:271-273`, `292-293`), so the flat revised
+root was deliberately never passed alongside the remediation dirs.
+
+**Consequence to carry forward.** Under the current scoring rule the earlier revised epoch (41
+receipts, rule `45e40deb…`) no longer validates: its receipts fail `_source_bound_queue` with
+`source_identity_hash_mismatch`, because the scoring sources changed when this epoch's rule was
+applied. This is the documented behaviour that a scoring-source change re-binds receipts, not a
+corruption, but it means the 54-coordinate dataset can no longer be analysed as one coherent
+epoch from the older receipts. The remaining honest route to a single-epoch 54-run analysis is a
+fresh re-score of all 54 runs under the current rule, which also repairs `sqli/low`,
+`sqli/medium` and the reduced Brute Force cells. That re-score has not been run.
