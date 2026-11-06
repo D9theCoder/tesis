@@ -1001,3 +1001,26 @@ ledgers. Driver receipt `rescore-full-epoch.json`; summary `canonical-epoch-summ
 The earlier epochs (original 35 final, revised 41 final, AC remediation 11 final) are kept
 unchanged as chronological records. This canonical epoch supersedes them for analysis because
 it is the only one whose receipts all validate under the current rule.
+
+### 31 — Requirement checklist reconciled with evidence (2026-11-06)
+
+An independent read-only audit of the handoff's 37 open boxes produced 22 satisfied verdicts;
+I reviewed each against the artifacts, added two the audit had left open but which have existing
+evidence (`canonical-scorer-smoke.json` and `cleanup-smoke.json` cover the saved-artifact smoke;
+`bulk-migration-manifest.json` plus `canonical-cutover-verification.json` are the old-to-new
+mapping and cutover check), and then performed the one audit the list still needed.
+
+- **24 of 37 boxes are ticked**, each against a named artifact.
+- **13 remain open**, each with its blocking condition recorded in the handoff: the 108-coordinate
+  two-model design (owner-reduced to 54 with one model), the prospective oracle preregistration
+  (cannot be backdated), the four AC fits (read-only host fixture), the candidate-specific
+  permission triple (the expected-denied control reads the object at low and medium), Sexploit
+  level 4 (assessed method is not the dependency source), the fit-1 provenance defect, approval
+  to freeze identity, and frozen inputs before a future selection.
+- **Item 116 terminology audit performed**: `core/scoring_contracts.py` labels both `human` and
+  `ai` as "manual assessment; final only with validated receipt", neither active document presents
+  the AI scorer as a separate scoring role, and reporting code carries no competing vocabulary.
+  No false split exists, so the box is ticked and the scope of the check is recorded.
+
+Ticking a box records that a requirement is met; it does not assert the research claim. The
+handoff stays in `docs/active/` and acceptance is not claimed.
