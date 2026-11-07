@@ -7,8 +7,15 @@ approval remains outstanding. Do not ask these questions again. This record stay
 at its original path because frozen ranking and execution metadata reference it;
 it is not an active handoff.
 
-**Unfinished scoring work:** [active AC scoring and methodology handoff](HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md).
-It owns the eight remaining work items; this file retains the settled ranking decisions.
+**Unfinished scoring work:** [active AC scoring and methodology handoff](<HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md>).
+It owns the remaining implementation/evidence work; this file retains the settled decisions.
+**Latest owner choices (2026-11-07):** High AC remains incomplete/unavailable and all 12
+coordinates still need resolution; choices 2B, 3B and 4B select a prospective methodology
+revision. See [section 5](<#5-owner-decisions-for-the-next-methodology-revision-2026-11-07>) and the
+[separate planning document](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>).
+The later [USER APPROVED authorization](<HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md#user-approved--full-implementation-and-execution-2026-11-07>)
+now covers full implementation/execution and LLM/tool calls for this revision;
+this turn records that approval without launching work.
 
 **Artifacts:** [ranking draft JSON](../../config/research/autoresearch-ranking-draft-2026-10-31.json)
 and [completed handoff](../completed/HANDOFF_AUTORESEARCH_LOOP_2026-10-30.md).
@@ -272,26 +279,31 @@ model is reachable again; it is not a study run and does not by itself constitut
 ### 3.1c The ranking rule was applied in a full declared epoch (2026-11-06)
 
 The owner's rubric authorization ("i authorize rubric changes", "proceed all including the rubric change
-if needed") was used for one change only: `Smethod` now grades reference fit (fit 3/2/1 graded 3/2/1,
-eligible-but-unranked graded 2) instead of the within-cell ranked position, which had demoted a uniquely
-confirmed method. Weights, denominators, evidence gates and unavailable-value behaviour are unchanged.
+if needed") preceded the restored epoch. **Description corrected on 2026-11-07:** the earlier note
+incorrectly described direct fit-to-score conversion. The maintained
+[selection grader](<../../evaluation/scoring_evidence.py#L400-L451>) assesses eligibility, confirmed
+reference fit/cost ranking, rationale and plan: lower-ranked or eligible-unranked choices receive 2;
+top-ranked choices receive 3 or 4 depending on verified rationale/plan support. `reference_fit` is an
+evaluator input, not the thesis score. This documentation correction changes neither frozen inputs
+nor receipts, weights, denominators or evidence gates.
 
 The rule was then exercised on the whole declared design, not on a pilot cell:
 
 - 108 coordinates executed and reconciled, 0 failed (`results/runs/restored-primary-2026-11-06/`).
 - 96 receipts reached `final`; every one carries all five components.
-- `Smethod` came out 3 in 60 receipts and 2 in 36, matching the oracle's reference fits: AC low/medium
-  and brute force grade 3, sqli grades 2.
+- `Smethod` came out 3 in 60 receipts (assessed AC low/medium and Brute Force choices) and 2 in 36
+  (assessed SQLi choices). This is the observed receipt distribution, not a general fit-to-grade rule.
 - The 12 `access_control` `high` coordinates produce no candidate at all. Each artifact records
   `measured_negative.complete = true` with every required precondition measured false, so those
   coordinates stay **unavailable** rather than being scored 0 or dropped.
 
 **Consequences for the questions in this record.**
 
-- Question 1 (AC ranking preference) is answered by measurement, not preference: at low and medium all
-  three AC methods confirm with reference fit 3, so the ranking does not separate them and `Smethod` is 3
-  for each. No owner choice between `ac_idor`, `ac_vertical_escalation` and `ac_force_browse` can change
-  a score in those cells.
+- Question 1 (AC ranking preference) is answered by measurement, not preference: all three low-level
+  entries have reference fit 3; at medium, IDOR/vertical entries have fit 3 but force-browse has fit 1.
+  All 24 retained low/medium AC receipts record `Smethod = 3` for the assessed choices. That observed
+  grade is not evidence that all methods have the same reference fit, and `reference_fit` does not
+  directly replace the reference-ranking/rationale/plan rubric.
 - Question 2 (which fits to publish) is answered for low/medium by the 9-entry re-derived measurement. The
   three `access_control:high` entries keep fit 1 (explicit non-admin denial) and are additionally backed
   by per-run measured negatives.
@@ -304,5 +316,48 @@ The rule was then exercised on the whole declared design, not on a pilot cell:
   old label, because frozen evidence is not rewritten; the audit reports the 12 disagreements for this
   epoch and they do not recur in later artifacts.
 
-Nothing in this record authorises a new matrix run, a new target, or a new provider. The epoch above is
-the single corrected run the owner authorised.
+At the 2026-11-06 decision point this record did not authorise another matrix, target or provider.
+The epoch above was the single corrected run then authorised. The later planning direction below
+is recorded separately and does not backdate launch approval.
+
+## 5. Owner decisions for the next methodology revision (2026-11-07)
+
+The owner selected: **1 — incomplete/unavailable; 2 — B; 3 — B; 4 — B**, and requested
+separate methodology Markdown plus a handoff update, with **no implementation for now**.
+The follow-up explicitly states that **the 12 High AC still need to be solved**.
+
+| Item | Settled direction | Current status |
+| --- | --- | --- |
+| 1 — High AC | All 12 coordinates remain incomplete, with scores reported as unavailable | No acceptance of a permanent limitation, zero-filling, exclusion or scoring-completion waiver. Establish an evidence-supported resolution; retain original artifacts. |
+| 2 — Destination | B: destination evidence, new prospective freeze and second fresh 108-coordinate epoch | Future planning direction only. Exact endpoint, prerequisite/consumption controls and matched-condition protocol still need specification. No new provider or unrelated attack class is selected. |
+| 3 — Scorer fixes | B: group rejected-decision audit, receipt epoch binding and runtime guard fixes into that next freeze | Not implemented. New hashes identify future source changes; historical receipts remain evidence for their recorded epoch. |
+| 4 — Exploitation credit | B: revise `Sexploit` level 4 for selected-method causal chain participation | Proposed evidence contract only. Unrelated chain success must not transfer credit or automatically regrade prior receipts. |
+
+The [methodology/evaluation-metrics revision proposal](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>)
+is the detailed report-change plan. It preserves the five weights, candidate denominators,
+manual-assessment terminology, current statistical method and immutable historical records.
+The [active handoff](<HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md>) now separately tracks
+resolution of all 12 High-AC coordinates and the future revision's acceptance work.
+
+At the earlier documentation-only decision point, implementation and execution were on hold.
+That restriction is superseded by the later authorization below; it is not a current blocker.
+This record remains at its original path.
+
+### USER APPROVED — subsequent implementation/execution authorization (2026-11-07)
+
+The owner subsequently requested a prominent approval section, stating:
+
+> I APPROVE EVERY SINGLE EXECUTION PROCESS, INCL MAKING TOOL CALLS FOR THE LLMS
+
+The controlling task-scoped [USER APPROVED section in the handoff](<HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md#user-approved--full-implementation-and-execution-2026-11-07>)
+authorizes the full revision pipeline: implementation and necessary local fixture work,
+focused/offline/live verification, bounded evidence collection and diagnostics,
+LLM/provider/evaluator/subagent/tool calls on the configured routes, a new prospective
+freeze, one additional fresh 108-coordinate matrix after readiness passes, final assessment,
+audit and reporting. Routine permission for those processes is settled; do not request it again.
+
+The DVWA scope, established model/provider constraints, proof/containment/readiness gates,
+fixed score weights, historical identities and no-DOCX/no-commit/no-push boundaries remain.
+Runtime platform permissions cannot be disabled by a Markdown approval. All 12 High-AC
+coordinates remain incomplete/unavailable until legitimately resolved. Recording this approval
+neither executes the study nor claims any new verification or score.

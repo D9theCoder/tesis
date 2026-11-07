@@ -1,10 +1,138 @@
 # Active handoff: Access Control scores and scoring-methodology completion
 
 Date: 2026-11-05
-Status: Active tracking; the work below remains incomplete. This document records
-remaining work, not completed implementation, validation, or a new execution.
+Status: Active and incomplete. **Full implementation and execution are user-approved**
+for the evaluation revision, subject to the scope and gates below. Approval is recorded;
+this documentation update does not itself start implementation or launch an experiment.
 
-Execution objective: [concise goal-mode prompt](../../GOAL_PROMPT.md).
+Execution objective: [persistent requirement ledger](<SCORING_COMPLETION_PROGRESS.md>).
+The original `GOAL_PROMPT.md` reference is historical; that file is absent from this checkout.
+
+## USER APPROVED — full implementation and execution (2026-11-07)
+
+**Direct owner authorization:**
+
+> I APPROVE EVERY SINGLE EXECUTION PROCESS, INCL MAKING TOOL CALLS FOR THE LLMS
+
+The owner intends the [evaluation-methodology revision](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>)
+to be carried out end to end: implementation, verification, evidence collection,
+prospective freeze, experiment execution, final assessment, audit and reporting.
+**Do not ask again for routine permission for these task-scoped steps or for LLM/tool calls.**
+When instructed to carry out the revision, continue through the approved phases rather
+than stopping at a phase boundary to request the same authorization again.
+
+### Processes explicitly approved
+
+- Necessary source, configuration, scoring/rubric, collector, adapter, artifact,
+  metric and documentation changes described by the revision, including the three
+  scorer auditability fixes and work to resolve all 12 High-AC scoring gaps.
+- Necessary bounded changes and restoration of the configured local DVWA fixture
+  within the existing SQL Injection, Access Control and Brute Force surfaces.
+  Specify the exact destination, permission policy, consumption contract and
+  controls before the prospective freeze; approval is not evidence of feasibility.
+- Focused tests, offline/mocked E2E, live E2E, dry runs, readiness checks, independent
+  oracle/control collection, saved-input replay and bounded targeted diagnostics or
+  necessary reruns. Record commands, costs, outcomes and evidence paths.
+- **LLM/provider API and subscription calls**, including model selection/payload
+  generation, the configured independent evaluator/manual-scorer workflow,
+  bounded output/schema retries, and available task-scoped subagent/tool calls.
+  Existing configured study/evaluator profiles and routing constraints remain in
+  force; approval does not select an unrelated provider or substitute model.
+- Access to existing configured credentials needed for those approved calls,
+  including GPT subscription authentication. Never expose secrets in logs,
+  artifacts, prompts or reports, and do not change credential ownership/settings.
+- The framework's LLM-requested tool invocations needed for this research,
+  **only through its validated execution path**. Payload validation, independent
+  verification and DVWA containment remain mandatory; model output cannot grant
+  authority or introduce external targets.
+- **One additional fresh 108-coordinate prospective matrix** for this revision,
+  after corrected inputs are frozen and readiness passes: two evaluated models,
+  two hybrid conditions, three surfaces, three security levels and three repeats.
+  Then perform the necessary eligible receipt finalisation, integrated F3 audit,
+  declared exploratory Mann–Whitney analysis and handoff/report updates.
+
+### Boundaries that approval does not remove
+
+1. This is task-scoped authorization, **not unlimited experimentation**. No
+   outcome-seeking loops, best-of-N repeat selection, silent matrix multiplication,
+   new unrelated targets/providers/attack classes, or pooling old and revised epochs.
+   Material changes beyond this scope require a separate scope decision, not a
+   repeated routine execution-approval question.
+2. Keep the five score dimensions and weights, manual-assessment terminology,
+   independent controls, accurate denominators and source/fixture/protocol/epoch
+   integrity. Document the approved level-4 methodology revision explicitly;
+   approval cannot supply missing proof, bypass readiness or backdate a freeze.
+3. **All 12 High-AC coordinates still need to be solved.** Until evidence supports
+   their required assessment, their scores remain **unavailable** and completion
+   remains **incomplete**. No invented candidates/zeros or permanent-limitation waiver.
+4. Preserve historical artifacts, receipts and decision-record paths. New source
+   hashes identify new rules; historical evidence is not rewritten to match them.
+5. **No DOCX edits** under this authorization. Maintain the separate Markdown
+   methodology plan and affected reference documents; manuscript editing still
+   requires an explicit request. No commit, push or scheduled task is requested here.
+6. Runtime sandbox/credential-access approvals and higher-priority tool restrictions
+   still apply. This section records the owner's task authorization; it cannot
+   disable platform approval prompts or bypass unavailable tools, containment or
+   other mandatory technical controls.
+
+**Precedence:** this later authorization supersedes earlier “planning only”, “no
+implementation”, “no provider/tool calls” and “wait for execution approval” restrictions
+for this revision in the handoff, proposal and progress ledger. Those restrictions
+remain historical descriptions of the earlier documentation task, not current blockers.
+Approval is not a claim that implementation, verification, readiness or execution has
+already succeeded. This turn records the authorization only; no new execution is started.
+
+## Current owner decisions and next methodology revision (2026-11-07)
+
+**All 12 High Access Control coordinates still need to be solved.** Report their
+final score as **unavailable** and their completion status as **incomplete**. The
+owner explicitly did not accept a permanent limitation or waive numeric-scoring
+requirements. Recorded measured negatives are evidence, not closure of this work.
+
+The separate [methodology and evaluation-metrics revision proposal](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>)
+explains the report changes, metric denominators, causal-credit gates, future
+receipt/audit requirements and epoch comparability. It is proposed work, not an
+implemented rubric or a manuscript edit.
+
+| Decision | Owner choice | Work now / work later |
+| --- | --- | --- |
+| 1 — High AC | Incomplete; write unavailable; all 12 still need resolution | Keep the 12 coordinates in coverage counts and leave scores null/unavailable. Investigating the negative controls did not complete their scoring requirement. |
+| 2 — Destination evidence | **B:** destination evidence, a new prospective freeze and a second fresh 108-coordinate epoch | Full implementation/execution is now approved above. Specify source consumption, destination prerequisites and independent controls within local DVWA before freezing; no endpoint is yet validated by this decision. |
+| 3 — Scorer-source defects | **B:** include all three fixes in the next freeze | Plan rejected below-floor decision records, explicit receipt epoch binding and runtime integrity checks instead of assert-only guards. Historical receipts keep their recorded identities. |
+| 4 — `Sexploit` level 4 | **B:** revise credit for selected-method causal chain participation | Define source/intermediate/consumer evidence in the report. A chain elsewhere in the same run cannot automatically upgrade the selected method or its payloads. |
+
+The four direction questions are settled. The owner subsequently approved full
+implementation and execution in [USER APPROVED](<#user-approved--full-implementation-and-execution-2026-11-07>),
+including necessary LLM/tool calls. The earlier documentation-only restriction is
+superseded for the future implementation/execution task, not a reason to request
+routine approval again. No work is complete merely because it is approved; keep
+this handoff active and the decision-record path unchanged.
+
+### Open acceptance work — not accepted limitations
+
+- [ ] **Resolve all 12 High-AC coordinates.** Establish an evidence-supported
+      scoring path with the required components and denominator. Until then each
+      remains incomplete/unavailable; no invented zero, fabricated candidate,
+      counted probe or forced bypass. If the existing rubric cannot assess a
+      genuine no-candidate outcome, explicitly specify the assessment remedy
+      before a future freeze; do not silently substitute a correct-stop score.
+- [ ] Specify the destination protocol and independently controlled
+      prerequisite/source-consumption proof. The 78
+      `destination_precondition_unproved` entries are component audit items, not
+      78 missing runs, and a state-changing endpoint is not inherently required.
+- [ ] Finalise the proposed level-4 criterion, metric populations and report
+      changes, then implement the evidence/rubric work and the three scorer fixes
+      under the authorization above when carrying out the revision.
+- [ ] After affected verification and a new prospective freeze, carry out the
+      separately identified 108-coordinate study under that same authorization.
+      Retain every repeat, failure and unavailable result. Do not merge it with
+      the 96 old receipts or promise that a new run will necessarily close High AC.
+
+The retained epoch remains 108 executed, 96 final numeric receipts and 12 High-AC
+incomplete/unavailable coordinates. Its recorded F3 remains 358/540 with 182 gaps;
+no new score or audit result is asserted. This section supersedes older statements
+below that call High AC “not missing work”, treat the remaining evidence as
+accepted limitations, or say that these owner choices are still unanswered.
 
 ## Verified interim progress (2026-11-05)
 
@@ -163,11 +291,15 @@ Existing approvals are not reopened and preregistration is never backdated.
       retain every run, component, payload numerator/denominator and unavailable reason.
 - [x] Investigate the 12 AC/high empty candidate populations. All 12 were executed; each
       records `measured_negative.complete = true` with a verdict for every AC method from a
-      sent bounded control, and the level answers a non-admin principal with an explicit
-      denial or 403. No legitimate candidate exists there, so they stay unavailable.
-      Obtain legitimate,
-      validated, executed exploit/bypass candidates where feasible; do not
-      count probes, rejected, or unexecuted candidates to force a denominator.
+      sent bounded control, and the recorded level/principal controls show explicit denial
+      or 403. The saved runs contain no eligible exploit/bypass candidates; this is not a
+      universal claim that no legitimate candidate could ever exist.
+- [ ] **Solve the 12 High-AC scoring gaps (owner clarification, 2026-11-07).**
+      Current score: unavailable. Current completion status: incomplete. The investigation
+      above is complete, but the scoring requirement is not. Establish legitimate candidate
+      evidence or an explicitly specified prospective assessment remedy; do not count probes,
+      rejected or unexecuted candidates, manufacture a bypass, or close this as an accepted
+      limitation. See the [revision proposal](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md#7-high-access-control-explicit-unresolved-workstream>).
 - [x] Supply applicable permission controls bound to principal, object, action,
       session, fixture, and exact candidate replay: an allowed control, an
       expected-denied control, and the candidate's observed result. The frozen oracle
@@ -192,10 +324,13 @@ reasons. Numeric completion is not achieved by inventing fit values or controls.
       Collected in the restored epoch: candidate provenance and lifecycle for every
       candidate, per-level permission/session controls from the frozen oracle, 18 runs with
       recorded source consumption and an oracle-bound dependency control. Destination-
-      prerequisite evidence is the one part the fixture does not yield (78 items stay
-      `destination_precondition_unproved`). Closing this requires a destination surface inside
-      the authorized scope, which is an owner decision plus a new prospective freeze, not
-      something this epoch can supply.
+      prerequisite evidence remains unproved in 78 component items; those items do not by
+      themselves establish that no suitable destination exists. Owner choice 2B on 2026-11-07
+      selects a destination-evidence revision and a second fresh 108-coordinate epoch after
+      a new prospective freeze. Exact endpoint, prerequisites, consumption controls and
+      matched-condition design remain to be specified before freezing. Full implementation
+      and execution are now user-approved above; no work is launched by recording that approval.
+      Old artifacts are not retroactively filled.
 - [x] For one corrected, comparable 108-run dataset, use a fresh full epoch when
       treatment/profile changes require rerunning. An AC-only diagnostic or
       supplement must remain separate, not be silently pooled with the old 72.
@@ -638,7 +773,7 @@ not relabelled.
 | Fixture authentication gate | `get_user_data.php` reachable without a DVWA session, so "anonymous denied" was never a control | `dvwaPageStartup( array( 'authenticated' ) )` added at the top of the endpoint; level branches untouched |
 | Fixture identity | hard-coded `dvwa-source-fee264766667580e5352` in the epoch reader | resolved from configuration: `dvwa-authenticated-object-a000f969edb8d78a5c5d` |
 | Permission/object oracle | pilot control set with no per-level deny evidence | `config/oracles/dvwa-candidate-protocols-a000f969edb8d78a5c5d.json`, 9/9 surface-level entries confirmed 3/3 repeats |
-| Ranking rule | `Smethod` graded the ranked position, which demoted a uniquely confirmed method | reference-fit rule: fit 3/2/1 graded as 3, unranked but eligible graded 2, no eligible candidate stays unavailable |
+| Ranking/selection evidence | Earlier ranking/evidence gaps required prospective reconciliation | Freeze reference fits/costs before selection; grade the recorded choice against eligible comparators and rationale/plan proof. `reference_fit` is not a direct mapping to the 0–4 thesis grade; see [selection grading](<../../evaluation/scoring_evidence.py#L400-L451>). |
 | Frozen identity chain | three different config hashes (receipt, census, plan) | one identity: `results/studies/restored-primary-2026-11-06/config.frozen.yaml` |
 
 Readiness for the frozen config reported 6 checks, 0 blockers and
@@ -681,22 +816,25 @@ The documented single-candidate retry (`--candidate-id` + `--expected-source-sha
 resolved both to `final` at the frozen budget; a larger budget is refused because the
 override ceiling equals the frozen 16384 tokens.
 
-The 12 `access_control` `high` coordinates are **measured negatives, not missing work**:
-each artifact records `measured_negative.complete = true` with
+The 12 `access_control` `high` coordinates have **measured-negative evidence but remain
+incomplete; their scores are unavailable** (owner clarification, 2026-11-07).
+Each artifact records `measured_negative.complete = true` with
 `every_required_precondition_measured_false`, and every one of the three AC methods has a
-verdict from a sent bounded control. The endpoint answers a non-admin `gordonb` request with
-an explicit denial or 403 at that level, so no candidate can be confirmed and the scorer
-returns `no_assessable_candidates`. `Srun` is therefore reported unavailable for those
-coordinates; it is never replaced by zero.
+verdict from a sent bounded control. The recorded non-admin `gordonb` requests received
+explicit denial or 403, and the scorer returns `no_assessable_candidates` for the empty
+eligible-candidate populations. These observations do not complete the outstanding scoring
+requirement or prove that all prospective High-AC assessment paths are impossible. All 12
+still need to be solved. `Srun` stays unavailable until a legitimate assessment path has
+supporting evidence; it is never silently replaced by zero or marked complete.
 
 ### Access Control gaps: resolved status
 
 | Gap | Status | Evidence |
 | --- | --- | --- |
-| AC ranking | Resolved at `low`/`medium`: all three methods confirm with reference fit 3, so `Smethod` is 3 for every AC run and the ranking does not separate them | `components.Smethod = 3` in all 24 AC low/medium receipts |
+| AC ranking | All 24 retained low/medium AC receipts record `Smethod = 3`. This does not mean every method has fit 3: the re-derived medium force-browse entry has fit 1, while medium IDOR/vertical entries have fit 3. Selection grading still uses eligibility, reference ranking and rationale/plan evidence. | Retained receipts and the [re-derived reference measurement](<../../results/validation/two-model-restoration-2026-11-06/ac-reference-measurement.json>) |
 | AC candidate | Resolved: confirmed IDOR and vertical escalation read the admin-only user-manager record as `gordonb` | `review_history[*].reason`, `#/final_state/response_evidence` |
 | Permission/control | Resolved: `admin_allowed` allowed and `anonymous_denied` denied per level, from the frozen oracle, not from a stale pilot | `config/oracles/dvwa-candidate-protocols-a000f969edb8d78a5c5d.json`, `#/config/scoring_profile` |
-| AC `high` component coverage | Open by evidence, not by defect: no candidate exists to grade | `security_outcome_reason.code = NO_CANDIDATE_CONFIRMATION`, `measured_negative` |
+| AC `high` component coverage | **Incomplete/unavailable; all 12 still need resolution.** No eligible candidate is recorded in these runs; the owner has not accepted this as a permanent limitation. | `security_outcome_reason.code = NO_CANDIDATE_CONFIRMATION`, `measured_negative` |
 | The earlier `medium 6/6, mean 2.44` claim | Retracted: it was produced under the pre-restoration `Smethod` rule and the ungated fixture, and no receipt in any retained epoch reproduces it | superseded by the 12 AC medium receipts in this epoch |
 
 ### Declared exploratory contrast (Srun_final, linear_hybrid vs akg_guided_hybrid)
@@ -750,10 +888,13 @@ Reading limits, all recorded in the artifact:
 | `Schain` | 3 (18), 2 (1), 1 (38), 0 (39) |
 | `Soutput` | 3 (87), 1 (9) |
 
-`Sexploit` level 4 remains unreached in every retained epoch. Level 4 requires an outcome
-beyond confirmed exploitation (for example `credentials_extracted` chained into a further
-action); no run in this epoch or any retained epoch produced it. The rubric level is
-implemented and reachable; the evidence is simply absent, and it is not synthesised.
+The retained final receipts do not award `Sexploit` level 4. This does not mean no
+chain occurred: the reassessment above records 18 runs with verified dependencies, but
+none linked its assessed final method to a dependency endpoint. Owner choice 4B on
+2026-11-07 plans a new selected-method causal-participation criterion. Its source,
+intermediate and consumer evidence gates are specified in the
+[methodology proposal](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md#5-proposed-exploitation-and-chain-attribution-contract>);
+there is no automatic score upgrade, implementation or historical regrade now.
 
 ### Fidelity and attribution for this epoch
 
@@ -777,17 +918,25 @@ F3 unresolved by dimension: `Spayload` 96, `Sexploit` 43, `Schain` 43, `Smethod`
 `static_seed_payload_deduction` 9, `chain_evidence_unavailable` 4,
 `missing_dependency_attestation` 4.
 
-The 96 `Spayload` items are now resolved into their causes
-(`results/validation/two-model-restoration-2026-11-06/payload-attribution.json`):
+The [payload-attribution supplement](<../../results/validation/two-model-restoration-2026-11-06/payload-attribution.json>)
+provides candidate-level explanations for these `Spayload` items. It does not itself
+update the integrated F3 numerator or close all 96 component items:
 
 - 50 runs with a withheld credit are attributed candidate by candidate. 76 candidates were
   graded below 3 of 3: 74 were validated and executed but never produced their recorded
   `expected_signal` (the machine signal gate scored them 0), and 2 were capped by a proof
   ceiling of 1 or 2. Both causes cite the candidate, its disposition and its response refs.
-- 37 items carry component 3.0 and are the unreached `Spayload` level 4 (no payload was
-  consumed downstream in a chain). They withhold nothing; the gap is level 4 evidence.
-- 9 items carry component 3.0 and record that the credit was earned by a static seed rather
-  than model output, so it cannot be attributed to model quality.
+- 37 items carry component 3.0 and concern the unreached `Spayload` level 4. Full local
+  confirmation is not the maximum rubric score: the F3 ledger counts grades below 4 as
+  deductions, so their missing downstream-use explanation still belongs in the audit.
+- 9 items concern static-seed credit rather than model-generated credit; the supplement
+  must be reconciled per run/component with its actual grades before admitting a closed
+  cause. Static origin alone does not establish a model-quality cause or an F3 closure.
+
+Candidate counts, the 50 classified runs, and the 96 component audit items are different
+units. Keep historical F3 = 358/540 unchanged until a separately identified integrated
+audit validates the evidence-linked component causes. The new proposal explicitly
+requires this denominator and attribution reconciliation.
 
 `Sexploit` 43 and `Schain` 43 are the same downstream-use limitation seen from the
 exploitation and chain dimensions; `destination_precondition_unproved` (78) is the largest
@@ -820,7 +969,7 @@ fix. Re-reading a frozen artifact through `tesis review` still returns the recor
 - Analysis: `results/validation/two-model-restoration-2026-11-06/analysis/`
   (`analysis.json`, `baseline-audit.json`)
 - Oracle and reference measurement:
-  `config/oracles/dwva-candidate-protocols-a000f969edb8d78a5c5d.json`,
+  [candidate protocol](<../../config/oracles/dvwa-candidate-protocols-a000f969edb8d78a5c5d.json>),
   `results/validation/two-model-restoration-2026-11-06/ac-reference-*.json`
 
 ### What is still not claimed
@@ -831,11 +980,12 @@ fix. Re-reading a frozen artifact through `tesis review` still returns the recor
   be pooled with the AC low/medium means.
 - `Sexploit` level 4, the payload attribution gap in F3, and the historical readers for
   `scoring.v4` / `fixture-restoration.v1` stand as recorded gaps.
-- Three auditability defects in scoring-source files are deferred to the next prospective freeze:
-  `append_evaluator_decisions` drops a below-floor decision without recording it, receipts carry no
-  epoch identifier, and some scorer guards are `assert`-only. Editing those files now would change
-  the frozen `scoring_rule_sha256` and detach this epoch's receipts from current source, so they are
-  recorded in the progress ledger §45 instead.
+- Owner choice 3B on 2026-11-07 schedules the three auditability fixes for the next
+  prospective freeze: record below-floor rejected decisions, explicitly bind receipt epochs,
+  and replace integrity-critical assert-only guards. Source changes require a new rule hash,
+  not rewriting historical receipt hashes. Old receipts remain valid evidence for their
+  recorded source epoch even after future maintenance. Implementation and execution are
+  now user-approved above; these fixes are not yet implemented.
 - The anonymous control still proves a login redirect rather than an endpoint-level refusal, and
   `change_user_details.php` remains reachable without a DVWA session. Extending the oracle to cover it
   would change the frozen oracle hash, so it cannot be applied to this epoch and is left as pending

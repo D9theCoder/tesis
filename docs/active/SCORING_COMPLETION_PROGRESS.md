@@ -5,6 +5,15 @@ supplements, not replaces, the [acceptance handoff](</home/kevin/coding/tesis/do
 and preserves the [settled decision record](</home/kevin/coding/tesis/docs/active/AUTORESEARCH_RANKING_APPROVAL_QUESTIONS.md>) at its original path.
 Evidence links use absolute workspace paths so they resolve from this document.
 
+**2026-11-07 update:** the owner selected **1 incomplete/unavailable, 2B, 3B, 4B**.
+All 12 High-AC coordinates **still need to be solved**; none is accepted as permanently
+unavailable or complete. The owner subsequently approved **full implementation and execution,
+including LLM/tool calls**, in [USER APPROVED](<HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md#user-approved--full-implementation-and-execution-2026-11-07>).
+See the [methodology/evaluation-metrics revision](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>)
+and §46 below. Earlier planning-only restrictions are superseded for the revision pipeline;
+no repeated routine execution-approval question is needed. This turn records approval only,
+without starting implementation, tests or a new experiment. DOCX files remain unchanged.
+
 ## Invariants and execution accounting
 
 - Selected manual scorer: configured `scoring_mode=ai`; no human regrade or sign-off.
@@ -539,27 +548,32 @@ dropped.
 
 ## Resume boundaries
 
-**Resume point at 2026-11-06 18:55.** Nothing in §1-§37 is still runnable work: the matrix ran, the
-96 receipts exist, the analysis and audit are regenerated, and the payload and chain attribution are
-recorded (§38-§45). Three things remain, and none of them is a repository task:
+**Resume point updated 2026-11-07 — full pipeline approved.** The owner answered all four
+direction questions, received the [methodology revision plan](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>),
+and then authorized full implementation and execution, including LLM/tool calls. The
+[USER APPROVED section](<HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md#user-approved--full-implementation-and-execution-2026-11-07>)
+supersedes the earlier planning-only instruction; no routine reapproval is needed. The current
+turn records that authority, not an experiment launch or a claim that the blocked goal is complete.
 
-1. A destination surface inside the authorised scope, which would let the 78
-   `destination_precondition_unproved` items be proved. Needs an owner decision plus a new prospective
-   freeze; this epoch cannot supply it.
-2. Whether `Sexploit` level 4 should credit the selected method's chain participation. Observed chains
-   always credited the consuming `bf_dictionary` visit, so the level is implemented but unreachable as
-   the design stands. Methodology decision, not a code defect.
-3. The three scoring-source auditability defects in §45, which must wait for the next prospective freeze
-   because editing those files changes the epoch's frozen rule digest.
+1. **All 12 High-AC coordinates remain incomplete/unavailable and still need resolution.**
+   Investigating measured negatives is not completion of the scoring requirement.
+2. Choice 2B selects a destination-evidence protocol, new prospective freeze and second fresh
+   108-coordinate epoch. Specify the endpoint, prerequisites, source consumption and controls;
+   the 78 missing-proof items do not establish that a fourth surface or a state-changing action
+   is necessary, or that one endpoint can close every item.
+3. Choice 4B selects revised `Sexploit` level-4 causal-participation credit. Do not transfer
+   another method's chain success merely because it occurred in the same run.
+4. Choice 3B groups the three scorer-source fixes into that next freeze. A new source hash does
+   not invalidate old receipts for their recorded epoch; it forbids treating them as receipts
+   for the amended rule. Future implementation is separate from this planning deliverable.
 
-Historical sections keep their original numbers. Where they conflict with the restored epoch (§38-§45)
-or with the supersession notes in the handoff and the approval record, the restored epoch wins.
-
-Do not start duplicate scoring/provider calls or a matrix based on narrative.
-Check live tool job state and artifact receipts first. Continue implementation,
-controls, binding repair, readiness, execution, receipts and audit in that order
-where dependencies require it; independent report recovery may proceed now.
-Overall goal stays active, with no completion or global blocked claim.
+The restored epoch's 108 executions, 96 final receipts and F3 358/540 remain historical
+facts. The owner has not waived incomplete High AC. Implementation, necessary local fixture
+work, software/E2E validation, scoring/provider/tool calls and the separate readiness-gated
+108-coordinate epoch are approved for carrying out the revision; none is started in this
+approval-recording turn. Preserve old artifacts and the decision-record path. Do not edit
+DOCX files, commit, push or schedule work without a specific request. See §46 for the pending
+acceptance checklist and the subsequent authorization note.
 
 ### 17 — Access Control: the gap is a design outcome, proven by measurement
 
@@ -1401,3 +1415,74 @@ receipts from the current source. They belong to the next freeze, not to a post-
 2. Receipts carry `scoring_policy` and source hashes but no epoch identifier, so two epochs scored
    under the same rule are distinguishable only by their directory and execution id.
 3. Several scorer guards rely on `assert`, which vanishes under `python -O`.
+
+## 46. Owner decisions and methodology proposal (2026-11-07; documentation only)
+
+Owner selected 1 incomplete/unavailable, 2B, 3B and 4B, then explicitly clarified:
+**the 12 High AC still need to be solved**. No implementation is requested now.
+
+Deliverables:
+
+- [Prospective methodology and evaluation-metrics revision](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>).
+- [Updated active handoff](<HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md>) with a prominently
+  reopened High-AC scoring requirement, separate from the completed investigation.
+- [Append-only decision update](<AUTORESEARCH_RANKING_APPROVAL_QUESTIONS.md#5-owner-decisions-for-the-next-methodology-revision-2026-11-07>)
+  at the unchanged decision-record path.
+
+### Corrections/qualifications for future methodology work
+
+- Destination confirmation need not change server state. Specify the actual material/session
+  consumption, permission and control contract within existing DVWA surfaces first. Missing
+  prerequisites alone do not prove the fixture is incapable of providing a destination.
+- The current exploitation automatic component is source-method scoped; the proposed criterion
+  broadens selected-method causal participation without granting run-global credit. Candidate
+  payload proof and run-scope chain grades remain separate. No old receipt is upgraded.
+- F3 counts component values below **4**, including 3, and nulls. The 76 candidate grades below
+  3 described in §42 are not the whole F3 population. The attribution supplement does not itself
+  change the integrated F3 of 358/540; validate run/component causes and denominators before
+  publishing any later audit figure. The 78 destination items are not 78 missing coordinates.
+- Editing scoring sources requires a new hash, not destruction or relabelling of old receipts.
+  Choice 3B groups those fixes prospectively; maintenance is not intrinsically blocked by history.
+- The proposal maps report Tables 3.4–3.11, missing-data reporting, metric scopes/denominators,
+  causal source/consumer proof, epoch identity, exploratory Mann–Whitney, multiplicity and
+  dependence limits. Both language summaries and the manuscript remain unchanged in this task.
+
+### Current request checklist
+
+- [x] Read the report's rubric/metric passages, current scoring code and handoff without editing implementation.
+- [x] Record the four decisions, including the explicit unresolved status of all 12 High-AC coordinates.
+- [x] Create the separate report-methodology proposal and link it in the active handoff.
+- [x] Keep all implementation, verification runs, fixture changes, scoring, DOCX edits and launch pending.
+
+Documentation checks: 38 new/changed local links resolved; code fences and whitespace checked.
+Only four Markdown records changed. Source/configuration and Chapter-3 DOCX hashes match the
+pre-edit baseline; no software tests, provider/target calls or artifact regeneration were run.
+The original goal-prompt file is absent, so the handoff now points to this persistent ledger
+rather than retaining a broken current-objective link. Changes are not committed or pushed.
+
+### Future acceptance — not completed by this documentation
+
+- [ ] Resolve the 12 High-AC scoring gaps with legitimate evidence and a declared assessment path;
+      unavailable is the current reported value, not an accepted permanent limitation.
+- [ ] Specify destination-prerequisite and source-consumption controls, restoring any mutable fixture state.
+- [ ] Finalise the selected-method level-4 contract and the report metric definitions before freezing.
+- [ ] Implement the three auditability fixes in the next prospective change set when requested.
+- [ ] Complete affected verification and prospective bindings, then execute the separate 108-coordinate
+      epoch when requested and ready; retain every coordinate and all unsuccessful outcomes.
+- [ ] Finalise eligible receipts and integrated F3/analysis; keep historical epochs separate and do not
+      claim overall completion while required High-AC assessment remains unresolved.
+
+### Subsequent USER APPROVED authorization (2026-11-07)
+
+After the planning deliverable, the owner explicitly approved every task-scoped implementation
+and execution process, including LLM/tool calls. See the controlling
+[USER APPROVED section](<HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md#user-approved--full-implementation-and-execution-2026-11-07>).
+This supersedes the planning-only prohibition above and in the proposal. Implementation,
+focused/offline/live verification, bounded control collection/replay/diagnostics, configured
+LLM/provider/evaluator calls, prospective freeze, one additional fresh readiness-gated
+108-coordinate matrix, final receipts, audit and reporting do not need repeated routine approval.
+
+This request only records the approval; no implementation or experiment is started by this
+update. No platform-permission bypass, unbounded outcome-seeking runs, new unrelated scope,
+DOCX edit, commit or push is implied. All 12 High-AC coordinates remain incomplete/unavailable
+until their required assessment is legitimately resolved; historical artifacts remain immutable.
