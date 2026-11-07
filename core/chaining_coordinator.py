@@ -13,6 +13,9 @@ same rule the readiness gate follows.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from core.run_status import terminal_status
 
 import logging
@@ -559,12 +562,31 @@ def chaining_router_node(state: dict) -> dict:
     if not stop_reason(state):
         from foundation.preconditions import precondition_keys_for_method, statuses_snapshot
 
+        def merge_destination_state(base: dict, update: Mapping[str, Any]) -> dict:
+            """Apply already-measured updates so the next edge sees them."""
+            list_keys = {
+                "preparation_failures", "telemetry_events", "containment_events",
+                "control_events", "observation_facts", "quarantined_visits",
+            }
+            map_keys = {
+                "probe_controls", "method_principals", "method_session_fingerprints",
+                "observations", "precondition_status",
+            }
+            merged = {**base, **{key: value for key, value in update.items()
+                                 if key not in list_keys and key not in map_keys}}
+            for key in list_keys:
+                merged[key] = [*base.get(key, []), *update.get(key, [])]
+            for key in map_keys:
+                merged[key] = {**base.get(key, {}), **update.get(key, {})}
+            return merged
+
         for edge in _chain_candidates(state):
-            if _chain_infeasibility(state, edge) is None:
+            current_state = merge_destination_state(state, destination_update)
+            if _chain_infeasibility(current_state, edge) is None:
                 break
             target_agent = str(edge["target_agent"])
             required_keys = precondition_keys_for_method(target_agent)
-            statuses = statuses_snapshot(state, target_agent)
+            statuses = statuses_snapshot(current_state, target_agent)
             if any(statuses.get(key) == "false" for key in required_keys):
                 # Measured negative evidence is a rejection, not a reason to probe.
                 continue
@@ -578,15 +600,16 @@ def chaining_router_node(state: dict) -> dict:
             measured: dict = {}
             if target_agent == "bf_dictionary":
                 from foundation.recon import probe_brute_force_destination
-                measured = probe_brute_force_destination(state)
+                measured = probe_brute_force_destination(current_state)
             elif target_agent in {"ac_idor", "ac_force_browse"}:
-                refs = {ref for decision in _source_decisions(state, edge["source"])
+                refs = {ref for decision in _source_decisions(current_state, edge["source"])
                         for ref in decision.get("evidence_refs", [])}
-                source_ids = [row["evidence_id"] for i, row in enumerate(state.get("response_evidence", []))
+                source_ids = [row["evidence_id"] for i, row in enumerate(current_state.get("response_evidence", []))
                     if f"#/final_state/response_evidence/{i}" in refs and row.get("evidence_id")]
                 if source_ids:
                     from foundation.recon import probe_access_control_destination
-                    measured = probe_access_control_destination(state, target_agent, source_ids)
+                    measured = probe_access_control_destination(
+                        current_state, target_agent, source_ids)
             if not measured:
                 # The bounded probe did not run for this edge (nothing to bind it
                 # to, or it already ran); that is not a measured limitation.
@@ -599,14 +622,7 @@ def chaining_router_node(state: dict) -> dict:
                     destination_update[key] = {**destination_update.get(key, {}), **value}
                 else:
                     destination_update[key] = value
-            measured_state = {**state, **{
-                key: value for key, value in destination_update.items() if key not in {
-                    "preparation_failures", "telemetry_events", "containment_events",
-                    "control_events", "observation_facts", "quarantined_visits"}},
-                "observation_facts": [*state.get("observation_facts", []),
-                                      *destination_update.get("observation_facts", [])],
-                "observations": {**state.get("observations", {}), **destination_update.get("observations", {})},
-                "precondition_status": {**state.get("precondition_status", {}), **destination_update.get("precondition_status", {})}}
+            measured_state = merge_destination_state(state, destination_update)
             measured_statuses = statuses_snapshot(measured_state, target_agent)
             if any(measured_statuses.get(key) == "false" for key in required_keys):
                 continue
@@ -622,9 +638,10 @@ def chaining_router_node(state: dict) -> dict:
                 continue
             if _chain_infeasibility(measured_state, edge) is None:
                 break
-    routing_state = {**state, **destination_update, "observations": {
-        **state.get("observations", {}), **destination_update.get("observations", {}),
-    }}
+    routing_state = merge_destination_state(state, destination_update) if not stop_reason(state) else {
+        **state,
+        "observations": {**state.get("observations", {}), **destination_update.get("observations", {})},
+    }
     next_agent, event = evaluate_chain_route(routing_state)
     updates: dict = {**destination_update, **_complete_routed_visit(state), "next_agent": next_agent}
     prior_routes = [row for row in _route_receipts(state)

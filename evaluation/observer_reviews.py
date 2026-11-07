@@ -9,7 +9,10 @@ import math
 from evaluation.remaining_evidence import _check_grades
 from evaluation.research_metrics import SCORING_RULE_DIGEST_DEFINITION, SCORING_SOURCE_FILES
 from core.historical_contracts import HISTORICAL_LABELS, HISTORICAL_SCORING_SOURCE_FILES
-from evaluation.thesis_scoring import WEIGHTS, _validated_reviews, review_queue
+from evaluation.thesis_scoring import (
+    WEIGHTS, _binding_claims_prospective, _binding_digest, _validated_reviews,
+    review_queue, validate_epoch_binding,
+)
 from tesis.artifact_repository import config_fingerprint
 from tesis.runtime_events import redact_secrets
 
@@ -30,7 +33,8 @@ def _empty(reason="missing_review"):
             "components": None, "Spayload_final": None, "Srun_final": None,
             "numerator": None, "denominator": None, "candidate_grades": [],
             "receipt": None, "review_status": None, "decision_ledger": None,
-            "generated_at": None, "rubric_version": None, "scoring_rule_sha256": None}
+            "generated_at": None, "rubric_version": None, "scoring_rule_sha256": None,
+            "epoch_sha256": None}
 
 
 def _hex64(value):
@@ -154,8 +158,38 @@ def _binding_check(entry, document, queue, *, legacy=False):
         raise ValueError("metrics_epoch_mismatch")
 
 
+def _binding_self_consistent(document):
+    """Validate a historical binding's self-digest without re-projecting it.
+
+    Old offline controls predate the current population projection.  They remain
+    readable: their binding digest is checked against the fields they recorded,
+    while the full epoch comparison is applied only to prospective study
+    artifacts.  This never authorizes a write or relabels the old epoch.
+    """
+    contract = document.get("receipt_contract") if isinstance(document, dict) else None
+    if contract is None:
+        return
+    binding = document.get("epoch_binding")
+    if not isinstance(binding, dict):
+        raise ValueError("receipt_epoch_binding_missing")
+    digest = binding.get("binding_sha256")
+    if not isinstance(digest, str) or digest != _binding_digest(
+            {key: value for key, value in binding.items() if key != "binding_sha256"}):
+        raise ValueError("receipt_binding_digest_mismatch")
+
+
+def _validate_epoch_claims(document, queue):
+    """Apply the full projection check only to prospective study documents."""
+    binding = document.get("epoch_binding") if isinstance(document, dict) else None
+    if queue.get("prospective_study") or _binding_claims_prospective(binding):
+        validate_epoch_binding(document, queue, allow_recorded_source_epoch=True)
+    else:
+        _binding_self_consistent(document)
+
+
 def _validated_receipt(catalog, entry, path, receipt, queue):
     queue = _source_bound_queue(entry, receipt, queue)
+    _validate_epoch_claims(receipt, queue)
     _binding_check(entry, receipt, queue)
     if catalog.resolve(receipt["source_path"], owner=path) != entry.path:
         raise ValueError("source_path_mismatch")
@@ -199,6 +233,8 @@ def _validated_receipt(catalog, entry, path, receipt, queue):
             or receipt.get("Srun_final") != round(sum(vector[k] * w for k, w in WEIGHTS.items()), 4)):
         raise ValueError("receipt_arithmetic_mismatch")
     return {**_empty(None), "status": "final", "components": vector,
+            "epoch_sha256": receipt.get("epoch_sha256")
+            or (receipt.get("epoch_binding") or {}).get("epoch_sha256"),
             **{key: receipt.get(key) for key in (
                 "Spayload_final", "Srun_final", "candidate_grades", "numerator", "denominator",
                 "generated_at", "rubric_version", "scoring_rule_sha256", "component_evidence_refs",
@@ -210,6 +246,7 @@ def _validated_receipt(catalog, entry, path, receipt, queue):
 
 def _validated_status(catalog, entry, path, status, queue, source_hash_count):
     queue = _source_bound_queue(entry, status, queue)
+    _validate_epoch_claims(status, queue)
     legacy = not status.get("execution_id") or not status.get("generated_at")
     _binding_check(entry, status, queue, legacy=legacy)
     if not legacy and (not status.get("source_path") or _timestamp(status) is None):
@@ -319,7 +356,9 @@ def discover_reviews(catalog, entry):
             ) if key in workflow}
             result[mode] = {**_empty(), **fields, "review_status": catalog.binding(path),
                 "decision_ledger": ledger, "generated_at": status.get("generated_at"),
-                "rubric_version": status["rubric_version"], "scoring_rule_sha256": status["scoring_rule_sha256"]}
+                "rubric_version": status["rubric_version"], "scoring_rule_sha256": status["scoring_rule_sha256"],
+                "epoch_sha256": status.get("epoch_sha256")
+                or (status.get("epoch_binding") or {}).get("epoch_sha256")}
             result[mode]["denominator"] = len(workflow["candidate_grades"])
             result[mode]["numerator"] = (sum(grade["score"] for grade in workflow["candidate_grades"])
                 if workflow["candidate_grades"] and all(grade["score"] is not None for grade in workflow["candidate_grades"])

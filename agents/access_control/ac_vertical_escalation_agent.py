@@ -57,7 +57,14 @@ _EXPLOIT_SIGNALS = [
 def _probe_preconditions(
     session: DVWASession, payloads: list[str], already_tried: set[str]
 ) -> tuple[bool, list[str], dict[str, bool], list[dict]]:
-    """Test role-based access control to detect logic flaws.
+    """Send safe local baselines; role applicability comes from matched controls.
+
+    This probe can observe the non-admin session's own endpoint behaviour, but
+    it cannot establish that a role boundary exists: an allowed read, a denial,
+    a login redirect and an error page are indistinguishable without a matched
+    known-admin reference under the frozen permission policy.  Applicability is
+    therefore measured once during recon and carried in scoped observation
+    facts; this function never invents a ``role_based_access_present`` fact.
 
     Returns (precondition_met, tried_payloads, observations, telemetry_events).
     """
@@ -67,14 +74,10 @@ def _probe_preconditions(
     verifier = Verifier()
     pre_control_fingerprint = session_fingerprint(session)
 
-    # Check if the authbypass endpoint responds differently for different users
-    # In DVWA, userId=1 is admin. Accessing it as a regular user tests vertical escalation.
-    sent_any = False
     for payload in payloads:
         if payload in already_tried:
             continue
         candidate_id = getattr(payload, "candidate_id", None)
-        sent_any = True
         tried.append(payload)
         try:
             test_id = payload.strip()
@@ -85,25 +88,11 @@ def _probe_preconditions(
             events[-1]["payload"].update(permission_evidence_fields(session, session._principal_id,
                 session._initial_session_fingerprint, object_id=user_object_id(test_id)))
             events[-1]["payload"]["pre_control_session_fingerprint"] = pre_control_fingerprint
-            if resp.status_code == 200:
-                try:
-                    decoded = json.loads(resp.text)
-                    records = decoded if isinstance(decoded, list) else [decoded] if isinstance(decoded, dict) else []
-                except (TypeError, ValueError):
-                    records = []
-                if any(isinstance(record, dict) and any(record.get(key) is not None
-                        for key in ("user_id", "userId", "id")) for record in records):
-                    events[-1]["payload"].update(signal_detected=True, verified_grade=1, verification_reason="verified_probe_precondition")
-                    observations[_PROBE_OBSERVATION_KEY] = True
-                    return True, tried, observations, events
         except Exception as exc:
             logger.warning("[%s] PROBE request failed: %s", AGENT_ID, exc)
             events.append(probe_event(AGENT_ID, f"userId={test_id}", None, False,
                 control_id=getattr(payload, "control_id", None)))
 
-    if not sent_any:
-        return False, tried, {}, events
-    observations[_PROBE_OBSERVATION_KEY] = False
     return False, tried, observations, events
 
 

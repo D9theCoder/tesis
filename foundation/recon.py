@@ -12,8 +12,10 @@ and sets ``next_agent`` to ``"orchestrator"``.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -388,6 +390,211 @@ def _probe_with_catalog_controls(
     return update, quarantine
 
 
+def _permission_protocol_source(state: Mapping[str, Any]) -> tuple[dict, dict] | None:
+    """Return the single frozen permission protocol that scopes this run."""
+    sources = state.get("scoring_oracles")
+    if not isinstance(sources, list):
+        return None
+    matches = [
+        source for source in sources
+        if isinstance(source, dict) and isinstance(source.get("document"), Mapping)
+        and "status" not in source["document"]
+        and (source["document"].get("oracle_protocol") or {}).get("kind")
+        == "dvwa_candidate_permission"
+        and (source["document"].get("oracle_protocol") or {}).get("enabled") is True
+    ]
+    if len(matches) != 1:
+        return None
+    source = matches[0]
+    document = source["document"]
+    for key in ("fixture_id", "protocol_version"):
+        expected = state.get(key)
+        if expected and str(document.get(key) or "") != str(expected):
+            return None
+    return source, dict(document.get("oracle_protocol") or {})
+
+
+def _page_control_outcome(response: Any, marker: str) -> dict[str, Any]:
+    """Classify one page-control response without treating errors as denial."""
+    status = getattr(response, "status_code", None)
+    final_url = str(getattr(response, "url", "") or "")
+    text = str(getattr(response, "text", "") or "")
+    final_path = urlparse(final_url).path.lower()
+    structured = BeautifulSoup(text, "html.parser").get_text(" ", strip=True)
+    if final_path.endswith("/login.php"):
+        outcome, denial_kind = "authentication_redirect", "authentication_redirect"
+    elif isinstance(status, int) and status == 200 and marker in structured:
+        outcome, denial_kind = "allowed", None
+    elif (isinstance(status, int) and status == 403
+          and structured.strip().lower() in {"unauthorised", "unauthorized"}):
+        outcome, denial_kind = "denied", "endpoint_denied"
+    elif isinstance(status, int) and 300 <= status < 400:
+        outcome, denial_kind = "authorization_redirect", "authorization_redirect"
+    elif isinstance(status, int) and 500 <= status <= 599:
+        outcome, denial_kind = "http_error", None
+    elif status is None:
+        outcome, denial_kind = "transport_error", None
+    else:
+        outcome, denial_kind = "ambiguous", None
+    return {
+        "control_outcome": outcome,
+        "denial_kind": denial_kind,
+        "status_code": status if isinstance(status, int) else None,
+        "final_url": final_url,
+        "interpretable": outcome in {"allowed", "denied", "authentication_redirect"},
+    }
+
+
+def _measure_vertical_role_boundary(
+    state: Mapping[str, Any],
+    admin_session: Any,
+    admin_principal: str | None,
+    admin_fingerprint: str | None,
+    nonadmin_session: Any,
+    nonadmin_principal: str | None,
+    nonadmin_fingerprint: str | None,
+    level: str,
+) -> dict[str, Any]:
+    """Measure role applicability with matched admin/non-admin page controls.
+
+    Applicability is true only when the known-admin principal is allowed and the
+    verified non-admin principal is explicitly denied on the same declared
+    policy path, action and level.  A login redirect, transport failure, server
+    error, ambiguous response, missing positive reference or unknown principal
+    records an explicit unknown rather than a measured false.  Detection
+    controls never become exploit candidates.
+    """
+    from foundation.control_catalog import (
+        APPLICABILITY_PHASE,
+        ROLE_BOUNDARY_METHOD,
+        catalog_sha256,
+        control_event,
+        role_boundary_control_rows,
+        role_boundary_controls_sha256,
+    )
+    from foundation.preconditions import make_observation_fact, observation_update
+
+    resolved = _permission_protocol_source(state)
+    if resolved is None:
+        return {}
+    source, protocol = resolved
+    rows = role_boundary_control_rows(
+        ROLE_BOUNDARY_METHOD, level, protocol=protocol,
+        protocol_source_sha256=str(source.get("sha256") or ""),
+    )
+    if len(rows) != 2:
+        return {}
+    admin_row, nonadmin_row = rows
+    if not (isinstance(admin_principal, str) and admin_principal
+            and isinstance(nonadmin_principal, str) and nonadmin_principal
+            and nonadmin_principal != admin_principal
+            and nonadmin_principal.lower() != "admin"
+            and admin_fingerprint and nonadmin_fingerprint
+            and admin_fingerprint != nonadmin_fingerprint):
+        return {}
+    visit_id = (
+        f"{ROLE_BOUNDARY_METHOD}:{APPLICABILITY_PHASE}:"
+        f"{state.get('execution_id') or state.get('run_id') or 'recon'}"
+    )
+    outcomes: dict[str, dict[str, Any]] = {}
+    events: list[dict[str, Any]] = []
+    for row, session in ((admin_row, admin_session), (nonadmin_row, nonadmin_session)):
+        role = str(row["principal_role"])
+        try:
+            response = session.get(str(row["request_path"]))
+            outcome = _page_control_outcome(response, str(row["policy_marker"]))
+        except (ContainmentError, TransportError, RequestTimeoutError, OSError, RuntimeError) as exc:
+            logger.warning("role-boundary %s control failed: %s", role, type(exc).__name__)
+            outcome = {"control_outcome": "transport_error", "denial_kind": None,
+                       "status_code": None, "final_url": "", "interpretable": False}
+            response = None
+        outcomes[role] = outcome
+        event = control_event(
+            control_id=str(row["control_id"]), control_class="detection",
+            method=ROLE_BOUNDARY_METHOD, visit_id=visit_id, phase=APPLICABILITY_PHASE,
+            purpose=str(row["purpose"]),
+            status="sent" if outcome["control_outcome"] != "transport_error" else "failed",
+            reason=str(outcome["control_outcome"]),
+            http_status=outcome["status_code"],
+            signal_detected=outcome["control_outcome"] == "allowed" and response is not None,
+            physical_requests=0 if response is None else 1,
+        )
+        event.update({
+            "principal_id": admin_principal if role == "admin" else nonadmin_principal,
+            "expected_principal_role": role,
+            "object_id": str(row["request_path"]),
+            "action": str(row["request_action"]),
+            "security_level": str(level),
+            "final_url": outcome["final_url"],
+            "control_outcome": outcome["control_outcome"],
+            "denial_kind": outcome["denial_kind"],
+            "protocol_source_sha256": str(source.get("sha256") or ""),
+            "control_sha256": str(row["control_sha256"]),
+        })
+        events.append(event)
+    admin_outcome = outcomes["admin"]["control_outcome"]
+    nonadmin_outcome = outcomes["nonadmin"]["control_outcome"]
+    if admin_outcome == "allowed" and nonadmin_outcome == "denied":
+        value: bool | None = True
+    elif admin_outcome == "allowed" and nonadmin_outcome == "allowed":
+        value = False
+    else:
+        value = None
+    fact = make_observation_fact(
+        "role_based_access_present", value, source="matched_permission_control",
+        method=ROLE_BOUNDARY_METHOD, visit_id=visit_id,
+        control_id=str(nonadmin_row["control_id"]),
+        evidence_refs=[str(admin_row["control_id"]), str(nonadmin_row["control_id"])],
+        fixture_id=state.get("fixture_id"), protocol_version=state.get("protocol_version"),
+        security_level=str(level), principal_id=nonadmin_principal,
+        session_fingerprint=nonadmin_fingerprint, phase=APPLICABILITY_PHASE,
+        session_scope="session",
+        detail=json.dumps({
+            "policy_path": str(admin_row["request_path"]),
+            "policy_action": str(admin_row["request_action"]),
+            "policy_marker": str(admin_row["policy_marker"]),
+            "admin_principal": admin_principal,
+            "nonadmin_principal": nonadmin_principal,
+            "admin_outcome": outcomes["admin"],
+            "nonadmin_outcome": outcomes["nonadmin"],
+            "protocol_source_sha256": str(source.get("sha256") or ""),
+        }, sort_keys=True),
+    )
+    scoped = {
+        **dict(state),
+        "method_principals": {
+            **dict(state.get("method_principals", {}) or {}),
+            ROLE_BOUNDARY_METHOD: nonadmin_principal,
+        },
+        "method_session_fingerprints": {
+            **dict(state.get("method_session_fingerprints", {}) or {}),
+            ROLE_BOUNDARY_METHOD: nonadmin_fingerprint,
+        },
+    }
+    update = observation_update(scoped, [fact], method=ROLE_BOUNDARY_METHOD)
+    update.update({
+        "control_events": events,
+        "method_principals": {ROLE_BOUNDARY_METHOD: nonadmin_principal},
+        "method_session_fingerprints": {ROLE_BOUNDARY_METHOD: nonadmin_fingerprint},
+        "probe_controls": {
+            f"{APPLICABILITY_PHASE}:{ROLE_BOUNDARY_METHOD}": {
+                "visit_id": visit_id,
+                "method": ROLE_BOUNDARY_METHOD,
+                "phase": APPLICABILITY_PHASE,
+                "policy_source_sha256": str(source.get("sha256") or ""),
+                "catalog_sha256": catalog_sha256(ROLE_BOUNDARY_METHOD, level),
+                "controls_sha256": role_boundary_controls_sha256(rows),
+                "candidates": rows,
+                "control_events": events,
+                "quarantined": False,
+                "requests_used": sum(1 for event in events if event["status"] == "sent"),
+                "physical_requests_used": sum(int(event["physical_requests"]) for event in events),
+            }
+        },
+    })
+    return update
+
+
 def _measure_recon_surface_controls(
     state: dict,
     session: Any,
@@ -418,6 +625,21 @@ def _measure_recon_surface_controls(
                     except (ValueError, RuntimeError, TransportError, RequestTimeoutError):
                         continue
                 active_session, active_principal = ac_session, ac_principal
+            if surface == "access_control" and method == "ac_vertical_escalation":
+                # Role applicability needs the known-admin positive reference and
+                # a verified non-admin negative reference on the same declared
+                # page/action/level.  The single-session method probe cannot
+                # distinguish a role boundary from a session or transport error.
+                role_update = _measure_vertical_role_boundary(
+                    state, session, principal_id, session_fingerprint(session),
+                    active_session, active_principal, session_fingerprint(active_session),
+                    level,
+                )
+                if role_update:
+                    if active_principal:
+                        updates.setdefault("method_principals", {})[method] = str(active_principal)
+                    _merge_control_update(updates, role_update)
+                continue
             update, quarantine = _probe_with_catalog_controls(
                 state, method, active_session, level, principal_id=active_principal,
                 phase="method_probe", snapshot_key=f"recon:method_probe:{method}")

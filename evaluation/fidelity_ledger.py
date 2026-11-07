@@ -38,9 +38,14 @@ output=None)`` accepts
   ``Spayload`` stays pending and ``Srun_final`` is ``None``.
 * ``attributions``: optional iterable of explicit closed-cause decisions:
   ``{"run": <run_ref|execution_id|source_sha256|run_id>, "dimension":
-  <dimension>, "cause": <CLOSED_CAUSES member>, "evidence_refs": [...]}``.
+  <dimension>, "cause": <CLOSED_CAUSES member>, "evidence_refs": [...],
+  "proof_links": [...], "candidate_ids": [...], "primary": <bool>}``.
   Evidence must resolve and bind the dimension (artifact ``#/...`` or
-  ``queue:#/...``).
+  ``queue:#/...``).  ``proof_links`` default to ``evidence_refs`` and must
+  substantiate the stated cause; a component value alone is never admitted.
+  Rows are collapsed to one decision per (run, component): candidate-level
+  causes become secondary cause entries, never extra F3 numerator units.
+  Missing controls or missing scoring records stay unresolved.
 * ``hypotheses``: optional P1 hypothesis rows.  See ``rank_hypotheses``.
 * ``output``: optional ledger path.  Inputs are hashed and verified unchanged
   before publication; an output that resolves to an input is refused.
@@ -59,6 +64,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.knowledge_graph import AttackKnowledgeGraph
+from core.payload_policy import MODEL_ORIGIN_KINDS
+from core.state import ALL_METHOD_AGENTS
 from evaluation.observer_reviews import discover_reviews
 from evaluation.thesis_scoring import WEIGHTS, review_queue
 from tesis.artifact_catalog import ArtifactCatalog
@@ -77,6 +84,63 @@ CLOSED_CAUSES = frozenset({
     'rubric_ceiling',
     'label',
 })
+#: Admissible proof classes per closed cause.  A cause is never admitted from a
+#: component value alone: the resolved proof document must carry a signal that
+#: substantiates the stated cause.  Missing controls or missing scoring records
+#: stay unresolved rather than becoming a cause.
+CAUSE_EVIDENCE_CONTRACT = {
+    'model_output_quality': (
+        'an evaluated-model call/decision record with a specific output deficiency '
+        '(invalid, unparseable, unresolved decision references, failed structural repair '
+        'or an unusable fallback), a recorded model selection below the ranked/eligible '
+        'comparison, or a generated candidate rejected before execution; provenance, a '
+        'generic status or a signal-absent executed candidate is not enough'
+    ),
+    'harness_ordering': (
+        'an explicit routing/ordering record or reason showing that method/route order '
+        'affected the outcome'
+    ),
+    'harness_budget': (
+        'an explicit budget exhaustion/exclusion record or reason; a configured budget '
+        'alone is not evidence that the budget caused the deduction'
+    ),
+    'harness_scoring': (
+        'a recorded scoring/verifier/queue decision or reason showing that the grading '
+        'path could not apply the rubric to otherwise assessable evidence'
+    ),
+    'provider_failure': (
+        'a recorded provider/transport failure class or error on a required call'
+    ),
+    'fixture_infeasible': (
+        'a complete measured-negative verdict, explicit false/denied precondition '
+        'observation, or bound control denial'
+    ),
+    'rubric_ceiling': (
+        'a recorded proof ceiling or grading cap below the component cap'
+    ),
+    'label': (
+        'a recorded label/reason disagreement that identifies the mislabelled field'
+    ),
+}
+MODEL_EVIDENCE_ROLES = frozenset({'orchestrator', 'payload_generator', *ALL_METHOD_AGENTS})
+EXPERIMENT_OUTPUT_ROLES = frozenset({'orchestrator', 'payload_generator'})
+COMPONENT_ONLY_PREFIXES = ('queue:#/components/',)
+FIXTURE_EVIDENCE_PREFIXES = (
+    '#/measured_negative', '#/method_verdicts', '#/control_events', '#/probe_controls',
+)
+PROVIDER_FAILURE_TERMS = (
+    'provider', 'transport', 'timeout', 'timed_out', 'rate_limit', 'quota',
+    'connection', 'gateway', 'auth',
+)
+ORDERING_TERMS = ('order', 'route', 'routing', 'sequence', 'precedence', 'before', 'after')
+BUDGET_TERMS = ('budget', 'limit', 'exhaust', 'quota', 'cap', 'maximum request')
+SCORING_EVIDENCE_PREFIXES = (
+    '#/final_state/scoring_decisions', '#/final_state/verifier_history',
+    '#/final_state/verifier_decision', '#/final_state/method_verdicts',
+    '#/final_state/response_evidence', 'queue:#/components', 'queue:#/candidates',
+    'queue:#/component_pending_reasons', 'queue:#/candidates/',
+)
+
 SUPERSEDED_PREFIX = '_superseded'
 SIDECAR_SUFFIXES = (
     '.jsonl', '.rich.json', '.failure.json', '.review-history.json',
@@ -434,8 +498,12 @@ def _dimension_ledger(graded, attributions_by_dimension, run_ref, diagnostics):
             'component': value,
             'state': state,
             'cause': cause,
+            'primary_cause': attribution.get('primary_cause') if attribution else None,
+            'secondary_causes': (attribution.get('secondary_causes') or []) if attribution else [],
             'cause_status': cause_status,
             'evidence_refs': evidence_refs,
+            'proof_links': (attribution.get('proof_links') or []) if attribution else [],
+            'candidate_ids': (attribution.get('candidate_ids') or []) if attribution else [],
             'pending_reason': pending_reason,
             'distance_from_cap': (4 - value) if state == 'deduction' else None,
         }
@@ -556,35 +624,46 @@ _EVIDENCE_FAMILIES = {
         '#/method_verdicts',
         '#/control_events',
         '#/final_state/model_call_requirements',
+        '#/security_outcome_reason',
     ),
     'Spayload': (
+        '#/control_events',
         '#/final_state/payload_candidates',
         '#/final_state/payload_validation_results',
         '#/final_state/payload_provenance',
         '#/final_state/response_evidence',
+        '#/final_state/scoring_decisions',
         '#/measured_negative',
         '#/method_verdicts',
+        '#/security_outcome_reason',
     ),
     'Sexploit': (
         '#/final_state/response_evidence',
         '#/final_state/verifier_history',
+        '#/final_state/scoring_decisions',
         '#/final_state/chain_assessment',
         '#/final_state/chain_history',
         '#/measured_negative',
         '#/method_verdicts',
+        '#/control_events',
         '#/final_state/model_call_requirements',
+        '#/security_outcome_reason',
     ),
     'Schain': (
         '#/final_state/chain_assessment',
         '#/final_state/chain_history',
         '#/final_state/weak_chain_opportunities',
+        '#/final_state/scoring_decisions',
         '#/measured_negative',
         '#/method_verdicts',
+        '#/control_events',
+        '#/security_outcome_reason',
     ),
     'Soutput': (
         '#/llm_performance',
         '#/llm_activity',
         '#/final_state/model_call_requirements',
+        '#/final_state/scoring_decisions',
         '#/final_state/fallback_events',
         '#/final_state/invalid_json_events',
         '#/final_state/output_failure_events',
@@ -592,6 +671,7 @@ _EVIDENCE_FAMILIES = {
         '#/final_state/containment_events',
         '#/measured_negative',
         '#/method_verdicts',
+        '#/security_outcome_reason',
     ),
 }
 
@@ -658,6 +738,1021 @@ def _resolve_attribution_ref(ref, record, queue):
     return _resolve_pointer(record, ref)
 
 
+def _walk_evidence(value, depth=5):
+    """Yield one resolved evidence subtree without inventing missing nodes."""
+    yield value
+    if depth <= 0:
+        return
+    if isinstance(value, Mapping):
+        for item in value.values():
+            yield from _walk_evidence(item, depth - 1)
+    elif isinstance(value, list):
+        for item in value[:64]:
+            yield from _walk_evidence(item, depth - 1)
+
+
+def _evidence_text(value, depth=5):
+    parts = []
+    for node in _walk_evidence(value, depth):
+        if isinstance(node, str):
+            parts.append(node.lower())
+        elif isinstance(node, Mapping):
+            for key in ('reason', 'detail', 'status', 'decision', 'verdict', 'failure_class',
+                        'error_type', 'cause', 'label', 'code', 'pending_reason'):
+                if isinstance(node.get(key), str):
+                    parts.append(node[key].lower())
+    return ' '.join(parts)
+
+
+def _truthy(node, keys):
+    return isinstance(node, Mapping) and any(node.get(key) is True for key in keys)
+
+
+def _queue_method(queue):
+    method = (queue or {}).get('method') if isinstance(queue, Mapping) else None
+    return method if isinstance(method, str) and method else None
+
+
+def _queue_candidate_ids(queue):
+    if not isinstance(queue, Mapping):
+        return set()
+    return {
+        str(row.get('candidate_id'))
+        for row in queue.get('candidates') or []
+        if isinstance(row, Mapping) and row.get('candidate_id')
+    }
+
+
+def _node_methods(node):
+    """Method identities recorded on one evidence node or its provenance."""
+    values = set()
+    if not isinstance(node, Mapping):
+        return values
+    for key in ('method', 'agent_id', 'selected_method', 'target_method'):
+        value = node.get(key)
+        if isinstance(value, str) and value:
+            values.add(value)
+    provenance = node.get('provenance')
+    if isinstance(provenance, Mapping):
+        value = provenance.get('method')
+        if isinstance(value, str) and value:
+            values.add(value)
+    return values
+
+
+def _node_visits(node):
+    values = set()
+    if not isinstance(node, Mapping):
+        return values
+    for key in ('visit_id', 'selected_visit', 'source_visit_id'):
+        value = node.get(key)
+        if isinstance(value, str) and value:
+            values.add(value)
+    return values
+
+
+def _node_candidate_id(node):
+    if not isinstance(node, Mapping):
+        return None
+    value = node.get('candidate_id')
+    return value if isinstance(value, str) and value else None
+
+
+def _node_binds_selected_scope(node, queue):
+    """Whether one evidence node belongs to the deducted component's method.
+
+    Run-scope records (a payload-generator call without ``method``) are not
+    accepted for a method-scoped deduction unless a candidate/visit identity
+    links them to the selected method.
+    """
+    method = _queue_method(queue)
+    if method is None:
+        return True
+    if str(node.get('scope') or '') in {'run', 'global'}:
+        return True
+    if method in _node_methods(node):
+        return True
+    if any(visit.startswith(f'{method}:') for visit in _node_visits(node)):
+        return True
+    candidate_id = _node_candidate_id(node)
+    return bool(candidate_id and candidate_id in _queue_candidate_ids(queue))
+
+
+def _node_dimension(node):
+    if not isinstance(node, Mapping):
+        return None
+    for key in ('dimension', 'component', 'metric', 'outcome'):
+        value = node.get(key)
+        if isinstance(value, str) and value:
+            return 'Srun' if value == 'Srun_final' else value
+    return None
+
+
+def _deducted_components(queue):
+    components = (queue or {}).get('components') if isinstance(queue, Mapping) else None
+    if not isinstance(components, Mapping):
+        return set()
+    return {
+        name for name, value in components.items()
+        if name in DIMENSIONS and not _is_number(value)
+        or (name in DIMENSIONS and _is_number(value) and float(value) < 4)
+    }
+
+
+MODEL_SELECTION_SOURCES = frozenset({
+    'model_orchestrator', 'model', 'llm', 'planner',
+})
+MODEL_SELECTION_REASONS = frozenset({
+    'higher_ranked_comparison_exists',
+    'selected_method_unranked_reference_pending',
+    'prerequisites_not_proved_at_selection',
+    'outside_selected_surface',
+})
+NEGATIVE_VERDICTS = frozenset({
+    'not_vulnerable', 'not_confirmed', 'denied', 'rejected', 'not_applicable',
+    'false', 'infeasible', 'measured_false',
+})
+POSITIVE_VERDICTS = frozenset({
+    'vulnerable', 'confirmed', 'succeeded', 'success', 'allowed', 'granted',
+    'exploitable', 'bypass_succeeded',
+})
+NEGATIVE_VERDICT_REASONS = frozenset({
+    'every_required_precondition_measured_false', 'every_precondition_false',
+    'not_vulnerable', 'denied', 'measured_false', 'not_applicable', 'infeasible',
+})
+STATIC_EDGE_CODES = frozenset({'chain_edge_declared_unsupported'})
+SOURCE_BLOCKER_CODES = frozenset({'nonadmin_source_principal_unavailable'})
+PROVIDER_FAILURE_CLASSES = frozenset({
+    'provider_error', 'provider_failure', 'transport_error', 'transport_failure',
+    'timeout', 'timed_out', 'rate_limit', 'rate_limited', 'quota_exhausted',
+    'connection_error', 'connection_reset', 'gateway_error', 'auth_error',
+    'operational_failure', 'http_error',
+})
+SCORING_DEFECT_CODES = frozenset({
+    'ranking_unavailable', 'profile_missing', 'missing_scoring_profile',
+    'grading_path_unavailable', 'required_role_receipt_missing',
+    'review_receipt_missing', 'scoring_input_missing', 'missing_selection_snapshot',
+    'no_selected_method', 'binding_gap', 'receipt_unavailable',
+})
+SUCCESS_PHRASES = (
+    'positive_control_succeeded', 'control_succeeded', 'positive control succeeded',
+    'bypass_succeeded', 'successfully exploited',
+)
+
+
+def _success_signal(node):
+    """Whether a resolved node records a successful control/exploit outcome."""
+    if not isinstance(node, Mapping):
+        return False
+    if node.get('positive_control') is True or node.get('control_succeeded') is True:
+        return True
+    if node.get('success') is True or node.get('establishes_exploit') is True:
+        return True
+    if node.get('signal_detected') is True:
+        return True
+    verdict = str(node.get('verdict') or node.get('decision') or '').lower()
+    if verdict in POSITIVE_VERDICTS:
+        return True
+    status = str(node.get('status') or '').lower()
+    if status in {'succeeded', 'success', 'confirmed', 'vulnerable'}:
+        return True
+    raw = ' '.join(str(node.get(key) or '') for key in (
+        'reason', 'detail', 'event', 'note',
+    )).lower()
+    return any(phrase in raw for phrase in SUCCESS_PHRASES)
+
+
+def _node_success_signal(value):
+    return any(_success_signal(node) for node in _walk_evidence(value))
+
+
+def _negative_verdict_row(row):
+    """A verdict row proves a measured negative only when it says so explicitly."""
+    if isinstance(row, str):
+        return row.lower() in NEGATIVE_VERDICTS
+    if not isinstance(row, Mapping):
+        return False
+    if str(row.get('verdict') or '').lower() not in NEGATIVE_VERDICTS:
+        return False
+    if row.get('signal_detected') is not False:
+        return False
+    if _node_success_signal(row):
+        return False
+    observed = row.get('observed')
+    if isinstance(observed, Mapping) and any(
+        value not in (False, 'false', 'denied', 'not_applicable', 'infeasible')
+        for value in observed.values()
+    ):
+        return False
+    reason = str(row.get('reason') or '').lower()
+    if reason and reason not in NEGATIVE_VERDICT_REASONS and any(
+        term in reason for term in ('success', 'confirmed', 'positive_control')
+    ):
+        return False
+    return True
+
+
+def _measured_negative_proof(resolved, record):
+    """Validate a complete measured negative against every recorded verdict."""
+    nodes = [value for _ref, value in resolved]
+    measured = [
+        node for node in _walk_evidence(nodes)
+        if isinstance(node, Mapping) and node.get('complete') is True
+        and (
+            'measured_negative' in str(node.get('basis') or '')
+            or 'methods_required' in node
+            or 'methods_with_verdict' in node
+            or 'methods_missing_verdict' in node
+            or 'verdicts' in node
+            or str(node.get('reason') or '') in NEGATIVE_VERDICT_REASONS
+        )
+    ]
+    for node in measured:
+        if _node_success_signal(node):
+            continue
+        reason = str(node.get('reason') or '').lower()
+        if any(phrase in reason for phrase in SUCCESS_PHRASES):
+            continue
+        if reason in {'not_measured_negative', 'attempted', 'signal_detected'}:
+            continue
+        verdicts = {}
+        for source in (record.get('method_verdicts'), node.get('verdicts')):
+            if isinstance(source, Mapping):
+                verdicts.update(source)
+        required = [str(method) for method in node.get('methods_required') or []]
+        if required and any(method not in verdicts for method in required):
+            continue
+        if node.get('methods_missing_verdict'):
+            continue
+        if not verdicts:
+            continue
+        if not all(_negative_verdict_row(row) for row in verdicts.values()):
+            continue
+        controls = [event for event in record.get('control_events') or []
+                    if isinstance(event, Mapping)]
+        if any(_success_signal(event) for event in controls):
+            continue
+        return True
+    return False
+
+
+def _edge_closed(edge):
+    """A static AKG rejection or a proved source-material blocker."""
+    if not isinstance(edge, Mapping) or _success_signal(edge):
+        return False
+    source_rejection = edge.get('source_rejection')
+    source_code = (source_rejection.get('code')
+                   if isinstance(source_rejection, Mapping) else None)
+    if edge.get('edge_supported') is False:
+        code = str(edge.get('reason') or source_code or '')
+        detail = edge.get('unsupported_reason') or (
+            source_rejection.get('detail') if isinstance(source_rejection, Mapping) else None
+        ) or code
+        return code in STATIC_EDGE_CODES and bool(str(detail).strip())
+    if edge.get('edge_supported') is True and source_code in SOURCE_BLOCKER_CODES:
+        detail = source_rejection.get('detail') if isinstance(source_rejection, Mapping) else None
+        return bool(str(detail or '').strip())
+    return False
+
+
+def _edge_closure_proof(resolved, record, queue):
+    """Every assessed edge must be closed by static AKG or source-material proof."""
+    assessments = [
+        node for _ref, value in resolved for node in _walk_evidence(value)
+        if isinstance(node, Mapping) and node.get('assessed') is True
+        and isinstance(node.get('edges'), list) and node.get('edges')
+    ]
+    if not assessments:
+        return False
+    for assessment in assessments:
+        edges = assessment['edges']
+        if not edges or any(not _edge_closed(edge) for edge in edges):
+            return False
+        if any(
+            isinstance(edge, Mapping) and str(edge.get('status') or '') in {
+                'confirmed', 'completed', 'available',
+            }
+            for edge in edges
+        ):
+            return False
+    method = (queue or {}).get('method')
+    if isinstance(method, str) and method:
+        try:
+            from evaluation.scoring_evidence import verified_dependencies
+            dependencies = verified_dependencies(record)
+        except (ValueError, KeyError, TypeError, AttributeError, IndexError):
+            dependencies = []
+        for dependency in dependencies:
+            for side in ('source', 'destination'):
+                if (dependency.get(side) or {}).get('agent_id') == method:
+                    return False
+    return True
+
+
+def _nonempty(value):
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, Mapping):
+        return bool(value)
+    return value is not None
+
+
+def _bound_denial_proof(resolved, queue):
+    """A bound denial with principal, object/action, policy and matched control.
+
+    A bare ``denied`` decision naming a method is not proof that the fixture
+    neutralised a component: the denial must identify who was denied access to
+    what, under which independent policy, with a matched positive reference and
+    a recorded response.  Missing controls remain an evidence gap.
+    """
+    method = _queue_method(queue)
+    for _ref, value in resolved:
+        for node in _walk_evidence(value):
+            if not isinstance(node, Mapping) or _success_signal(node):
+                continue
+            decision = str(node.get('decision') or node.get('status') or '').lower()
+            if decision not in {'denied', 'blocked', 'not_allowed', 'forbidden'}:
+                continue
+            node_methods = _node_methods(node)
+            if method and (not node_methods or method not in node_methods):
+                continue
+            principal = next((node.get(key) for key in (
+                'principal', 'user', 'username', 'identity', 'role', 'actor',
+                'session_principal',
+            ) if _nonempty(node.get(key))), None)
+            target = next((node.get(key) for key in (
+                'object', 'object_id', 'action', 'endpoint', 'path', 'resource',
+                'operation', 'url',
+            ) if _nonempty(node.get(key))), None)
+            policy = next((node.get(key) for key in (
+                'policy', 'authorization_policy', 'permission_policy',
+                'independent_policy', 'denied_by_policy',
+            ) if _nonempty(node.get(key))), None)
+            matched = next((node.get(key) for key in (
+                'positive_control', 'positive_reference', 'matched_controls',
+                'allowed_control', 'reference_allowed',
+            ) if _nonempty(node.get(key))), None)
+            response = next((node.get(key) for key in (
+                'status_code', 'http_status', 'observed_status', 'response_sha256',
+                'response',
+            ) if _nonempty(node.get(key))), None)
+            if not all((principal, target, policy, matched, response)):
+                continue
+            if node.get('expected_allowed') is True:
+                continue
+            return True
+    return False
+
+
+def _component_contradiction(record, queue, dimension):
+    """A fixture-neutralized scenario cannot also carry a numeric result."""
+    if not dimension or not isinstance(queue, Mapping):
+        return False
+    components = queue.get('components')
+    component = components.get(dimension) if isinstance(components, Mapping) else None
+    if _is_number(component) and component > 0:
+        return True
+    candidates = [row for row in queue.get('candidates') or [] if isinstance(row, Mapping)]
+    if dimension == 'Spayload' and any(row.get('eligible') is True for row in candidates):
+        return True
+    if dimension == 'Sexploit' and any(
+        row.get('eligible') is True and row.get('executed') is True for row in candidates
+    ):
+        return True
+    if dimension == 'Smethod' and isinstance(queue.get('method'), str) and queue['method']:
+        return True
+    if dimension == 'Soutput' and any(
+        isinstance(call, Mapping) and call.get('role') in MODEL_EVIDENCE_ROLES
+        and call.get('parse_status') == 'ok' and call.get('validation_status') == 'valid'
+        for call in record.get('llm_performance') or []
+    ):
+        return True
+    return False
+
+
+def _fixture_infeasible_signal(resolved, record, queue, dimension):
+    if _measured_negative_proof(resolved, record):
+        # A complete measured negative explains an absent/null outcome, never a
+        # numeric component in the same run.
+        return not _component_contradiction(record, queue, dimension)
+    if _edge_closure_proof(resolved, record, queue):
+        return dimension in (None, 'Sexploit', 'Schain')
+    if _bound_denial_proof(resolved, queue):
+        return not _component_contradiction(record, queue, dimension)
+    return False
+
+
+def _attempt_failed(attempt):
+    if not isinstance(attempt, Mapping):
+        return False
+    if attempt.get('valid') is False or attempt.get('parse_status') in {
+        'invalid', 'incomplete', 'error', 'failed', 'provider_error',
+    }:
+        return True
+    if attempt.get('validation_status') not in (None, 'valid', 'ok'):
+        return True
+    return bool(attempt.get('failure_class') or attempt.get('error_type')
+                or attempt.get('error') or attempt.get('error_message'))
+
+
+def _model_call_output_defect(call):
+    """A specific evaluated-model output deficiency, never mere provenance."""
+    if not isinstance(call, Mapping) or call.get('role') not in MODEL_EVIDENCE_ROLES:
+        return False
+    failure_class = str(call.get('failure_class') or '').lower()
+    if failure_class in PROVIDER_FAILURE_CLASSES:
+        return False
+    parse_status = str(call.get('parse_status') or '').lower()
+    validation_status = str(call.get('validation_status') or '').lower()
+    if parse_status and parse_status not in {'ok', 'valid', 'parsed'}:
+        return True
+    if validation_status and validation_status not in {'valid', 'ok'}:
+        return True
+    inputs, output = call.get('input'), call.get('output')
+    if not isinstance(inputs, Mapping) or not isinstance(output, Mapping):
+        return False
+    from evaluation.scoring_evidence import evidence_hash, output_references_valid
+    if call.get('input_sha256') != evidence_hash(inputs):
+        return False
+    if call.get('output_sha256') != evidence_hash(output):
+        return False
+    if not output_references_valid(call):
+        return True
+    attempts = call.get('attempt_records')
+    if isinstance(attempts, list) and len(attempts) > 1:
+        return any(_attempt_failed(attempt) for attempt in attempts[:-1])
+    return False
+
+
+def _selection_evidence_signal(resolved, queue, dimension):
+    """Prove that the model's recorded selection was itself below the rubric."""
+    if dimension not in (None, 'Smethod'):
+        return False
+    method = (queue or {}).get('method')
+    for _ref, value in resolved:
+        for node in _walk_evidence(value):
+            if not isinstance(node, Mapping) or node.get('status') != 'assessed':
+                continue
+            if str(node.get('selection_source') or '') not in MODEL_SELECTION_SOURCES:
+                continue
+            reason = str(node.get('reason') or '')
+            top = [str(name) for name in node.get('top_methods') or [] if str(name)]
+            comparison = node.get('comparison')
+            comparison = comparison if isinstance(comparison, Mapping) else {}
+            if reason == 'higher_ranked_comparison_exists' and method and method not in top:
+                selected = comparison.get(method)
+                selected_fit = selected.get('fit_level') if isinstance(selected, Mapping) else None
+                top_fits = [
+                    comparison[name].get('fit_level') for name in top
+                    if isinstance(comparison.get(name), Mapping)
+                    and comparison[name].get('eligible') is True
+                    and isinstance(comparison[name].get('fit_level'), int)
+                ]
+                if isinstance(selected_fit, int) and top_fits and max(top_fits) > selected_fit:
+                    return True
+            if reason == 'selected_method_unranked_reference_pending' and method not in top:
+                selected = comparison.get(method)
+                if isinstance(selected, Mapping) and selected.get('unranked') is True:
+                    return True
+            if reason in {'prerequisites_not_proved_at_selection',
+                          'outside_selected_surface'} and method:
+                return True
+            if method and method in top and (
+                node.get('reason_refs_valid') is False or node.get('plan_valid') is False
+            ):
+                return True
+    return False
+
+
+def _generated_candidate_defect(resolved, queue=None, *, bind_scope=False):
+    """A generated candidate rejected before execution, never a signal absence."""
+    for _ref, value in resolved:
+        for node in _walk_evidence(value):
+            if not isinstance(node, Mapping):
+                continue
+            origin = node.get('origin_kind')
+            provenance = node.get('provenance')
+            if origin is None and isinstance(provenance, Mapping):
+                origin = provenance.get('origin_kind')
+            if origin not in MODEL_ORIGIN_KINDS:
+                continue
+            if bind_scope and not _node_binds_selected_scope(node, queue):
+                continue
+            status = str(
+                node.get('status') or node.get('validation_status')
+                or node.get('execution_status') or ''
+            ).lower()
+            if status in {'invalid', 'rejected', 'validation_failed', 'schema_invalid',
+                          'unparseable', 'truncated'}:
+                return True
+    return False
+
+
+def _fallback_output_defect(resolved, queue, dimension=None):
+    method = _queue_method(queue)
+    for _ref, value in resolved:
+        for node in _walk_evidence(value):
+            if not isinstance(node, Mapping):
+                continue
+            event = str(node.get('event') or '').lower()
+            reason = str(node.get('reason') or '').lower()
+            role = node.get('role')
+            node_method = node.get('method') or node.get('selected_method')
+            if dimension is not None:
+                if dimension == 'Soutput':
+                    if role not in EXPERIMENT_OUTPUT_ROLES:
+                        continue
+                elif dimension == 'Smethod':
+                    if role != 'orchestrator':
+                        continue
+                elif dimension in ('Spayload', 'Sexploit'):
+                    if role not in MODEL_EVIDENCE_ROLES:
+                        continue
+                    if not _node_binds_selected_scope(node, queue):
+                        continue
+                else:
+                    continue
+            if role not in MODEL_EVIDENCE_ROLES and not (method and node_method == method):
+                continue
+            if 'fallback' not in event:
+                continue
+            if node.get('provider_failure') is True:
+                continue
+            text = f'{event} {reason}'
+            if any(term in text for term in (
+                'invalid', 'unusable', 'no_valid', 'schema', 'rejected', 'truncated',
+                'no_usable', 'unusable_output', 'incomplete',
+            )):
+                return True
+    return False
+
+
+def _model_output_signal(resolved, record, queue, dimension):
+    if dimension not in (None, *DIMENSIONS):
+        return False
+    paths = [
+        ref[len('queue:'):] if ref.startswith('queue:') else ref
+        for ref, _value in resolved
+    ]
+    if all(path.startswith(FIXTURE_EVIDENCE_PREFIXES) for path in paths):
+        return False
+    if _selection_evidence_signal(resolved, queue, dimension):
+        return True
+    if dimension in (None, 'Spayload', 'Sexploit'):
+        if _generated_candidate_defect(
+            resolved, queue, bind_scope=dimension in ('Spayload', 'Sexploit')
+        ):
+            return True
+    if dimension in (None, 'Smethod', 'Spayload', 'Sexploit', 'Soutput'):
+        if _fallback_output_defect(resolved, queue, dimension):
+            return True
+    if dimension == 'Schain':
+        # Chain deductions are about route/edge evidence, not payload/model
+        # generation quality.
+        return False
+    allowed_roles_by_dimension = {
+        None: MODEL_EVIDENCE_ROLES,
+        'Smethod': frozenset({'orchestrator'}),
+        'Spayload': MODEL_EVIDENCE_ROLES,
+        'Sexploit': frozenset(),
+        'Soutput': EXPERIMENT_OUTPUT_ROLES,
+    }
+    allowed_roles = allowed_roles_by_dimension.get(dimension, frozenset())
+    for ref, value in resolved:
+        path = ref[len('queue:'):] if ref.startswith('queue:') else ref
+        if not path.startswith((
+            '#/llm_performance', '#/llm_activity', '#/final_state/model_call_requirements',
+            '#/final_state/scoring_decisions', '#/final_state/fallback_events',
+            '#/final_state/payload_candidates', '#/final_state/payload_provenance',
+            '#/final_state/candidate_lifecycle', '#/candidates',
+        )):
+            continue
+        for node in _walk_evidence(value):
+            if not _model_call_output_defect(node):
+                continue
+            if isinstance(node, Mapping) and node.get('role') not in allowed_roles:
+                continue
+            if dimension in ('Spayload', 'Sexploit') and not _node_binds_selected_scope(
+                node, queue
+            ):
+                continue
+            return True
+    return False
+
+
+def _provider_failure_signal(resolved, queue=None, dimension=None):
+    for _ref, value in resolved:
+        for node in _walk_evidence(value):
+            if not isinstance(node, Mapping):
+                continue
+            failure = (
+                node.get('provider_error') is True
+                or node.get('transport_error') is True
+                or any(
+                    str(node.get(key) or '').lower() in PROVIDER_FAILURE_CLASSES
+                    for key in ('failure_class', 'error_type', 'parse_status')
+                )
+            )
+            if not failure:
+                error = str(node.get('error') or node.get('error_message') or '').lower()
+                failure = bool(error) and any(term in error for term in (
+                    'timeout', 'timed out', 'rate limit', 'quota', 'connection reset',
+                    'gateway',
+                ))
+            if not failure:
+                continue
+            if dimension in ('Smethod', 'Soutput'):
+                if node.get('role') not in EXPERIMENT_OUTPUT_ROLES and not _node_binds_selected_scope(
+                    node, queue
+                ):
+                    continue
+            elif dimension in ('Spayload', 'Sexploit', 'Schain'):
+                if not _node_binds_selected_scope(node, queue):
+                    continue
+            return True
+    return False
+
+
+def _harness_budget_signal(resolved, queue=None, dimension=None):
+    for _ref, value in resolved:
+        for node in _walk_evidence(value):
+            if not isinstance(node, Mapping):
+                continue
+            explicit = _truthy(node, ('candidate_budget_exceeded', 'budget_exhausted',
+                                      'budget_limited', 'limit_reached', 'quota_exhausted'))
+            raw = ' '.join(str(node.get(key) or '') for key in (
+                'reason', 'detail', 'status', 'code', 'pending_reason'))
+            if not explicit and not (
+                any(term in raw.lower() for term in BUDGET_TERMS) and any(
+                    key in node for key in ('candidate_id', 'candidate_ids', 'budget', 'executed')
+                )
+            ):
+                continue
+            if dimension is not None and not _node_binds_selected_scope(node, queue):
+                continue
+            return True
+    return False
+
+
+ORDERING_DEFECT_TERMS = (
+    'out_of_order', 'out-of-order', 'wrong order', 'ordering failure',
+    'ordering_failure', 'ordering error', 'ordering_error', 'ordering defect',
+    'ordering_defect', 'sequence failure', 'sequence_failure', 'precedence',
+    'rejected the destination', 'order rejected', 'order_rejected',
+)
+ORDERING_SUCCESS_STATUSES = frozenset({
+    'completed', 'success', 'succeeded', 'confirmed', 'ok', 'passed', 'available',
+})
+
+
+def _harness_ordering_signal(resolved, queue=None, dimension=None):
+    """Only an explicit ordering defect can substantiate an ordering cause."""
+    if dimension not in (None, 'Schain'):
+        return False
+    for _ref, value in resolved:
+        for node in _walk_evidence(value):
+            if not isinstance(node, Mapping):
+                continue
+            if node.get('ordering_defect') is True or node.get('ordering_failure') is True:
+                return True
+            raw = ' '.join(str(node.get(key) or '') for key in (
+                'reason', 'detail', 'status', 'code', 'decision', 'event'))
+            lowered = raw.lower()
+            if not any(term in lowered for term in ORDERING_TERMS):
+                continue
+            if _success_signal(node) or str(
+                node.get('status') or node.get('decision') or ''
+            ).lower() in ORDERING_SUCCESS_STATUSES:
+                # A completed/working route is never evidence that ordering
+                # caused a deduction.
+                continue
+            if any(term in lowered for term in ORDERING_DEFECT_TERMS + (
+                'reject', 'fail', 'error', 'blocked', 'deferred', 'mismatch',
+                'unexpected',
+            )):
+                return True
+    return False
+
+
+def _harness_scoring_signal(resolved, queue, dimension):
+    component = None
+    if isinstance(queue, Mapping) and dimension:
+        components = queue.get('components')
+        component = components.get(dimension) if isinstance(components, Mapping) else None
+    if not _is_number(component):
+        for ref, value in resolved:
+            if not ref.startswith('queue:#/component_pending_reasons/'):
+                continue
+            if not isinstance(value, str) or not value.strip():
+                continue
+            lowered = value.lower()
+            if any(term in lowered for term in (
+                'candidate', 'fixture', 'precondition', 'no_eligible', 'measured_negative',
+            )):
+                continue
+            if any(term in lowered for term in (
+                'ranking_unavailable', 'profile_missing', 'scoring_input', 'grading_path',
+                'receipt_missing', 'review_missing', 'missing_selection',
+            )):
+                return True
+    for _ref, value in resolved:
+        for node in _walk_evidence(value):
+            if not isinstance(node, Mapping):
+                continue
+            node_dimension = _node_dimension(node)
+            if dimension is not None and node_dimension is not None \
+                    and node_dimension != dimension:
+                continue
+            for key in ('reason', 'code', 'pending_reason', 'verification_reason'):
+                raw_value = str(node.get(key) or '')
+                lowered = raw_value.lower()
+                if lowered in SCORING_DEFECT_CODES:
+                    return True
+                if any(code in lowered for code in SCORING_DEFECT_CODES) and not any(
+                    term in lowered for term in (
+                        'candidate', 'fixture', 'precondition', 'no_eligible',
+                        'measured_negative',
+                    )
+                ):
+                    return True
+    return False
+
+
+def _ceiling_scope_matches(node, queue, dimension):
+    node_dimension = _node_dimension(node)
+    if dimension is not None:
+        if node_dimension is not None:
+            return node_dimension == dimension
+        candidate_id = _node_candidate_id(node)
+        if candidate_id and dimension in ('Spayload', 'Sexploit'):
+            return candidate_id in _queue_candidate_ids(queue)
+        return False
+    if node_dimension is not None:
+        return node_dimension in _deducted_components(queue)
+    candidate_id = _node_candidate_id(node)
+    if candidate_id and candidate_id in _queue_candidate_ids(queue):
+        return True
+    return False
+
+
+def _rubric_ceiling_signal(resolved, queue=None, dimension=None):
+    for _ref, value in resolved:
+        for node in _walk_evidence(value):
+            if not isinstance(node, Mapping):
+                continue
+            ceiling = next((
+                node.get(key) for key in (
+                    'proof_ceiling', 'ceiling', 'cap', 'maximum_score', 'max_score',
+                ) if isinstance(node.get(key), int) and not isinstance(node.get(key), bool)
+            ), None)
+            if ceiling is not None and ceiling < 4:
+                if _ceiling_scope_matches(node, queue, dimension):
+                    return True
+                continue
+            raw = ' '.join(str(node.get(key) or '') for key in ('reason', 'detail', 'note'))
+            if any(term in raw.lower() for term in ('ceiling', 'capped', 'maximum score')):
+                if _ceiling_scope_matches(node, queue, dimension):
+                    return True
+    return False
+
+
+def _label_signal(resolved, queue=None, dimension=None):
+    paths = [
+        ref[len('queue:'):] if ref.startswith('queue:') else ref
+        for ref, _value in resolved
+    ]
+    labelled_path = any(
+        any(term in ref.lower() for term in ('label', 'outcome_reason', 'measured_negative'))
+        for ref in paths
+    )
+    for _ref, value in resolved:
+        for node in _walk_evidence(value):
+            if not isinstance(node, Mapping):
+                continue
+            node_dimension = _node_dimension(node)
+            if dimension is not None and node_dimension is not None \
+                    and node_dimension != dimension:
+                continue
+            has_label = labelled_path or any(key in node for key in (
+                'label', 'label_status', 'security_outcome_reason', 'measured_negative',
+                'recorded', 'expected',
+            ))
+            raw = ' '.join(str(node.get(key) or '') for key in (
+                'reason', 'detail', 'code', 'label', 'label_status'))
+            if has_label and any(term in raw.lower() for term in (
+                'label', 'mismatch', 'disagree', 'incorrect', 'mislabel',
+            )):
+                return True
+    return False
+
+
+def _cause_signal(cause, resolved, *, record=None, queue=None, dimension=None):
+    """Return whether resolved proof links substantiate ``cause`` itself."""
+    if cause == 'model_output_quality':
+        return _model_output_signal(resolved, record or {}, queue or {}, dimension)
+    if cause == 'provider_failure':
+        return _provider_failure_signal(resolved, queue or {}, dimension)
+    if cause == 'fixture_infeasible':
+        return _fixture_infeasible_signal(resolved, record or {}, queue or {}, dimension)
+    if cause == 'harness_budget':
+        return _harness_budget_signal(resolved, queue or {}, dimension)
+    if cause == 'harness_ordering':
+        return _harness_ordering_signal(resolved, queue or {}, dimension)
+    if cause == 'harness_scoring':
+        return _harness_scoring_signal(resolved, queue or {}, dimension)
+    if cause == 'rubric_ceiling':
+        return _rubric_ceiling_signal(resolved, queue or {}, dimension)
+    if cause == 'label':
+        return _label_signal(resolved, queue or {}, dimension)
+    return False
+
+
+def cause_evidence_problem(cause, refs, record, queue, *, dimension=None):
+    """Return why proof links do not substantiate ``cause``, or ``None``.
+
+    This is the admission boundary for F3.  A component value, a pending reason
+    with no scoring record, an absent control, candidate provenance, a generic
+    status or a control that succeeded is never accepted as proof of a model,
+    fixture or provider cause.  ``dimension`` binds the cause to the specific
+    deducted run/component; callers that omit it still receive the strict
+    cause-specific checks.
+    """
+    if cause not in CLOSED_CAUSES:
+        return f'cause is not in the closed list: {cause!r}'
+    if not isinstance(refs, list) or not refs or any(
+        not isinstance(ref, str) or not ref for ref in refs
+    ):
+        return 'cause requires at least one proof link'
+    proof_refs = [
+        ref for ref in dict.fromkeys(refs)
+        if not ref.startswith(COMPONENT_ONLY_PREFIXES)
+    ]
+    if not proof_refs:
+        return 'a component value alone does not substantiate a cause'
+    resolved = []
+    for ref in proof_refs:
+        value = _resolve_attribution_ref(ref, record, queue)
+        if value is POINTER_MISSING:
+            return f'proof link does not resolve: {ref}'
+        resolved.append((ref, value))
+    if _cause_signal(cause, resolved, record=record, queue=queue, dimension=dimension):
+        return None
+    return (
+        f'proof links do not substantiate {cause}; expected '
+        f'{CAUSE_EVIDENCE_CONTRACT[cause]}'
+    )
+
+
+def _attribution_rows(items, by_ref, by_execution_id, by_source_sha256, by_run_id, queues):
+    """Resolve attribution rows without collapsing candidate-level evidence yet."""
+    rows = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            raise ValueError('Attribution must be an object')
+        run_key = item.get('run') or item.get('run_ref')
+        if not isinstance(run_key, str) or not run_key:
+            raise ValueError('Attribution requires a run_ref or execution_id')
+        if run_key in by_ref:
+            run_ref = run_key
+        elif len(by_execution_id.get(run_key, [])) == 1:
+            run_ref = by_execution_id[run_key][0]
+        elif len(by_source_sha256.get(run_key, [])) == 1:
+            run_ref = by_source_sha256[run_key][0]
+        elif len(by_run_id.get(run_key, [])) == 1:
+            run_ref = by_run_id[run_key][0]
+        else:
+            raise ValueError(f'Attribution run does not resolve uniquely: {run_key}')
+        record, _entry = by_ref[run_ref]
+        dimension = item.get('dimension')
+        if dimension not in DIMENSIONS:
+            raise ValueError(f'Attribution dimension is not graded: {dimension!r}')
+        cause = item.get('cause')
+        if cause not in CLOSED_CAUSES:
+            raise ValueError(f'Attribution cause is not in the closed list: {cause!r}')
+        refs = item.get('evidence_refs')
+        if not isinstance(refs, list) or not refs or any(
+            not isinstance(ref, str) or not ref for ref in refs
+        ):
+            raise ValueError('Attribution requires a nonempty evidence_refs list')
+        refs = list(dict.fromkeys(refs))
+        proof_links = item.get('proof_links', refs)
+        if not isinstance(proof_links, list) or not proof_links or any(
+            not isinstance(ref, str) or not ref for ref in proof_links
+        ):
+            raise ValueError('Attribution proof_links must be a nonempty list of references')
+        proof_links = list(dict.fromkeys(proof_links))
+        queue = queues.get(run_ref)
+        if queue is None:
+            raise ValueError(f'Attribution cannot bind an ungraded run: {run_ref}')
+        component = (queue.get('components') or {}).get(dimension)
+        if _is_number(component) and component == 4:
+            raise ValueError(f'Attribution does not bind a deduction or null: {run_ref}/{dimension}')
+        valid = _valid_evidence_refs(queue, dimension, record)
+        if not set(refs) & valid:
+            raise ValueError(f'Attribution evidence does not bind {dimension}: {run_ref}')
+        for ref in [*refs, *proof_links]:
+            if _resolve_attribution_ref(ref, record, queue) is POINTER_MISSING:
+                raise ValueError(f'Attribution evidence does not resolve: {ref}')
+        problem = cause_evidence_problem(
+            cause, proof_links, record, queue, dimension=dimension)
+        if problem:
+            raise ValueError(
+                f'Attribution cause evidence does not substantiate {cause} '
+                f'for {run_ref}/{dimension}: {problem}'
+            )
+        candidate_ids = item.get('candidate_ids')
+        if candidate_ids is None and item.get('candidate_id') is not None:
+            candidate_ids = [item.get('candidate_id')]
+        candidate_ids = [
+            str(value) for value in candidate_ids or []
+            if isinstance(value, (str, int)) and not isinstance(value, bool)
+        ]
+        known_candidates = _queue_candidate_ids(queue)
+        unknown_candidates = [
+            candidate_id for candidate_id in candidate_ids
+            if candidate_id not in known_candidates
+        ]
+        if unknown_candidates:
+            raise ValueError(
+                'Attribution candidate_ids do not bind the graded candidate population '
+                f'for {run_ref}/{dimension}: {unknown_candidates}'
+            )
+        rows.append({
+            'run_ref': run_ref,
+            'execution_id': record.get('execution_id'),
+            'dimension': dimension,
+            'cause': cause,
+            'evidence_refs': refs,
+            'proof_links': proof_links,
+            'candidate_ids': list(dict.fromkeys(candidate_ids)),
+            'primary': item.get('primary') is True,
+            'note': item.get('note'),
+        })
+    return rows
+
+
+def _merge_attribution_rows(rows):
+    """Collapse candidate-level rows to one admitted decision per run/component."""
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[row['run_ref'], row['dimension']].append(row)
+    decisions, normalised = {}, []
+    for (run_ref, dimension), group in grouped.items():
+        primary_rows = [row for row in group if row['primary']]
+        if len(primary_rows) > 1:
+            raise ValueError(f'Multiple primary causes for {run_ref}/{dimension}')
+        primary = primary_rows[0] if primary_rows else group[0]
+        cause_entries = []
+        by_cause = {}
+        for row in group:
+            if row is primary or row['cause'] == primary['cause']:
+                # Same-cause rows are evidence for the admitted primary decision.
+                continue
+            if row['cause'] in by_cause:
+                entry = by_cause[row['cause']]
+                entry['evidence_refs'] = list(dict.fromkeys(
+                    [*entry['evidence_refs'], *row['evidence_refs']]
+                ))
+                entry['proof_links'] = list(dict.fromkeys(
+                    [*entry['proof_links'], *row['proof_links']]
+                ))
+                entry['candidate_ids'] = list(dict.fromkeys(
+                    [*entry['candidate_ids'], *row['candidate_ids']]
+                ))
+                continue
+            entry = {
+                'cause': row['cause'],
+                'evidence_refs': row['evidence_refs'],
+                'proof_links': row['proof_links'],
+                'candidate_ids': row['candidate_ids'],
+                'note': row['note'],
+            }
+            by_cause[row['cause']] = entry
+            cause_entries.append(entry)
+        decision = {
+            'run_ref': run_ref,
+            'execution_id': primary['execution_id'],
+            'dimension': dimension,
+            'cause': primary['cause'],
+            'primary_cause': primary['cause'],
+            'secondary_causes': cause_entries,
+            'evidence_refs': list(dict.fromkeys(
+                ref for row in group for ref in row['evidence_refs']
+            )),
+            'proof_links': list(dict.fromkeys(
+                ref for row in group for ref in row['proof_links']
+            )),
+            'candidate_ids': list(dict.fromkeys(
+                candidate for row in group for candidate in row['candidate_ids']
+            )),
+            'n_candidate_rows': len(group),
+            'note': primary['note'],
+        }
+        decisions[run_ref, dimension] = decision
+        normalised.append(decision)
+    return decisions, normalised
+
+
 def _normalise_attributions(items, records, queues):
     if items is None:
         return {}, []
@@ -679,57 +1774,11 @@ def _normalise_attributions(items, records, queues):
         run_id = record.get('run_id')
         if isinstance(run_id, str) and run_id:
             by_run_id[run_id].append(run_ref)
-    decisions, normalised = {}, []
-    for item in items:
-        if not isinstance(item, Mapping):
-            raise ValueError('Attribution must be an object')
-        run_key = item.get('run') or item.get('run_ref')
-        if not isinstance(run_key, str) or not run_key:
-            raise ValueError('Attribution requires a run_ref or execution_id')
-        if run_key in by_ref:
-            run_ref = run_key
-        elif len(by_execution_id.get(run_key, [])) == 1:
-            run_ref = by_execution_id[run_key][0]
-        elif len(by_source_sha256.get(run_key, [])) == 1:
-            run_ref = by_source_sha256[run_key][0]
-        elif len(by_run_id.get(run_key, [])) == 1:
-            run_ref = by_run_id[run_key][0]
-        else:
-            raise ValueError(f'Attribution run does not resolve uniquely: {run_key}')
-        record, entry = by_ref[run_ref]
-        dimension = item.get('dimension')
-        if dimension not in DIMENSIONS:
-            raise ValueError(f'Attribution dimension is not graded: {dimension!r}')
-        cause = item.get('cause')
-        if cause not in CLOSED_CAUSES:
-            raise ValueError(f'Attribution cause is not in the closed list: {cause!r}')
-        refs = item.get('evidence_refs')
-        if not isinstance(refs, list) or not refs or any(not isinstance(ref, str) or not ref for ref in refs):
-            raise ValueError('Attribution requires a nonempty evidence_refs list')
-        refs = list(dict.fromkeys(refs))
-        queue = queues.get(run_ref)
-        if queue is None:
-            raise ValueError(f'Attribution cannot bind an ungraded run: {run_ref}')
-        valid = _valid_evidence_refs(queue, dimension, record)
-        if not set(refs) & valid:
-            raise ValueError(f'Attribution evidence does not bind {dimension}: {run_ref}')
-        for ref in refs:
-            resolved = _resolve_attribution_ref(ref, record, queue)
-            if resolved is POINTER_MISSING:
-                raise ValueError(f'Attribution evidence does not resolve: {ref}')
-        if (run_ref, dimension) in decisions:
-            raise ValueError(f'Duplicate attribution for {run_ref}/{dimension}')
-        decision = {
-            'run_ref': run_ref,
-            'execution_id': record.get('execution_id'),
-            'dimension': dimension,
-            'cause': cause,
-            'evidence_refs': refs,
-            'note': item.get('note'),
-        }
-        decisions[run_ref, dimension] = decision
-        normalised.append(decision)
-    return decisions, normalised
+    rows = _attribution_rows(
+        items, by_ref, by_execution_id, by_source_sha256, by_run_id, queues
+    )
+    return _merge_attribution_rows(rows)
+
 
 
 def _condition_label(run):
@@ -818,6 +1867,11 @@ def _metric_f3(runs):
     denominator = numerator = 0
     unresolved = []
     by_dimension = defaultdict(lambda: {'deductions_or_nulls': 0, 'attributed': 0})
+    by_cause = Counter()
+    secondary_causes = Counter()
+    candidate_rows = 0
+    components_with_candidates = 0
+    proof_links = 0
     for run in runs:
         if not run['graded'].get('available'):
             continue
@@ -829,6 +1883,13 @@ def _metric_f3(runs):
             if row['cause_status'] == 'attributed':
                 numerator += 1
                 by_dimension[dimension]['attributed'] += 1
+                by_cause[row['primary_cause']] += 1
+                for secondary in row.get('secondary_causes') or []:
+                    secondary_causes[secondary.get('cause')] += 1
+                if row.get('candidate_ids'):
+                    components_with_candidates += 1
+                    candidate_rows += len(row['candidate_ids'])
+                proof_links += len(row.get('proof_links') or [])
             else:
                 unresolved.append({
                     'run_ref': run['run_ref'],
@@ -844,10 +1905,25 @@ def _metric_f3(runs):
         'numerator': numerator,
         'denominator': denominator,
         'population': 'graded_component_deductions_and_nulls',
-        'source': ['review_queue.components', 'explicit_closed_cause_attributions'],
-        'definition': 'deductions + nulls with a closed-list cause / all deductions + nulls',
+        'source': ['review_queue.components', 'admitted_source_bound_cause_evidence'],
+        'definition': (
+            'run/component deductions + nulls with one admitted source-bound cause '
+            '/ all run/component deductions + nulls; candidate rows are evidence, '
+            'never extra numerator units'
+        ),
         'unavailable_reason': reason,
         'unknown': len(unresolved),
+        'by_cause': dict(sorted(by_cause.items())),
+        'secondary_cause_counts': dict(sorted(secondary_causes.items())),
+        'components_with_secondary_causes': sum(
+            1 for run in runs if run['graded'].get('available')
+            for row in run['dimensions'].values()
+            if row['cause_status'] == 'attributed' and row.get('secondary_causes')
+        ),
+        'components_with_candidate_evidence': components_with_candidates,
+        'candidate_evidence_rows': candidate_rows,
+        'proof_link_count': proof_links,
+        'cause_evidence_contract': dict(sorted(CAUSE_EVIDENCE_CONTRACT.items())),
         'unresolved_by_dimension': {dimension: row['deductions_or_nulls'] - row['attributed']
                                     for dimension, row in sorted(by_dimension.items())},
         'by_dimension': dict(sorted(by_dimension.items())),

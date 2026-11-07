@@ -43,6 +43,25 @@ from tesis.config_loader import (
 
 RESEARCH_PLAN_VERSION = 'study-plan'
 RESEARCH_CONFIG_VERSION = 'study-config'
+CONDITION_CONTRAST_OUTCOMES = ("Smethod", "Spayload", "Sexploit", "Schain", "Soutput", "Srun")
+CONDITION_CONTRAST_MULTIPLICITY = (
+    "Holm-Bonferroni across the six outcomes within each model x surface x level "
+    "condition-contrast row"
+)
+CONDITION_CONTRAST_MISSING_POLICY = (
+    "A missing or untestable outcome keeps its null value and does not reduce the "
+    "declared six-outcome family. Available p-values remain adjusted against family "
+    "size six; an unavailable hypothesis can never receive adjusted significance. If "
+    "the frozen analysis cannot represent the full six-hypothesis family for a row, "
+    "that row is reported unsupported rather than silently re-adjusting over fewer "
+    "outcomes."
+)
+CONDITION_CONTRAST_SUPPLEMENTARY_FAMILIES = (
+    {"name": "paired_wilcoxon", "role": "supplementary",
+     "policy": "reported separately and never substitutes for the primary family"},
+    {"name": "bootstrap_interval", "role": "supplementary",
+     "policy": "uncertainty diagnostic outside the primary multiplicity family"},
+)
 MIN_REPEATS = 3
 PRIMARY_CONDITIONS: tuple[str, ...] = ("linear_hybrid", "akg_guided_hybrid")
 PRIMARY_PAYLOAD_MODE = "hybrid"
@@ -245,6 +264,63 @@ def _contained_run_root(
     return candidate
 
 
+def validate_condition_contrast_declaration(design: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the frozen six-outcome condition-contrast family declaration.
+
+    The declaration is an input to the plan, so its presence and content are
+    source-bound before selection.  A later analysis may report the declaration
+    as verified only by matching this content and the plan chronology; a
+    hard-coded boolean is not proof of preregistration.
+    """
+    if not isinstance(design, Mapping):
+        raise ValueError("research config design must be a mapping")
+    family = design.get("condition_contrast_family")
+    if not isinstance(family, dict):
+        raise ValueError(
+            "research config must predeclare the six-outcome condition-contrast family"
+        )
+    expected_fields = {
+        "stratum": "model x surface x level",
+        "contrast": "linear_hybrid vs akg_guided_hybrid",
+        "family_size": 6,
+        "multiplicity": CONDITION_CONTRAST_MULTIPLICITY,
+        "missing_outcome_policy": CONDITION_CONTRAST_MISSING_POLICY,
+        "declaration_source": "frozen research_config hashed into the plan before selection",
+    }
+    for key, expected in expected_fields.items():
+        if family.get(key) != expected:
+            raise ValueError(
+                f"research config condition_contrast_family.{key} must equal {expected!r}"
+            )
+    if list(family.get("outcomes") or []) != list(CONDITION_CONTRAST_OUTCOMES):
+        raise ValueError(
+            "research config condition_contrast_family.outcomes must declare exactly "
+            "Smethod, Spayload, Sexploit, Schain, Soutput and Srun"
+        )
+    supplementary = family.get("supplementary_families")
+    if not isinstance(supplementary, list) or len(supplementary) != len(
+            CONDITION_CONTRAST_SUPPLEMENTARY_FAMILIES):
+        raise ValueError(
+            "research config condition_contrast_family.supplementary_families must "
+            "declare the separate supplementary families"
+        )
+    for expected, recorded in zip(
+            CONDITION_CONTRAST_SUPPLEMENTARY_FAMILIES, supplementary):
+        if not isinstance(recorded, Mapping):
+            raise ValueError("supplementary family entries must be mappings")
+        if any(recorded.get(key) != value for key, value in expected.items()):
+            raise ValueError(
+                "research config supplementary families must match their declared role "
+                "and policy"
+            )
+    if design.get("multiple_comparisons") != CONDITION_CONTRAST_MULTIPLICITY:
+        raise ValueError(
+            "research config design.multiple_comparisons must match the declared "
+            "six-outcome Holm family"
+        )
+    return dict(family)
+
+
 def load_research_config(path: str | Path) -> dict[str, Any]:
     """Load and validate a declared Chapter 3 study contract.
 
@@ -311,6 +387,7 @@ def load_research_config(path: str | Path) -> dict[str, Any]:
     design = document.get("design")
     if not isinstance(design, dict) or not design.get("pairing") or not design.get("multiple_comparisons"):
         raise ValueError("research config must predeclare pairing and multiple-comparison policy")
+    validate_condition_contrast_declaration(design)
     return document
 
 
@@ -1051,6 +1128,7 @@ def build_research_plan(
     plan = {
         "artifact_type": "chapter3_research_plan",
         "plan_version": RESEARCH_PLAN_VERSION,
+        "epoch_binding_required": True,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "epoch_id": epoch_id,
         "config_path": str(resolved_config),
@@ -1324,6 +1402,20 @@ def _verify_plan_blocks(plan: Mapping[str, Any], constraints: Mapping[str, Any])
             )
 
 
+def _plan_requires_receipt_epoch_binding(plan: Mapping[str, Any]) -> bool:
+    """Whether a plan declares the prospective receipt-epoch contract.
+
+    Only the canonical top-level boolean or the structured ``required=True``
+    declaration counts.  A historical plan without either marker stays readable
+    through its historical version/byte decoding; it is never treated as a
+    current plan and its hashes are never backfilled.
+    """
+    if plan.get("epoch_binding_required") is True:
+        return True
+    contract = plan.get("receipt_epoch_binding")
+    return isinstance(contract, Mapping) and contract.get("required") is True
+
+
 def verify_plan(plan_path: str | Path) -> dict[str, Any]:
     """Re-hash a plan's frozen inputs; refuse execution after drift."""
     path = Path(plan_path)
@@ -1350,6 +1442,11 @@ def verify_plan(plan_path: str | Path) -> dict[str, Any]:
     config = load_and_resolve_config(config_path=str(config_path), cli_args={})
     require_frozen_token_price_schedule(config)
     validate_evidence_config(config.scoring_rubric_version, config.scoring_profile, config.scoring_oracles)
+    if not _plan_requires_receipt_epoch_binding(plan):
+        raise ValueError(
+            "current research plan omits the prospective receipt epoch declaration; "
+            "a historical plan remains readable but is not executable"
+        )
     constraints = plan["constraints"]
     research_config = plan.get("research_config")
     if research_config:
@@ -1451,6 +1548,76 @@ def verify_plan(plan_path: str | Path) -> dict[str, Any]:
     return plan
 
 
+def _saved_execution_artifacts(block_root: Path) -> list[dict[str, Any]]:
+    """Read execution artifacts already saved under a block attempt."""
+    rows: list[dict[str, Any]] = []
+    for path in sorted(block_root.rglob("*.json")):
+        name = path.name
+        if (name in {"block-run-receipt.json", "coordinate-reconciliation.json"}
+                or name.endswith((".matrix.json", ".scheduler-partial.json", ".resume.json"))):
+            continue
+        try:
+            document = json.loads(path.read_bytes())
+        except (OSError, ValueError):
+            continue
+        if (isinstance(document, dict) and document.get("schema_version") == "execution"
+                and document.get("execution_id")):
+            rows.append(document)
+    return rows
+
+
+def _scheduler_partial(block_root: Path) -> dict[str, Any] | None:
+    for path in sorted(block_root.glob("*.scheduler-partial.json")):
+        try:
+            document = json.loads(path.read_bytes())
+        except (OSError, ValueError):
+            continue
+        if isinstance(document, dict) and isinstance(document.get("scheduler"), dict):
+            return document
+    return None
+
+
+def _execution_counters(artifacts: list[dict[str, Any]]) -> dict[str, int]:
+    from core.run_status import terminal_status
+
+    completed = failed = interrupted = skipped = 0
+    for artifact in artifacts:
+        if artifact.get("status") == "skipped":
+            skipped += 1
+            continue
+        status = terminal_status(artifact)["execution_status"]
+        if status == "completed":
+            completed += 1
+        elif status == "failed":
+            failed += 1
+        elif status == "interrupted":
+            interrupted += 1
+    return {
+        "observed": len(artifacts), "completed": completed, "failed": failed,
+        "interrupted": interrupted, "skipped": skipped,
+    }
+
+
+def _validate_artifact_plan_identities(
+    plan: Mapping[str, Any], artifacts: list[dict[str, Any]],
+) -> dict[str, str]:
+    if (plan.get("artifact_type") == "chapter3_research_plan"
+            and plan.get("plan_version") == RESEARCH_PLAN_VERSION
+            and not _plan_requires_receipt_epoch_binding(plan)):
+        raise ValueError(
+            "current research plan omits the prospective receipt epoch declaration; "
+            "refusing to validate execution artifacts for a non-prospective plan"
+        )
+    expected = {"plan_sha256": plan["plan_sha256"], "epoch_id": plan["epoch_id"]}
+    for artifact in artifacts:
+        recorded = artifact.get("research_plan_identity")
+        if recorded != expected:
+            raise ValueError(
+                "execution artifact research_plan_identity does not match the frozen plan"
+            )
+    return expected
+
+
 def _run_block(plan: dict[str, Any], block: str, *, output_epoch: Path
                ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str], dict[str, Any] | None]:
     """Execute one declared block and always record a truthful receipt."""
@@ -1478,6 +1645,7 @@ def _run_block(plan: dict[str, Any], block: str, *, output_epoch: Path
     block_root.mkdir(parents=True, exist_ok=True)
     counter = {"n": 0}
     attempt_directories: list[str] = []
+    plan_identity = {"plan_sha256": plan["plan_sha256"], "epoch_id": plan["epoch_id"]}
 
     def child_directory(_coordinate: dict[str, Any], _index: int) -> Path:
         counter["n"] += 1
@@ -1491,12 +1659,20 @@ def _run_block(plan: dict[str, Any], block: str, *, output_epoch: Path
         "artifact_type": "chapter3_block_run",
         "block": block,
         "planned": len(coordinates),
+        "prepared": 0,
+        "submitted": None,
         "observed": 0,
+        "completed": 0,
+        "failed": 0,
+        "interrupted": 0,
+        "unstarted": None,
         "status": "running",
+        "execution_status": None,
+        "coverage_status": "pending",
         "aggregate_path": None,
         "aggregate_sha256": None,
         "execution_id": None,
-        "attempted_runs": 0,
+        "attempted_runs": None,
         "run_directories": attempt_directories,
         "error": None,
     }
@@ -1540,6 +1716,7 @@ def _run_block(plan: dict[str, Any], block: str, *, output_epoch: Path
             scoring_policy_epoch=config.scoring_policy_epoch,
             token_price_schedule=config.token_price_schedule,
             source_hashes_sha256=plan["source_hashes_sha256"],
+            research_plan_identity=plan_identity,
             payload_policy_snapshot=plan.get("payload_policy_snapshot"),
             fixture_id=config.fixture_id,
             protocol_version=config.protocol_version,
@@ -1553,12 +1730,42 @@ def _run_block(plan: dict[str, Any], block: str, *, output_epoch: Path
             },
         )
     except Exception as exc:  # noqa: BLE001 - attempt failure must be retained truthfully
+        saved = _saved_execution_artifacts(block_root)
+        scheduler_partial = _scheduler_partial(block_root)
+        scheduler = (scheduler_partial or {}).get("scheduler") or {}
+        counters = _execution_counters(saved)
+        for key in ("observed", "completed", "failed", "interrupted", "skipped"):
+            counters[key] = max(counters[key], int(scheduler.get(key) or 0))
+        try:
+            reconciliation = _reconcile_coordinates(coordinates, saved)
+        except (ValueError, KeyError, TypeError):
+            reconciliation = None
         receipt.update({
             "status": "failed",
-            "observed": 0,
-            "attempted_runs": counter["n"],
+            "execution_status": "failed",
+            "coverage_status": (
+                "reconciled" if reconciliation and not reconciliation["missing"]
+                and not reconciliation["extra"] and not reconciliation["duplicates"]
+                else "incomplete"
+            ),
+            "prepared": counter["n"],
+            "submitted": scheduler.get("submitted"),
+            "attempted_runs": scheduler.get("submitted"),
+            "unstarted": scheduler.get("unstarted"),
+            **counters,
             "error": f"{type(exc).__name__}: {exc}",
+            "scheduler_partial": bool(scheduler_partial),
+            "coordinate_reconciliation": (
+                {key: reconciliation[key] for key in (
+                    "planned", "observed", "matched", "missing", "extra")}
+                if reconciliation else None
+            ),
+            "coordinate_reconciliation_path": (
+                str(block_root / "coordinate-reconciliation.json") if reconciliation else None
+            ),
         })
+        if reconciliation:
+            _atomic_json(block_root / "coordinate-reconciliation.json", reconciliation)
         _atomic_json(block_root / "block-run-receipt.json", receipt)
         raise
     if not isinstance(artifacts, list) or not isinstance(aggregate, Mapping):
@@ -1567,21 +1774,60 @@ def _run_block(plan: dict[str, Any], block: str, *, output_epoch: Path
     if not aggregate_path.is_file():
         receipt.update({
             "status": "failed",
+            "execution_status": "failed",
             "observed": len(artifacts),
-            "attempted_runs": counter["n"],
+            "prepared": counter["n"],
             "execution_id": aggregate.get("execution_id"),
             "error": "aggregate_missing_after_matrix_run",
         })
         _atomic_json(block_root / "block-run-receipt.json", receipt)
         raise ValueError(f"block {block!r} produced no aggregate at {aggregate_path}")
+    try:
+        _validate_artifact_plan_identities(plan, artifacts)
+    except ValueError as exc:
+        receipt.update({
+            "status": "failed",
+            "execution_status": "failed",
+            "observed": len(artifacts),
+            "prepared": counter["n"],
+            "execution_id": aggregate.get("execution_id"),
+            "error": str(exc),
+        })
+        _atomic_json(block_root / "block-run-receipt.json", receipt)
+        raise
     reconciliation = _reconcile_coordinates(coordinates, artifacts)
+    scheduler = aggregate.get("scheduler") if isinstance(aggregate.get("scheduler"), Mapping) else {}
+    counters = _execution_counters(artifacts)
+    coverage_status = (
+        "reconciled" if not reconciliation["missing"] and not reconciliation["extra"]
+        and not reconciliation["duplicates"] else "incomplete"
+    )
+    execution_status = str(aggregate.get("execution_status") or "")
+    if execution_status not in {"completed", "failed", "interrupted"}:
+        execution_status = (
+            "failed" if counters["failed"] else "interrupted" if counters["interrupted"]
+            else "completed"
+        )
+    status = (
+        "error" if execution_status == "failed"
+        else "cancelled" if execution_status == "interrupted"
+        else "incomplete" if coverage_status != "reconciled"
+        else "completed"
+    )
     receipt.update({
-        "status": "completed",
-        "observed": len(artifacts),
-        "attempted_runs": counter["n"],
+        "status": status,
+        "execution_status": execution_status,
+        "coverage_status": coverage_status,
+        "prepared": counter["n"],
+        "submitted": scheduler.get("submitted"),
+        "attempted_runs": scheduler.get("submitted"),
+        "unstarted": scheduler.get("unstarted"),
+        **counters,
         "aggregate_path": str(aggregate_path),
         "aggregate_sha256": _file_hash(aggregate_path),
         "execution_id": aggregate.get("execution_id"),
+        "execution_reason": aggregate.get("execution_reason"),
+        "scheduler": dict(scheduler),
         "coordinate_reconciliation": {
             key: reconciliation[key]
             for key in ("planned", "observed", "matched", "missing", "extra")
@@ -1638,12 +1884,18 @@ def _reconcile_coordinates(
             continue
         coordinate = candidates[0]
         matched.add(str(coordinate.get("coordinate_id")))
+        from core.run_status import terminal_status
+
         observed.append({
             "coordinate_id": coordinate.get("coordinate_id"),
             "coordinate_index": coordinate.get("coordinate_index"),
             "execution_id": artifact.get("execution_id"),
             "run_id": artifact.get("run_id"),
             "status": artifact.get("status"),
+            "execution_status": (
+                None if artifact.get("status") == "skipped"
+                else terminal_status(artifact)["execution_status"]
+            ),
             "axes": list(axes),
         })
     missing = [
@@ -1703,6 +1955,10 @@ def run_research_plan(plan_path: str | Path, *, output_epoch: str | None = None)
         "observed_counts": {},
         "blocks": receipts,
         "status": "running",
+        "execution": {
+            "status": "running", "submitted": 0, "observed": 0,
+            "completed": 0, "failed": 0, "interrupted": 0, "unstarted": 0,
+        },
         "error": None,
         "manifest": None,
         "coordinate_reconciliation": reconciliations,
@@ -1712,6 +1968,22 @@ def run_research_plan(plan_path: str | Path, *, output_epoch: str | None = None)
             "final_status": "pending_review",
         },
     }
+
+    def execution_totals() -> dict[str, Any]:
+        block_rows = [row for row in receipts.values() if isinstance(row, Mapping)]
+        return {
+            "status": (
+                "failed" if any(row.get("execution_status") == "failed" for row in block_rows)
+                else "interrupted" if any(row.get("execution_status") == "interrupted" for row in block_rows)
+                else "completed"
+            ),
+            "submitted": sum(int(row.get("submitted") or 0) for row in block_rows),
+            "observed": sum(int(row.get("observed") or 0) for row in block_rows),
+            "completed": sum(int(row.get("completed") or 0) for row in block_rows),
+            "failed": sum(int(row.get("failed") or 0) for row in block_rows),
+            "interrupted": sum(int(row.get("interrupted") or 0) for row in block_rows),
+            "unstarted": sum(int(row.get("unstarted") or 0) for row in block_rows),
+        }
     try:
         for block in block_names:
             receipt, block_artifacts, block_children, aggregate = _run_block(
@@ -1733,35 +2005,71 @@ def run_research_plan(plan_path: str | Path, *, output_epoch: str | None = None)
         duplicates = sorted({value for row in reconciliations.values()
                              for value in row.get("duplicates") or []})
         summary["coordinate_reconciliation"] = reconciliations
+        summary["execution"] = execution_totals()
+        coverage_complete = not missing and not extra and not duplicates
+        if not coverage_complete:
+            summary["status"] = "incomplete"
+            summary["error"] = (
+                f"coordinate reconciliation failed: missing={missing} extra={extra} "
+                f"duplicates={duplicates}"
+            )
+        elif summary["execution"]["status"] == "failed":
+            summary["status"] = "failed"
+            summary["error"] = "one or more child coordinates failed; see block receipts"
+        elif summary["execution"]["status"] == "interrupted":
+            summary["status"] = "interrupted"
+            summary["error"] = "one or more child coordinates were interrupted; see block receipts"
+        else:
+            summary["status"] = "completed"
         summary["coordinate_summary"] = {
             "planned": expected,
             "observed": len(artifacts),
             "missing": missing,
             "extra": extra,
             "duplicates": duplicates,
+            **{key: summary["execution"][key] for key in (
+                "submitted", "completed", "failed", "interrupted", "unstarted")},
         }
+        manifest_status = (
+            "incomplete" if not coverage_complete
+            else "failed" if summary["execution"]["status"] == "failed"
+            else "interrupted" if summary["execution"]["status"] == "interrupted"
+            else "completed"
+        )
         manifest_path = _write_epoch_manifest(
             epoch_root, plan=plan,
             artifacts=_manifest_artifacts(artifacts, reconciliations),
             children=children,
             aggregate=aggregates.get(block_names[0]),
             aggregate_artifact=aggregate_artifact,
-            status="completed" if not missing and not extra and not duplicates else "incomplete",
+            status=manifest_status,
         )
         summary["manifest"] = {
             "path": str(manifest_path),
             "sha256": _file_hash(manifest_path),
         }
-        if missing or extra or duplicates:
-            summary["status"] = "incomplete"
-            summary["error"] = (
-                f"coordinate reconciliation failed: missing={missing} extra={extra} "
-                f"duplicates={duplicates}"
-            )
-        else:
-            summary["status"] = "completed"
     except Exception as exc:  # noqa: BLE001 - retain the failed attempt, never roll back
-        summary.update({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
+        for block in block_names:
+            receipt_path = epoch_root / block / "block-run-receipt.json"
+            if block not in receipts and receipt_path.is_file():
+                try:
+                    receipts[block] = json.loads(receipt_path.read_bytes())
+                except (OSError, ValueError):
+                    continue
+        summary["blocks"] = receipts
+        summary["execution"] = execution_totals()
+        summary["status"] = "failed"
+        summary["error"] = f"{type(exc).__name__}: {exc}"
+        summary["coordinate_summary"] = {
+            "planned": int(plan["planned_counts"]["total"]),
+            "observed": sum(int(row.get("observed") or 0) for row in receipts.values()
+                            if isinstance(row, Mapping)),
+            "missing": None,
+            "extra": None,
+            "duplicates": [],
+            **{key: summary["execution"][key] for key in (
+                "submitted", "completed", "failed", "interrupted", "unstarted")},
+        }
         _atomic_json(epoch_root / "research-run-summary.json", summary)
         raise
     _atomic_json(epoch_root / "research-run-summary.json", summary)

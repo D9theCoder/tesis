@@ -36,7 +36,12 @@ A cause is assigned only when the artifact itself carries the evidence:
   bounds the value.
 
 Anything else is reported as an evidence gap; missing evidence is never
-converted into a cause.  The module deliberately has no target/provider calls
+converted into a cause.  Proposed causes pass the admission boundary in
+:func:`evaluation.fidelity_ledger.cause_evidence_problem`: the proof links must
+substantiate the cause itself, not merely resolve.  A rejected proposed cause is
+retained under ``accounting.rejected_causes`` and its component stays unresolved;
+the F3 numerator never counts candidate rows or pointer existence.
+The module deliberately has no target/provider calls
 and no experiment runner.
 """
 from __future__ import annotations
@@ -49,7 +54,12 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from evaluation.fidelity_ledger import CLOSED_CAUSES, DIMENSIONS, build_ledger
+from evaluation.fidelity_ledger import (
+    CLOSED_CAUSES,
+    DIMENSIONS,
+    build_ledger,
+    cause_evidence_problem,
+)
 from evaluation.scoring_evidence import (
     EXPERIMENT_ROLES,
     chain_availability,
@@ -399,11 +409,24 @@ def _decision(run_ref, dimension, cause, record, queue, refs, note):
         ref for ref in refs if isinstance(ref, str) and ref and _exists(record, queue, ref)))
     if not cleaned:
         return None
+    problem = cause_evidence_problem(cause, cleaned, record, queue, dimension=dimension)
+    if problem:
+        return {
+            'run': run_ref,
+            'dimension': dimension,
+            'cause': cause,
+            'evidence_refs': cleaned,
+            'proof_links': cleaned,
+            'note': note,
+            'admission': 'rejected',
+            'admission_reason': problem,
+        }
     return {
         'run': run_ref,
         'dimension': dimension,
         'cause': cause,
         'evidence_refs': cleaned,
+        'proof_links': cleaned,
         'note': note,
     }
 
@@ -532,6 +555,15 @@ def _classify_smethod(record, queue, row, run_ref):
     refs = [f'#/final_state/scoring_decisions/{index}'] if index is not None else []
     refs.append(f'#/final_state/scoring_decisions/{index}/precondition_status'
                 if index is not None else '#/final_state/precondition_status')
+    # The ranking comparison and the model's own orchestrator output are the
+    # source-bound proof of a selection-quality deduction; a numeric grading
+    # record alone never substantiates model output quality.
+    refs.append('queue:#/selection_evidence')
+    selected_call = _call_index(
+        record, role='orchestrator', method=decision.get('method'),
+        visit_id=decision.get('visit_id'))
+    if selected_call is not None:
+        refs.extend(_call_refs(record, selected_call))
     if value in (0, 1):
         return _decision(
             run_ref, 'Smethod', 'model_output_quality', record, queue, refs,
@@ -1146,6 +1178,7 @@ def audit_baseline(sources=DEFAULT_SOURCE, *, receipts=None, output=None):
     run_sources = []
     decisions = []
     gaps = []
+    rejected = []
     source_epochs = Counter()
     for run in runs:
         path = Path(run['source']['resolved_path'])
@@ -1168,7 +1201,17 @@ def audit_baseline(sources=DEFAULT_SOURCE, *, receipts=None, output=None):
                 continue
             decision, gap = classify_dimension(record, queue, dimension, row, run['run_ref'])
             if decision is not None:
-                decisions.append(decision)
+                if decision.get('admission') == 'rejected':
+                    rejected.append(decision)
+                    gaps.append(_gap(
+                        run['run_ref'], dimension, row,
+                        'cause_evidence_insufficient',
+                        'The proposed closed-list cause is not substantiated by its proof '
+                        f'links: {decision.get("admission_reason")}',
+                        decision.get('evidence_refs'),
+                    ))
+                else:
+                    decisions.append(decision)
             if gap is not None:
                 gaps.append(gap)
     if len(source_epochs) > 1:
@@ -1234,6 +1277,7 @@ def audit_baseline(sources=DEFAULT_SOURCE, *, receipts=None, output=None):
             'by_cause': dict(sorted(by_cause.items())),
             'gaps_by_code': dict(sorted(gaps_by_code.items())),
             'decisions': decisions,
+            'rejected_causes': rejected,
             'unresolved': gaps,
         },
         'interpretations': _interpretations(),

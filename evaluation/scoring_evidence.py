@@ -557,6 +557,39 @@ def candidate_base(artifact, cid, method, refs):
     return min(max(linked), 2) if (negatives or 0 in linked) and max(linked) > 0 else max(linked)
 
 
+def candidate_negative_oracle_confirmed(artifact, cid, method, refs):
+    """Whether this candidate has an operator-confirmed method-negative oracle.
+
+    Table 3.8/3.9 level 0 requires a permission or session check, not merely a
+    request whose signal is absent.  The negative attestation must bind the same
+    candidate, method, visit, response and principal; an absent or pending
+    source is unknown, never a measured zero.
+    """
+    from evaluation.thesis_scoring import _resolve
+    for ref in refs:
+        row = _resolve(artifact, ref)
+        if not isinstance(row, dict) or row.get('candidate_id') != cid \
+                or row.get('agent_id') != method or row.get('stage') not in CANDIDATE_STAGES:
+            continue
+        if oracle_negative_confirmed(artifact, row):
+            return True
+    return False
+
+
+def candidate_exploit_base(artifact, cid, method, refs, base_proof):
+    """Component-specific negative floor for the exploitation dimension.
+
+    A method-negative payload signal can legitimately score payload 0 without an
+    independent permission/session oracle (Table 3.6).  Exploitation level 0 for
+    Access Control and Brute Force additionally requires the operator permission
+    or session check (Tables 3.8/3.9).  Without that check the exploitation
+    component is unavailable, never 0.
+    """
+    if base_proof != 0 or not str(method or '').startswith(('ac_', 'bf_')):
+        return base_proof
+    return 0 if candidate_negative_oracle_confirmed(artifact, cid, method, refs) else None
+
+
 def prerequisite_proof(artifact, route):
     from evaluation.thesis_scoring import _resolve
     edge = edge_for(route)
@@ -586,11 +619,72 @@ def prerequisite_proof(artifact, route):
     return True
 
 
+def _hex_digest(value):
+    return isinstance(value, str) and len(value) == 64 and set(value) <= set('0123456789abcdef')
+
+
+def _dependency_controls_valid(att, controls):
+    """Matched positive/negative source-availability controls for one dependency.
+
+    Summary controls on the attestation must match the detailed control rows.
+    Each detailed row must agree with its own expected truth, use fresh isolated
+    sessions and a distinct response hash; the positive/negative pair must show
+    destination confirmation with the source available and non-confirmation
+    without it. A failure row or a missing truth declaration invalidates the
+    dependency.
+    """
+    if not isinstance(controls, list) or not controls:
+        return False
+    summaries = att.get('controls')
+    if not isinstance(summaries, list) or len(summaries) != len(controls):
+        return False
+    detailed = []
+    for control in controls:
+        if not isinstance(control, dict) or control.get('failure'):
+            return False
+        if not _hex_digest(control.get('response_sha256')):
+            return False
+        if not _hex_digest(control.get('session_fingerprint')) \
+                or not _hex_digest(control.get('initial_session_fingerprint')):
+            return False
+        if control.get('expected_source_available') is not control.get('source_available'):
+            return False
+        if control.get('expected_destination_confirmed') is not control.get('destination_confirmed'):
+            return False
+        detailed.append(control)
+    by_name = {}
+    for control in detailed:
+        name = control.get('control')
+        if not isinstance(name, str) or not name or name in by_name:
+            return False
+        by_name[name] = control
+    for summary in summaries:
+        if not isinstance(summary, dict) or summary.get('control') not in by_name:
+            return False
+        control = by_name[summary['control']]
+        for key in ('source_available', 'destination_confirmed', 'response_sha256', 'status_code'):
+            if summary.get(key) != control.get(key):
+                return False
+    positive = [c for c in detailed if c['source_available'] is True
+                and c['destination_confirmed'] is True]
+    negative = [c for c in detailed if c['source_available'] is False
+                and c['destination_confirmed'] is False]
+    if not positive or not negative:
+        return False
+    if positive[0]['session_fingerprint'] == negative[0]['session_fingerprint']:
+        return False
+    if positive[0]['initial_session_fingerprint'] == negative[0]['initial_session_fingerprint']:
+        return False
+    if positive[0]['response_sha256'] == negative[0]['response_sha256']:
+        return False
+    return True
+
+
 def verified_dependencies(artifact):
     from evaluation.thesis_scoring import _resolve
     accepted = []
     history = artifact['final_state'].get('verifier_history', [])
-    for route in artifact['final_state'].get('chain_history', []):
+    for route_index, route in enumerate(artifact['final_state'].get('chain_history', [])):
         if route.get('status') != 'completed' or not prerequisite_proof(artifact, route):
             continue
         sources = [_resolve(artifact, r) for r in route.get('source_evidence_refs', [])]
@@ -640,7 +734,7 @@ def verified_dependencies(artifact):
             if att.get('source_response_sha256') != source.get('response_sha256') or att.get('destination_response_sha256') != dest.get('response_sha256'):
                 continue
             material = att.get('material_fingerprint')
-            if not isinstance(material, str) or len(material) != 64:
+            if not _hex_digest(material):
                 continue
             try:
                 if not timestamp(att['source_at']) <= timestamp(att['consumed_at']) <= timestamp(att['verified_at']):
@@ -650,11 +744,284 @@ def verified_dependencies(artifact):
             except (KeyError, TypeError, ValueError):
                 continue
             controls = bundle['document'].get('dependency_controls', [])
-            if not all(any(c.get('source_available') is available and c.get('destination_confirmed') is available
-                for c in controls if isinstance(c, dict)) for available in (True, False)):
+            if not _dependency_controls_valid(att, controls):
                 continue
-            accepted.append({'route': route, 'source': source, 'destination': dest, 'consumption': consumption})
+            control_refs = [
+                f'#/config/scoring_oracles/{dependency_ref.split("/")[3]}/document/dependency_controls/{index}'
+                for index in range(len(controls))]
+            accepted.append({
+                'route': route,
+                'route_ref': f'#/final_state/chain_history/{route_index}',
+                'dependency_ref': dependency_ref,
+                'dependency': att,
+                'control_refs': control_refs,
+                'source': source,
+                'destination': dest,
+                'consumption': consumption,
+                'lineage': {
+                    'route_id': route.get('route_id'),
+                    'route_ref': f'#/final_state/chain_history/{route_index}',
+                    'source_candidate_id': source.get('candidate_id'),
+                    'source_visit_id': source.get('visit_id'),
+                    'source_evidence_id': source.get('evidence_id'),
+                    'source_response_sha256': source.get('response_sha256'),
+                    'destination_candidate_id': dest.get('candidate_id'),
+                    'destination_visit_id': dest.get('visit_id'),
+                    'destination_evidence_id': dest.get('evidence_id'),
+                    'destination_response_sha256': dest.get('response_sha256'),
+                    'material_fingerprint': material,
+                },
+            })
     return accepted
+
+
+def _chain_history_available(artifact):
+    state = artifact.get('final_state') if isinstance(artifact, dict) else None
+    if not isinstance(state, dict):
+        return False
+    return isinstance(state.get('chain_history'), list) or isinstance(state.get('chain_assessment'), dict)
+
+
+def _route_row_ref(artifact, route, side, candidate_id, method, evidence_id=None):
+    """Resolve the selected candidate's own evidence row reference in a route."""
+    from evaluation.thesis_scoring import _resolve
+    key = 'source_evidence_refs' if side == 'source' else 'destination_evidence_refs'
+    for ref in route.get(key) or []:
+        row = _resolve(artifact, ref)
+        if not isinstance(row, dict):
+            continue
+        if row.get('candidate_id') != candidate_id or row.get('agent_id') != method:
+            continue
+        if evidence_id is not None and row.get('evidence_id') != evidence_id:
+            continue
+        return ref
+    return None
+
+
+def _completed_chain_references(artifact, candidate_ids, method):
+    """Completed-chain references to this candidate/method without a verified join."""
+    from evaluation.thesis_scoring import _resolve
+    state = artifact.get('final_state') if isinstance(artifact, dict) else None
+    history = state.get('chain_history') if isinstance(state, dict) else None
+    if not isinstance(history, list):
+        return None
+    references = []
+    for route_index, route in enumerate(history):
+        if not isinstance(route, dict) or route.get('status') != 'completed':
+            continue
+        route_id = route.get('route_id')
+        for side in ('source_evidence_refs', 'destination_evidence_refs'):
+            for ref in route.get(side) or []:
+                row = _resolve(artifact, ref)
+                if isinstance(row, dict) and row.get('agent_id') == method \
+                        and row.get('candidate_id') in candidate_ids:
+                    references.append({'ref': ref, 'route_id': route_id,
+                                       'route_ref': f'#/final_state/chain_history/{route_index}'})
+        for binding in route.get('source_bindings') or []:
+            if isinstance(binding, dict) and binding.get('candidate_id') in candidate_ids:
+                references.append({'ref': f'#/final_state/chain_history/{route_index}',
+                                   'route_id': route_id,
+                                   'route_ref': f'#/final_state/chain_history/{route_index}'})
+    return references
+
+
+def _dependency_chronology(dependency):
+    attestation = dependency.get('dependency') if isinstance(dependency, dict) else None
+    if not isinstance(attestation, dict):
+        return None
+    try:
+        return (timestamp(attestation['source_at']), timestamp(attestation['consumed_at']),
+                timestamp(attestation['verified_at']))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _participation_result(candidate_id, method, local_proof, *, status, role=None,
+                          roles=None, reason, dependencies=()):
+    dependencies = list(dependencies)
+    evidence_refs, dependency_refs, control_refs, route_ids, lineage = [], [], [], [], []
+    visits = []
+    for dependency in dependencies:
+        evidence_refs.extend(dependency.get('evidence_refs') or [])
+        if dependency.get('dependency_ref'):
+            dependency_refs.append(dependency['dependency_ref'])
+        control_refs.extend(dependency.get('control_refs') or [])
+        route_id = dependency.get('route', {}).get('route_id')
+        if route_id:
+            route_ids.append(route_id)
+        lineage_row = dependency.get('lineage') if isinstance(dependency.get('lineage'), dict) else None
+        if lineage_row:
+            lineage.append(lineage_row)
+            source = dependency.get('source') if isinstance(dependency.get('source'), dict) else {}
+            visit = lineage_row.get(
+                'source_visit_id' if source.get('candidate_id') == candidate_id
+                else 'destination_visit_id')
+            if visit:
+                visits.append(visit)
+    return {
+        'status': status,
+        'role': role,
+        'roles': list(roles or ([role] if role else [])),
+        'candidate_id': candidate_id,
+        'method': method,
+        'visit_id': visits[0] if visits else None,
+        'local_proof': local_proof,
+        'evidence_refs': sorted(set(evidence_refs)),
+        'dependency_refs': list(dict.fromkeys(dependency_refs)),
+        'control_refs': list(dict.fromkeys(control_refs)),
+        'chain_route_ids': list(dict.fromkeys(route_ids)),
+        'lineage': lineage,
+        'reason': reason,
+    }
+
+
+def causal_participation(artifact, candidate_id, method, local_proof, dependencies=None):
+    """Assess one selected candidate's source/intermediate/consumer level-4 participation.
+
+    Level 4 requires the candidate's own local proof at 3 plus a completed,
+    prerequisite-proved AKG transition whose operator dependency attestation,
+    matched controls, response hashes, material fingerprint and chronology bind
+    the candidate/visit/evidence to actual consumption. Another method's success
+    or an unrelated chain in the same run never upgrades this candidate.
+    """
+    dependencies = list(verified_dependencies(artifact)
+                        if dependencies is None else dependencies)
+    if local_proof != 3:
+        return _participation_result(candidate_id, method, local_proof,
+            status='local_proof_below_3', reason='local_proof_below_3')
+    source_deps = [d for d in dependencies
+                   if d.get('source', {}).get('candidate_id') == candidate_id
+                   and d['source'].get('agent_id') == method]
+    consumer_deps = [d for d in dependencies
+                     if d.get('destination', {}).get('candidate_id') == candidate_id
+                     and d['destination'].get('agent_id') == method]
+    intermediate = []
+    for incoming in consumer_deps:
+        incoming_times = _dependency_chronology(incoming)
+        if incoming_times is None:
+            continue
+        for outgoing in source_deps:
+            outgoing_times = _dependency_chronology(outgoing)
+            if outgoing_times is None:
+                continue
+            if incoming.get('destination', {}).get('evidence_id') != outgoing.get('source', {}).get('evidence_id'):
+                continue
+            if incoming['destination'].get('candidate_id') != outgoing['source'].get('candidate_id'):
+                continue
+            if incoming['destination'].get('visit_id') != outgoing['source'].get('visit_id'):
+                continue
+            if incoming['destination'].get('response_sha256') != outgoing['source'].get('response_sha256'):
+                continue
+            if incoming.get('route', {}).get('route_id') == outgoing.get('route', {}).get('route_id'):
+                continue
+            if incoming_times[2] > outgoing_times[0]:
+                continue
+            intermediate.append((incoming, outgoing))
+    if intermediate:
+        chosen = [dependency for pair in intermediate for dependency in pair]
+        role, roles = 'intermediate', ['intermediate', 'source', 'consumer']
+        reason = 'verified_intermediate_participation'
+    elif source_deps:
+        chosen = source_deps
+        role, roles = 'source', ['source'] + (['consumer'] if consumer_deps else [])
+        reason = 'verified_source_participation'
+    elif consumer_deps:
+        chosen = consumer_deps
+        role, roles = 'consumer', ['consumer']
+        reason = 'verified_consumer_participation'
+    else:
+        references = _completed_chain_references(artifact, {candidate_id}, method)
+        if references:
+            result = _participation_result(candidate_id, method, local_proof,
+                status='conflicting_lineage', reason='completed_chain_participation_unverified')
+            result['evidence_refs'] = sorted({row['ref'] for row in references})
+            result['chain_route_ids'] = sorted({str(row.get('route_id')) for row in references
+                                                if row.get('route_id')})
+            return result
+        if not _chain_history_available(artifact):
+            return _participation_result(candidate_id, method, local_proof,
+                status='unavailable', reason='chain_history_unavailable')
+        return _participation_result(candidate_id, method, local_proof,
+            status='not_participating', reason='no_verified_chain_participation')
+    # Bind the exact selected-method evidence row(s) from the chosen routes.
+    evidence_refs = []
+    for dependency in chosen:
+        source_ref = _route_row_ref(artifact, dependency['route'], 'source', candidate_id,
+                                    method, dependency['source'].get('evidence_id'))
+        if source_ref:
+            evidence_refs.append(source_ref)
+        destination_ref = _route_row_ref(artifact, dependency['route'], 'destination', candidate_id,
+                                         method, dependency['destination'].get('evidence_id'))
+        if destination_ref:
+            evidence_refs.append(destination_ref)
+        dependency['evidence_refs'] = evidence_refs
+    result = _participation_result(candidate_id, method, local_proof,
+        status='verified', role=role, roles=roles, reason=reason, dependencies=chosen)
+    result['evidence_refs'] = sorted(set(evidence_refs))
+    # A completed route that references the selected candidate but is not one of
+    # the strictly verified joins is conflicting lineage: retain the local grade.
+    references = _completed_chain_references(artifact, {candidate_id}, method) or []
+    covered_routes = set(result['chain_route_ids'])
+    uncovered = [row for row in references if row.get('route_id') not in covered_routes]
+    if uncovered:
+        result.update(status='conflicting_lineage',
+                      reason='completed_chain_participation_unverified')
+        result['evidence_refs'] = sorted(set(result['evidence_refs'])
+                                         | {row['ref'] for row in uncovered})
+    return result
+
+
+def method_causal_participation(artifact, method, dependencies=None, rows=None, components=None):
+    """Summarize the selected method's causal participation for receipt/reporting."""
+    dependencies = list(verified_dependencies(artifact)
+                        if dependencies is None else dependencies)
+    candidate_ids = []
+    for row in rows or []:
+        if isinstance(row, dict) and row.get('eligible') and row.get('base_proof') == 3 \
+                and row.get('candidate_id') and row['candidate_id'] not in candidate_ids:
+            candidate_ids.append(row['candidate_id'])
+    for dependency in dependencies:
+        for side in ('source', 'destination'):
+            candidate = dependency.get(side) or {}
+            if candidate.get('agent_id') == method and candidate.get('candidate_id') \
+                    and candidate['candidate_id'] not in candidate_ids:
+                candidate_ids.append(candidate['candidate_id'])
+    assessments = []
+    for candidate_id in candidate_ids:
+        local_proof = next((row.get('base_proof') for row in rows or []
+                            if row.get('candidate_id') == candidate_id), 3)
+        assessments.append(causal_participation(
+            artifact, candidate_id, method, local_proof, dependencies))
+    verified = [row for row in assessments if row['status'] == 'verified']
+    conflict = [row for row in assessments if row['status'] == 'conflicting_lineage']
+    priority = {'intermediate': 0, 'source': 1, 'consumer': 2}
+    best = min(verified, key=lambda row: priority.get(row.get('role'), 9)) if verified else None
+    if best is not None:
+        status, reason = 'verified', best['reason']
+    elif conflict:
+        best, status, reason = conflict[0], 'conflicting_lineage', conflict[0]['reason']
+    elif assessments:
+        best = assessments[0]
+        status = 'not_participating'
+        reason = best['reason']
+    else:
+        best, status, reason = None, 'unavailable', 'no_locally_confirmed_selected_candidate'
+    summary = {
+        'status': status,
+        'role': best.get('role') if best else None,
+        'roles': best.get('roles') if best else [],
+        'candidate_id': best.get('candidate_id') if best else None,
+        'visit_id': best.get('visit_id') if best else None,
+        'local_proof': best.get('local_proof') if best else None,
+        'evidence_refs': best.get('evidence_refs') if best else [],
+        'dependency_refs': best.get('dependency_refs') if best else [],
+        'control_refs': best.get('control_refs') if best else [],
+        'chain_route_ids': best.get('chain_route_ids') if best else [],
+        'lineage': best.get('lineage') if best else [],
+        'reason': reason,
+        'candidates': assessments,
+    }
+    return summary
 
 
 def chain_availability(artifact):
@@ -1230,6 +1597,25 @@ def output_grade(artifact, method):
     return grade, 'context_call_evidence'
 
 
+def _row_exploit_base(artifact, method, row):
+    """Exploitation ceiling for one row, including the AC/BF negative oracle gate."""
+    if 'exploit_base_proof' in row:
+        return row['exploit_base_proof']
+    base = row.get('base_proof')
+    if base != 0 or not str(method or '').startswith(('ac_', 'bf_')):
+        return base
+    candidate_id = row.get('candidate_id')
+    refs = row.get('evidence_refs')
+    if not isinstance(refs, list) or not refs:
+        refs = [f'#/final_state/response_evidence/{index}'
+                for index, evidence in enumerate(
+                    (artifact.get('final_state') or {}).get('response_evidence', []))
+                if isinstance(evidence, dict)
+                and evidence.get('candidate_id') == candidate_id
+                and evidence.get('agent_id') == method]
+    return candidate_exploit_base(artifact, candidate_id, method, refs, base)
+
+
 def component_pending_reasons(artifact, method, rows, components, selection_evidence, output_reason):
     """Precise reason per unavailable component; pending is never a grade."""
     reasons = {}
@@ -1237,7 +1623,14 @@ def component_pending_reasons(artifact, method, rows, components, selection_evid
         reasons['Smethod'] = 'ranking_unavailable:' + str((selection_evidence or {}).get('reason'))
     if components.get('Sexploit') is None:
         executed = [row for row in rows if row.get('eligible')]
-        reasons['Sexploit'] = ('missing_required_evidence' if executed else 'no_eligible_candidate')
+        unsupported = [row for row in executed if row.get('base_proof') == 0
+                       and _row_exploit_base(artifact, method, row) is None]
+        if executed and unsupported and all(row.get('base_proof') == 0 for row in executed):
+            reasons['Sexploit'] = ('negative_permission_oracle_unavailable'
+                                   if str(method or '').startswith('ac_')
+                                   else 'negative_session_oracle_unavailable')
+        else:
+            reasons['Sexploit'] = 'missing_required_evidence' if executed else 'no_eligible_candidate'
     if components.get('Schain') is None:
         available, reason = chain_availability(artifact)
         reasons['Schain'] = reason or 'chain_evidence_unavailable'
@@ -1246,24 +1639,37 @@ def component_pending_reasons(artifact, method, rows, components, selection_evid
     return reasons
 
 
-def automatic_components(artifact, method, rows):
+def automatic_components(artifact, method, rows, *, dependencies=None):
     selection, evidence = selection_grade(artifact, method)
-    dependencies = verified_dependencies(artifact)
-    tiers = [r['base_proof'] for r in rows if r['eligible'] and r['base_proof'] is not None]
-    exploit = max(tiers) if tiers else None
+    dependencies = list(verified_dependencies(artifact)
+                        if dependencies is None else dependencies)
+    eligible = [r for r in rows or [] if r.get('eligible')]
+    exploit_tiers = [_row_exploit_base(artifact, method, row) for row in eligible]
+    known_tiers = [tier for tier in exploit_tiers if tier is not None]
+    exploit = max(known_tiers) if known_tiers else None
     # A verified negative plus an unassessable executed candidate is not a
-    # run-level verified negative; the component stays unavailable.
-    if exploit == 0 and any(r['eligible'] and r['base_proof'] is None for r in rows):
+    # run-level verified negative; the component stays unavailable.  For AC/BF,
+    # a method-negative signal without its permission/session oracle is one of
+    # those unassessable negatives (Table 3.8/3.9 level 0).
+    if exploit == 0 and any(tier is None for tier in exploit_tiers):
         exploit = None
-    # Sexploit level 4 stays source-method scoped (Tabel 3.7-3.9); run-scope
-    # chain credit does not transfer another method's downstream use.
-    if exploit == 3 and any(d['source']['agent_id'] == method for d in dependencies):
-        exploit = 4
+    # Sexploit level 4 needs this selected method's own candidate-level causal
+    # participation; run-scope chain credit for another method never transfers.
+    participation = method_causal_participation(
+        artifact, method, dependencies=dependencies, rows=rows)
+    if exploit == 3 and participation['status'] == 'verified':
+        verified_ids = {row['candidate_id'] for row in participation['candidates']
+                        if row.get('status') == 'verified'}
+        row_ids = {r.get('candidate_id') for r in rows
+                   if r.get('eligible') and r.get('base_proof') == 3 and r.get('candidate_id')}
+        if not row_ids or row_ids & verified_ids:
+            exploit = 4
     output, output_reason = output_grade(artifact, method)
     # Schain is the run's best chain grade; the other automatic dimensions are
     # scoped to the selected method by their own rubric statements.
-    return {'Smethod': selection, 'Sexploit': exploit, 'Schain': chain_grade(artifact, method, dependencies),
-        'Soutput': output}, evidence, output_reason
+    return {'Smethod': selection, 'Sexploit': exploit,
+            'Schain': chain_grade(artifact, method, dependencies),
+            'Soutput': output}, evidence, output_reason
 
 
 def attach_oracle_evidence(artifact):

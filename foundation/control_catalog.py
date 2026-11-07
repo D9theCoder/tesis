@@ -115,10 +115,85 @@ _PHASE_METHOD_DEFAULTS = {
 }
 
 
+APPLICABILITY_PHASE = "applicability_probe"
+ROLE_BOUNDARY_METHOD = "ac_vertical_escalation"
+
+
 def canonical_sha256(value: Any) -> str:
     """Return the repository's canonical evidence hash encoding."""
     return sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
                              ensure_ascii=False).encode()).hexdigest()
+
+
+def role_boundary_control_rows(
+    method: str,
+    security_level: str,
+    *,
+    protocol: Mapping[str, Any] | None,
+    protocol_source_sha256: str | None,
+) -> list[dict[str, Any]]:
+    """Freeze the matched admin/non-admin page controls for role applicability.
+
+    A bare denial is not applicability evidence.  The pair binds one declared
+    policy path and read action to a known-admin positive reference and a
+    verified non-admin negative reference at the same level.  The rows are
+    detection controls only: they never establish exploitation credit, and the
+    non-admin request is a page read dispatched to the declared path rather than
+    a value substituted into a data-API parameter.
+    """
+    if method != ROLE_BOUNDARY_METHOD or not isinstance(protocol, Mapping):
+        return []
+    if protocol.get("enabled") is not True:
+        return []
+    paths = protocol.get("protected_paths")
+    signals = protocol.get("path_signals")
+    if not isinstance(paths, list) or len(paths) != 1 or not isinstance(paths[0], str):
+        return []
+    if not isinstance(signals, Mapping):
+        return []
+    markers = signals.get(paths[0])
+    if not isinstance(markers, list) or len(markers) != 1 or not isinstance(markers[0], str):
+        return []
+    if not isinstance(protocol_source_sha256, str) or len(protocol_source_sha256) != 64:
+        return []
+    level = _normalized_level(security_level)
+    path = paths[0]
+    marker = markers[0]
+    specs = (
+        ("admin", "allowed", "role_boundary_admin_allowed_reference",
+         "admin_only_policy_notice"),
+        ("nonadmin", "denied", "role_boundary_nonadmin_denied_reference",
+         "admin_only_access_denied"),
+    )
+    rows: list[dict[str, Any]] = []
+    for index, (principal_role, expected, purpose, signal) in enumerate(specs):
+        row = _row_base(
+            method=method, level=level, phase=APPLICABILITY_PHASE, index=index,
+            payload=path, purpose=purpose, expected_signal=signal,
+            source="operator_fixture", source_seed_id=None,
+            precondition_keys=["role_based_access_present"],
+            detail=(
+                "matched valid-principal page control under the frozen permission "
+                "policy; never an exploit candidate"
+            ),
+        )
+        row.update({
+            "principal_role": principal_role,
+            "request_path": path,
+            "request_action": "read",
+            "expected_control_outcome": expected,
+            "policy_marker": marker,
+            "protocol_source_sha256": protocol_source_sha256,
+            "control_sha256": "",
+        })
+        row["control_sha256"] = canonical_sha256(row)
+        rows.append(row)
+    return rows
+
+
+def role_boundary_controls_sha256(rows: Iterable[Mapping[str, Any]]) -> str:
+    """Return the frozen identity hash for the matched role-boundary controls."""
+    return canonical_sha256([dict(row) for row in rows])
 
 
 def _normalized_level(state_or_level: Any) -> str:

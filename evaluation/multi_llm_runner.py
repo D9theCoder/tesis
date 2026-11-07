@@ -36,6 +36,7 @@ from tesis.config_fields import fixture_evidence_envelope
 from tesis.runtime_events import CancellationToken, RunEvent, RuntimeEventSink, redact_secrets
 
 from evaluation.runner import (
+    _validated_research_plan_identity,
     default_source_hashes_sha256,
     default_source_identity,
     fixture_evidence_for_level,
@@ -163,6 +164,7 @@ def _run_single_with_payload_kwargs(kwargs: dict[str, Any]) -> dict:
             "fixture_restoration_evidence",
             "payload_policy_snapshot",
             "source_hashes_sha256",
+            "research_plan_identity",
             "llm_runtime",
             "llm_role_configs",
             "model_profiles",
@@ -593,6 +595,7 @@ def run_provider_matrix(
     fixture_restoration_evidence: dict[str, Any] | None = None,
     payload_policy_snapshot: dict[str, Any] | None = None,
     source_hashes_sha256: str | None = None,
+    research_plan_identity: dict[str, Any] | None = None,
     fixture_id: str | None = None,
     protocol_version: str | None = None,
     dvwa_username: str = "admin",
@@ -608,6 +611,7 @@ def run_provider_matrix(
     """
     if scoring_rubric_version != THESIS_RUBRIC:
         raise ValueError('Matrix launches require the canonical thesis-scoring rubric')
+    research_plan_identity = _validated_research_plan_identity(research_plan_identity)
     if llm_role_configs is None:
         llm_role_configs = role_configs
     if llm_runtime_config:
@@ -812,13 +816,15 @@ def run_provider_matrix(
         matrix_fields = matrix_terminal_status(artifacts, interrupted=status == "cancelled",
             interruption_reason=cancellation_token.reason or "")
         status = lifecycle_alias(matrix_fields["execution_status"])
+        scheduler_fields = scheduler_summary()
         aggregate.update({
             "execution_id": matrix_execution_id,
             "run_id": "matrix-" + config_fingerprint(matrix_config).split(":", 1)[-1][:12],
             "status": status,
             "planned_runs": total_runs,
             "observed_runs": len(artifacts),
-            "not_started_runs": max(0, total_runs - len(artifacts)),
+            "not_started_runs": scheduler_fields["unstarted"],
+            "scheduler": scheduler_fields,
             "matrix_wall_time_ms": int((perf_counter() - matrix_started_clock) * 1000),
             "score_epoch": {
                 "runtime_provisional": "runtime-scoring",
@@ -834,7 +840,7 @@ def run_provider_matrix(
             "reason": cancellation_token.reason if cancellation_token.is_cancelled else None,
             "completed_runs": len(artifacts),
             "total_runs": total_runs,
-            "not_started_runs": max(0, total_runs - len(artifacts)),
+            "not_started_runs": scheduler_fields["unstarted"],
         }
         if output_dir:
             write_json_report(Path(output_dir) / f"{matrix_execution_id}.matrix.json", aggregate)
@@ -846,6 +852,47 @@ def run_provider_matrix(
         if run_output_dir_factory is not None:
             coordinate_output_dir = str(run_output_dir_factory(coordinate, index))
         prepared.append((index, coordinate, coordinate_output_dir, new_execution_id()))
+
+    scheduler: dict[int, dict[str, Any]] = {
+        index: {
+            "coordinate_index": index,
+            "coordinate_id": coordinate.get("coordinate_id"),
+            "axes": dict(coordinate),
+            "state": "prepared",
+            "execution_id": prepared[index][3],
+            "execution_status": None,
+            "run_id": None,
+            "failure": None,
+        }
+        for index, coordinate, _directory, _execution_id in prepared
+    }
+    submitted_count = 0
+
+    def scheduler_summary() -> dict[str, Any]:
+        """Report actual scheduler states, never inferred from allocations."""
+        states = [row["state"] for row in scheduler.values()]
+        counts = {state: states.count(state) for state in (
+            "prepared", "submitted", "completed", "failed", "interrupted",
+            "skipped", "unstarted", "observed",
+        )}
+        return {
+            "planned": total_runs,
+            "prepared": len(prepared),
+            "submitted": submitted_count,
+            "observed": len([item for item in ordered_artifacts if item is not None]),
+            "completed": counts["completed"],
+            "failed": counts["failed"],
+            "interrupted": counts["interrupted"],
+            "skipped": counts["skipped"],
+            "unstarted": counts["unstarted"],
+            "prepared_not_submitted": counts["prepared"],
+            "coordinate_states": [scheduler[index] for index in sorted(scheduler)],
+        }
+
+    def _artifact_execution_status(artifact: Mapping[str, Any]) -> str | None:
+        if artifact.get("status") == "skipped":
+            return None
+        return terminal_status(artifact)["execution_status"]
 
     ordered_artifacts: list[dict[str, Any] | None] = [None] * total_runs
 
@@ -995,6 +1042,7 @@ def run_provider_matrix(
                 evidence_hash(coordinate_evidence) if coordinate_evidence else None
             ),
             "source_hashes_sha256": source_hashes_sha256,
+            "research_plan_identity": research_plan_identity,
             "source_identity": {
                 key: default_source_identity().get(key)
                 for key in ("identity_version", "source_hashes", "source_hashes_sha256", "config_sha256")
@@ -1120,6 +1168,7 @@ def run_provider_matrix(
         "fixture_restoration_evidence": fixture_restoration_evidence,
         "payload_policy_snapshot": recorded_payload_policy,
         "source_hashes_sha256": source_hashes_sha256,
+        "research_plan_identity": research_plan_identity,
         "fixture_id": fixture_id, "protocol_version": protocol_version,
         "scoring_mode": scoring_mode,
             "scoring_evaluator": scoring_evaluator or {},
@@ -1181,6 +1230,11 @@ def run_provider_matrix(
                 cancellation_token.reason or "keyboard interrupt",
             )
         except BaseException as exc:
+            scheduler[index].update({
+                "state": "failed",
+                "execution_status": "failed",
+                "failure": {"error": f"{type(exc).__name__}: {exc}"},
+            })
             if not cancellation_token.is_cancelled and not interrupted:
                 raise
             artifact = cancelled_artifact(
@@ -1189,6 +1243,14 @@ def run_provider_matrix(
                 f"{type(exc).__name__}: {exc}",
             )
         ordered_artifacts[index] = artifact
+        state = "skipped" if artifact.get("status") == "skipped" else (
+            _artifact_execution_status(artifact) or "observed")
+        scheduler[index].update({
+            "state": state,
+            "execution_status": _artifact_execution_status(artifact),
+            "run_id": artifact.get("run_id"),
+            "failure": artifact.get("failure"),
+        })
         completed = sum(item is not None for item in ordered_artifacts)
         failure = artifact.get("failure")
         failure_class = failure.get("failure_class") if isinstance(failure, dict) else None
@@ -1238,6 +1300,11 @@ def run_provider_matrix(
                 adapter = str(((model_configs or {}).get(provider) or {}).get("provider", provider))
                 if adapter not in SUPPORTED_PROVIDERS:
                     ordered_artifacts[index] = skipped_artifact(coordinate, run_execution_id)
+                    scheduler[index].update({
+                        "state": "skipped",
+                        "execution_status": None,
+                        "failure": {"error": f"Unsupported provider: {adapter}"},
+                    })
                     continue
                 completed = sum(item is not None for item in ordered_artifacts)
                 emit("matrix.run.started", message="Starting matrix coordinate", data={
@@ -1246,6 +1313,8 @@ def run_provider_matrix(
                     "coordinate_execution_id": run_execution_id,
                     "completed": completed, "total": total_runs,
                 })
+                scheduler[index]["state"] = "submitted"
+                submitted_count += 1
                 future = executor.submit(
                     execute_coordinate, coordinate, coordinate_output_dir, run_execution_id
                 )
@@ -1269,6 +1338,39 @@ def run_provider_matrix(
     except KeyboardInterrupt:
         interrupted = True
         cancellation_token.cancel("keyboard interrupt")
+    except BaseException as exc:  # unexpected scheduler failure must stay auditable
+        shutdown_executor(executor)
+        for future, (index, coordinate) in sorted(
+            list(futures.items()), key=lambda item: item[1][0]
+        ):
+            try:
+                record_future_result(future, index, coordinate)
+            except BaseException as child_exc:
+                scheduler[index].update({
+                    "state": "failed", "execution_status": "failed",
+                    "failure": {"error": f"{type(child_exc).__name__}: {child_exc}"},
+                })
+        futures.clear()
+        for row in scheduler.values():
+            if row["state"] == "prepared":
+                row["state"] = "unstarted"
+        artifacts = [artifact for artifact in ordered_artifacts if artifact is not None]
+        try:
+            _partial_artifacts, partial_aggregate = finalize_aggregate("error")
+            partial_aggregate["scheduler"]["error"] = f"{type(exc).__name__}: {exc}"
+            if output_dir:
+                write_json_report(
+                    Path(output_dir) / f"{matrix_execution_id}.scheduler-partial.json",
+                    {
+                        "artifact_type": "matrix_scheduler_partial",
+                        "execution_id": matrix_execution_id,
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "scheduler": partial_aggregate["scheduler"],
+                    },
+                )
+        except BaseException:  # preserve the original scheduler exception
+            pass
+        raise
     finally:
         shutdown_executor(executor)
 
@@ -1282,6 +1384,9 @@ def run_provider_matrix(
             record_future_result(future, index, coordinate)
         futures.clear()
 
+    for row in scheduler.values():
+        if row["state"] == "prepared":
+            row["state"] = "unstarted"
     artifacts = [artifact for artifact in ordered_artifacts if artifact is not None]
     if cancellation_token.is_cancelled:
         emit("matrix.cancelled", message="Matrix cancellation acknowledged", data={

@@ -692,6 +692,26 @@ def _run_scope_scoring(final_state: dict, summary: dict) -> dict:
     }
 
 
+def _validated_research_plan_identity(value: dict[str, Any] | None) -> dict[str, str] | None:
+    """Normalize the frozen plan identity a declared-plan execution carries.
+
+    A malformed identity is refused rather than emitted, so a consumer can never
+    infer a plan from a directory name or accept a partial binding.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("research_plan_identity must be a mapping")
+    digest = value.get("plan_sha256") or value.get("sha256")
+    epoch = value.get("epoch_id") or value.get("experiment_epoch_id")
+    if (not isinstance(digest, str) or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest.lower())):
+        raise ValueError("research_plan_identity requires a valid plan_sha256")
+    if not isinstance(epoch, str) or not epoch.strip():
+        raise ValueError("research_plan_identity requires an epoch_id")
+    return {"plan_sha256": digest.lower(), "epoch_id": epoch}
+
+
 def run_single_engagement(
     *,
     target_url: str,
@@ -741,6 +761,7 @@ def run_single_engagement(
     fixture_restoration_evidence: dict[str, Any] | None = None,
     payload_policy_snapshot: dict[str, Any] | None = None,
     source_hashes_sha256: str | None = None,
+    research_plan_identity: dict[str, Any] | None = None,
     fixture_id: str | None = None,
     protocol_version: str | None = None,
     dvwa_username: str = "admin",
@@ -798,6 +819,7 @@ def run_single_engagement(
     )
     if source_hashes_sha256 is None:
         source_hashes_sha256 = default_source_hashes_sha256()
+    research_plan_identity = _validated_research_plan_identity(research_plan_identity)
     fixture_restoration_sha256 = None
     if fixture_restoration_evidence:
         from foundation.readiness import validate_fixture_restoration_evidence
@@ -1798,6 +1820,7 @@ def run_single_engagement(
             for key in ("identity_version", "source_hashes", "source_hashes_sha256", "config_sha256")
         },
         "source_hashes_sha256": source_hashes_sha256,
+        "research_plan_identity": research_plan_identity,
         "fixture_restoration_evidence": fixture_restoration_evidence,
         "fixture_restoration_sha256": fixture_restoration_sha256,
         "payload_policy_version": PAYLOAD_POLICY_VERSION,

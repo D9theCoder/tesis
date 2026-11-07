@@ -61,6 +61,477 @@ PROOF_TIERS = {
 # hint so the three cannot drift apart again.
 EVALUATOR_MAX_TOKENS_CEILING = 16384
 
+# Receipt/epoch identity.  New receipts explicitly bind the experiment, plan,
+# active scoring rules, source configuration, fixture, oracle protocol and source
+# execution.  Historical receipts keep their recorded fields and are read as
+# ``historical_unbound``; a directory or a missing field never invents identity.
+EPOCH_BINDING_VERSION = 'scoring-epoch-binding'
+RECEIPT_CONTRACT = 'epoch-bound-receipt'
+REJECTED_DECISION_EVENT = 'below_machine_proof_floor'
+REJECTED_DECISION_REASON = 'candidate_grade_below_machine_proof_floor'
+# A prospective final receipt must name every identity needed to compare it with
+# the frozen plan and to reject cross-epoch pooling.  The per-receipt source
+# execution hash is checked against that receipt's own artifact; it is never a
+# cross-receipt population key.
+REQUIRED_EPOCH_COMPONENTS = (
+    'experiment_epoch', 'plan', 'scoring_epoch', 'config', 'fixture',
+    'oracles', 'source_execution',
+)
+REQUIRED_EPOCH_FLAT_FIELDS = (
+    'experiment_epoch_id', 'plan_sha256', 'scoring_epoch_id',
+    'source_execution_sha256', 'config_sha256', 'fixture_id',
+    'protocol_version', 'oracle_sha256', 'scoring_rule_sha256',
+)
+FIXTURE_LEVELS = frozenset({'low', 'medium', 'high'})
+# Runtime producer contract for the frozen declared plan.  The execution
+# artifact must carry this exact identity; a directory name never invents it.
+RESEARCH_PLAN_IDENTITY_KEY = 'research_plan_identity'
+RESEARCH_PLAN_IDENTITY_FIELDS = ('plan_sha256', 'epoch_id')
+
+
+def _hex64(value):
+    return isinstance(value, str) and len(value) == 64 and set(value) <= set('0123456789abcdef')
+
+
+def _binding_digest(value):
+    return sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
+                             ensure_ascii=False, default=str).encode()).hexdigest()
+
+
+def _binding_unavailable(reason):
+    return {'status': 'unavailable', 'reason': reason}
+
+
+def _binding_completeness_problem(binding):
+    """Return missing/contradictory prospective identity fields.
+
+    Historical receipts are read as ``historical_unbound`` before this check.
+    Offline fixture receipts do not claim a study epoch and are not forced to
+    invent one.  A receipt or queue that names an experiment epoch must carry
+    the complete frozen plan/config/fixture/protocol/rule identity plus its own
+    source execution hash.
+    """
+    if not isinstance(binding, dict):
+        return ['binding_missing']
+    problems = []
+    for component in REQUIRED_EPOCH_COMPONENTS:
+        value = binding.get(component)
+        if not isinstance(value, dict) or value.get('status') != 'bound':
+            problems.append(f'{component}_unavailable')
+    for field in REQUIRED_EPOCH_FLAT_FIELDS:
+        value = binding.get(field)
+        if field.endswith('sha256'):
+            if not _hex64(value):
+                problems.append(f'{field}_invalid')
+        elif not isinstance(value, str) or not value.strip():
+            problems.append(f'{field}_missing')
+    config = binding.get('config') if isinstance(binding.get('config'), dict) else {}
+    if not _hex64(config.get('source_config_sha256')):
+        problems.append('config_source_config_sha256_invalid')
+    if not _hex64(config.get('source_hashes_sha256')):
+        problems.append('config_source_hashes_sha256_invalid')
+    fixture = binding.get('fixture') if isinstance(binding.get('fixture'), dict) else {}
+    if not _hex64(fixture.get('fixture_restoration_sha256')):
+        problems.append('fixture_restoration_sha256_invalid')
+    if fixture.get('security_level') not in FIXTURE_LEVELS:
+        problems.append('fixture_security_level_invalid')
+    oracles = binding.get('oracles') if isinstance(binding.get('oracles'), dict) else {}
+    if not isinstance(oracles.get('protocol_sources'), list) or not oracles['protocol_sources']:
+        problems.append('oracle_protocol_sources_missing')
+    plan = binding.get('plan') if isinstance(binding.get('plan'), dict) else {}
+    if plan.get('status') == 'bound':
+        if plan.get('plan_sha256') != binding.get('plan_sha256'):
+            problems.append('plan_identity_mismatch')
+        if plan.get('epoch_id') != binding.get('experiment_epoch_id'):
+            problems.append('plan_epoch_identity_mismatch')
+    experiment = (binding.get('experiment_epoch')
+                  if isinstance(binding.get('experiment_epoch'), dict) else {})
+    if experiment.get('status') == 'bound' \
+            and experiment.get('epoch_id') != binding.get('experiment_epoch_id'):
+        problems.append('experiment_epoch_identity_mismatch')
+    rules = binding.get('rules') if isinstance(binding.get('rules'), dict) else {}
+    if rules.get('status') == 'bound' \
+            and rules.get('scoring_rule_sha256') != binding.get('scoring_epoch_id'):
+        problems.append('scoring_epoch_identity_mismatch')
+    execution = (binding.get('source_execution')
+                 if isinstance(binding.get('source_execution'), dict) else {})
+    if execution.get('status') == 'bound' \
+            and execution.get('source_sha256') != binding.get('source_execution_sha256'):
+        problems.append('source_execution_identity_mismatch')
+    return sorted(set(problems))
+
+
+def _binding_claims_prospective(binding):
+    """Whether a bound document explicitly claims a study/experiment epoch or plan."""
+    if not isinstance(binding, dict):
+        return False
+    experiment = binding.get('experiment_epoch')
+    if isinstance(experiment, dict) and experiment.get('status') == 'bound':
+        return True
+    plan = binding.get('plan')
+    return isinstance(plan, dict) and plan.get('status') == 'bound'
+
+
+def _artifact_requires_prospective_binding(artifact):
+    """A real study execution names an experiment epoch; offline fixtures do not."""
+    if not isinstance(artifact, dict):
+        return False
+    config = artifact.get('config') if isinstance(artifact.get('config'), dict) else {}
+    score_epoch = artifact.get('score_epoch') if isinstance(artifact.get('score_epoch'), dict) else {}
+    for candidate in (
+        artifact.get('policy_epoch'),
+        config.get('policy_epoch'),
+        score_epoch.get('scoring_policy_epoch'),
+        artifact.get('fixture_restoration_evidence'),
+    ):
+        if isinstance(candidate, dict):
+            epoch_id = candidate.get('epoch_id')
+            if isinstance(epoch_id, str) and epoch_id.strip():
+                return True
+    return False
+
+
+def _require_prospective_epoch_binding(binding, *, context):
+    problems = _binding_completeness_problem(binding)
+    if problems:
+        raise ValueError(f'{context}:' + ','.join(problems))
+    return binding
+
+
+def _recorded_plan_identity(artifact):
+    """Read an explicit plan identity; never infer one from directory names."""
+    for key in (RESEARCH_PLAN_IDENTITY_KEY, 'plan_identity'):
+        candidate = artifact.get(key)
+        if candidate is None:
+            continue
+        if not isinstance(candidate, dict):
+            raise ValueError('research_plan_identity_invalid')
+        digest = candidate.get('plan_sha256') or candidate.get('sha256')
+        epoch = candidate.get('epoch_id') or candidate.get('experiment_epoch_id')
+        if not _hex64(digest) or not isinstance(epoch, str) or not epoch.strip():
+            raise ValueError('research_plan_identity_invalid')
+        return {'status': 'bound', 'plan_sha256': digest, 'epoch_id': epoch,
+                'source': key}
+    plan = artifact.get('research_plan')
+    if isinstance(plan, dict) and _hex64(plan.get('plan_sha256')):
+        epoch = plan.get('epoch_id')
+        return {'status': 'bound', 'plan_sha256': plan['plan_sha256'],
+                'epoch_id': epoch if isinstance(epoch, str) and epoch else None,
+                'source': 'research_plan'}
+    return _binding_unavailable('plan_identity_not_recorded_in_artifact')
+
+
+def _experiment_epoch_identity(artifact, config, score_epoch, plan):
+    candidates = []
+    policy_epoch = artifact.get('policy_epoch')
+    if isinstance(policy_epoch, dict) and policy_epoch.get('epoch_id'):
+        candidates.append((policy_epoch['epoch_id'], 'policy_epoch.epoch_id'))
+    policy_epoch = config.get('policy_epoch')
+    if isinstance(policy_epoch, dict) and policy_epoch.get('epoch_id'):
+        candidates.append((policy_epoch['epoch_id'], 'config.policy_epoch.epoch_id'))
+    scoring_policy_epoch = score_epoch.get('scoring_policy_epoch')
+    if isinstance(scoring_policy_epoch, dict) and scoring_policy_epoch.get('epoch_id'):
+        candidates.append((scoring_policy_epoch['epoch_id'], 'score_epoch.scoring_policy_epoch.epoch_id'))
+    evidence = artifact.get('fixture_restoration_evidence')
+    if isinstance(evidence, dict) and evidence.get('epoch_id'):
+        candidates.append((evidence['epoch_id'], 'fixture_restoration_evidence.epoch_id'))
+    for value, source in candidates:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError('experiment_epoch_identity_invalid')
+    distinct = {value for value, _source in candidates}
+    if len(distinct) > 1:
+        raise ValueError('experiment_epoch_identity_conflict')
+    if plan.get('status') == 'bound' and plan.get('epoch_id') and distinct \
+            and plan['epoch_id'] not in distinct:
+        raise ValueError('research_plan_epoch_mismatch')
+    if not candidates:
+        return _binding_unavailable('experiment_epoch_identity_unavailable')
+    value, source = candidates[0]
+    return {'status': 'bound', 'epoch_id': value, 'source': source}
+
+
+def _policy_component(policy, *, required):
+    if not isinstance(policy, dict):
+        if required:
+            raise ValueError('scoring_policy_identity_invalid')
+        return None
+    source_files = policy.get('source_files')
+    source_hashes = policy.get('source_hashes')
+    digest = policy.get('scoring_rule_sha256')
+    from evaluation.research_metrics import SCORING_RULE_DIGEST_DEFINITION
+    if (not isinstance(source_files, list) or not source_files
+            or any(not isinstance(path, str) or not path for path in source_files)
+            or not isinstance(source_hashes, dict) or set(source_hashes) != set(source_files)
+            or any(not _hex64(source_hashes[path]) for path in source_files)
+            or policy.get('digest_definition') != SCORING_RULE_DIGEST_DEFINITION
+            or not _hex64(digest)
+            or sha256(''.join(source_hashes[path] for path in source_files).encode()).hexdigest() != digest):
+        if required:
+            raise ValueError('scoring_policy_identity_invalid')
+        return None
+    fields = {name: policy.get(name) for name in (
+        'policy_version', 'metrics_epoch', 'rate_definition_version', 'rubric_version')}
+    if any(not isinstance(value, str) or not value for value in fields.values()):
+        if required:
+            raise ValueError('scoring_policy_identity_invalid')
+        return None
+    return {'status': 'bound', **fields, 'scoring_rule_sha256': digest,
+            'digest_definition': policy['digest_definition'],
+            'source_files': list(source_files),
+            'source_hashes': {path: source_hashes[path] for path in source_files}}
+
+
+def _compose_epoch_binding(artifact, policy, *, source_sha256=None):
+    """Compose the explicit receipt/producer identity from recorded fields."""
+    config = artifact.get('config') if isinstance(artifact.get('config'), dict) else {}
+    score_epoch = artifact.get('score_epoch') if isinstance(artifact.get('score_epoch'), dict) else {}
+    plan = _recorded_plan_identity(artifact)
+    experiment_epoch = _experiment_epoch_identity(artifact, config, score_epoch, plan)
+    scoring_epoch = _policy_component(policy, required=True)
+    source_identity = artifact.get('source_identity') if isinstance(artifact.get('source_identity'), dict) else {}
+    config_fingerprint = artifact.get('config_fingerprint')
+    if not isinstance(config_fingerprint, str) or not config_fingerprint:
+        from tesis.artifact_repository import config_fingerprint as fingerprint
+        config_fingerprint = fingerprint(config)
+    config_component = {
+        'status': 'bound',
+        'config_fingerprint': config_fingerprint,
+        'source_config_sha256': config.get('source_config_sha256') or source_identity.get('config_sha256'),
+        'source_hashes_sha256': config.get('source_hashes_sha256') or artifact.get('source_hashes_sha256'),
+        'source_identity_version': source_identity.get('identity_version') or config.get('source_identity_version'),
+    }
+    evidence = artifact.get('fixture_restoration_evidence')
+    evidence = evidence if isinstance(evidence, dict) else {}
+    fixture_id = config.get('fixture_id') or artifact.get('fixture_id') or evidence.get('fixture_id')
+    protocol_version = config.get('protocol_version') or artifact.get('protocol_version') or evidence.get('protocol_version')
+    restoration = (config.get('fixture_restoration_sha256') or artifact.get('fixture_restoration_sha256')
+                   or evidence.get('evidence_sha256'))
+    if isinstance(fixture_id, str) and fixture_id.strip() and isinstance(protocol_version, str) and protocol_version.strip():
+        fixture_component = {'status': 'bound', 'fixture_id': fixture_id,
+            'protocol_version': protocol_version,
+            'fixture_restoration_sha256': restoration if _hex64(restoration) else None,
+            'security_level': config.get('security_level')}
+    else:
+        fixture_component = _binding_unavailable('fixture_identity_unavailable')
+    sources = config.get('scoring_oracles')
+    protocol_sources = []
+    if isinstance(sources, list):
+        for source in sources:
+            document = source.get('document') if isinstance(source, dict) else None
+            if not isinstance(document, dict) or 'protocol_source_sha256' in document:
+                continue
+            if not isinstance(source.get('source_id'), str) or not source['source_id'] \
+                    or not _hex64(source.get('sha256')):
+                raise ValueError('scoring_oracle_identity_invalid')
+            protocol_sources.append({'source_id': source['source_id'],
+                'sha256': source['sha256'], 'origin': source.get('origin')})
+    protocol_sources.sort(key=lambda row: (row['source_id'], row['sha256']))
+    oracle_component = {
+        'status': 'bound' if protocol_sources else 'unavailable',
+        'reason': None if protocol_sources else 'no_frozen_scoring_oracles',
+        'protocol_sources': protocol_sources,
+        'protocol_sources_sha256': _binding_digest(protocol_sources),
+        'collected_source_count': len(sources) if isinstance(sources, list) else 0,
+    }
+    recorded_epoch = {name: score_epoch.get(name) for name in (
+        'thesis_final', 'scoring_rule_sha256', 'scoring_policy_version',
+        'metrics_epoch', 'final_status')}
+    effective_source_sha256 = source_sha256 or artifact.get('source_sha256')
+    source_execution = {
+        'status': 'bound' if _hex64(effective_source_sha256) else 'unavailable',
+        'reason': None if _hex64(effective_source_sha256) else 'source_execution_hash_unavailable',
+        'execution_id': artifact.get('execution_id'),
+        'run_id': artifact.get('run_id'),
+        'source_sha256': effective_source_sha256,
+        'recorded_score_epoch': recorded_epoch,
+        'source_identity': {
+            'config_sha256': source_identity.get('config_sha256'),
+            'source_hashes_sha256': source_identity.get('source_hashes_sha256'),
+        },
+    }
+    # Flat identity fields are the reader-facing epoch keys used by aggregate
+    # analysis. ``source_execution_sha256`` is per receipt and must not be used
+    # as a cross-receipt population key; ``epoch_sha256`` is that population key.
+    flat_identity = {
+        'experiment_epoch_id': (experiment_epoch.get('epoch_id')
+                                if experiment_epoch.get('status') == 'bound' else None),
+        'scoring_epoch_id': scoring_epoch.get('scoring_rule_sha256'),
+        'source_execution_sha256': effective_source_sha256,
+        'plan_sha256': plan.get('plan_sha256') if plan.get('status') == 'bound' else None,
+        'config_sha256': (config_component.get('source_config_sha256')
+                          or config_component.get('config_fingerprint')),
+        'fixture_id': (fixture_component.get('fixture_id')
+                       if fixture_component.get('status') == 'bound' else None),
+        'protocol_version': (fixture_component.get('protocol_version')
+                             if fixture_component.get('status') == 'bound' else None),
+        'oracle_sha256': (oracle_component.get('protocol_sources_sha256')
+                          if oracle_component.get('status') == 'bound' else None),
+        'scoring_rule_sha256': scoring_epoch.get('scoring_rule_sha256'),
+    }
+    return {
+        'binding_version': EPOCH_BINDING_VERSION,
+        **flat_identity,
+        'experiment_epoch': experiment_epoch,
+        'plan': plan,
+        'scoring_epoch': scoring_epoch,
+        'config': config_component,
+        'fixture': fixture_component,
+        'oracles': oracle_component,
+        'rules': scoring_epoch,
+        'source_execution': source_execution,
+    }
+
+
+def _epoch_projection(binding):
+    """Repeat/coordinate-invariant epoch identity; excludes per-receipt source.
+
+    Excluded on purpose: ``source_execution`` and its hash (one per receipt),
+    ``oracles.collected_source_count`` and collected candidate sources (one per
+    execution), and the per-coordinate ``config_fingerprint``.  The frozen
+    protocol source list/hash, source config/source-set hashes, fixture
+    identity/restoration identity and plan/rules are the comparable population
+    identity.  ``security_level`` is a population axis in the compatibility
+    fingerprint; real fixtures also bind it through the frozen restoration hash.
+    """
+    config = binding['config']
+    fixture = {key: value for key, value in binding['fixture'].items()
+               if key != 'security_level'}
+    return {
+        'binding_version': binding['binding_version'],
+        'experiment_epoch': binding['experiment_epoch'],
+        'plan': binding['plan'],
+        'scoring_epoch': binding['scoring_epoch'],
+        'config': {key: config.get(key) for key in (
+            'status', 'source_config_sha256', 'source_hashes_sha256', 'source_identity_version')},
+        'fixture': fixture,
+        'oracles': {key: binding['oracles'].get(key) for key in (
+            'status', 'reason', 'protocol_sources', 'protocol_sources_sha256')},
+        'rules': binding['rules'],
+    }
+
+
+def seal_epoch_binding(binding):
+    """Return a sealed copy with recomputed epoch and full-binding digests."""
+    sealed = json.loads(json.dumps(binding, sort_keys=True, ensure_ascii=False, default=str))
+    sealed.pop('binding_sha256', None)
+    sealed['epoch_sha256'] = _binding_digest(_epoch_projection(sealed))
+    sealed['binding_sha256'] = _binding_digest(sealed)
+    return sealed
+
+
+def build_epoch_binding(artifact, *, policy=None, source_sha256=None):
+    """Build the active-receipt binding for a frozen execution artifact."""
+    if policy is None:
+        from evaluation.research_metrics import scoring_policy
+        policy = scoring_policy(artifact)
+    return seal_epoch_binding(_compose_epoch_binding(
+        artifact, policy, source_sha256=source_sha256))
+
+
+def recorded_epoch_binding(artifact, *, source_sha256=None):
+    """Read-only source-epoch binding reconstructed from the artifact itself.
+
+    Returns ``None`` when the artifact predates a hash-pinned scoring policy.
+    This identity is only used to read receipts produced under that recorded
+    source epoch; it never authorizes a current write or a new assessment.
+    """
+    policy = artifact.get('scoring_policy')
+    component = _policy_component(policy, required=False)
+    if component is None:
+        return None
+    try:
+        return seal_epoch_binding(_compose_epoch_binding(
+            artifact, policy, source_sha256=source_sha256))
+    except ValueError:
+        return None
+
+
+def _binding_mismatch_keys(actual, expected):
+    if not isinstance(actual, dict):
+        return ['<missing>']
+    keys = set(actual) | set(expected)
+    return sorted(key for key in keys if actual.get(key) != expected.get(key))
+
+
+def _validate_receipt_binding_integrity(receipt):
+    """Validate contract presence and self-consistent binding digests."""
+    contract = receipt.get('receipt_contract') if isinstance(receipt, dict) else None
+    binding = receipt.get('epoch_binding') if isinstance(receipt, dict) else None
+    if contract is None:
+        if binding is not None:
+            raise ValueError('receipt_contract_missing')
+        return None
+    if contract != RECEIPT_CONTRACT:
+        raise ValueError('receipt_contract_unknown')
+    if not isinstance(binding, dict):
+        raise ValueError('receipt_epoch_binding_missing')
+    if binding.get('binding_version') != EPOCH_BINDING_VERSION:
+        raise ValueError('receipt_epoch_binding_version_unknown')
+    if binding.get('binding_sha256') != _binding_digest(
+            {key: value for key, value in binding.items() if key != 'binding_sha256'}):
+        raise ValueError('receipt_binding_digest_mismatch')
+    if binding.get('epoch_sha256') != _binding_digest(_epoch_projection(binding)):
+        raise ValueError('receipt_epoch_digest_mismatch')
+    execution = binding.get('source_execution')
+    if not isinstance(execution, dict):
+        raise ValueError('receipt_source_execution_missing')
+    if execution.get('source_sha256') != binding.get('source_execution_sha256'):
+        raise ValueError('receipt_source_execution_binding_mismatch')
+    if receipt.get('source_sha256') not in (None, binding.get('source_execution_sha256')):
+        raise ValueError('receipt_source_execution_binding_mismatch')
+    if receipt.get('run_id') not in (None, execution.get('run_id')):
+        raise ValueError('receipt_run_identity_mismatch')
+    if receipt.get('execution_id') not in (None, execution.get('execution_id')):
+        raise ValueError('receipt_execution_identity_mismatch')
+    if receipt.get('epoch_sha256') not in (None, binding.get('epoch_sha256')):
+        raise ValueError('receipt_epoch_digest_mismatch')
+    oracles = binding.get('oracles')
+    if isinstance(oracles, dict):
+        protocol_sources = oracles.get('protocol_sources')
+        if (not isinstance(protocol_sources, list)
+                or oracles.get('protocol_sources_sha256') != _binding_digest(protocol_sources)):
+            raise ValueError('receipt_oracle_protocol_digest_mismatch')
+    plan = binding.get('plan')
+    if isinstance(plan, dict) and plan.get('status') == 'bound' \
+            and plan.get('plan_sha256') != binding.get('plan_sha256'):
+        raise ValueError('receipt_plan_identity_mismatch')
+    experiment = binding.get('experiment_epoch')
+    if isinstance(experiment, dict) and experiment.get('status') == 'bound' \
+            and experiment.get('epoch_id') != binding.get('experiment_epoch_id'):
+        raise ValueError('receipt_experiment_epoch_identity_mismatch')
+    rules = binding.get('rules')
+    if not isinstance(rules, dict) \
+            or rules.get('scoring_rule_sha256') != binding.get('scoring_epoch_id'):
+        raise ValueError('receipt_scoring_epoch_identity_mismatch')
+    return binding
+
+
+def validate_epoch_binding(receipt, queue, *, allow_recorded_source_epoch=False):
+    """Validate a receipt's explicit epoch binding against the reader's source."""
+    binding = _validate_receipt_binding_integrity(receipt)
+    if binding is None:
+        return {'status': 'historical_unbound', 'epoch_sha256': None,
+                'binding_sha256': None, 'detail': 'Historical receipt has no epoch-binding fields'}
+    expected = queue.get('epoch_binding') if isinstance(queue, dict) else None
+    recorded = queue.get('recorded_epoch_binding') if isinstance(queue, dict) else None
+    if not isinstance(expected, dict):
+        raise ValueError('receipt_epoch_binding_unavailable')
+    if receipt.get('artifact_type') == 'thesis_score_receipt' and (
+            _binding_claims_prospective(binding)
+            or (isinstance(queue, dict) and queue.get('prospective_study'))):
+        _require_prospective_epoch_binding(
+            binding, context='receipt_epoch_identity_incomplete')
+    if binding == expected:
+        if receipt.get('epoch_sha256') not in (None, binding['epoch_sha256']):
+            raise ValueError('receipt_epoch_digest_mismatch')
+        return {'status': 'current', 'epoch_sha256': binding['epoch_sha256'],
+                'binding_sha256': binding['binding_sha256']}
+    if allow_recorded_source_epoch and isinstance(recorded, dict) and binding == recorded:
+        return {'status': 'recorded_source_epoch', 'epoch_sha256': binding['epoch_sha256'],
+                'binding_sha256': binding['binding_sha256']}
+    keys = _binding_mismatch_keys(binding, expected)
+    raise ValueError('receipt_epoch_binding_mismatch:' + (','.join(keys) or 'unknown'))
+
 
 def validate_scoring_config(mode, evaluator):
     if mode not in SCORING_MODES:
@@ -258,6 +729,16 @@ class _IncompleteEvaluatorResponse(ValueError):
     pass
 
 
+class _BelowMachineProofFloor(ValueError):
+    """A review grade contradicts evidence already established for the candidate."""
+
+    def __init__(self, attempted_score, floor, candidate_id):
+        super().__init__('Review grade is below the machine proof for this candidate')
+        self.attempted_score = attempted_score
+        self.floor = floor
+        self.candidate_id = candidate_id
+
+
 def _resolve(artifact, ref):
     if not isinstance(ref, str) or not ref.startswith('#/'):
         return None
@@ -334,6 +815,7 @@ def _candidate_proof(artifact, candidate, method, refs):
 def review_queue(source: str | Path) -> dict:
     path = Path(source)
     raw = path.read_bytes()
+    source_sha256 = sha256(raw).hexdigest()
     artifact = json.loads(raw)
     if not isinstance(artifact, dict) or not isinstance(artifact.get('final_state'), dict):
         raise ValueError('Expected an execution artifact with final_state')
@@ -361,6 +843,11 @@ def review_queue(source: str | Path) -> dict:
         raise ValueError('Selected method is outside the thesis registry')
     candidates = {c['candidate_id']: c for c in state.get('payload_candidates', {}).get(method, []) if c.get('candidate_id')}
     manual = {r['candidate_id']: r for r in manual_scoring_rows(artifact) if r['method_node'] == method}
+    from evaluation.scoring_evidence import (
+        candidate_base, candidate_execution_evidence, candidate_exploit_base,
+        candidate_lifecycle_status, causal_participation, method_causal_participation,
+        verified_dependencies)
+    dependencies = verified_dependencies(artifact)
     rows = []
     ids = dict.fromkeys([*candidates, *manual])
     for cid in ids:
@@ -380,7 +867,6 @@ def review_queue(source: str | Path) -> dict:
                 if v.get('candidate_id') == cid), {})
         valid = validation.get('valid') is True
         stage = candidate.get('stage')
-        from evaluation.scoring_evidence import candidate_execution_evidence, candidate_lifecycle_status
         execution_rows = candidate_execution_evidence(artifact, cid, method)
         lifecycle_status = candidate_lifecycle_status(artifact, cid, method)
         executed = bool(execution_rows) and lifecycle_status not in {
@@ -390,20 +876,14 @@ def review_queue(source: str | Path) -> dict:
         refs = list(dict.fromkeys([*refs, *execution_refs]))
         eligible = valid and stage in {'exploit', 'bypass'} and executed
         provenance = state.get('payload_provenance', {}).get(cid, {})
-        from evaluation.scoring_evidence import candidate_base, verified_dependencies
         base = candidate_base(artifact, cid, method, refs) if eligible and provenance else None
-        dependencies = verified_dependencies(artifact)
-        # Methodology revision (owner-authorised 2026-11-06): level 4 is reachable
-        # when the assessed method is the dependency source *or* when its own
-        # executed candidate consumed a verified dependency. Either way the base
-        # proof must already be 3 and a dependency must be recorded.
-        # The consumer of a dependency is the destination candidate, recorded as
-        # ``candidate_id``; ``source_candidate_id`` names the producer it consumed.
-        consumes_dependency = any(d.get('candidate_id') == cid
-                                  for d in dependencies)
-        ceiling = 4 if base == 3 and (
-            any(d['source'].get('candidate_id') == cid and d['source'].get('agent_id') == method
-                for d in dependencies) or consumes_dependency) else base
+        # Methodology revision (owner-authorised 2026-11-07): level 4 requires the
+        # assessed candidate's own source/intermediate/consumer participation in a
+        # completed, control-backed verified chain. Another method's chain cannot
+        # raise this candidate's ceiling.
+        participation = causal_participation(
+            artifact, cid, method, base, dependencies)
+        ceiling = 4 if base == 3 and participation.get('status') == 'verified' else base
         proof_refs = []
         for ref in refs:
             evidence = _resolve(artifact, ref)
@@ -411,29 +891,53 @@ def review_queue(source: str | Path) -> dict:
                 oracle_ref = evidence.get(field) if isinstance(evidence, dict) else None
                 if oracle_ref and isinstance(_resolve(artifact, oracle_ref), dict):
                     proof_refs.extend([oracle_ref, '/'.join(oracle_ref.split('/')[:4])])
-        for dependency in verified_dependencies(artifact):
-            if dependency['source'].get('candidate_id') == cid and dependency['source'].get('agent_id') == method:
-                proof_refs.extend([dependency['consumption']['dependency_ref'],
-                    *dependency['route']['destination_evidence_refs']])
+        for dependency in dependencies:
+            source_match = (dependency['source'].get('candidate_id') == cid
+                            and dependency['source'].get('agent_id') == method)
+            destination_match = (dependency['destination'].get('candidate_id') == cid
+                                 and dependency['destination'].get('agent_id') == method)
+            if source_match or destination_match:
+                proof_refs.extend([
+                    *([dependency['route_ref']] if dependency.get('route_ref') else []),
+                    *([dependency['consumption']['dependency_ref']]
+                      if dependency.get('consumption', {}).get('dependency_ref') else []),
+                    *dependency.get('control_refs', []),
+                    *dependency['route'].get('destination_evidence_refs', []),
+                ])
         refs = list(dict.fromkeys([*refs, *proof_refs]))
         status = ('invalid' if not valid else 'probe_only' if stage == 'probe' else
             'not_executed' if not executed else 'not_assessable' if ceiling is None else
             'signal_absent' if ceiling == 0 else 'pending_review')
+        exploit_base = (candidate_exploit_base(artifact, cid, method, refs, base)
+                        if base is not None else None)
         rows.append({'candidate_id': cid, 'method': method, 'stage': stage, 'eligible': eligible,
-            'status': status, 'proof_ceiling': ceiling, 'base_proof': base, 'evidence_refs': refs,
+            'status': status, 'proof_ceiling': ceiling, 'base_proof': base,
+            'exploit_base_proof': exploit_base,
+            'evidence_refs': refs,
             'executed': executed, 'execution_evidence_refs': [f"#/{'final_state/' if isinstance(state.get('response_evidence'), list) else ''}response_evidence/{index}" for index, _row in execution_rows],
             'candidate_lifecycle_status': lifecycle_status,
             'validation': validation, 'validity_grade': None if valid else 0, 'provenance': provenance,
+            'participation': participation,
             'candidate': redact_secrets(candidate),
             'evidence': redact_secrets([_resolve(artifact, ref) for ref in refs])})
     from evaluation.scoring_evidence import automatic_components, component_pending_reasons
-    components, selection_evidence, output_reason = automatic_components(artifact, method, rows)
+    components, selection_evidence, output_reason = automatic_components(
+        artifact, method, rows, dependencies=dependencies)
+    participation_summary = method_causal_participation(
+        artifact, method, dependencies=dependencies, rows=rows, components=components)
     pending_reasons = component_pending_reasons(artifact, method, rows, components,
         selection_evidence, output_reason)
     from evaluation.research_metrics import scoring_policy, compute_run_metrics
+    canonical_policy = scoring_policy(artifact)
     metrics = compute_run_metrics(artifact, rubric_version=version, rows=rows, components=components)
-    policy = {**scoring_policy(artifact), 'rubric_version': version,
+    policy = {**canonical_policy, 'rubric_version': version,
               'declared_rubric_version': config.get('scoring_rubric_version')}
+    epoch_binding = build_epoch_binding(
+        artifact, policy=canonical_policy, source_sha256=source_sha256)
+    recorded_binding = recorded_epoch_binding(artifact, source_sha256=source_sha256)
+    prospective_study = _artifact_requires_prospective_binding(artifact)
+    epoch_binding_problems = (_binding_completeness_problem(epoch_binding)
+                              if prospective_study else [])
     component_refs = {
         'Smethod': [f'#/final_state/scoring_decisions/{i}' for i,d in enumerate(state.get('scoring_decisions', []))
             if d.get('dimension') == 'Smethod' and d.get('method') == method],
@@ -458,12 +962,18 @@ def review_queue(source: str | Path) -> dict:
         'historical_read_only': historical_read_only,
         'source_rubric_version': config.get('scoring_rubric_version', epoch.get('thesis_final')),
         'source_path': str(path.resolve()),
-        'source_sha256': sha256(raw).hexdigest(), 'run_id': artifact.get('run_id'),
+        'source_sha256': source_sha256, 'run_id': artifact.get('run_id'),
         'execution_id': artifact.get('execution_id'), 'selection': mode,
         'evaluator': redact_secrets(evaluator), 'method': method, 'candidates': rows,
         'components': components, 'component_evidence_refs': component_refs,
         'selection_evidence': selection_evidence, 'output_reason': output_reason,
         'component_pending_reasons': pending_reasons,
+        'causal_participation': participation_summary,
+        'epoch_binding': epoch_binding,
+        'recorded_epoch_binding': recorded_binding,
+        'epoch_sha256': epoch_binding['epoch_sha256'],
+        'prospective_study': prospective_study,
+        'epoch_binding_problems': epoch_binding_problems,
         'scoring_policy': policy,
         'prompt_identities': _prompt_identities(artifact),
         'scoring_rule_sha256': policy['scoring_rule_sha256'],
@@ -500,7 +1010,7 @@ def _validated_reviews(queue, decisions):
             # Methodology revision (owner-authorised 2026-11-06): the machine
             # proof already established for this candidate is a floor, not only a
             # ceiling. A lower review would contradict recorded evidence.
-            raise ValueError('Review grade is below the machine proof for this candidate')
+            raise _BelowMachineProofFloor(d['score'], base_proof, cid)
         if not identifier or identifier in seen or not all(isinstance(d.get(k), str) and d[k].strip()
             for k in ('reason', 'reviewer_id', 'review_version', 'timestamp')):
             raise ValueError('Missing review identity/reason/version/timestamp or duplicate decision')
@@ -652,17 +1162,157 @@ def load_review_decisions(source, *, queue=None, receipt_path=None, output_dir=N
         receipt = json.loads(path.read_bytes())
         if receipt.get('artifact_type') != 'thesis_score_receipt' or receipt.get('status') != 'final' or receipt.get('source_sha256') != queue['source_sha256']:
             raise ValueError('Saved receipt does not match the execution source')
+        validate_epoch_binding(receipt, queue)
         decisions = merge_review_decisions(decisions, receipt['review_history'])
     _validated_reviews(queue, decisions)
     return decisions
 
 
-def append_evaluator_decisions(history, additions, *, queue=None):
-    """Append evaluator decisions, dropping any that contradict the machine floor.
+def rejected_decisions_path(source, *, output_dir=None, queue=None):
+    """Append-only rejected-decision ledger path for one review epoch."""
+    source = Path(source)
+    if output_dir is None:
+        return source.parent / 'reviews' / f'{source.stem}.rejected-decisions.json'
+    queue = queue or review_queue(source)
+    return Path(output_dir) / f'{_review_identity(queue)}.rejected-decisions.json'
 
-    A grade below the candidate's machine proof cannot be recorded: the evidence
-    already establishes that proof. Such a grade leaves the candidate pending with
-    an explicit reason instead of being silently clamped.
+
+def _rejected_event_content(event):
+    """Content that must never change for one rejected-decision event ID.
+
+    ``recorded_at`` is the first-observation clock and may differ when the same
+    decision is reconstructed later.  ``content_sha256`` is derived from this
+    projection, so it is excluded from its own input.
+    """
+    return {key: value for key, value in event.items()
+            if key not in {'recorded_at', 'content_sha256'}}
+
+
+def _rejected_event_content_digest(event):
+    """Validate and return the canonical content digest for one event.
+
+    A caller that mutates a substantive field after constructing the event must
+    not be able to reuse its original ``content_sha256`` to look idempotent.
+    """
+    computed = _binding_digest(_rejected_event_content(event))
+    recorded = event.get('content_sha256')
+    if recorded is not None and recorded != computed:
+        raise ValueError('Cannot change a saved rejected-decision event: content digest mismatch')
+    return computed
+
+
+def rejected_decision_event(decision, floor, *, queue):
+    """Build one structured, append-only below-floor rejection event."""
+    candidate_id = decision.get('candidate_id')
+    row = next((r for r in queue.get('candidates') or []
+                if r.get('candidate_id') == candidate_id), {})
+    evaluator = queue.get('evaluator') if isinstance(queue.get('evaluator'), dict) else {}
+    provenance = ({'provider': evaluator.get('provider'), 'model': evaluator.get('model')}
+                  if decision.get('scoring_mode') == 'ai' and evaluator
+                  else {'reviewer_id': decision.get('reviewer_id'),
+                        'review_version': decision.get('review_version')})
+    identity = {key: decision.get(key) for key in (
+        'decision_id', 'candidate_id', 'source_sha256', 'rubric_version', 'score')}
+    identity.update({
+        'floor': floor,
+        'run_id': queue.get('run_id'),
+        'execution_id': queue.get('execution_id'),
+        'scoring_rule_sha256': queue.get('scoring_rule_sha256'),
+        'epoch_sha256': queue.get('epoch_sha256'),
+    })
+    event_id = 'rejected:' + _binding_digest(identity)[:32]
+    event = {
+        'event': REJECTED_DECISION_EVENT,
+        'event_id': event_id,
+        'recorded_at': (decision.get('timestamp')
+                        if isinstance(decision.get('timestamp'), str)
+                        else datetime.now(timezone.utc).isoformat()),
+        'decision_id': decision.get('decision_id'),
+        'candidate_id': candidate_id,
+        'method': row.get('method') if isinstance(row, dict) else None,
+        'scoring_mode': decision.get('scoring_mode'),
+        'reviewer_id': decision.get('reviewer_id'),
+        'review_version': decision.get('review_version'),
+        'run_id': queue.get('run_id'),
+        'execution_id': queue.get('execution_id'),
+        'source_sha256': decision.get('source_sha256') or queue.get('source_sha256'),
+        'rubric_version': decision.get('rubric_version') or queue.get('rubric_version'),
+        'scoring_rule_sha256': queue.get('scoring_rule_sha256'),
+        'attempted_score': decision.get('score'),
+        'floor': floor,
+        'reason': redact_secrets(decision.get('reason') or ''),
+        'rejection_reason': REJECTED_DECISION_REASON,
+        'evidence_refs': list(decision.get('evidence_refs') or []),
+        'evaluator_provenance': redact_secrets(provenance),
+        'epoch_sha256': queue.get('epoch_sha256'),
+    }
+    event['content_sha256'] = _binding_digest(_rejected_event_content(event))
+    return event
+
+
+def rejected_decision_events(history, additions, *, queue=None):
+    """Return rejection events for additions that contradict the machine floor."""
+    if queue is None:
+        return []
+    floors = {}
+    for row in queue.get('candidates') or []:
+        base = row.get('base_proof')
+        if type(base) is int:
+            floors[row.get('candidate_id')] = base
+    events = []
+    for decision in additions:
+        if not isinstance(decision, dict):
+            continue
+        floor = floors.get(decision.get('candidate_id'))
+        score = decision.get('score')
+        if floor is not None and isinstance(score, (int, float)) \
+                and not isinstance(score, bool) and score < floor:
+            events.append(rejected_decision_event(decision, floor, queue=queue))
+    return events
+
+
+def append_rejected_decisions(path, events, source):
+    """Merge rejection events without rewriting or removing prior events."""
+    path = Path(path)
+    _protect_source(path, source)
+    if not isinstance(events, list):
+        raise ValueError('Rejected decisions must be a JSON list')
+    existing = []
+    if path.exists():
+        existing = json.loads(path.read_bytes())
+        if not isinstance(existing, list):
+            raise ValueError('Saved rejected-decision ledger must be a JSON list')
+        if any(not isinstance(row, dict) or not isinstance(row.get('event_id'), str)
+               for row in existing):
+            raise ValueError('Saved rejected-decision ledger is malformed')
+    merged = list(existing)
+    by_id = {row['event_id']: row for row in merged}
+    for event in events:
+        if not isinstance(event, dict) or not isinstance(event.get('event_id'), str):
+            raise ValueError('Rejected decision event is malformed')
+        event_digest = _rejected_event_content_digest(event)
+        if event['event_id'] in by_id:
+            saved = by_id[event['event_id']]
+            # Retries may carry a different recording clock.  Compare the
+            # canonical substantive content instead, so replaying the same
+            # decision is idempotent while any changed identity/grade/proof
+            # still fails closed instead of rewriting the saved event.
+            if _rejected_event_content_digest(saved) != event_digest:
+                raise ValueError('Cannot change a saved rejected-decision event')
+            continue
+        merged.append(event)
+        by_id[event['event_id']] = event
+    if merged != existing:
+        _write_review_file(path, merged, source)
+    return merged
+
+
+def append_evaluator_decisions(history, additions, *, queue=None, rejected=None):
+    """Append evaluator decisions, auditing any that contradict the machine floor.
+
+    A grade below the candidate's machine proof cannot be accepted: the evidence
+    already establishes that proof. Such a grade leaves the candidate pending and
+    is retained as an append-only rejection event instead of being clamped.
     """
     floors = {}
     if queue is not None:
@@ -671,27 +1321,45 @@ def append_evaluator_decisions(history, additions, *, queue=None):
             if type(base) is int:
                 floors[row.get('candidate_id')] = base
     merged = list(history)
+    rejection_events = []
     for decision in additions:
         decision = dict(decision)
         floor = floors.get(decision.get('candidate_id'))
-        if floor is not None and type(decision.get('score')) is int and decision['score'] < floor:
+        score = decision.get('score')
+        if floor is not None and isinstance(score, (int, float)) \
+                and not isinstance(score, bool) and score < floor:
+            rejection_events.append(rejected_decision_event(decision, floor, queue=queue))
             continue
         previous = next((d for d in reversed(merged) if d['scoring_mode'] == decision['scoring_mode']
             and d['candidate_id'] == decision['candidate_id']), None)
         if previous:
             decision['supersedes'] = previous['decision_id']
         merged.append(decision)
+    if rejected is not None:
+        rejected.extend(rejection_events)
     return merged
 
 
-def save_evaluator_telemetry(source, evaluated, *, output_dir=None):
+def save_evaluator_telemetry(source, evaluated, *, output_dir=None, isolated_output=False):
     queue = review_queue(source)
     if queue.get('historical_read_only') or queue.get('rubric_version') != RUBRIC_VERSION:
         raise ValueError('Historical scoring identities are read-only')
     out = Path(output_dir) if output_dir else Path(source).parent / 'reviews'
     path = out / f'{_review_identity(queue)}.evaluator.json'
     _write_review_file(path, evaluated, source)
+    rejections = evaluated.get('rejected_decisions') if isinstance(evaluated, dict) else None
+    if rejections:
+        append_rejected_decisions(
+            rejected_decisions_path(
+                source, output_dir=out if isolated_output else None, queue=queue),
+            rejections, source)
     return path
+
+
+def _require_final_payload(payload, numerator):
+    """Integrity guard that also runs under optimized Python (unlike an assert)."""
+    if payload is None or numerator is None:
+        raise ValueError('Final thesis workflow has no complete payload numerator')
 
 
 def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=False,
@@ -708,9 +1376,23 @@ def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=Fals
         if (resolved_out == source_reviews or resolved_out in source_reviews.parents
                 or source_reviews in resolved_out.parents):
             raise ValueError('isolated review output must be separate from the source-side reviews tree')
-    decisions = merge_review_decisions(load_review_decisions(source, queue=queue,
+    loaded = load_review_decisions(source, queue=queue,
         output_dir=out if isolated_output else None,
-        include_source_ledger=include_source_ledger), decisions)
+        include_source_ledger=include_source_ledger)
+    decisions = merge_review_decisions(loaded, decisions)
+    rejection_path = rejected_decisions_path(
+        source, output_dir=out if isolated_output else None, queue=queue)
+    # Persist every newly submitted below-floor attempt before validation can
+    # fail the workflow.  This covers direct API calls, the CLI decision import
+    # and the TUI human submission; the evaluator path additionally records this
+    # in its telemetry.  Decisions already present in a saved ledger/receipt are
+    # historical context and are never re-audited as new attempts.
+    known_ids = {row.get('decision_id') for row in loaded if isinstance(row, dict)}
+    new_decisions = [row for row in decisions
+                     if isinstance(row, dict) and row.get('decision_id') not in known_ids]
+    rejection_events = rejected_decision_events(loaded, new_decisions, queue=queue)
+    if rejection_events:
+        append_rejected_decisions(rejection_path, rejection_events, source)
     latest = _validated_reviews(queue, decisions)
     modes = ('human', 'ai') if queue['selection'] == 'both' else (queue['selection'],)
     result = {'rubric_version': queue['rubric_version'], 'source_sha256': queue['source_sha256'],
@@ -718,6 +1400,10 @@ def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=Fals
         'generated_at': datetime.now(timezone.utc).isoformat(),
         **{k: queue[k] for k in ('execution_status', 'execution_reason', 'security_outcome', 'security_outcome_reason')},
         'artifact_type': 'thesis_review_status', 'config': queue['config'], 'method': queue['method'],
+        'receipt_contract': RECEIPT_CONTRACT,
+        'epoch_binding': queue['epoch_binding'],
+        'epoch_sha256': queue['epoch_sha256'],
+        'causal_participation': queue.get('causal_participation'),
         'scoring_rule_sha256': queue['scoring_rule_sha256'],
         'scoring_policy': queue.get('scoring_policy'),
         'prompt_identities': queue.get('prompt_identities') or [],
@@ -759,15 +1445,25 @@ def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=Fals
             'component_pending_reasons': pending, 'components': vector,
             'numerator': numerator, 'denominator': denominator,
             'candidate_grades': grades, 'Spayload_final': round(payload, 4) if payload is not None else None,
-            'Srun_final': None}
+            'Srun_final': None,
+            'exploit_participation': queue.get('causal_participation')}
         if reason:
             continue
-        assert payload is not None and numerator is not None
+        if queue.get('prospective_study'):
+            # A pending status remains readable, but no prospective final
+            # receipt is emitted without the frozen plan and complete source
+            # identity.  Missing runtime identity fails closed here.
+            _require_prospective_epoch_binding(
+                queue['epoch_binding'], context='prospective_epoch_binding_incomplete')
+        _require_final_payload(payload, numerator)
         receipt = {k: queue[k] for k in ('rubric_version', 'source_path', 'source_sha256', 'run_id',
             'execution_id', 'selection', 'method', 'config', 'stop_reason', 'metrics',
             'component_evidence_refs', 'scoring_rule_sha256',
             'execution_status', 'execution_reason', 'security_outcome', 'security_outcome_reason')}
         receipt.update({'artifact_type': 'thesis_score_receipt', 'scoring_mode': mode, 'status': 'final',
+            'receipt_contract': RECEIPT_CONTRACT,
+            'epoch_binding': queue['epoch_binding'], 'epoch_sha256': queue['epoch_sha256'],
+            'exploit_participation': queue.get('causal_participation'),
             'composite_score_status': f"thesis_final_{queue['rubric_version']}", 'thesis_scoring_status': 'final',
             'scoring_policy': queue.get('scoring_policy'),
             'prompt_identities': queue.get('prompt_identities') or [],
@@ -789,6 +1485,9 @@ def finalize_reviews(source, decisions, *, output_dir=None, isolated_output=Fals
         result['workflows'][mode].update(Spayload_final=receipt['Spayload_final'], Srun_final=receipt['Srun_final'],
             components=vector, numerator=numerator, denominator=denominator)
     _write_review_file(ledger, decisions, source)
+    rejected_events = json.loads(rejection_path.read_bytes()) if rejection_path.exists() else []
+    result['rejected_decisions_path'] = str(rejection_path.resolve())
+    result['rejected_decision_count'] = len(rejected_events) if isinstance(rejected_events, list) else 0
     _write_review_file(out / f'{identity}.review-status.json', result, source)
     return result
 
@@ -798,6 +1497,9 @@ def evaluate_queue(queue, evaluator, *, invoke=None, candidate_ids=None, expecte
     """Bounded independent evaluator; refusal/malformed/missing citations abstain."""
     if queue.get('historical_read_only') or queue.get('rubric_version') != RUBRIC_VERSION:
         raise ValueError('Historical scoring identities are read-only; no evaluator calls are permitted')
+    if queue.get('prospective_study'):
+        _require_prospective_epoch_binding(
+            queue.get('epoch_binding'), context='prospective_epoch_binding_incomplete')
     validate_scoring_config(queue['selection'], evaluator)
     source_sha256 = queue.get('source_sha256')
     if expected_source_sha256 is not None and expected_source_sha256 != source_sha256:
@@ -907,9 +1609,20 @@ def evaluate_queue(queue, evaluator, *, invoke=None, candidate_ids=None, expecte
                     'reviewer_id': f"{evaluator['provider']}/{evaluator['model']}",
                     'review_version': JUDGE_VERSION, 'timestamp': datetime.now(timezone.utc).isoformat(),
                     'score': parsed.get('score'), 'reason': parsed.get('reason'), 'evidence_refs': parsed.get('evidence_refs')}
-                _validated_reviews(queue, [decision])
+                try:
+                    _validated_reviews(queue, [decision])
+                except _BelowMachineProofFloor:
+                    # Preserve the rejected decision for audit; never clamp or
+                    # accept it. The candidate remains pending.
+                    result.setdefault('rejected_decisions', []).append(
+                        rejected_decision_event(decision, row['base_proof'], queue=queue))
+                    raise
                 result['decisions'].append(decision)
                 entry['status'] = 'accepted'
+            except _BelowMachineProofFloor as exc:
+                entry.update(status='rejected', error_type=type(exc).__name__,
+                    rejection_reason=REJECTED_DECISION_REASON,
+                    attempted_score=exc.attempted_score, floor=exc.floor)
             except Exception as exc:
                 entry.update(status='abstained', error_type=type(exc).__name__)
             result['telemetry'].append(entry)
@@ -927,12 +1640,14 @@ REPEAT_IDENTITY_KEYS = frozenset({
 })
 
 
-def _comparison_fingerprint(record):
+def _comparison_fingerprint(record, *, include_epoch=True):
     """Group by oracle protocol settings; retain per-execution proof in receipts.
 
     Repeat identity (repeat index, matrix coordinate index) is excluded: repeats
     are the aggregation unit, not a compatibility boundary. It is still reported
-    per group so repeat coverage stays visible.
+    per group so repeat coverage stays visible. New receipts also carry their
+    explicit repeat-invariant epoch key; historical-unbound records group under a
+    constant marker and are never mixed with a bound epoch.
     """
     from tesis.artifact_repository import config_fingerprint
     config = dict(record['config'])
@@ -948,10 +1663,17 @@ def _comparison_fingerprint(record):
             # Collectors append candidate/route-specific sources alongside the
             # frozen protocol. Their IDs and documents describe observations.
             if 'protocol_source_sha256' not in source['document']]
-    return config_fingerprint({**config, 'assessed_method': record['method'],
+    payload = {**config, 'assessed_method': record['method'],
         'scoring_rule_sha256': record['scoring_rule_sha256'],
         'prompt_identities': record.get('prompt_identities') or [],
-        'scoring_policy': record.get('scoring_policy') or {}})
+        'scoring_policy': record.get('scoring_policy') or {}}
+    if include_epoch:
+        epoch = record.get('epoch_sha256')
+        if epoch is None:
+            binding = record.get('epoch_binding')
+            epoch = binding.get('epoch_sha256') if isinstance(binding, dict) else None
+        payload['epoch_sha256'] = epoch or 'historical_unbound'
+    return config_fingerprint(payload)
 
 
 def receipt_compatibility_key(receipt):
@@ -994,9 +1716,11 @@ def pair_compatibility_components(receipt):
     axis. Grader mode is included and remains a separate analysis key.
     """
     policy = receipt.get('scoring_policy') if isinstance(receipt.get('scoring_policy'), dict) else {}
+    binding = receipt.get('epoch_binding') if isinstance(receipt.get('epoch_binding'), dict) else {}
     return {
         'rubric_version': receipt.get('rubric_version'),
         'scoring_mode': receipt.get('scoring_mode'),
+        'epoch_sha256': receipt.get('epoch_sha256') or binding.get('epoch_sha256'),
         'metrics_epoch': receipt.get('metrics_epoch'),
         'scoring_rule_sha256': receipt.get('scoring_rule_sha256'),
         'scoring_policy': {key: policy.get(key) for key in (
@@ -1079,12 +1803,19 @@ def _selection_repeat_summaries(records):
 
 
 def compare_receipts(paths, *, planned_repeats=None):
-    """Aggregate repeats only within identical frozen settings/grader/rubric."""
+    """Aggregate repeats only within identical frozen settings/grader/rubric/epoch."""
     groups, pending = {}, []
     all_records = []
     versions, profiles = set(), set()
+    epochs = {}
     for path in paths:
         receipt = json.loads(Path(path).read_bytes())
+        binding = _validate_receipt_binding_integrity(receipt)
+        if binding is not None and receipt.get('artifact_type') == 'thesis_score_receipt' \
+                and _binding_claims_prospective(binding):
+            _require_prospective_epoch_binding(
+                binding, context='receipt_epoch_identity_incomplete')
+        epoch_key = binding['epoch_sha256'] if binding else None
         all_records.append(receipt)
         versions.add(receipt.get('rubric_version'))
         profiles.add((receipt.get('config', {}).get('scoring_profile') or {}).get('sha256'))
@@ -1100,6 +1831,11 @@ def compare_receipts(paths, *, planned_repeats=None):
             raise ValueError('Receipt composite does not recompute')
         latest_reviews = {d['candidate_id']: d for d in receipt['review_history']}
         graders = tuple(sorted({(d['reviewer_id'], d['review_version']) for d in latest_reviews.values()}))
+        cell_key = (receipt['rubric_version'], receipt['scoring_mode'], graders,
+                    _comparison_fingerprint(receipt, include_epoch=False))
+        if cell_key in epochs and epochs[cell_key] != epoch_key:
+            raise ValueError('Cannot compare receipts from different scoring epochs')
+        epochs[cell_key] = epoch_key
         key = (receipt['rubric_version'], receipt['scoring_mode'], graders, _comparison_fingerprint(receipt))
         group = groups.setdefault(key, [])
         if any(r['source_sha256'] == receipt['source_sha256'] for r in group):
@@ -1244,11 +1980,19 @@ def main(argv=None):
             write_json_report(args.template, queue)
         if args.isolated_ledger and not args.output_dir:
             parser.error('--isolated-ledger requires --output-dir')
+        isolated = bool(args.candidate_ids) or args.isolated_ledger
+        rejection_dir = args.output_dir if isolated else None
         decisions = load_review_decisions(args.source, queue=queue,
             output_dir=args.output_dir,
             include_source_ledger=not args.isolated_ledger)
         if args.decisions:
-            decisions = merge_review_decisions(decisions, json.loads(args.decisions.read_bytes()))
+            additions = json.loads(args.decisions.read_bytes())
+            external_rejections = rejected_decision_events(decisions, additions, queue=queue)
+            if external_rejections:
+                append_rejected_decisions(rejected_decisions_path(
+                    args.source, output_dir=rejection_dir, queue=queue),
+                    external_rejections, args.source)
+            decisions = merge_review_decisions(decisions, additions)
         _validated_reviews(queue, decisions)
         evaluated = None
         if args.evaluate:
@@ -1258,10 +2002,17 @@ def main(argv=None):
                 candidate_ids=args.candidate_ids,
                 expected_source_sha256=args.expected_source_sha256,
                 max_tokens_override=args.max_tokens_override)
-            decisions = append_evaluator_decisions(decisions, evaluated['decisions'], queue=queue)
-            save_evaluator_telemetry(args.source, evaluated, output_dir=args.output_dir)
+            rejections = list(evaluated.get('rejected_decisions') or [])
+            decisions = append_evaluator_decisions(
+                decisions, evaluated['decisions'], queue=queue, rejected=rejections)
+            if rejections:
+                append_rejected_decisions(rejected_decisions_path(
+                    args.source, output_dir=rejection_dir, queue=queue),
+                    rejections, args.source)
+            save_evaluator_telemetry(args.source, evaluated, output_dir=args.output_dir,
+                isolated_output=isolated)
         result = finalize_reviews(args.source, decisions, output_dir=args.output_dir,
-            isolated_output=bool(args.candidate_ids) or args.isolated_ledger,
+            isolated_output=isolated,
             review_runtime=evaluated.get('evaluator_runtime') if evaluated else None,
             include_source_ledger=not args.isolated_ledger)
         result['evaluator_provider_calls'] = len(evaluated['telemetry']) if evaluated else 0

@@ -21,7 +21,15 @@ from foundation.session_manager import (
     session_fingerprint,
 )
 from foundation.http_client import http_accounted
-from foundation.verifier import fixture_attestation_valid
+from foundation.verifier import (
+    PERMISSION_CONTROL_SEMANTICS,
+    fixture_attestation_valid,
+    permission_candidate_outcome_problem,
+    permission_control_outcome,
+    permission_control_outcome_problem,
+    permission_same_origin,
+    permission_url_is_login,
+)
 
 
 _AC_METHODS = {"ac_idor", "ac_vertical_escalation", "ac_force_browse"}
@@ -33,6 +41,28 @@ logger = logging.getLogger(__name__)
 
 def _body_hash(response) -> str:
     return sha256(str(getattr(response, "text", "")).encode()).hexdigest()
+
+
+def _final_url(response) -> str:
+    return str(getattr(response, "url", "") or "")
+
+
+def _control_outcome(
+    method: str,
+    response,
+    *,
+    resource_visible: bool,
+    target: str,
+    protocol: dict | None = None,
+) -> dict:
+    """Classify one control response; error pages are never denials."""
+    return permission_control_outcome(
+        status_code=getattr(response, "status_code", None),
+        final_url=_final_url(response),
+        target=target,
+        resource_visible=bool(resource_visible),
+        denial_observed=_denial_observed(method, response),
+    )
 
 
 def _protocol_source(sources: list[dict]) -> dict | None:
@@ -149,7 +179,8 @@ def _candidate_session(target: str, level: str, row: dict, raw_state: dict):
 
 def _control_record(name: str, principal: str, expected_principal: str, session,
                     initial: str | None, object_id: str, action: str,
-                    expected_allowed: bool, observed_allowed: bool, response) -> dict:
+                    expected_allowed: bool, observed_allowed: bool, response,
+                    *, security_level: str, request_path: str, outcome: dict) -> dict:
     return {
         "control": name,
         "principal_id": principal,
@@ -158,11 +189,18 @@ def _control_record(name: str, principal: str, expected_principal: str, session,
         "initial_session_fingerprint": initial or session_fingerprint(session),
         "object_id": object_id,
         "action": action,
-        "status_code": int(response.status_code),
+        "request_path": request_path,
+        "security_level": str(security_level),
+        "status_code": outcome["status_code"],
+        "final_url": outcome["final_url"],
+        "control_outcome": outcome["control_outcome"],
+        "denial_kind": outcome["denial_kind"],
+        "interpretable": outcome["interpretable"],
         "response_sha256": _body_hash(response),
         "expected_allowed": expected_allowed,
         "observed_allowed": observed_allowed,
         "expected_confirmed": False,
+        "observed_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -205,34 +243,53 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
 
     sessions = []
     controls: list[dict] = []
+    level = str(config.get("security_level") or "low")
     document = {
         "fixture_id": config["fixture_id"], "protocol_version": config["protocol_version"],
         "oracle_protocol": protocol, "protocol_source_sha256": protocol_source["sha256"],
+        "control_semantics": PERMISSION_CONTROL_SEMANTICS,
         "policy_evidence": {}, "admin_principal_id": "admin", "controls": [],
         "candidate_replay": {}, "attestations": [], "status": "pending",
         "scope_outcome": "pending",
     }
     try:
-        admin, admin_principal, admin_initial = open_configured_principal_session(target, config.get("security_level"))
+        admin, admin_principal, admin_initial = open_configured_principal_session(target, level)
         sessions.append(admin)
         policy_response = admin.get("/vulnerabilities/authbypass/")
         policy_text = BeautifulSoup(policy_response.text, "html.parser").get_text(" ", strip=True)
-        policy_ok = policy_response.status_code == 200 and _ADMIN_ONLY_POLICY in policy_text
+        policy_ok = (
+            policy_response.status_code == 200
+            and _ADMIN_ONLY_POLICY in policy_text
+            and permission_same_origin(_final_url(policy_response), target)
+            and not permission_url_is_login(_final_url(policy_response))
+        )
         document["policy_evidence"] = {
             "endpoint": "/vulnerabilities/authbypass/", "status_code": int(policy_response.status_code),
             "response_sha256": _body_hash(policy_response), "admin_only_marker_observed": policy_ok,
+            "final_url": _final_url(policy_response), "security_level": level,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
         }
         allowed_response, admin_allowed = _request(admin, method, descriptor, protocol)
+        admin_outcome = _control_outcome(
+            method, allowed_response, resource_visible=admin_allowed,
+            target=target, protocol=protocol)
         controls.append(_control_record("admin_allowed", admin_principal, "admin", admin,
-            admin_initial, object_id, action, True, admin_allowed, allowed_response))
+            admin_initial, object_id, action, True, admin_allowed, allowed_response,
+            security_level=level, request_path=path, outcome=admin_outcome))
 
         candidate_session, candidate_principal, candidate_initial = _candidate_session(
-            target, config.get("security_level", "low"), row, raw_state)
+            target, level, row, raw_state)
         if candidate_session is None:
             raise ValueError("Candidate source material is not bound to its source evidence")
         sessions.append(candidate_session)
         candidate_response, candidate_allowed = _request(candidate_session, method, descriptor, protocol)
-        candidate_denied = _denial_observed(method, candidate_response)
+        candidate_outcome = _control_outcome(
+            method, candidate_response, resource_visible=candidate_allowed,
+            target=target, protocol=protocol)
+        candidate_denied = (
+            candidate_outcome["control_outcome"] == "denied"
+            and candidate_outcome["denial_kind"] == "endpoint_denied"
+        )
         replay = {
             "run_id": artifact["run_id"], "execution_id": artifact["execution_id"],
             "fixture_id": config["fixture_id"], "protocol_version": config["protocol_version"],
@@ -240,12 +297,18 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
             "evidence_id": row["evidence_id"], "original_response_sha256": row["response_sha256"],
             "principal_id": candidate_principal, "object_id": object_id, "action": action,
             "payload": row["payload"], "endpoint": row["endpoint"],
+            "request_path": path, "security_level": level,
             "session_fingerprint": session_fingerprint(candidate_session),
             "initial_session_fingerprint": candidate_initial,
-            "status_code": int(candidate_response.status_code),
+            "status_code": candidate_outcome["status_code"],
+            "final_url": candidate_outcome["final_url"],
+            "control_outcome": candidate_outcome["control_outcome"],
+            "denial_kind": candidate_outcome["denial_kind"],
+            "interpretable": candidate_outcome["interpretable"],
             "response_sha256": _body_hash(candidate_response),
             "expected_allowed": False, "observed_allowed": candidate_allowed,
             "denial_observed": candidate_denied,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
         }
         document["candidate_replay"] = replay
 
@@ -259,20 +322,47 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
         # unauthenticated client cannot read the object, which does not depend on
         # the level, so the read proceeds with the level cookie already applied by
         # the session and the limitation is recorded on the control.
-        security_level_persisted = True
+        security_level_persisted = False
         try:
-            anonymous.set_security_level(config.get("security_level", "low"))
+            anonymous.set_security_level(level)
         except (RuntimeError, ValueError) as exc:
-            security_level_persisted = False
             logger.debug("anonymous control could not persist security level: %s", exc)
+        try:
+            observed_anonymous_level = anonymous.observed_security_level()
+        except Exception:  # optional diagnostic; control interpretation stays fail-closed
+            observed_anonymous_level = None
+        security_level_persisted = observed_anonymous_level == level
+        security_cookie = getattr(getattr(anonymous, "http", None), "cookies", {}).get("security")
         denied_response, anonymous_allowed = _request(anonymous, method, descriptor, protocol)
+        anonymous_outcome = _control_outcome(
+            method, denied_response, resource_visible=anonymous_allowed,
+            target=target, protocol=protocol)
+        anonymous_denied = anonymous_outcome["control_outcome"] in {
+            "denied", "authentication_redirect"} and anonymous_outcome["denial_kind"] in {
+            "endpoint_denied", "authentication_redirect"}
         controls.append({**_control_record("anonymous_denied", "anonymous", "anonymous", anonymous,
-            anonymous_initial, object_id, action, False, anonymous_allowed, denied_response),
-            "security_level_persisted": security_level_persisted})
-        scope_outcome = "broad_exposure" if anonymous_allowed else "candidate_specific"
+            anonymous_initial, object_id, action, False, anonymous_allowed, denied_response,
+            security_level=level, request_path=path, outcome=anonymous_outcome),
+            "security_level_persisted": security_level_persisted,
+            "security_level_binding": (
+                str(security_cookie).strip().lower()
+                if isinstance(security_cookie, str) else None
+            )})
+        if anonymous_allowed:
+            scope_outcome = "broad_exposure"
+        elif anonymous_denied:
+            scope_outcome = "candidate_specific"
+        else:
+            scope_outcome = "pending"
         controls[-1]["expected_confirmed"] = anonymous_allowed
         controls = [{**control, "fixture_id": config["fixture_id"],
             "protocol_version": config["protocol_version"]} for control in controls]
+        inconsistent = next((control for control in controls
+            if permission_control_outcome_problem(control, target=target)), None)
+        if inconsistent is not None:
+            document["controls"] = controls
+            document["reason"] = "control_outcome_inconsistent"
+            return document
         document["controls"] = controls
         document["scope_outcome"] = scope_outcome
         replay["scope_outcome"] = scope_outcome
@@ -283,8 +373,18 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
         if not policy_ok:
             document["reason"] = "admin_only_policy_not_observed"
             return document
-        if candidate_allowed is not row.get("signal_detected"):
-            document["reason"] = "candidate_control_outcome_disagrees"
+        if admin_outcome["control_outcome"] != "allowed":
+            document["reason"] = "admin_positive_reference_not_observed"
+            return document
+        if row.get("signal_detected") is True:
+            if candidate_outcome["control_outcome"] != "allowed":
+                document["reason"] = "candidate_control_outcome_disagrees"
+                return document
+        elif not candidate_denied:
+            document["reason"] = "candidate_denial_not_interpretable"
+            return document
+        if not anonymous_allowed and not anonymous_denied:
+            document["reason"] = "anonymous_control_uninterpretable"
             return document
         negative = row.get("signal_detected") is False and candidate_denied
         if not admin_allowed or (not candidate_allowed and not negative) or (
@@ -296,6 +396,7 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
         attestation = {
             "kind": "permission", "run_id": artifact["run_id"], "execution_id": artifact["execution_id"],
             "fixture_id": config["fixture_id"], "protocol_version": config["protocol_version"],
+            "control_semantics": PERMISSION_CONTROL_SEMANTICS,
             "method": method, "visit_id": row["visit_id"], "candidate_id": row["candidate_id"],
             "evidence_id": row["evidence_id"], "response_sha256": row["response_sha256"],
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -303,12 +404,22 @@ def _collect_candidate(artifact: dict, raw_state: dict, protocol_source: dict, r
             "session_fingerprint": row["session_fingerprint"],
             "initial_session_fingerprint": row["initial_session_fingerprint"],
             "object_id": object_id, "action": action,
+            "security_level": level, "request_path": path,
+            "final_url": candidate_outcome["final_url"],
+            "control_outcome": candidate_outcome["control_outcome"],
+            "denial_kind": candidate_outcome["denial_kind"],
+            "protocol_source_sha256": protocol_source["sha256"],
+            "observed_at": replay["observed_at"],
             "expected_allowed": False, "observed_allowed": not negative,
             "outcome": "not_confirmed" if negative else "confirmed", "denial_observed": candidate_denied,
             "scope_outcome": scope_outcome,
         }
         field = "negative_attestations" if negative else "attestations"
         document[field] = [attestation]
+        if (permission_control_outcome_problem(replay, target=target)
+                or permission_candidate_outcome_problem(attestation, target=target)):
+            document["reason"] = "candidate_outcome_inconsistent"
+            return document
         if fixture_attestation_valid(attestation, row, document, artifact, outcome=attestation["outcome"]):
             document["status"] = attestation["outcome"]
         else:

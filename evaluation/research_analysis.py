@@ -47,6 +47,8 @@ from evaluation.observer_reviews import discover_reviews
 from evaluation.research_metrics import RESEARCH_METRIC_NAMES
 from evaluation.scoring_evidence import evidence_hash
 from evaluation.thesis_scoring import (
+    EPOCH_BINDING_VERSION,
+    RECEIPT_CONTRACT,
     compare_receipts,
     pair_compatibility_key,
     pair_compatibility_mismatches,
@@ -57,10 +59,493 @@ ANALYSIS_SCHEMA_VERSION = 'study-analysis'
 SUPPORTED_PLAN_VERSIONS = ('study-plan',)
 PRIMARY_CONDITIONS: tuple[str, ...] = ("linear_hybrid", "akg_guided_hybrid")
 COMPONENT_NAMES = ("Smethod", "Spayload", "Sexploit", "Schain", "Soutput", "Srun_final")
+FAMILY_OUTCOMES = ("Smethod", "Spayload", "Sexploit", "Schain", "Soutput", "Srun")
+OUTCOME_LABELS = {name: ("Srun" if name == "Srun_final" else name) for name in COMPONENT_NAMES}
 BOOTSTRAP_RESAMPLES = 2000
 BOOTSTRAP_SEED = 20261028
 DIFFERENCE_DIRECTION = "linear_hybrid_minus_akg_guided_hybrid"
 STUDY_DESIGN_VERSION = 'study-design'
+
+#: Explicit receipt epoch identity emitted by the scorer interface.  The
+#: repeat-invariant population key is ``epoch_sha256``; ``source_execution_sha256``
+#: is per receipt and must never be used to compare repeats.  Historical receipts
+#: without this block remain readable within their own recorded epoch, but an
+#: aggregation row may not mix bound and unbound receipts, and no reader may pool
+#: different explicit epoch keys.
+EPOCH_BINDING_KEY = 'epoch_binding'
+EPOCH_BINDING_REQUIRED = (
+    'epoch_sha256', 'scoring_epoch_id', 'source_execution_sha256',
+)
+EPOCH_BINDING_OPTIONAL = (
+    'experiment_epoch_id', 'plan_sha256', 'config_sha256', 'fixture_id',
+    'protocol_version', 'oracle_sha256', 'scoring_rule_sha256',
+    'binding_sha256', 'binding_version',
+)
+EPOCH_BINDING_EXPLICIT = 'explicit'
+EPOCH_BINDING_LEGACY = 'legacy_unbound'
+EPOCH_BINDING_INVALID = 'invalid'
+
+
+def _hex_digest(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(
+        character in '0123456789abcdefABCDEF' for character in value
+    )
+
+
+def _embedded_research_design(plan: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The source-bound design declaration embedded in a frozen plan."""
+    research_config = plan.get('research_config')
+    if isinstance(research_config, Mapping):
+        declaration = research_config.get('declaration')
+        if isinstance(declaration, Mapping):
+            design = declaration.get('design')
+            if isinstance(design, Mapping):
+                return design
+    analysis_declaration = plan.get('analysis_declaration')
+    if isinstance(analysis_declaration, Mapping):
+        design = analysis_declaration.get('design')
+        if isinstance(design, Mapping):
+            return design
+        if isinstance(analysis_declaration.get('family'), Mapping):
+            return analysis_declaration
+    design = plan.get('design')
+    return design if isinstance(design, Mapping) else None
+
+
+def plan_requires_receipt_epoch_binding(plan: Mapping[str, Any]) -> bool:
+    """Whether a plan declares that every receipt must carry explicit epoch identity.
+
+    The marker is prospective: historical plans without it remain readable in
+    their recorded read-only context, while a prospective plan can never accept
+    an unbound or plan-less receipt.  A top-level boolean is the canonical form;
+    a ``receipt_epoch_binding`` object is accepted as the equivalent structured
+    declaration so a freeze can carry plan/config/fixture identities together.
+    A plan that embeds a six-outcome condition-contrast declaration is also
+    prospective: the declaration is only meaningful for a frozen plan whose
+    receipts must bind it.
+    """
+    if plan.get('epoch_binding_required') is True:
+        return True
+    contract = plan.get('receipt_epoch_binding')
+    if isinstance(contract, Mapping) and contract.get('required') is True:
+        return True
+    design = _embedded_research_design(plan)
+    return isinstance(design, Mapping) and isinstance(
+        design.get('condition_contrast_family'), Mapping
+    )
+
+
+def _epoch_binding(document: Mapping[str, Any]) -> dict[str, Any]:
+    """Read one receipt's explicit epoch binding without inventing identity."""
+    raw = document.get(EPOCH_BINDING_KEY)
+    contract = document.get('receipt_contract')
+    if raw is None and contract is None:
+        return {'status': EPOCH_BINDING_LEGACY, 'binding': None, 'problems': []}
+    problems = []
+    if contract != RECEIPT_CONTRACT:
+        problems.append('receipt_contract_missing_or_unknown')
+    if not isinstance(raw, Mapping):
+        return {
+            'status': EPOCH_BINDING_INVALID, 'binding': None,
+            'problems': [*problems, 'epoch_binding_not_an_object'],
+        }
+    if raw.get('binding_version') != EPOCH_BINDING_VERSION:
+        problems.append('epoch_binding_version_unknown')
+    binding: dict[str, Any] = {}
+    for field in EPOCH_BINDING_REQUIRED:
+        value = raw.get(field)
+        if not isinstance(value, str) or not value.strip():
+            problems.append(f'{field}_missing')
+        else:
+            binding[field] = value.strip()
+    for field in EPOCH_BINDING_OPTIONAL:
+        value = raw.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value.strip():
+            problems.append(f'{field}_invalid')
+        else:
+            binding[field] = value.strip()
+    for field in ('epoch_sha256', 'source_execution_sha256', 'binding_sha256',
+                  'plan_sha256', 'config_sha256', 'oracle_sha256',
+                  'scoring_rule_sha256', 'scoring_epoch_id'):
+        if field in binding and not _hex_digest(binding[field]):
+            problems.append(f'{field}_invalid')
+    if 'scoring_rule_sha256' in binding and 'scoring_epoch_id' in binding \
+            and binding['scoring_rule_sha256'] != binding['scoring_epoch_id']:
+        problems.append('scoring_epoch_rule_mismatch')
+    return {
+        'status': EPOCH_BINDING_INVALID if problems else EPOCH_BINDING_EXPLICIT,
+        'binding': binding,
+        'problems': problems,
+    }
+
+
+def _epoch_binding_problem(document: Mapping[str, Any]) -> str | None:
+    info = _epoch_binding(document)
+    if info['status'] == EPOCH_BINDING_INVALID:
+        return 'receipt_epoch_binding_invalid:' + ';'.join(info['problems'])
+    return None
+
+
+def _epoch_population_problem(documents: Iterable[Mapping[str, Any]]) -> str | None:
+    """Refuse mixed or conflicting receipt epochs in one aggregation group."""
+    infos = [_epoch_binding(document) for document in documents]
+    if not infos:
+        return None
+    invalid = [info for info in infos if info['status'] == EPOCH_BINDING_INVALID]
+    if invalid:
+        return 'receipt_epoch_binding_invalid'
+    statuses = {info['status'] for info in infos}
+    if len(statuses) > 1:
+        return 'receipt_epoch_binding_mixed'
+    explicit = [info['binding'] for info in infos if info['status'] == EPOCH_BINDING_EXPLICIT]
+    if explicit and len({value.get('epoch_sha256') for value in explicit}) > 1:
+        return 'receipt_epoch_binding_mismatch'
+    if explicit and len({
+        value.get('plan_sha256') for value in explicit if value.get('plan_sha256')
+    }) > 1:
+        return 'receipt_plan_identity_mismatch'
+    if explicit and any(not value.get('plan_sha256') for value in explicit):
+        return 'receipt_plan_identity_missing'
+    return None
+
+
+def refuse_epoch_pooling(documents: Iterable[Mapping[str, Any]]) -> str:
+    """Return one epoch id or refuse to aggregate across declared epochs.
+
+    Analysis/audit documents must name their epoch explicitly.  Aggregating
+    compatible cells is allowed inside one epoch; a caller that supplies more
+    than one epoch identity is refused before any statistic is computed.
+    """
+    epochs: dict[str, int] = Counter()
+    for index, document in enumerate(documents):
+        if not isinstance(document, Mapping):
+            raise ValueError(f'Aggregation document {index} is not an object')
+        epoch = document.get('epoch_id')
+        if not isinstance(epoch, str) or not epoch.strip():
+            raise ValueError(
+                f'Aggregation document {index} does not declare epoch_id; '
+                'unidentified populations cannot be pooled'
+            )
+        epochs[epoch.strip()] += 1
+    if not epochs:
+        raise ValueError('Aggregation requires at least one declared epoch')
+    if len(epochs) > 1:
+        raise ValueError(f'Refusing to pool declared epochs: {dict(sorted(epochs.items()))}')
+    return next(iter(epochs))
+
+
+def _receipt_epoch_problem(
+    document: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    entry: Any,
+    constraints: Mapping[str, Any],
+) -> tuple[str | None, dict[str, Any]]:
+    """Compare one receipt's explicit binding with the declared plan/execution.
+
+    A historical unbound receipt is not an error by itself: it remains readable
+    for its recorded epoch.  It cannot share a population with bound receipts,
+    and it can never be treated as a receipt for the current plan.
+    """
+    prospective = plan_requires_receipt_epoch_binding(plan)
+    info = _epoch_binding(document)
+    if info['status'] == EPOCH_BINDING_LEGACY:
+        if prospective:
+            return 'receipt_epoch_binding_missing', info
+        return None, info
+    if info['status'] == EPOCH_BINDING_INVALID:
+        return 'receipt_epoch_binding_invalid:' + ';'.join(info['problems']), info
+    binding = info['binding'] or {}
+    plan_epoch = plan.get('epoch_id')
+    receipt_epoch = binding.get('experiment_epoch_id')
+    plan_sha = plan.get('plan_sha256')
+    bound_plan = binding.get('plan_sha256')
+    if prospective:
+        if not isinstance(plan_sha, str) or not plan_sha.strip():
+            return 'receipt_plan_identity_unavailable_for_prospective_plan', info
+        if not isinstance(bound_plan, str) or not bound_plan.strip():
+            return 'receipt_plan_identity_missing', info
+        if bound_plan != plan_sha:
+            return 'receipt_plan_identity_mismatch', info
+    else:
+        # Any bound receipt claims a prospective plan identity, even when the
+        # plan lacks the explicit prospective marker.  The reader must not let
+        # a numeric-looking binding stand in for a missing/mismatched plan.
+        if not isinstance(plan_sha, str) or not plan_sha.strip():
+            return 'receipt_plan_identity_unavailable_for_bound_receipt', info
+        if not isinstance(bound_plan, str) or not bound_plan.strip():
+            return 'receipt_plan_identity_missing', info
+        if bound_plan != plan_sha:
+            return 'receipt_plan_identity_mismatch', info
+    if not isinstance(plan_epoch, str) or not plan_epoch.strip():
+        return 'receipt_experiment_epoch_identity_unavailable', info
+    if receipt_epoch != plan_epoch:
+        return 'receipt_experiment_epoch_mismatch', info
+    source_sha = entry.source.get('sha256') if isinstance(entry.source, Mapping) else None
+    bound_execution = binding.get('source_execution_sha256')
+    receipt_source = document.get('source_sha256')
+    if source_sha and bound_execution != source_sha:
+        return 'receipt_source_execution_mismatch', info
+    if bound_execution and receipt_source and bound_execution != receipt_source:
+        return 'receipt_source_execution_mismatch', info
+    if source_sha and receipt_source and source_sha != receipt_source:
+        return 'receipt_source_execution_mismatch', info
+    recorded_rule = document.get('scoring_rule_sha256')
+    if binding.get('scoring_rule_sha256') and recorded_rule \
+            and binding['scoring_rule_sha256'] != recorded_rule:
+        return 'receipt_scoring_rule_identity_mismatch', info
+    if binding.get('scoring_epoch_id') and recorded_rule \
+            and binding['scoring_epoch_id'] != recorded_rule:
+        return 'receipt_scoring_epoch_identity_mismatch', info
+    for field, constraint in (
+        ('fixture_id', constraints.get('fixture_id')),
+        ('protocol_version', constraints.get('protocol_version')),
+    ):
+        if constraint and binding.get(field) and binding[field] != constraint:
+            return f'receipt_epoch_{field}_mismatch', info
+    return None, info
+
+
+def _canonical_sha256(value: Any) -> str:
+    import hashlib
+    payload = json.dumps(
+        value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, default=str
+    ).encode('utf-8')
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _file_sha256(path: Path) -> str | None:
+    import hashlib
+    try:
+        digest = hashlib.sha256()
+        with open(path, 'rb') as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b''):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def _parse_timestamp(value: Any) -> float | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        from datetime import datetime
+        parsed = datetime.fromisoformat(value.strip().replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.timestamp()
+
+
+def _earliest_receipt_timestamp(
+    observations: Iterable[Mapping[str, Any]],
+) -> tuple[float | None, str | None, int]:
+    values = []
+    document_count = 0
+    for observation in observations:
+        for _mode, binding in (observation.get('documents') or {}).items():
+            document = binding[1] if isinstance(binding, (tuple, list)) and len(binding) > 1 else None
+            if isinstance(document, Mapping):
+                document_count += 1
+                timestamp = _parse_timestamp(document.get('generated_at'))
+                if timestamp is not None:
+                    values.append((timestamp, document.get('generated_at')))
+    if not values:
+        return None, None, document_count
+    timestamp, text = min(values, key=lambda row: row[0])
+    return timestamp, text, document_count
+
+
+def _implemented_family() -> dict[str, Any]:
+    return {
+        'unit': 'model x surface x level condition-contrast row',
+        'contrast': 'linear_hybrid vs akg_guided_hybrid',
+        'outcomes': list(FAMILY_OUTCOMES),
+        'family_size': len(FAMILY_OUTCOMES),
+        'adjustment': 'Holm-Bonferroni step-down',
+        'alpha': 0.05,
+        'raw_p_field': 'p_value_raw',
+        'adjusted_p_field': 'p_value_holm',
+        'missing_outcome_policy': (
+            'A missing or untestable outcome keeps its null value and does not reduce '
+            'the declared six-outcome family. Available p-values remain adjusted against '
+            'family size six.'
+        ),
+        'supplementary_families': [
+            {'name': 'paired_wilcoxon', 'role': 'supplementary'},
+            {'name': 'bootstrap_interval', 'role': 'supplementary'},
+        ],
+    }
+
+
+def _family_from_design(design: Mapping[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """Parse an exact, source-bound family declaration; never arbitrary text."""
+    from evaluation.research_plan import (
+        CONDITION_CONTRAST_MISSING_POLICY,
+        CONDITION_CONTRAST_MULTIPLICITY,
+        CONDITION_CONTRAST_OUTCOMES,
+        validate_condition_contrast_declaration,
+    )
+    family = design.get('condition_contrast_family')
+    if not isinstance(family, Mapping):
+        return {}, 'condition_contrast_family_missing'
+    try:
+        validated = validate_condition_contrast_declaration(design)
+    except ValueError as exc:
+        return {}, f'condition_contrast_family_invalid:{exc}'
+    if list(validated.get('outcomes') or []) != list(CONDITION_CONTRAST_OUTCOMES):
+        return {}, 'condition_contrast_family_outcomes_mismatch'
+    if int(validated.get('family_size') or 0) != len(FAMILY_OUTCOMES):
+        return {}, 'condition_contrast_family_size_mismatch'
+    declared = {
+        'unit': validated.get('stratum'),
+        'contrast': validated.get('contrast'),
+        'outcomes': list(CONDITION_CONTRAST_OUTCOMES),
+        'family_size': int(validated.get('family_size') or len(FAMILY_OUTCOMES)),
+        'adjustment': 'Holm-Bonferroni step-down',
+        'alpha': 0.05,
+        'raw_p_field': 'p_value_raw',
+        'adjusted_p_field': 'p_value_holm',
+        'missing_outcome_policy': validated.get(
+            'missing_outcome_policy', CONDITION_CONTRAST_MISSING_POLICY
+        ),
+        'multiplicity': validated.get('multiplicity', CONDITION_CONTRAST_MULTIPLICITY),
+        'supplementary_families': list(
+            validated.get('supplementary_families') or []
+        ),
+    }
+    return declared, None
+
+
+def _analysis_declaration(
+    plan: Mapping[str, Any],
+    observations: Iterable[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Bind the family declaration to its plan/source/chronology.
+
+    A hard-coded boolean is never proof of preregistration.  A prospective plan
+    must carry a valid six-outcome declaration whose exact source file hash is
+    recorded in the plan and whose plan timestamp precedes the final receipts.
+    A historical plan without such a declaration is reported as an explicitly
+    labelled recomputation diagnostic, not as a preregistered family.
+    """
+    prospective = plan_requires_receipt_epoch_binding(plan)
+    design = _embedded_research_design(plan) or {}
+    family, family_problem = _family_from_design(design)
+    research_config = plan.get('research_config')
+    source: dict[str, Any] = {}
+    problems: list[str] = []
+    if isinstance(research_config, Mapping):
+        path = research_config.get('path')
+        recorded_sha = research_config.get('sha256')
+        source = {
+            'type': 'frozen_research_config',
+            'path': str(path) if path else None,
+            'recorded_sha256': recorded_sha,
+            'declaration_sha256': _canonical_sha256(research_config.get('declaration')),
+        }
+        if not isinstance(path, str) or not path.strip():
+            problems.append('declaration_source_path_missing')
+        else:
+            resolved = Path(path)
+            if not resolved.is_absolute():
+                resolved = Path(__file__).resolve().parents[1] / resolved
+            observed_sha = _file_sha256(resolved)
+            source['observed_sha256'] = observed_sha
+            if observed_sha is None:
+                problems.append('declaration_source_unavailable')
+            elif recorded_sha != observed_sha:
+                problems.append('declaration_source_hash_mismatch')
+    else:
+        plans_declaration = plan.get('analysis_declaration')
+        if isinstance(plans_declaration, Mapping):
+            source = {
+                'type': 'plan_analysis_declaration',
+                'path': None,
+                'recorded_sha256': plans_declaration.get('sha256'),
+                'declaration_sha256': _canonical_sha256(plans_declaration),
+            }
+        else:
+            problems.append('declaration_source_missing')
+    plan_sha = plan.get('plan_sha256')
+    if not isinstance(plan_sha, str) or not plan_sha.strip():
+        problems.append('plan_sha256_missing')
+    plan_ts = _parse_timestamp(plan.get('generated_at'))
+    receipt_ts, receipt_text, receipt_documents = _earliest_receipt_timestamp(observations)
+    chronology = {
+        'plan_generated_at': plan.get('generated_at'),
+        'earliest_final_receipt_generated_at': receipt_text,
+        'final_receipt_documents': receipt_documents,
+        'plan_precedes_final_receipts': (
+            None if plan_ts is None or receipt_ts is None else plan_ts <= receipt_ts
+        ),
+        'status': (
+            'no_final_receipts' if receipt_documents == 0
+            else 'verified' if receipt_ts is not None and plan_ts is not None
+            and plan_ts <= receipt_ts
+            else 'unverified'
+        ),
+    }
+    if prospective:
+        if family_problem:
+            problems.append(family_problem)
+        if plan_ts is None:
+            problems.append('plan_generated_at_missing_or_invalid')
+        if receipt_documents and receipt_ts is None:
+            problems.append('earliest_final_receipt_generated_at_missing_or_invalid')
+        elif receipt_ts is not None and plan_ts is not None and plan_ts > receipt_ts:
+            problems.append('plan_not_before_final_receipts')
+    if prospective and not problems:
+        return {
+            'status': 'verified',
+            'declared_before_analysis': True,
+            'role': 'prospective_preregistered_family',
+            'family': family,
+            'source': source,
+            'chronology': chronology,
+            'problems': [],
+            'reason': None,
+        }
+    if prospective:
+        return {
+            'status': 'invalid',
+            'declared_before_analysis': False,
+            'role': 'prospective_declaration_unverified',
+            'family': family or _implemented_family(),
+            'source': source,
+            'chronology': chronology,
+            'problems': list(dict.fromkeys(problems)),
+            'reason': 'prospective analysis family declaration is not source-bound',
+        }
+    return {
+        'status': 'historical_unverified',
+        'declared_before_analysis': False,
+        'role': 'historical_recomputation_diagnostic',
+        'family': _implemented_family(),
+        'source': source,
+        'chronology': chronology,
+        'problems': list(dict.fromkeys(problems)),
+        'reason': 'no source-bound preselection family declaration was available',
+    }
+
+
+def _family_record(declaration: Mapping[str, Any]) -> dict[str, Any]:
+    family = dict(declaration.get('family') or {})
+    return {
+        'declared_before_analysis': declaration.get('declared_before_analysis') is True,
+        'declaration_status': declaration.get('status'),
+        'role': declaration.get('role'),
+        'source': dict(declaration.get('source') or {}),
+        'chronology': dict(declaration.get('chronology') or {}),
+        'problems': list(declaration.get('problems') or []),
+        **family,
+        'family_size': int(family.get('family_size') or len(FAMILY_OUTCOMES)),
+        'outcomes': list(family.get('outcomes') or FAMILY_OUTCOMES),
+    }
+
 
 # Axes that must agree for a coordinate pair to be compared. Repeat is a
 # pairing axis (paired by repeat) and is dropped only when pooling pairs.
@@ -314,15 +799,27 @@ def _bootstrap_median_ci(values: list[float]) -> dict[str, Any]:
     }
 
 
-def _holm(p_values: list[float | None]) -> list[float | None]:
-    """Holm-Bonferroni step-down adjustment within one declared metric family."""
+def _holm(
+    p_values: list[float | None], *, family_size: int | None = None,
+) -> list[float | None]:
+    """Holm-Bonferroni step-down within the declared family.
+
+    Missing p-values keep a null adjusted value.  They never shrink the family:
+    the default family size is the number of declared slots in ``p_values``,
+    and callers with an explicit six-outcome declaration pass that size.  An
+    unavailable hypothesis therefore cannot receive adjusted significance.
+    """
     indexed = [(value, index) for index, value in enumerate(p_values) if value is not None]
     adjusted: list[float | None] = [None] * len(p_values)
     if not indexed:
         return adjusted
+    total = len(p_values) if family_size is None else int(family_size)
+    if total < len(indexed):
+        raise ValueError(
+            f'Holm family size {total} is smaller than the {len(indexed)} available p-values'
+        )
     indexed.sort()
     running = 0.0
-    total = len(indexed)
     for position, (value, index) in enumerate(indexed):
         candidate = min(1.0, value * (total - position))
         running = max(running, candidate)
@@ -439,6 +936,23 @@ def _receipt_values(document: Mapping[str, Any]) -> dict[str, float | None]:
     return values
 
 
+def _final_receipt_complete(document: Mapping[str, Any]) -> bool:
+    """A final receipt must carry all five components and a finite composite."""
+    components = document.get("components")
+    if not isinstance(components, Mapping):
+        return False
+    for name in COMPONENT_NAMES[:-1]:
+        value = components.get(name)
+        if not isinstance(value, (int, float)) or isinstance(value, bool) \
+                or not math.isfinite(float(value)) or not 0 <= float(value) <= 4:
+            return False
+    srun = document.get("Srun_final")
+    return (
+        isinstance(srun, (int, float)) and not isinstance(srun, bool)
+        and math.isfinite(float(srun)) and 0 <= float(srun) <= 4
+    )
+
+
 def _cell_identity(coordinate: Mapping[str, Any]) -> dict[str, Any]:
     return {name: coordinate.get(name) for name in SPREAD_AXES}
 
@@ -510,8 +1024,11 @@ def _grader_report(documents: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         values, problem = _receipt_graders(document)
         if problem:
             reasons.add(problem)
+        elif values is None:
+            # Explicit failure path: assertion removal under ``python -O`` must
+            # not make a malformed grader identity look compatible.
+            reasons.add('grader_identity_unavailable')
         else:
-            assert values is not None
             graders.update(values)
     if not materialized:
         status = "no_final_receipts"
@@ -547,9 +1064,8 @@ def _grader_difference(left: Mapping[str, Any], right: Mapping[str, Any]) -> lis
     """Return the grader components that make two receipts incompatible."""
     left_graders, left_problem = _receipt_graders(left)
     right_graders, right_problem = _receipt_graders(right)
-    if left_problem or right_problem:
+    if left_problem or right_problem or left_graders is None or right_graders is None:
         return ["grader_identity"]
-    assert left_graders is not None and right_graders is not None
     return _grader_component_difference(left_graders, right_graders)
 
 
@@ -560,7 +1076,10 @@ def _grader_identity_problem(left: Mapping[str, Any], right: Mapping[str, Any]) 
     problems = sorted({problem for problem in (left_problem, right_problem) if problem})
     if problems:
         return _grader_unavailable_reason(problems)
-    assert left_graders is not None and right_graders is not None
+    if left_graders is None or right_graders is None:
+        # Explicit failure path, equivalent to the removed assertion but visible
+        # under optimised execution.
+        return _grader_unavailable_reason(['grader_identity_unavailable'])
     different = _grader_component_difference(left_graders, right_graders)
     if not different:
         return None
@@ -1018,6 +1537,9 @@ def _side_compatibility_problem(
     documents: list[Mapping[str, Any]], constraints: Mapping[str, Any]
 ) -> str | None:
     """Check that repeats on one side of a model contrast are comparable."""
+    epoch_problem = _epoch_population_problem(documents)
+    if epoch_problem:
+        return epoch_problem
     if len(documents) < 2:
         return None
     grader_problems = _grader_problems(documents)
@@ -1055,6 +1577,7 @@ def _model_contrast_row(
     modes_by_model_key: Mapping[tuple[tuple[str, str], tuple[str, ...]], set[str]],
     unready_modes_by_model_key: Mapping[tuple[tuple[str, str], tuple[str, ...]], set[str]],
     constraints: Mapping[str, Any],
+    declaration: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Build one model-pair contrast row; never pair or pool silently."""
     left = list(final_documents.get((model_a, key, mode), [])) if mode is not None else []
@@ -1190,9 +1713,31 @@ def _model_contrast_row(
                 )
             ),
         }
-    adjusted = _holm([test.get("p_value") for test in tests])
+    declared_family = _family_record(declaration)
+    adjusted = _holm(
+        [test.get("p_value") for test in tests],
+        family_size=declared_family["family_size"],
+    )
     for index, name in enumerate(names):
         metrics[name]["holm_adjusted_p"] = adjusted[index]
+        metrics[name]["p_value_holm"] = adjusted[index]
+        metrics[name]["p_value_raw"] = metrics[name].get("p_value")
+        metrics[name]["signed_rank_biserial"] = metrics[name].get("effect_size")
+        left_distribution = metrics[name].get("model_a") or {}
+        right_distribution = metrics[name].get("model_b") or {}
+        metrics[name].update({
+            "outcome": name,
+            "n_left": left_distribution.get("n"),
+            "n_right": right_distribution.get("n"),
+            "median_left": left_distribution.get("median"),
+            "median_right": right_distribution.get("median"),
+            "iqr_left": left_distribution.get("iqr"),
+            "iqr_right": right_distribution.get("iqr"),
+        })
+    row["family"] = {
+        **declared_family,
+        "unit": "one model-pair × stratum × condition × grader-mode contrast row",
+    }
     row["status"] = "analyzed"
     row["metrics"] = metrics
     return row
@@ -1202,6 +1747,7 @@ def _model_contrasts(
     planned: list[dict[str, Any]],
     observations: list[dict[str, Any]],
     constraints: Mapping[str, Any],
+    declaration: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Contrast model pairs per frozen stratum, condition and grader mode."""
     models: dict[tuple[str, str], dict[str, Any]] = {}
@@ -1273,6 +1819,7 @@ def _model_contrasts(
                     model_a, model_b, key, strata[key], mode, final_documents,
                     unready_documents, observation_states, planned_counts,
                     modes_by_model_key, unready_modes_by_model_key, constraints,
+                    declaration,
                 ))
     status_counts = Counter(row["status"] for row in results)
     unsupported_reasons = Counter(
@@ -1297,6 +1844,10 @@ def _model_contrasts(
             "Holm-Bonferroni across the six outcomes within each "
             "stratum/condition/grader-mode row"
         ),
+        "family_declaration": {
+            **_family_record(declaration),
+            "unit": "model-pair × stratum × condition × grader-mode contrast row",
+        },
         "models": [models[model_key] for model_key in model_keys],
         "n_models": len(model_keys),
         "missing_model_identity": missing_identity,
@@ -1314,6 +1865,7 @@ def _model_contrasts(
 
 def _condition_contrasts(
     observations: list[dict[str, Any]], constraints: Mapping[str, Any],
+    declaration: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Declared rank sums over compatible conditions, not complete pairs only.
 
@@ -1322,6 +1874,18 @@ def _condition_contrasts(
     repeat is unavailable. Different models, epochs, fixtures and graders are
     never pooled. Matched-pair statistics are reported separately.
     """
+    if declaration is None:
+        declaration = {
+            'status': 'historical_unverified',
+            'declared_before_analysis': False,
+            'role': 'historical_recomputation_diagnostic',
+            'family': _implemented_family(),
+            'source': {},
+            'chronology': {},
+            'problems': ['caller_supplied_no_declaration'],
+            'reason': 'no source-bound preselection family declaration was available',
+        }
+    declared_family = _family_record(declaration)
     axes = tuple(name for name in SPREAD_AXES if name != "experiment_condition")
     strata: dict[tuple[str, ...], list[dict[str, Any]]] = defaultdict(list)
     for observation in observations:
@@ -1369,6 +1933,10 @@ def _condition_contrasts(
                     if not documents[condition]:
                         row["reason"] = f"{condition}:no_ready_final_receipts"
                         break
+                    if any(not _final_receipt_complete(document)
+                           for document in documents[condition]):
+                        row["reason"] = f"{condition}:partial_final_receipt"
+                        break
                     problem = _side_compatibility_problem(documents[condition], constraints)
                     if problem:
                         row["reason"] = f"{condition}:{problem}"
@@ -1391,13 +1959,35 @@ def _condition_contrasts(
                         condition: [vector[name] for vector in group if vector[name] is not None]
                         for condition, group in vectors.items()
                     }
-                    metrics[name] = _mann_whitney_exploratory(
+                    metric = _mann_whitney_exploratory(
                         values[PRIMARY_CONDITIONS[0]], values[PRIMARY_CONDITIONS[1]],
                     )
-                adjusted = _holm([metric.get("p_value") for metric in metrics.values()])
+                    left = metric.get("left") or {}
+                    right = metric.get("right") or {}
+                    metric.update({
+                        "outcome": OUTCOME_LABELS[name],
+                        "p_value_raw": metric.get("p_value"),
+                        "n_left": left.get("n", metric.get("n_left")),
+                        "n_right": right.get("n", metric.get("n_right")),
+                        "median_left": left.get("median"),
+                        "median_right": right.get("median"),
+                        "iqr_left": left.get("iqr"),
+                        "iqr_right": right.get("iqr"),
+                        "signed_rank_biserial": metric.get("effect_size"),
+                    })
+                    metrics[name] = metric
+                adjusted = _holm(
+                    [metric.get("p_value") for metric in metrics.values()],
+                    family_size=declared_family["family_size"],
+                )
                 for metric, p_value in zip(metrics.values(), adjusted):
                     metric["holm_adjusted_p"] = p_value
+                    metric["p_value_holm"] = p_value
                 row.update(status="analyzed", metrics=metrics)
+                row["family"] = {
+                    **declared_family,
+                    "unit": "one model × surface × security-level condition contrast row",
+                }
             results.append(row)
     return {
         "role": "declared_exploratory_analysis", "test": "two-sided Mann-Whitney U",
@@ -1405,6 +1995,20 @@ def _condition_contrasts(
         "independent": False,
         "limitations": "Shared fixtures, models and graders may induce dependence; three repeats limit inference.",
         "multiple_comparisons": "Holm-Bonferroni across six outcomes within each stratum/grader row",
+        "family_declaration": {
+            **_family_record(declaration),
+            "unit": "model × surface × security-level condition-contrast row",
+            "supplementary_families": (
+                "paired Wilcoxon and bootstrap intervals are separate supplementary "
+                "families and never replace the declared rank-sum result"
+            ),
+        },
+        "reporting": {
+            "effect_size": "signed rank-biserial exploratory",
+            "n": "actual final ready receipts per side; planned n remains in coverage",
+            "central_tendency": "median per side",
+            "spread": "inclusive-quartile IQR per side",
+        },
         "n_contrast_rows": len(results),
         "status_counts": dict(sorted(Counter(row["status"] for row in results).items())),
         "results": results,
@@ -1426,6 +2030,17 @@ def analyze_plan(
         # A plan without a frozen source identity cannot reject stale artifacts;
         # refuse instead of matching by omission.
         raise ValueError("research plan is missing its frozen source_hashes_sha256")
+    preliminary = _analysis_declaration(plan, ())
+    if preliminary.get('status') == 'invalid':
+        blocking = [
+            problem for problem in preliminary.get('problems') or []
+            if problem != 'earliest_final_receipt_generated_at_missing_or_invalid'
+        ]
+        if blocking:
+            raise ValueError(
+                'prospective plan analysis declaration is not source-bound: '
+                + ';'.join(blocking)
+            )
     catalog = ArtifactCatalog(source_roots, review_roots)
     catalog.scan()
     planned = _planned_coordinates(plan)
@@ -1471,6 +2086,23 @@ def analyze_plan(
         status = str(entry.record.get("execution_status") or entry.record.get("status") or "")
         reviews = discover_reviews(catalog, entry)
         documents, review_reasons = _final_receipts(catalog, reviews)
+        epoch_binding = {}
+        epoch_problem = None
+        for mode, (_path, document) in documents.items():
+            problem, info = _receipt_epoch_problem(document, plan, entry, constraints)
+            epoch_binding[mode] = info
+            if problem:
+                epoch_problem = problem
+                break
+        if epoch_problem:
+            observations.append({
+                "coordinate": coordinate, "state": "epoch_mismatch",
+                "reason": epoch_problem, "ready": False,
+                "readiness_reason": epoch_problem, "identity": identity,
+                "documents": documents, "reviews": reviews, "entry": entry,
+                "epoch_binding": epoch_binding,
+            })
+            continue
         if status == "failed":
             state = "error"
             reason = (entry.record.get("execution_reason") or {}).get("code") or "execution_failed"
@@ -1488,7 +2120,15 @@ def analyze_plan(
             "coordinate": coordinate, "state": state, "reason": reason,
             "ready": ready, "readiness_reason": readiness_reason,
             "identity": identity, "documents": documents, "reviews": reviews, "entry": entry,
+            "epoch_binding": epoch_binding,
         })
+
+    analysis_declaration = _analysis_declaration(plan, observations)
+    if analysis_declaration.get('status') == 'invalid':
+        raise ValueError(
+            'prospective plan analysis declaration is not source-bound: '
+            + ';'.join(analysis_declaration.get('problems') or [])
+        )
 
     # Authoritative per-group summaries come from the scorer. Never reimplement
     # repeat grouping, stability, or component arithmetic here.
@@ -1572,7 +2212,12 @@ def analyze_plan(
 
     paired = _paired_analysis(observations, constraints)
     outcome_spread = _outcome_spread(planned, observations)
-    model_contrasts = _model_contrasts(planned, observations, constraints)
+    model_contrasts = _model_contrasts(
+        planned, observations, constraints, analysis_declaration
+    )
+    condition_contrasts = _condition_contrasts(
+        observations, constraints, analysis_declaration
+    )
     exclusions = Counter(
         str(observation.get("reason") or observation["state"])
         for observation in observations
@@ -1586,6 +2231,22 @@ def analyze_plan(
         "plan_version": plan.get("plan_version"),
         "plan_sha256": plan.get("plan_sha256"),
         "epoch_id": plan.get("epoch_id"),
+        "epoch_contract": {
+            "receipt_epoch_binding_required": plan_requires_receipt_epoch_binding(plan),
+            "mode": (
+                "prospective_bound"
+                if plan_requires_receipt_epoch_binding(plan)
+                else "historical_read_only"
+            ),
+            "read_only": not plan_requires_receipt_epoch_binding(plan),
+            "plan_sha256": plan.get("plan_sha256"),
+            "required_receipt_fields": list(EPOCH_BINDING_REQUIRED),
+            "note": (
+                "A historical plan without the prospective binding marker remains readable "
+                "for its recorded epoch only; it cannot satisfy a current plan or be pooled "
+                "with another epoch."
+            ),
+        },
         "study": {
             "primary_conditions": list(PRIMARY_CONDITIONS),
             "payload_mode": constraints.get("payload_mode"),
@@ -1615,6 +2276,10 @@ def analyze_plan(
                 "readiness_reason": observation["readiness_reason"],
                 "execution_id": (observation.get("identity") or {}).get("execution_id"),
                 "receipt_modes": sorted(observation.get("documents", {})),
+                "epoch_binding_status": sorted({
+                    info.get("status")
+                    for info in (observation.get("epoch_binding") or {}).values()
+                }),
             }
             for observation in observations
         ],
@@ -1622,9 +2287,32 @@ def analyze_plan(
         "selection_groups": selection_groups,
         "group_exclusions": group_exclusions,
         "outcome_spread": outcome_spread,
+        "analysis_declaration": analysis_declaration,
         "model_contrasts": model_contrasts,
-        "condition_contrasts": _condition_contrasts(observations, constraints),
+        "condition_contrasts": condition_contrasts,
         "paired": {"role": "supplementary", **paired},
+        "epoch_binding": {
+            "interface": {
+                "receipt_key": EPOCH_BINDING_KEY,
+                "required": list(EPOCH_BINDING_REQUIRED),
+                "optional": list(EPOCH_BINDING_OPTIONAL),
+                "historical_policy": (
+                    "unbound receipts stay readable for their recorded epoch; a row "
+                    "with mixed bound/unbound receipts or differing explicit bindings "
+                    "is refused rather than pooled"
+                ),
+            },
+            "receipt_status_counts": dict(sorted(Counter(
+                info.get("status")
+                for observation in observations
+                for info in (observation.get("epoch_binding") or {}).values()
+            ).items())),
+            "refused_observations": dict(sorted(Counter(
+                str(observation.get("reason"))
+                for observation in observations
+                if observation["state"] == "epoch_mismatch"
+            ).items())),
+        },
         "score_epoch": {
             "runtime_provisional": "runtime-scoring",
             "thesis_final": constraints.get("scoring_rubric_version"),
@@ -1748,7 +2436,10 @@ def _paired_analysis(
     for base, metrics in pooled.items():
         names = [name for name in COMPONENT_NAMES if metrics.get(name)]
         tests = [_wilcoxon_signed_rank(metrics[name]["differences"]) for name in names]
-        adjusted = _holm([test.get("p_value") for test in tests])
+        adjusted = _holm(
+            [test.get("p_value") for test in tests],
+            family_size=len(COMPONENT_NAMES),
+        )
         n_pairs = len(metrics[names[0]]["differences"]) if names else 0
         results.append({
             "comparison": list(base[:-2]),
@@ -1772,6 +2463,18 @@ def _paired_analysis(
     return {
         "results": results,
         "unmatched": unmatched,
+        "family": {
+            "role": "supplementary",
+            "outcomes": list(FAMILY_OUTCOMES),
+            "family_size": len(COMPONENT_NAMES),
+            "adjustment": "Holm-Bonferroni step-down",
+            "missing_outcome_policy": (
+                "A missing p-value stays null; it never reduces the declared family "
+                "size and can never receive adjusted significance."
+            ),
+            "declared_before_analysis": False,
+            "replaces_declared_rank_sum": False,
+        },
         "n_pair_units": sum(
             len(next(iter(metrics.values()))["differences"])
             for metrics in pooled.values()
@@ -1796,10 +2499,13 @@ def _paired_analysis(
 def _receipt_identity_problem(
     left: Mapping[str, Any], right: Mapping[str, Any]
 ) -> str | None:
-    """Check rubric, scoring rule, grader mode and metrics epoch equality."""
+    """Check rubric, scoring rule, grader mode, epoch binding and metrics epoch."""
     for field in ("rubric_version", "scoring_rule_sha256", "scoring_mode"):
         if left.get(field) != right.get(field) or not left.get(field):
             return f"receipt_{field}_mismatch"
+    epoch_problem = _epoch_population_problem((left, right))
+    if epoch_problem:
+        return epoch_problem
     left_metrics_epoch = left.get("metrics_epoch")
     right_metrics_epoch = right.get("metrics_epoch")
     if left_metrics_epoch != right_metrics_epoch or not left_metrics_epoch:
@@ -1948,6 +2654,11 @@ __all__ = [
     "BOOTSTRAP_RESAMPLES",
     "BOOTSTRAP_SEED",
     "DIFFERENCE_DIRECTION",
+    "EPOCH_BINDING_KEY",
+    "EPOCH_BINDING_REQUIRED",
+    "EPOCH_BINDING_OPTIONAL",
+    "FAMILY_OUTCOMES",
+    "OUTCOME_LABELS",
     "OBSERVATION_STATES",
     "PAIR_AXES",
     "PRIMARY_CONDITIONS",
@@ -1956,6 +2667,7 @@ __all__ = [
     "SUPPORTED_PLAN_VERSIONS",
     "analyze_plan",
     "main",
+    "refuse_epoch_pooling",
 ]
 
 

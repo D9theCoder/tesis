@@ -12,7 +12,10 @@ import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from evaluation.thesis_scoring import WEIGHTS, _validated_reviews, review_ledger_path, review_queue
+from evaluation.thesis_scoring import (
+    WEIGHTS, _validated_reviews, review_ledger_path, review_queue,
+    validate_epoch_binding,
+)
 
 
 COORDINATE_KEYS = ('experiment_condition', 'target_method', 'security_level',
@@ -153,6 +156,7 @@ def _audit_workflow_receipt(reader, *, mode, queue, artifact, workflow,
         return None, None
 
     receipt = reader.read(receipt_path)
+    validate_epoch_binding(receipt, queue)
     require(receipt['source_sha256'] == queue['source_sha256']
             and receipt['execution_id'] == queue['execution_id']
             and receipt['run_id'] == queue['run_id']
