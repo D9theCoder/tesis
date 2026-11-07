@@ -6,6 +6,7 @@ planner code is called; no live probe or experiment result is produced.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -19,6 +20,10 @@ ORACLE_DRAFT_PATH = (
     REPOSITORY_ROOT / "config/research/autoresearch-oracle-preregistration-draft-2026-10-31.json"
 )
 ORACLE_SOURCE_PATH = REPOSITORY_ROOT / "config/oracles/dvwa-source-fee264766667580e5352.json"
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _write_json(path: Path, payload) -> Path:
@@ -93,17 +98,7 @@ def _blocker_ids(blockers) -> set[str]:
     return {blocker["id"] for blocker in blockers}
 
 
-def test_oracle_gate_rejects_a_declared_status_without_an_actual_artifact(tmp_path):
-    draft = {"policy": {"oracle_preregistration": {"status": "preregistered"}}}
-
-    result = experiment_readiness._oracle_preregistration(draft, root=tmp_path)
-
-    assert result["draft_declared_status"] == "preregistered"
-    assert result["status"] == "missing_not_registered"
-    assert result["registered"] is False
-
-
-def test_oracle_gate_accepts_a_prospective_commitment_without_collected_proof(tmp_path):
+def _prepare_historical_oracle(tmp_path: Path, *, relative_path: str | None = None):
     document = json.loads(ORACLE_DRAFT_PATH.read_text(encoding="utf-8"))
     source = json.loads(ORACLE_SOURCE_PATH.read_text(encoding="utf-8"))
     latest_protocol_freeze = max(
@@ -113,20 +108,174 @@ def test_oracle_gate_accepts_a_prospective_commitment_without_collected_proof(tm
     document["created_at"] = latest_protocol_freeze
     document["approval"]["approved_at"] = latest_protocol_freeze
     document["draft_sha256"] = oracle_preregistration.draft_hash(document)
-    _write_json(tmp_path / experiment_readiness.ORACLE_PREREGISTRATION_DRAFT_PATH, document)
-    (tmp_path / "config/oracles").mkdir(parents=True)
-    shutil.copy(ORACLE_SOURCE_PATH, tmp_path / "config/oracles" / ORACLE_SOURCE_PATH.name)
+    relative = relative_path or "results/validation/test-evidence/oracle-preregistered.json"
+    artifact_path = _write_json(tmp_path / relative, document)
+    source_dir = tmp_path / "config/oracles"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy(ORACLE_SOURCE_PATH, source_dir / ORACLE_SOURCE_PATH.name)
+    return document, relative, artifact_path
 
-    result = experiment_readiness._oracle_preregistration(
-        {"policy": {"oracle_preregistration": {"status": "preregistered"}}}, root=tmp_path,
-    )
+
+def _oracle_draft_for(
+    document: dict,
+    *,
+    relative_path: str,
+    artifact_path: Path,
+    file_sha256: str | None = None,
+    draft_sha256: str | None = None,
+    epoch_id: str | None = None,
+    fixture_id: str | None = None,
+    protocol_version: str | None = None,
+) -> dict:
+    epoch = epoch_id or document["intended_epoch"]["epoch_id"]
+    return {
+        "intended_epoch": {
+            "epoch_id": epoch,
+            "output_root": f"results/runs/{epoch}",
+        },
+        "scope": {
+            "fixture_id": fixture_id or document["fixture"]["fixture_id"],
+            "protocol_version": protocol_version or document["fixture"]["protocol_version"],
+        },
+        "policy": {
+            "oracle_preregistration": {
+                "status": "preregistered",
+                "document_path": relative_path,
+                "file_sha256": file_sha256 if file_sha256 is not None else _sha256(artifact_path),
+                "draft_sha256": draft_sha256 or document["draft_sha256"],
+            },
+        },
+    }
+
+
+def test_oracle_gate_rejects_a_declared_status_without_a_pinned_artifact_even_when_historical_exists(tmp_path):
+    document, _, _ = _prepare_historical_oracle(tmp_path)
+    _write_json(tmp_path / experiment_readiness.ORACLE_PREREGISTRATION_DRAFT_PATH, document)
+    draft = {"policy": {"oracle_preregistration": {"status": "preregistered"}}}
+
+    result = experiment_readiness._oracle_preregistration(draft, root=tmp_path)
+
+    assert result["draft_declared_status"] == "preregistered"
+    assert result["status"] == "missing_not_registered"
+    assert result["registered"] is False
+    assert result["draft_path"] is None
+    assert result["evidence_imported"] is False
+
+
+def test_oracle_gate_accepts_a_prospective_commitment_without_collected_proof(tmp_path):
+    document, relative, artifact_path = _prepare_historical_oracle(tmp_path)
+    draft = _oracle_draft_for(document, relative_path=relative, artifact_path=artifact_path)
+
+    result = experiment_readiness._oracle_preregistration(draft, root=tmp_path)
 
     assert result["status"] == "preregistered"
     assert result["registered"] is True
     assert result["commitment"]["preregistered"] is True
     assert result["commitment"]["blockers"] == []
     assert result["proof"]["blockers"]
+    assert result["proof"]["missing_control_count"] > 0
     assert result["evidence_imported"] is True
+    assert result["draft_path"] == relative
+    assert result["file_sha256"] == _sha256(artifact_path)
+    assert result["draft_sha256"] == document["draft_sha256"]
+
+
+def test_oracle_gate_consumes_the_pinned_prospective_artifact_not_the_retained_historical_document(tmp_path):
+    historical, relative, artifact_path = _prepare_historical_oracle(tmp_path)
+    _write_json(
+        tmp_path / experiment_readiness.ORACLE_PREREGISTRATION_DRAFT_PATH, historical,
+    )
+    revision = json.loads(json.dumps(historical))
+    revision["draft_id"] = "oracle-preregistration-test-new-epoch"
+    revision["intended_epoch"] = {
+        "epoch_id": "epoch-new",
+        "output_root": "results/runs/epoch-new",
+        "status": "not_started",
+        "started_at": None,
+    }
+    revision["draft_sha256"] = oracle_preregistration.draft_hash(revision)
+    revision_relative = "results/validation/test-evidence/oracle-new-epoch.json"
+    revision_path = _write_json(tmp_path / revision_relative, revision)
+    draft = _oracle_draft_for(
+        revision, relative_path=revision_relative, artifact_path=revision_path,
+    )
+
+    result = experiment_readiness._oracle_preregistration(draft, root=tmp_path)
+
+    assert result["status"] == "preregistered"
+    assert result["registered"] is True
+    assert result["draft_path"] == revision_relative
+    assert result["epoch"]["epoch_id"] == "epoch-new"
+    assert result["fixture"]["fixture_id"] == revision["fixture"]["fixture_id"]
+    assert result["file_sha256"] == _sha256(revision_path)
+    assert result["draft_path"] != experiment_readiness.ORACLE_PREREGISTRATION_DRAFT_PATH
+
+
+def test_oracle_gate_rejects_tampered_or_mismatched_pins(tmp_path):
+    document, relative, artifact_path = _prepare_historical_oracle(tmp_path)
+    valid = _oracle_draft_for(document, relative_path=relative, artifact_path=artifact_path)
+
+    tampered_file = json.loads(json.dumps(valid))
+    tampered_file["policy"]["oracle_preregistration"]["file_sha256"] = "0" * 64
+    tampered_content = json.loads(json.dumps(valid))
+    tampered_content["policy"]["oracle_preregistration"]["draft_sha256"] = "0" * 64
+    wrong_epoch = json.loads(json.dumps(valid))
+    wrong_epoch["intended_epoch"] = {
+        "epoch_id": "other-epoch", "output_root": "results/runs/other-epoch",
+    }
+    wrong_fixture = json.loads(json.dumps(valid))
+    wrong_fixture["scope"]["fixture_id"] = "other-fixture"
+    wrong_fixture["scope"]["protocol_version"] = "other-protocol"
+    configured_mismatch = {
+        "fixture_id": "other-fixture",
+        "protocol_version": "other-protocol",
+        "scoring_oracle_source_ids": ["other-source"],
+        "scoring_oracles_sha256": "0" * 64,
+    }
+
+    cases = [
+        (tampered_file, None, "file_sha256_mismatch"),
+        (tampered_content, None, "draft_sha256_mismatch"),
+        (wrong_epoch, None, "epoch_id_mismatch"),
+        (wrong_fixture, None, "fixture_id_mismatch"),
+        (valid, configured_mismatch, "configured_fixture_mismatch"),
+    ]
+    for draft, configured, expected_issue in cases:
+        result = experiment_readiness._oracle_preregistration(
+            draft, root=tmp_path, configured=configured,
+        )
+        assert result["status"] == "invalid"
+        assert result["registered"] is False
+        assert expected_issue in result["binding_issues"]
+
+
+def test_oracle_gate_rejects_a_retrospective_started_epoch(tmp_path):
+    document, relative, artifact_path = _prepare_historical_oracle(tmp_path)
+    document["intended_epoch"]["status"] = "started"
+    document["intended_epoch"]["started_at"] = "2000-01-01T00:00:00+00:00"
+    document["draft_sha256"] = oracle_preregistration.draft_hash(document)
+    _write_json(artifact_path, document)
+    draft = _oracle_draft_for(document, relative_path=relative, artifact_path=artifact_path)
+
+    result = experiment_readiness._oracle_preregistration(draft, root=tmp_path)
+
+    assert result["status"] == "invalid"
+    assert result["registered"] is False
+    assert "epoch_started_before_preregistration" in result["binding_issues"]
+
+
+def test_oracle_gate_rejects_bad_approval_chronology(tmp_path):
+    document, relative, artifact_path = _prepare_historical_oracle(tmp_path)
+    document["approval"]["approved_at"] = "2000-01-01T00:00:00+00:00"
+    document["draft_sha256"] = oracle_preregistration.draft_hash(document)
+    _write_json(artifact_path, document)
+    draft = _oracle_draft_for(document, relative_path=relative, artifact_path=artifact_path)
+
+    result = experiment_readiness._oracle_preregistration(draft, root=tmp_path)
+
+    assert result["status"] == "invalid"
+    assert result["registered"] is False
+    assert "assessment_failed" in result["binding_issues"]
 
 
 def _stub_build(monkeypatch, oracle_result: dict) -> None:
@@ -162,7 +311,10 @@ def _stub_build(monkeypatch, oracle_result: dict) -> None:
         module, "_authorization_gate",
         lambda draft: {"execution_authorized": True, "owner_approval_recorded": True},
     )
-    monkeypatch.setattr(module, "_oracle_preregistration", lambda draft, *, root: oracle_result)
+    monkeypatch.setattr(
+        module, "_oracle_preregistration",
+        lambda draft, *, root, configured=None: oracle_result,
+    )
 
 
 def test_launch_gate_blocks_until_the_oracle_commitment_is_actually_registered(monkeypatch, tmp_path):
@@ -367,6 +519,145 @@ def test_live_readiness_rejects_missing_or_mismatched_config_digest(tmp_path):
     )
     assert "config_sha256" in unbound["issues"]
     assert "live_readiness_identity_mismatch" in _blocker_ids(unbound_blockers)
+
+
+def _live_draft_with_binding(
+    path: str, sha256: str | None, *, status: str = "collected",
+) -> dict:
+    draft = _live_draft()
+    draft["scope"] = {
+        "live_readiness": {"path": path, "sha256": sha256, "status": status},
+    }
+    return draft
+
+
+def test_live_readiness_accepts_explicit_fresh_evidence_while_retained_failure_remains(tmp_path):
+    configured = {
+        "_source_tree_sha256": "a" * 64,
+        "_config_sha256": "b" * 64,
+        "target_url": "http://127.0.0.1/dvwa",
+    }
+    retained_failure = _live_document("b" * 64)
+    retained_failure["checks"][-1]["status"] = "failed"
+    _write_live_document(tmp_path, retained_failure)
+    retained_path = tmp_path / "results/epochs/epoch-1/live-readiness.json"
+    retained_sha = _sha256(retained_path)
+    fresh_relative = "results/epochs/epoch-1/live-readiness-prospective-2026-11-08.json"
+    fresh_path = _write_json(tmp_path / fresh_relative, _live_document("b" * 64))
+    draft = _live_draft_with_binding(fresh_relative, _sha256(fresh_path))
+
+    result, blockers = experiment_readiness.analyse_live_readiness(
+        draft, configured, repo_root=tmp_path,
+    )
+
+    assert blockers == []
+    assert result["present"] is True
+    assert result["path"] == fresh_relative
+    assert result["declared"]["explicit"] is True
+    assert result["file_sha256"] == _sha256(fresh_path)
+    assert _sha256(retained_path) == retained_sha
+
+
+def test_live_readiness_rejects_invalid_explicit_binding_without_fallback(tmp_path):
+    configured = {
+        "_source_tree_sha256": "a" * 64,
+        "_config_sha256": "b" * 64,
+        "target_url": "http://127.0.0.1/dvwa",
+    }
+    _write_live_document(tmp_path, _live_document("b" * 64))
+    retained_path = tmp_path / "results/epochs/epoch-1/live-readiness.json"
+    retained_sha = _sha256(retained_path)
+    fresh_relative = "results/epochs/epoch-1/live-readiness-prospective-2026-11-08.json"
+    fresh_path = _write_json(tmp_path / fresh_relative, _live_document("b" * 64))
+    not_object = _live_draft()
+    not_object["scope"] = {"live_readiness": "not-an-object"}
+
+    cases = [
+        _live_draft_with_binding(fresh_relative, "0" * 64),
+        _live_draft_with_binding(
+            "results/epochs/epoch-1/live-readiness-missing.json", _sha256(fresh_path),
+        ),
+        _live_draft_with_binding("/tmp/outside-live-readiness.json", _sha256(fresh_path)),
+        _live_draft_with_binding(fresh_relative, None),
+        not_object,
+    ]
+    for draft in cases:
+        result, blockers = experiment_readiness.analyse_live_readiness(
+            draft, configured, repo_root=tmp_path,
+        )
+        assert "live_readiness_binding_invalid" in _blocker_ids(blockers)
+        assert result["present"] is False
+        assert result["path"] is None
+    assert _sha256(retained_path) == retained_sha
+
+
+def test_live_readiness_planned_binding_fails_closed_without_reading_retained_failure(tmp_path):
+    configured = {
+        "_source_tree_sha256": "a" * 64,
+        "_config_sha256": "b" * 64,
+        "target_url": "http://127.0.0.1/dvwa",
+    }
+    _write_live_document(tmp_path, _live_document("b" * 64))
+    retained_path = tmp_path / "results/epochs/epoch-1/live-readiness.json"
+    retained_sha = _sha256(retained_path)
+    planned_relative = "results/epochs/epoch-1/live-readiness-prospective-2026-11-08.json"
+    draft = _live_draft_with_binding(
+        planned_relative, None, status="planned_not_collected",
+    )
+
+    result, blockers = experiment_readiness.analyse_live_readiness(
+        draft, configured, repo_root=tmp_path,
+    )
+
+    assert {"live_readiness_unverified", "containment_unverified_live"} <= _blocker_ids(blockers)
+    assert result["present"] is False
+    assert result["path"] == planned_relative
+    assert result["declared"]["status"] == "planned_not_collected"
+    assert _sha256(retained_path) == retained_sha
+
+
+def test_live_readiness_explicit_path_keeps_identity_and_outcome_refusals(tmp_path):
+    configured = {
+        "_source_tree_sha256": "a" * 64,
+        "_config_sha256": "b" * 64,
+        "target_url": "http://127.0.0.1/dvwa",
+    }
+    fresh_relative = "results/epochs/epoch-1/live-readiness-prospective-2026-11-08.json"
+    failed = _live_document("b" * 64)
+    failed["checks"][0]["status"] = "failed"
+    missing = _live_document("b" * 64)
+    missing["checks"] = missing["checks"][:-1]
+    wrong_epoch = _live_document("b" * 64)
+    wrong_epoch["epoch_id"] = "epoch-2"
+    cases = [
+        (_live_document("b" * 64, source_sha="c" * 64), "source_tree_hash"),
+        (_live_document("c" * 64), "config_sha256"),
+        (wrong_epoch, "epoch_id"),
+    ]
+    for document, expected_issue in cases:
+        path = _write_json(tmp_path / fresh_relative, document)
+        draft = _live_draft_with_binding(fresh_relative, _sha256(path))
+        result, blockers = experiment_readiness.analyse_live_readiness(
+            draft, configured, repo_root=tmp_path,
+        )
+        assert expected_issue in result["issues"]
+        assert "live_readiness_identity_mismatch" in _blocker_ids(blockers)
+
+    path = _write_json(tmp_path / fresh_relative, failed)
+    draft = _live_draft_with_binding(fresh_relative, _sha256(path))
+    result, blockers = experiment_readiness.analyse_live_readiness(
+        draft, configured, repo_root=tmp_path,
+    )
+    assert result["failed"]
+    assert "live_readiness_checks_failed" in _blocker_ids(blockers)
+
+    path = _write_json(tmp_path / fresh_relative, missing)
+    draft = _live_draft_with_binding(fresh_relative, _sha256(path))
+    result, blockers = experiment_readiness.analyse_live_readiness(
+        draft, configured, repo_root=tmp_path,
+    )
+    assert result["missing"]
+    assert "live_readiness_checks_missing" in _blocker_ids(blockers)
 
 
 def _output_draft() -> dict:

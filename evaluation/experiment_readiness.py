@@ -105,8 +105,10 @@ DRAFT_COST_KEYS = frozenset({
 DRAFT_SCOPE_KEYS = frozenset({
     "target_url", "fixture_id", "protocol_version", "candidate_budget",
     "surface_level_scope", "containment", "live_target_access_performed",
-    "provider_access_performed",
+    "provider_access_performed", "live_readiness",
 })
+LIVE_READINESS_BINDING_KEYS = frozenset({"path", "sha256", "status", "detail"})
+LIVE_READINESS_PLANNED_STATUS = "planned_not_collected"
 TRACEABILITY_KEYS = frozenset({
     "output_root", "web_discovery_contract", "required_run_fields",
     "manifest_emission", "coordinate_identity",
@@ -453,6 +455,46 @@ def validate_design(draft: Mapping[str, Any]) -> list[dict[str, Any]]:
         if scope.get("live_target_access_performed") is not False or \
                 scope.get("provider_access_performed") is not False:
             issues.append(_issue("network_claim_invalid", "offline draft must record no target/provider access"))
+        declared_live = scope.get("live_readiness")
+        if declared_live is not None:
+            if not isinstance(declared_live, Mapping):
+                issues.append(_issue(
+                    "live_readiness_binding_invalid",
+                    "scope.live_readiness must be an object",
+                    "scope.live_readiness",
+                ))
+            else:
+                unknown = sorted(set(declared_live) - LIVE_READINESS_BINDING_KEYS)
+                if unknown:
+                    issues.append(_issue(
+                        "live_readiness_binding_unknown_fields",
+                        f"unknown scope.live_readiness fields: {unknown}",
+                        "scope.live_readiness",
+                    ))
+                declared_path = declared_live.get("path")
+                if not isinstance(declared_path, str) or not declared_path.strip():
+                    issues.append(_issue(
+                        "live_readiness_binding_invalid",
+                        "scope.live_readiness requires a repository-relative path",
+                        "scope.live_readiness.path",
+                    ))
+                else:
+                    relative = PurePosixPath(declared_path)
+                    if relative.is_absolute() or ".." in relative.parts:
+                        issues.append(_issue(
+                            "live_readiness_binding_invalid",
+                            "scope.live_readiness.path must stay inside the repository",
+                            "scope.live_readiness.path",
+                        ))
+                declared_sha = declared_live.get("sha256")
+                if declared_sha is not None and (
+                    not isinstance(declared_sha, str) or not HEX64.fullmatch(declared_sha)
+                ):
+                    issues.append(_issue(
+                        "live_readiness_binding_invalid",
+                        "scope.live_readiness.sha256 must be null or a lowercase SHA-256",
+                        "scope.live_readiness.sha256",
+                    ))
     traceability = draft.get("traceability")
     if not isinstance(traceability, Mapping):
         issues.append(_issue("traceability_missing", "traceability must be a mapping"))
@@ -1144,22 +1186,86 @@ def analyse_cost(draft: Mapping[str, Any], configured: Mapping[str, Any]) -> tup
     return result, blockers, warnings
 
 
+def _repository_relative_evidence_path(
+    repo_root: Path, value: Any,
+) -> tuple[Path | None, str | None]:
+    """Resolve a declared evidence path while refusing absolute/traversal values."""
+    if not isinstance(value, str) or not value.strip():
+        return None, "path_missing"
+    relative = PurePosixPath(value)
+    if relative.is_absolute() or ".." in relative.parts:
+        return None, "path_not_repository_relative"
+    root = repo_root.resolve()
+    path = (root / relative).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return None, "path_outside_repository"
+    return path, None
+
+
 def analyse_live_readiness(
     draft: Mapping[str, Any], configured: Mapping[str, Any], *, repo_root: Path,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Validate recorded live target/provider probe evidence for this epoch."""
+    """Validate recorded live target/provider probe evidence for this epoch.
+
+    A draft may pin a fresh evidence file with ``scope.live_readiness``.  The
+    pinned path and SHA-256 are authoritative when present; an invalid pin
+    fails closed and never falls back to the retained epoch file.  Without a
+    declaration the historical epoch path remains readable for compatibility.
+    """
     blockers: list[dict[str, Any]] = []
+    root = Path(repo_root).resolve()
     epoch = draft.get("intended_epoch") or {}
     epoch_id = str(epoch.get("epoch_id") or "")
-    path = repo_root / "results" / "epochs" / epoch_id / "live-readiness.json"
+    scope_value = draft.get("scope")
+    scope: Mapping[str, Any] = scope_value if isinstance(scope_value, Mapping) else {}
+    declared_value = scope.get("live_readiness")
+    declared: Mapping[str, Any] | None = (
+        declared_value if isinstance(declared_value, Mapping) else None
+    )
+    explicit = declared_value is not None
+    declared_issues: list[str] = []
+    declared_path_text = declared.get("path") if declared is not None else None
+    declared_sha = declared.get("sha256") if declared is not None else None
+    declared_status = str(declared.get("status") or "") if declared is not None else None
+    planned_not_collected = declared_status == LIVE_READINESS_PLANNED_STATUS
+    path: Path | None = None
+    if explicit and declared is None:
+        declared_issues.append("binding_not_object")
+    elif declared is not None:
+        path, path_issue = _repository_relative_evidence_path(root, declared_path_text)
+        if path_issue:
+            declared_issues.append(path_issue)
+        if declared_sha is None:
+            if not planned_not_collected:
+                declared_issues.append("sha256_missing")
+        elif not isinstance(declared_sha, str) or not HEX64.fullmatch(declared_sha):
+            declared_issues.append("sha256_invalid")
+    else:
+        path = root / "results" / "epochs" / epoch_id / "live-readiness.json"
+
     result: dict[str, Any] = {
-        "path": str(path.relative_to(repo_root)) if path.is_file() else None,
-        "present": path.is_file(),
+        "path": None,
+        "present": False,
+        "declared": (
+            {
+                "path": declared_path_text,
+                "sha256": declared_sha,
+                "status": declared_status or None,
+                "explicit": True,
+            }
+            if explicit else None
+        ),
+        "binding_issues": sorted(set(declared_issues)),
+        "file_sha256": None,
         "checks": {},
         "missing": [],
         "detail": "No recorded live target/provider readiness evidence exists for this epoch.",
     }
-    if not path.is_file():
+
+    def unverified(detail: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        result["detail"] = detail
         blockers.append(_blocker(
             "live_readiness_unverified", "readiness",
             "offline validation cannot prove DVWA authentication, requested level, endpoint "
@@ -1173,8 +1279,78 @@ def analyse_live_readiness(
             severity="gate",
         ))
         return result, blockers
+
+    if explicit and declared_issues:
+        blockers.append(_blocker(
+            "live_readiness_binding_invalid", "readiness",
+            "the explicitly pinned live readiness evidence declaration is invalid: "
+            f"{sorted(set(declared_issues))}; no fallback path is read",
+            severity="gate",
+            evidence={"declared": result["declared"]},
+        ))
+        result["detail"] = "Explicit live readiness binding is invalid; no fallback was read."
+        return result, blockers
+    assert path is not None
+    if explicit and planned_not_collected and path.is_file():
+        blockers.append(_blocker(
+            "live_readiness_binding_invalid", "readiness",
+            "scope.live_readiness is declared planned_not_collected but its path already "
+            "exists; the declaration must be updated with the recorded digest before use",
+            severity="gate",
+            evidence={"declared": result["declared"], "path": str(path.relative_to(root))},
+        ))
+        result["detail"] = "Planned live readiness evidence is already present but unpinned."
+        return result, blockers
+    if not path.is_file():
+        if explicit and planned_not_collected:
+            result["path"] = str(path.relative_to(root)) if path else None
+            return unverified(
+                "The freshly planned live readiness evidence has not been collected; "
+                "the retained failed probe was not read as a fallback."
+            )
+        if explicit:
+            blockers.append(_blocker(
+                "live_readiness_binding_invalid", "readiness",
+                "scope.live_readiness pins a file that does not exist; no fallback path is read",
+                severity="gate",
+                evidence={"declared": result["declared"]},
+            ))
+            result["detail"] = "Explicit live readiness evidence is missing."
+            return result, blockers
+        return unverified("No recorded live target/provider readiness evidence exists for this epoch.")
     try:
-        document = json.loads(path.read_bytes())
+        raw = path.read_bytes()
+    except OSError as exc:
+        if explicit:
+            blockers.append(_blocker(
+                "live_readiness_binding_invalid", "readiness",
+                f"pinned live readiness evidence cannot be read: {type(exc).__name__}: {exc}",
+                severity="gate",
+                evidence={"declared": result["declared"]},
+            ))
+            result["detail"] = "Explicit live readiness evidence is unreadable."
+        else:
+            blockers.append(_blocker(
+                "live_readiness_unreadable", "readiness", f"{type(exc).__name__}: {exc}",
+            ))
+        return result, blockers
+    actual_file_sha = sha256(raw).hexdigest()
+    result["file_sha256"] = actual_file_sha
+    if explicit and declared_sha is not None and actual_file_sha != declared_sha:
+        blockers.append(_blocker(
+            "live_readiness_binding_invalid", "readiness",
+            "scope.live_readiness.sha256 does not match the pinned evidence file; "
+            "no fallback path is read",
+            severity="gate",
+            evidence={
+                "declared": result["declared"],
+                "actual_file_sha256": actual_file_sha,
+            },
+        ))
+        result["detail"] = "Explicit live readiness evidence digest does not match."
+        return result, blockers
+    try:
+        document = json.loads(raw)
     except (OSError, json.JSONDecodeError) as exc:
         blockers.append(_blocker(
             "live_readiness_unreadable", "readiness", f"{type(exc).__name__}: {exc}",
@@ -1221,6 +1397,7 @@ def analyse_live_readiness(
         if check_id in required and check.get("status") != "passed"
     )
     result.update({
+        "path": str(path.relative_to(root)),
         "present": True,
         "checks": {
             check_id: {
@@ -2022,51 +2199,203 @@ def _authorization_gate(draft: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _oracle_preregistration(draft: Mapping[str, Any], *, root: Path) -> dict[str, Any]:
-    """Read the pinned preregistration artifact without treating proof as present."""
+def _oracle_preregistration(
+    draft: Mapping[str, Any], *, root: Path,
+    configured: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Read the explicitly pinned preregistration artifact without treating proof as present.
+
+    The draft's ``policy.oracle_preregistration.document_path``/``file_sha256``/
+    ``draft_sha256`` pin is authoritative.  The retained historical document is
+    never consumed as a fallback, and the artifact must match this draft's
+    intended epoch, output root, fixture, protocol and configured oracle sources.
+    A prospective commitment remains separate from later per-run proof.
+    """
     policy_value = draft.get("policy")
     policy: Mapping[str, Any] = policy_value if isinstance(policy_value, Mapping) else {}
     declared_value = policy.get("oracle_preregistration")
     declared: Mapping[str, Any] = declared_value if isinstance(declared_value, Mapping) else {}
-    path = root / ORACLE_PREREGISTRATION_DRAFT_PATH
+    declared_path = declared.get("document_path")
     result: dict[str, Any] = {
         "status": "missing_not_registered",
         "draft_declared_status": declared.get("status"),
         "registered": False,
         "evidence_imported": False,
-        "draft_path": ORACLE_PREREGISTRATION_DRAFT_PATH,
+        "draft_path": declared_path if isinstance(declared_path, str) else None,
         "documentation_path": ORACLE_PREREGISTRATION_DOC_PATH,
+        "file_sha256": None,
+        "draft_sha256": None,
+        "binding_issues": [],
         "commitment": None,
         "proof": None,
         "detail": (
-            "The preregistration artifact is missing or invalid. Configured scoring oracle "
-            "sources are configuration, not preregistered independent evidence."
+            "No prospective preregistration artifact is pinned. The fixed historical "
+            "document is not consumed; configured scoring oracle sources are "
+            "configuration, not preregistered independent evidence."
         ),
     }
+    if not isinstance(declared_path, str) or not declared_path.strip():
+        return result
+
+    path, path_issue = _repository_relative_evidence_path(root, declared_path)
+    declared_file = declared.get("file_sha256")
+    declared_draft = declared.get("draft_sha256")
+    binding_issues: list[str] = []
+    if path_issue:
+        binding_issues.append(path_issue)
+    if not isinstance(declared_file, str) or not HEX64.fullmatch(declared_file):
+        binding_issues.append("file_sha256_missing_or_invalid")
+    if not isinstance(declared_draft, str) or not HEX64.fullmatch(declared_draft):
+        binding_issues.append("draft_sha256_missing_or_invalid")
+    if binding_issues:
+        result.update({
+            "status": "invalid",
+            "binding_issues": sorted(set(binding_issues)),
+            "detail": "The pinned prospective preregistration declaration is incomplete.",
+        })
+        return result
+    assert path is not None
     if not path.is_file():
+        result.update({
+            "status": "invalid",
+            "binding_issues": ["document_missing"],
+            "detail": "The pinned prospective preregistration artifact does not exist.",
+        })
+        return result
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        result.update({
+            "status": "invalid",
+            "binding_issues": ["document_unreadable"],
+            "detail": f"{type(exc).__name__}: {exc}",
+        })
+        return result
+    actual_file_sha = sha256(raw).hexdigest()
+    result["file_sha256"] = actual_file_sha
+    if actual_file_sha != declared_file:
+        result.update({
+            "status": "invalid",
+            "binding_issues": ["file_sha256_mismatch"],
+            "detail": "The pinned preregistration file digest does not match its bytes.",
+        })
         return result
     try:
         from evaluation import oracle_preregistration
 
-        report = oracle_preregistration.assess_draft(
-            oracle_preregistration.load_draft(path), root=root,
-        )
+        document = oracle_preregistration.load_draft(path)
+        report = oracle_preregistration.assess_draft(document, root=root)
+        actual_draft_sha = oracle_preregistration.draft_hash(document)
     except (OSError, ValueError) as exc:
-        result.update({"status": "invalid", "detail": f"{type(exc).__name__}: {exc}"})
+        result.update({
+            "status": "invalid",
+            "binding_issues": ["assessment_failed"],
+            "detail": f"{type(exc).__name__}: {exc}",
+        })
         return result
+    if declared_draft != actual_draft_sha or document.get("draft_sha256") != actual_draft_sha:
+        result.update({
+            "status": "invalid",
+            "binding_issues": ["draft_sha256_mismatch"],
+            "detail": "The pinned preregistration content digest does not match the artifact.",
+        })
+        return result
+
+    intended_value = draft.get("intended_epoch")
+    intended: Mapping[str, Any] = intended_value if isinstance(intended_value, Mapping) else {}
+    scope_value = draft.get("scope")
+    scope: Mapping[str, Any] = scope_value if isinstance(scope_value, Mapping) else {}
+    artifact_epoch = report.get("epoch") or {}
+    artifact_fixture = report.get("fixture") or {}
+    source_record = report.get("source_record") or {}
+    if artifact_epoch.get("epoch_id") != intended.get("epoch_id"):
+        binding_issues.append("epoch_id_mismatch")
+    if artifact_epoch.get("output_root") != intended.get("output_root"):
+        binding_issues.append("output_root_mismatch")
+    if artifact_epoch.get("status") != "not_started" or artifact_epoch.get("started_at") is not None:
+        binding_issues.append("epoch_started_before_preregistration")
+    if artifact_fixture.get("fixture_id") != scope.get("fixture_id"):
+        binding_issues.append("fixture_id_mismatch")
+    if artifact_fixture.get("protocol_version") != scope.get("protocol_version"):
+        binding_issues.append("protocol_version_mismatch")
+
+    root_path = Path(root).resolve()
+
+    def normalised(value: Any) -> str | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        raw_path = Path(value)
+        if not raw_path.is_absolute():
+            raw_path = root_path / raw_path
+        try:
+            return raw_path.resolve().relative_to(root_path).as_posix()
+        except ValueError:
+            return raw_path.resolve().as_posix()
+
+    declared_oracles_value = policy.get("scoring_oracles")
+    declared_oracles: Mapping[str, Any] = (
+        declared_oracles_value if isinstance(declared_oracles_value, Mapping) else {}
+    )
+    if declared_oracles:
+        if declared_oracles.get("path") and normalised(declared_oracles.get("path")) != \
+                normalised(source_record.get("path")):
+            binding_issues.append("source_record_path_mismatch")
+        if declared_oracles.get("file_sha256") and \
+                source_record.get("file_sha256") != declared_oracles.get("file_sha256"):
+            binding_issues.append("source_file_sha256_mismatch")
+        if declared_oracles.get("sha256") and \
+                source_record.get("content_sha256") != declared_oracles.get("sha256"):
+            binding_issues.append("source_content_sha256_mismatch")
+        if declared_oracles.get("source_count") is not None and \
+                source_record.get("source_count") != declared_oracles.get("source_count"):
+            binding_issues.append("source_count_mismatch")
+        declared_ids = sorted(
+            str(source_id) for source_id in (declared_oracles.get("source_ids") or [])
+        )
+        if declared_ids and declared_ids != sorted(
+            str(source_id) for source_id in (source_record.get("sources") or [])
+        ):
+            binding_issues.append("source_ids_mismatch")
+    configured_map: Mapping[str, Any] = configured or {}
+    if configured_map.get("fixture_id") and \
+            artifact_fixture.get("fixture_id") != configured_map.get("fixture_id"):
+        binding_issues.append("configured_fixture_mismatch")
+    if configured_map.get("protocol_version") and \
+            artifact_fixture.get("protocol_version") != configured_map.get("protocol_version"):
+        binding_issues.append("configured_protocol_mismatch")
+    configured_ids = sorted(
+        str(source_id) for source_id in (configured_map.get("scoring_oracle_source_ids") or [])
+    )
+    if configured_ids and configured_ids != sorted(
+        str(source_id) for source_id in (source_record.get("sources") or [])
+    ):
+        binding_issues.append("configured_source_ids_mismatch")
+    configured_content = configured_map.get("scoring_oracles_sha256")
+    if configured_content and source_record.get("content_sha256") != configured_content:
+        binding_issues.append("configured_source_hash_mismatch")
+
     commitment = report["readiness"]["commitment"]
     result.update({
         "status": (
+            "invalid" if binding_issues else
             "preregistered" if commitment["preregistered"] else "not_preregistered"
         ),
-        "registered": bool(commitment["preregistered"]),
+        "registered": bool(commitment["preregistered"]) and not binding_issues,
         "evidence_imported": True,
-        "draft_sha256": report.get("source_record", {}).get("file_sha256"),
+        "file_sha256": actual_file_sha,
+        "draft_sha256": actual_draft_sha,
+        "epoch": artifact_epoch,
+        "fixture": artifact_fixture,
+        "source_record": source_record,
+        "binding_issues": sorted(set(binding_issues)),
         "commitment": commitment,
         "proof": report["readiness"]["proof"],
         "coverage": report.get("coverage"),
         "approval": report.get("preregistration"),
         "detail": (
+            f"The pinned preregistration artifact does not match this draft/configured scope: "
+            f"{sorted(set(binding_issues))}."
+            if binding_issues else
             "The commitment and owner approval are recorded prospectively. Per-run "
             "attestations remain separate proof and are graded only from recorded controls."
         ),
@@ -2105,11 +2434,18 @@ def build_readiness_report(
     discovery, discovery_blockers = check_discovery(
         repo_root=repo_root, web_root=web_root, draft=draft,
     )
-    oracle = _oracle_preregistration(draft, root=Path(repo_root).resolve())
+    oracle = _oracle_preregistration(
+        draft, root=Path(repo_root).resolve(), configured=configured,
+    )
     oracle_blockers: list[dict[str, Any]] = []
     if not oracle["registered"]:
+        blocker_id = (
+            "oracle_preregistration_binding_invalid"
+            if oracle.get("binding_issues") else
+            "oracle_preregistration_uncommitted"
+        )
         oracle_blockers.append(_blocker(
-            "oracle_preregistration_uncommitted", "policy",
+            blocker_id, "policy",
             "the preregistration artifact does not record a valid prospective commitment "
             f"(status={oracle.get('status')!r}); declared "
             "policy.oracle_preregistration.status alone is not authorization. "
@@ -2118,6 +2454,7 @@ def build_readiness_report(
                 "status": oracle.get("status"),
                 "declared_status": oracle.get("draft_declared_status"),
                 "draft_path": oracle.get("draft_path"),
+                "binding_issues": oracle.get("binding_issues"),
             },
         ))
     blockers = []
