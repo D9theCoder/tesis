@@ -21,3 +21,6 @@ results/
 /docs/tui_baseline_*/
 /docs/tui_shell_*/
 /docs/tui_mission_control_*/
+
+# documents (including the checkpoint/ snapshots inside it)
+/docs/docx/

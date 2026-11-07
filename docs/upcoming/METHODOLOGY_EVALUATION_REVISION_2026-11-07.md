@@ -234,6 +234,10 @@ Required current status wording:
 
 > The restored epoch contains 108 executed coordinates and 96 final numeric receipts. All 12 High Access Control coordinates remain incomplete, with final scores reported as unavailable. Their recorded measured negatives do not resolve the outstanding scoring requirement. Further evidence/protocol work is required; they are not excluded or treated as an accepted permanent limitation.
 
+Important NOTE REGARDING DOCX EDIT:
+
+> Checkpoint the current docx with proper timestamp in the file name you want to edit to docs/docx/checkpoint/ before editing. The new/edited text must be colored red. If the text which you edited is already red, no need to change the color to black, keep it red. 
+
 ### Completed preparation — documentation only
 
 - [x] Record all four owner choices and the additional High-AC clarification.
