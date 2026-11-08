@@ -59,7 +59,9 @@ def test_permission_denial_envelope_does_not_prove_vertical_probe():
             return SimpleNamespace(status_code=200, text='{"result":"fail","error":"Access denied"}')
     passed, _, observations, _ = _probe_preconditions(Denied(), ['2'], set())
     assert passed is False
-    assert observations['role_based_access_present'] is False
+    # A denial envelope from the non-admin session alone cannot distinguish a
+    # role boundary from a session/transport failure; it must stay unknown.
+    assert 'role_based_access_present' not in observations
 
 
 @pytest.mark.parametrize("visible", [True, False])

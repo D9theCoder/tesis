@@ -10,6 +10,7 @@ import pytest
 import evaluation.baseline_audit as baseline_audit
 from evaluation.baseline_audit import (
     _ceilings,
+    _decision,
     _dependency_census,
     audit_baseline,
     classify_dimension,
@@ -102,6 +103,40 @@ def test_missing_selected_authority_receipt_is_an_explicit_gap():
     assert decision is None
     assert gap['gap'] == 'missing_selected_authority_receipt'
     assert gap['run_ref'] == 'mn-1'
+
+
+def test_bare_denial_does_not_become_a_fixture_cause():
+    record = measured_negative_artifact()
+    record["measured_negative"] = {"complete": False}
+    record["method_verdicts"] = {}
+    record["control_events"] = [{"decision": "denied", "method": "ac_idor"}]
+    row = {"state": "null", "component": None,
+           "pending_reason": "no_eligible_candidate"}
+    queue = {"method": "ac_idor", "components": {"Sexploit": None}, "candidates": []}
+    decision, gap = classify_dimension(record, queue, "Sexploit", row, "mn-1")
+    assert decision is None
+    assert gap["gap"] == "unresolved_sexploit_no_eligible_candidate"
+
+    record["control_events"] = [{
+        "decision": "denied", "method": "ac_idor",
+        "principal": "gordonb", "object": "admin_user_manager",
+        "policy": "admin_only_user_record", "expected_allowed": False,
+        "positive_control": {"principal": "admin", "allowed": True},
+        "http_status": 403, "response_sha256": "b" * 64,
+    }]
+    # The audit decision builder admits the matched denial; the null-component
+    # classifier still requires a complete measured negative before assigning a
+    # fixture cause to an unavailable component.
+    decision = _decision(
+        "mn-1", "Sexploit", "fixture_infeasible", record, queue,
+        ["#/control_events/0"], "matched denial",
+    )
+    assert decision is not None
+    assert decision.get("admission") != "rejected"
+    assert decision["cause"] == "fixture_infeasible"
+    _decision_result, gap = classify_dimension(
+        record, queue, "Sexploit", row, "mn-1")
+    assert gap["gap"] == "unresolved_sexploit_no_eligible_candidate"
 
 
 def test_rejected_selection_without_decision_is_a_scoring_gap():

@@ -174,8 +174,13 @@ def test_all_pending_repeats_remain_visible(monkeypatch):
     assert all(g['output_stability'] is None and g['mean'] is None for g in groups)
 
 
-@pytest.mark.parametrize('method,ceiling', [('ac_idor', 3), ('bf_dictionary', 2)])
-def test_same_session_proof_depends_on_attestation_kind(monkeypatch, method, ceiling):
+@pytest.mark.parametrize('method', ['ac_idor', 'bf_dictionary'])
+def test_same_session_evidence_cannot_raise_proof_ceiling(monkeypatch, method):
+    # Fix28 current permission evidence and the session contract both require a
+    # candidate replay whose session fingerprint differs from its initial
+    # fingerprint.  The previous AC-specific expectation of 3 encoded the
+    # superseded pre-Fix28 semantics; same-session evidence now stays at the
+    # unoracled level-2 ceiling for both attestation kinds.
     from evaluation.thesis_scoring import review_queue
     a, row, att = oracle_artifact(monkeypatch, method)
     row['session_fingerprint'] = att['session_fingerprint'] = att['initial_session_fingerprint']
@@ -185,4 +190,4 @@ def test_same_session_proof_depends_on_attestation_kind(monkeypatch, method, cei
             c['session_fingerprint'] = c['initial_session_fingerprint']
     bundle['sha256'] = digest(bundle['document'])
     q = review_queue(export(a, f'{method}-same-session'))
-    assert next(r for r in q['candidates'] if r['candidate_id'] == row['candidate_id'])['proof_ceiling'] == ceiling
+    assert next(r for r in q['candidates'] if r['candidate_id'] == row['candidate_id'])['proof_ceiling'] == 2

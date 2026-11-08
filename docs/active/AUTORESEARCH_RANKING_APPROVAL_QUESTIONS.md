@@ -12,7 +12,7 @@ It owns the remaining implementation/evidence work; this file retains the settle
 **Latest owner choices (2026-11-07):** High AC remains incomplete/unavailable and all 12
 coordinates still need resolution; choices 2B, 3B and 4B select a prospective methodology
 revision. See [section 5](<#5-owner-decisions-for-the-next-methodology-revision-2026-11-07>) and the
-[separate planning document](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>).
+[separate planning document](<METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>).
 The later [USER APPROVED authorization](<HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md#user-approved--full-implementation-and-execution-2026-11-07>)
 now covers full implementation/execution and LLM/tool calls for this revision;
 this turn records that approval without launching work.
@@ -333,7 +333,7 @@ The follow-up explicitly states that **the 12 High AC still need to be solved**.
 | 3 — Scorer fixes | B: group rejected-decision audit, receipt epoch binding and runtime guard fixes into that next freeze | Not implemented. New hashes identify future source changes; historical receipts remain evidence for their recorded epoch. |
 | 4 — Exploitation credit | B: revise `Sexploit` level 4 for selected-method causal chain participation | Proposed evidence contract only. Unrelated chain success must not transfer credit or automatically regrade prior receipts. |
 
-The [methodology/evaluation-metrics revision proposal](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>)
+The [methodology/evaluation-metrics revision proposal](<METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>)
 is the detailed report-change plan. It preserves the five weights, candidate denominators,
 manual-assessment terminology, current statistical method and immutable historical records.
 The [active handoff](<HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md>) now separately tracks

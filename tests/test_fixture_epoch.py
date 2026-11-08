@@ -67,6 +67,22 @@ def _install_censuses(
     return calls
 
 
+def _write_identity_config(
+    tmp_path: Path,
+    *,
+    fixture_id: str | None = "offline-fixture",
+    protocol_version: str | None = "offline-protocol",
+) -> Path:
+    lines: list[str] = []
+    if fixture_id is not None:
+        lines.append(f"fixture_id: {fixture_id}")
+    if protocol_version is not None:
+        lines.append(f"protocol_version: {protocol_version}")
+    path = tmp_path / "config.yaml"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 def _build(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -78,8 +94,36 @@ def _build(
         epoch_id="offline-epoch",
         repo_root=tmp_path,
         output_dir=tmp_path / "evidence",
-        config_path=tmp_path / "config.yaml",
+        config_path=_write_identity_config(tmp_path),
     )
+
+
+def test_missing_fixture_identity_refuses_attestation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    calls = _install_censuses(monkeypatch, _complete_census(), _complete_census())
+    with pytest.raises(ValueError, match="fixture_id"):
+        fixture_epoch.build_attestations(
+            epoch_id="offline-epoch",
+            repo_root=tmp_path,
+            output_dir=tmp_path / "evidence",
+            config_path=_write_identity_config(tmp_path, fixture_id=None),
+        )
+    assert calls == []
+
+
+def test_missing_protocol_identity_refuses_attestation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    calls = _install_censuses(monkeypatch, _complete_census(), _complete_census())
+    with pytest.raises(ValueError, match="protocol_version"):
+        fixture_epoch.build_attestations(
+            epoch_id="offline-epoch",
+            repo_root=tmp_path,
+            output_dir=tmp_path / "evidence",
+            config_path=_write_identity_config(tmp_path, protocol_version=None),
+        )
+    assert calls == []
 
 
 def _no_mutation(tmp_path: Path) -> dict[str, Any]:

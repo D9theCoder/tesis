@@ -96,11 +96,29 @@ def _write_config(tmp_path: Path) -> Path:
     return config_path
 
 
+def _six_outcome_family() -> dict[str, Any]:
+    return {
+        "stratum": "model x surface x level",
+        "contrast": "linear_hybrid vs akg_guided_hybrid",
+        "outcomes": list(research_plan.CONDITION_CONTRAST_OUTCOMES),
+        "multiplicity": research_plan.CONDITION_CONTRAST_MULTIPLICITY,
+        "family_size": 6,
+        "missing_outcome_policy": research_plan.CONDITION_CONTRAST_MISSING_POLICY,
+        "declaration_source": (
+            "frozen research_config hashed into the plan before selection"),
+        "supplementary_families": list(
+            research_plan.CONDITION_CONTRAST_SUPPLEMENTARY_FAMILIES),
+    }
+
+
 def _study_document(**overrides: Any) -> dict[str, Any]:
     document: dict[str, Any] = json.loads(STUDY_PATH.read_text(encoding="utf-8"))
     # Fresh synthetic launch input, not a rewrite of the dated source.
     document["research_config_version"] = research_plan.RESEARCH_CONFIG_VERSION
     document["fixture_restoration"] = None
+    document["design"]["multiple_comparisons"] = (
+        research_plan.CONDITION_CONTRAST_MULTIPLICITY)
+    document["design"]["condition_contrast_family"] = _six_outcome_family()
     document.update(overrides)
     return document
 
@@ -139,6 +157,9 @@ def _build(monkeypatch, tmp_path, config_path, *, study=None, output_epoch=None,
             # A fresh launch fixture may reuse declared axes, not an original
             # historical namespace. Explicit custom/invalid schemas stay intact.
             document["research_config_version"] = research_plan.RESEARCH_CONFIG_VERSION
+            document["design"]["multiple_comparisons"] = (
+                research_plan.CONDITION_CONTRAST_MULTIPLICITY)
+            document["design"]["condition_contrast_family"] = _six_outcome_family()
         # The synthetic repository has no operator fixture documents; the
         # evidence-binding path is covered separately against real files.
         document["fixture_restoration"] = None
@@ -193,6 +214,27 @@ def test_study_rejects_forced_only_empty_or_malformed_blocks(
     path = _write_study(tmp_path, _study_document(blocks=blocks))
 
     with pytest.raises(ValueError, match=match):
+        load_research_config(path)
+
+
+def test_study_rejects_broader_or_silently_shrunk_family_wording(tmp_path):
+    document = _study_document()
+    document["design"]["multiple_comparisons"] = "paired metric family"
+    path = _write_study(tmp_path, document)
+    with pytest.raises(ValueError, match="six-outcome Holm family"):
+        load_research_config(path)
+
+    document = _study_document()
+    document["design"]["condition_contrast_family"]["missing_outcome_policy"] = (
+        "drop unavailable outcomes and adjust over the remainder")
+    path = _write_study(tmp_path, document)
+    with pytest.raises(ValueError, match="missing_outcome_policy"):
+        load_research_config(path)
+
+    document = _study_document()
+    document["design"]["condition_contrast_family"]["supplementary_families"] = []
+    path = _write_study(tmp_path, document)
+    with pytest.raises(ValueError, match="supplementary_families"):
         load_research_config(path)
 
 
@@ -528,6 +570,220 @@ def test_runner_executes_exactly_the_declared_blocks(monkeypatch, tmp_path, bloc
     assert (epoch / "research-run-summary.json").is_file()
 
 
+def test_artifact_plan_identity_is_required_and_must_match():
+    plan = {"plan_sha256": "a" * 64, "epoch_id": "offline-epoch"}
+    expected = {"plan_sha256": "a" * 64, "epoch_id": "offline-epoch"}
+    assert research_plan._validate_artifact_plan_identities(
+        plan, [{"research_plan_identity": dict(expected)}],
+    ) == expected
+    with pytest.raises(ValueError, match="research_plan_identity"):
+        research_plan._validate_artifact_plan_identities(plan, [{}])
+    with pytest.raises(ValueError, match="research_plan_identity"):
+        research_plan._validate_artifact_plan_identities(
+            plan, [{"research_plan_identity": {
+                "plan_sha256": "a" * 64, "epoch_id": "different-epoch"}}],
+        )
+
+
+def _block_config():
+    from tesis.model_config import LLMRuntimeConfig, ModelConfig
+
+    config = _resolved_config(synthetic_profile())
+    config.models = {
+        DEEPSEEK_PROFILE: ModelConfig(
+            provider="openai_compatible", api_key="offline",
+            model_name="deepseek-ai/DeepSeek-V4.1-Flash-1017",
+            reasoning_effort=PRIMARY_REASONING_EFFORT,
+        ),
+    }
+    config.target_url = "http://fixture.invalid/dvwa"
+    config.iterations = 10
+    config.stop_policy = "coverage"
+    config.coverage_target = 0.7
+    config.enriched_reporting = False
+    config.diagnose = False
+    config.evasion_max_retries = 1
+    config.evasion_cooldown_threshold = 2
+    config.llm_max_concurrency = 1
+    config.llm_cache = False
+    config.llm_runtime = LLMRuntimeConfig()
+    config.scoring_evaluator = {}
+    return config
+
+
+def test_block_runner_emits_the_frozen_plan_identity_to_executions(monkeypatch, tmp_path):
+    config = _block_config()
+    monkeypatch.setattr(research_plan, "load_and_resolve_config", lambda **_kwargs: config)
+    captured: dict[str, Any] = {}
+    coordinate = {
+        "provider": DEEPSEEK_PROFILE, "surface": "sqli", "security_level": "low",
+        "payload_mode": "hybrid", "experiment_condition": "linear_hybrid",
+        "target_method": None, "repeat_index": 0, "coordinate_id": "c0",
+        "coordinate_index": 0, "guardrail_retry_enabled": False,
+        "guardrail_handling": "reactive",
+    }
+    plan = {
+        "epoch_id": "offline-identity-epoch",
+        "plan_sha256": "a" * 64,
+        "config_path": str(tmp_path / "config.yaml"),
+        "source_hashes_sha256": "b" * 64,
+        "constraints": {"repeats": 1, "fixture_restoration": None},
+        "payload_policy_snapshot": {"snapshot_sha256": "c" * 64},
+        "blocks": {"selection": [coordinate]},
+    }
+
+    def fake_matrix(**kwargs):
+        captured.update(kwargs)
+        identity = kwargs["research_plan_identity"]
+        artifact = {
+            "schema_version": "execution", "execution_id": "exec-0", "run_id": "run-0",
+            "status": "success", "execution_status": "completed",
+            "security_outcome": "unconfirmed",
+            "security_outcome_reason": {"code": "NO_CANDIDATE_CONFIRMATION",
+                                        "detail": "", "evidence_refs": []},
+            "provider": DEEPSEEK_PROFILE, "surface": "sqli", "security_level": "low",
+            "payload_mode": "hybrid", "experiment_condition": "linear_hybrid",
+            "target_method": None, "repeat_index": 0,
+            "research_plan_identity": identity,
+        }
+        execution_id = "offline-identity-epoch-selection"
+        aggregate_path = Path(kwargs["output_dir"]) / f"{execution_id}.matrix.json"
+        aggregate_path.write_text(json.dumps({"execution_id": execution_id}), encoding="utf-8")
+        aggregate = {
+            "execution_id": execution_id, "execution_status": "completed",
+            "scheduler": {"planned": 1, "prepared": 1, "submitted": 1, "observed": 1,
+                          "completed": 1, "failed": 0, "interrupted": 0,
+                          "unstarted": 0, "skipped": 0},
+        }
+        return [artifact], aggregate
+
+    monkeypatch.setattr(
+        "evaluation.multi_llm_runner.run_provider_matrix", fake_matrix)
+    receipt, artifacts, _directories, _aggregate = research_plan._run_block(
+        plan, "selection", output_epoch=tmp_path / "epoch")
+
+    expected = {"plan_sha256": "a" * 64, "epoch_id": "offline-identity-epoch"}
+    assert captured["research_plan_identity"] == expected
+    assert artifacts[0]["research_plan_identity"] == expected
+    assert receipt["execution_status"] == "completed"
+    assert receipt["coverage_status"] == "reconciled"
+    assert receipt["submitted"] == 1
+
+
+def test_block_runner_rejects_an_execution_without_the_frozen_identity(monkeypatch, tmp_path):
+    config = _block_config()
+    monkeypatch.setattr(research_plan, "load_and_resolve_config", lambda **_kwargs: config)
+    coordinate = {
+        "provider": DEEPSEEK_PROFILE, "surface": "sqli", "security_level": "low",
+        "payload_mode": "hybrid", "experiment_condition": "linear_hybrid",
+        "target_method": None, "repeat_index": 0, "coordinate_id": "c0",
+        "coordinate_index": 0, "guardrail_retry_enabled": False,
+        "guardrail_handling": "reactive",
+    }
+    plan = {
+        "epoch_id": "offline-identity-epoch", "plan_sha256": "a" * 64,
+        "config_path": str(tmp_path / "config.yaml"),
+        "source_hashes_sha256": "b" * 64,
+        "constraints": {"repeats": 1, "fixture_restoration": None},
+        "payload_policy_snapshot": {"snapshot_sha256": "c" * 64},
+        "blocks": {"selection": [coordinate]},
+    }
+
+    def fake_matrix(**kwargs):
+        execution_id = "offline-identity-epoch-selection"
+        aggregate_path = Path(kwargs["output_dir"]) / f"{execution_id}.matrix.json"
+        aggregate_path.write_text(json.dumps({"execution_id": execution_id}), encoding="utf-8")
+        artifact = {
+            "schema_version": "execution", "execution_id": "exec-0", "run_id": "run-0",
+            "status": "success", "execution_status": "completed",
+            "security_outcome": "unconfirmed",
+            "security_outcome_reason": {"code": "NO_CANDIDATE_CONFIRMATION",
+                                        "detail": "", "evidence_refs": []},
+            "provider": DEEPSEEK_PROFILE, "surface": "sqli", "security_level": "low",
+            "payload_mode": "hybrid", "experiment_condition": "linear_hybrid",
+            "target_method": None, "repeat_index": 0,
+        }
+        return [artifact], {
+            "execution_id": execution_id, "execution_status": "completed",
+            "scheduler": {"planned": 1, "prepared": 1, "submitted": 1, "observed": 1,
+                          "completed": 1, "failed": 0, "interrupted": 0,
+                          "unstarted": 0, "skipped": 0},
+        }
+
+    monkeypatch.setattr(
+        "evaluation.multi_llm_runner.run_provider_matrix", fake_matrix)
+    with pytest.raises(ValueError, match="research_plan_identity"):
+        research_plan._run_block(plan, "selection", output_epoch=tmp_path / "epoch")
+    receipt = json.loads((tmp_path / "epoch/selection/block-run-receipt.json").read_text())
+    assert receipt["status"] == "failed"
+    assert "research_plan_identity" in receipt["error"]
+
+
+def test_runner_reports_failed_child_even_when_grid_is_reconciled(monkeypatch, tmp_path):
+    plan = _summary_plan(["selection"])
+    epoch = tmp_path / "epoch"
+    epoch.mkdir()
+
+    def fake_block(_plan, block, *, output_epoch):
+        path = Path(output_epoch) / block / "coordinate-reconciliation.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "coordinates": [], "missing": [], "extra": [], "duplicates": [],
+        }), encoding="utf-8")
+        receipt = {
+            "observed": 1, "submitted": 1, "completed": 0, "failed": 1,
+            "interrupted": 0, "unstarted": 0, "execution_status": "failed",
+            "status": "error", "coverage_status": "reconciled",
+            "coordinate_reconciliation_path": str(path),
+        }
+        return receipt, [], [], None
+
+    monkeypatch.setattr(research_plan, "verify_plan", lambda _path: plan)
+    monkeypatch.setattr(research_plan, "_run_block", fake_block)
+    monkeypatch.setattr(
+        research_plan, "_write_epoch_manifest",
+        lambda _root, **_kwargs: epoch / "experiment.manifest.json",
+    )
+    (epoch / "experiment.manifest.json").write_text("{}", encoding="utf-8")
+
+    summary = research_plan.run_research_plan(tmp_path / "plan.json", output_epoch=str(epoch))
+
+    assert summary["status"] == "failed"
+    assert summary["execution"]["completed"] == 0
+    assert summary["execution"]["failed"] == 1
+    assert summary["coordinate_summary"]["failed"] == 1
+    assert summary["coordinate_summary"]["missing"] == 0
+
+
+def test_runner_exception_retains_partial_block_receipt(monkeypatch, tmp_path):
+    plan = _summary_plan(["selection"])
+    epoch = tmp_path / "epoch"
+    epoch.mkdir()
+
+    def exploding_block(_plan, block, *, output_epoch):
+        block_root = Path(output_epoch) / block
+        block_root.mkdir(parents=True, exist_ok=True)
+        receipt = {
+            "planned": 1, "observed": 1, "submitted": 1, "completed": 0,
+            "failed": 1, "interrupted": 0, "unstarted": 0,
+            "execution_status": "failed", "status": "failed",
+        }
+        (block_root / "block-run-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+        raise RuntimeError("synthetic block failure")
+
+    monkeypatch.setattr(research_plan, "verify_plan", lambda _path: plan)
+    monkeypatch.setattr(research_plan, "_run_block", exploding_block)
+
+    with pytest.raises(RuntimeError, match="synthetic block failure"):
+        research_plan.run_research_plan(tmp_path / "plan.json", output_epoch=str(epoch))
+
+    summary = json.loads((epoch / "research-run-summary.json").read_text())
+    assert summary["status"] == "failed"
+    assert summary["execution"]["failed"] == 1
+    assert summary["coordinate_summary"]["observed"] == 1
+    assert summary["blocks"]["selection"]["execution_status"] == "failed"
+
+
 def test_runner_rejects_forced_only_before_any_block(monkeypatch, tmp_path):
     plan = _summary_plan(["forced"])
     calls: list[str] = []
@@ -649,6 +905,56 @@ def test_historical_plan_version_is_readable_but_not_executable(tmp_path):
     }))
     with pytest.raises(ValueError, match="readable but not executable"):
         verify_plan(plan_path)
+
+
+def test_current_plan_requires_the_prospective_receipt_epoch_marker(monkeypatch, offline):
+    config_path = _write_config(offline)
+    plan = _build(monkeypatch, offline, config_path, study=STUDY_PATH)
+    plan_path = offline / "results/runs" / EPOCH / "research-plan.json"
+
+    assert plan["epoch_binding_required"] is True
+    assert verify_plan(plan_path)["epoch_binding_required"] is True
+    assert research_plan._validate_artifact_plan_identities(
+        plan, [{"research_plan_identity": {
+            "plan_sha256": plan["plan_sha256"], "epoch_id": plan["epoch_id"],
+        }}],
+    ) == {"plan_sha256": plan["plan_sha256"], "epoch_id": plan["epoch_id"]}
+
+    without_marker = {
+        key: value for key, value in plan.items()
+        if key not in {"epoch_binding_required", "plan_sha256"}
+    }
+    without_marker["plan_sha256"] = research_plan._json_hash(without_marker)
+    plan_path.write_text(json.dumps(without_marker), encoding="utf-8")
+    with pytest.raises(ValueError, match="prospective receipt epoch"):
+        verify_plan(plan_path)
+
+    with pytest.raises(ValueError, match="prospective receipt epoch"):
+        research_plan._validate_artifact_plan_identities(
+            without_marker,
+            [{"research_plan_identity": {
+                "plan_sha256": without_marker["plan_sha256"],
+                "epoch_id": without_marker["epoch_id"],
+            }}],
+        )
+
+
+def test_historical_plan_decoding_does_not_backfill_the_current_marker(tmp_path):
+    historical = sorted(HISTORICAL_CONTRACT_NAMES["study-plan"])[0]
+    plan = {
+        "artifact_type": "chapter3_research_plan",
+        "plan_version": historical,
+        "epoch_id": "restored-primary-2026-11-06",
+    }
+    plan["plan_sha256"] = research_plan._json_hash(plan)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    raw = plan_path.read_bytes()
+
+    with pytest.raises(ValueError, match="readable but not executable"):
+        verify_plan(plan_path)
+    assert "epoch_binding_required" not in json.loads(plan_path.read_bytes())
+    assert plan_path.read_bytes() == raw
 
 
 def test_unknown_plan_label_stays_unsupported(tmp_path):

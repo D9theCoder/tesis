@@ -13,16 +13,31 @@ and automatic scores are merged. These are offline E2E controls, not live DVWA
 acceptance.
 """
 from copy import deepcopy
+from hashlib import sha256
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from evaluation.scoring_evidence import evidence_hash, oracle_confirmed, verified_dependencies
+from evaluation.scoring_evidence import (
+    evidence_hash,
+    oracle_confirmed,
+    oracle_negative_confirmed,
+    verified_dependencies,
+)
+from foundation.verifier import permission_evidence_mode
 
 
 FIXTURE = "offline-dvwa-permission-fixture"
 PROTOCOL = "permission-chain-offline.v1"
 TARGET = "http://fixture.invalid/dvwa"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+HISTORICAL_ARTIFACT = (
+    REPOSITORY_ROOT
+    / "results/runs/restored-primary-2026-11-06/selection/run-007"
+    / "exec-20261106T100020480863Z-8695cf91f1b149ff8cbc3f597ff9d797.json"
+)
 
 
 class FakeSession:
@@ -57,19 +72,25 @@ class FakeSession:
         path = str(path)
         if path.endswith("login.php") and "PHPSESSID" not in self.cookies:
             self.cookies["PHPSESSID"] = f"anonymous-{len(self.instances)}"
+        final_path = path
         if path.rstrip("/").endswith("authbypass") and not path.endswith("get_user_data.php"):
             body = ("This page should only be accessible by the admin user. for example gordonb/fixture-secret"
                     if self.principal == "admin" else "Login")
             status = 200 if self.principal == "admin" else 302
+            if status == 302:
+                final_path = "login.php"
         elif path.endswith("get_user_data.php"):
             body = '[{"user_id":"1","first_name":"admin"}]' if self.principal in {"admin", "gordonb"} else "Login"
             status = 200 if self.principal in {"admin", "gordonb"} else 302
+            if status == 302:
+                final_path = "login.php"
         elif path.endswith("index.php"):
             body = f"Username: {self.principal}" if self.principal else "Login"
             status = 200
         else:
             body, status = "Login", 302
-        return SimpleNamespace(text=body, status_code=status, url=f"{TARGET}/{path.lstrip('/')}")
+            final_path = "login.php"
+        return SimpleNamespace(text=body, status_code=status, url=f"{TARGET}/{final_path.lstrip('/')}")
 
     def set_security_level(self, level):
         self.calls.append(("security", level))
@@ -226,6 +247,229 @@ def test_candidate_permission_oracle_binds_same_resource_and_identity(monkeypatc
     assert "fixture-secret" not in repr(bundle)
 
 
+def _permission_collect(monkeypatch, session_type):
+    from evaluation import permission_oracle
+    FakeSession.instances = []
+    monkeypatch.setattr(permission_oracle, "DVWASession", session_type)
+    monkeypatch.setattr("foundation.session_manager.DVWASession", session_type)
+    artifact, _, _, _, row, _ = chain_artifact()
+    row.update(object_id="dvwa-user:1", action="read")
+    raw = {
+        "target_url": TARGET, "security_level": "low", "selected_visit_id": row["visit_id"],
+        "selected_method": "ac_idor", "run_id": artifact["run_id"], "execution_id": artifact["execution_id"],
+        "payload_candidates": {"ac_idor": deepcopy(artifact["final_state"]["payload_candidates"]["ac_idor"])},
+        "payload_validation_results": {"ac_idor": [{"candidate_id": row["candidate_id"], "valid": True}]},
+        "response_evidence": artifact["final_state"]["response_evidence"],
+        "found_credentials": [{"username": "gordonb", "password": "fixture-secret",
+            "source_evidence_id": "response:0", "source_candidate_id": "bf_dictionary_generated_0",
+            "source_visit_id": "bf_dictionary:visit:0"}],
+    }
+    result = permission_oracle.collect_permission_oracles(artifact, raw)
+    from evaluation.scoring_evidence import attach_oracle_evidence
+    attach_oracle_evidence(result)
+    enriched = next(e for e in result["final_state"]["response_evidence"]
+                    if e["evidence_id"] == row["evidence_id"])
+    return result, enriched, raw
+
+
+class AnonymousErrorSession(FakeSession):
+    def get(self, path, params=None):
+        if self.principal is None and str(path).endswith("get_user_data.php"):
+            self.calls.append(("GET", str(path), deepcopy(params or {})))
+            return SimpleNamespace(text="Server error", status_code=500,
+                                   url=f"{TARGET}/vulnerabilities/authbypass/get_user_data.php")
+        return super().get(path, params)
+
+
+class AnonymousAmbiguousSession(FakeSession):
+    def get(self, path, params=None):
+        if self.principal is None and str(path).endswith("get_user_data.php"):
+            self.calls.append(("GET", str(path), deepcopy(params or {})))
+            return SimpleNamespace(text="Nothing to see here", status_code=200,
+                                   url=f"{TARGET}/vulnerabilities/authbypass/get_user_data.php")
+        return super().get(path, params)
+
+
+class AnonymousTransportSession(FakeSession):
+    def get(self, path, params=None):
+        if self.principal is None and str(path).endswith("get_user_data.php"):
+            raise RuntimeError("fixture transport failed")
+        return super().get(path, params)
+
+
+class AdminErrorSession(FakeSession):
+    def get(self, path, params=None):
+        if self.principal == "admin" and str(path).endswith("get_user_data.php"):
+            self.calls.append(("GET", str(path), deepcopy(params or {})))
+            return SimpleNamespace(text="Server error", status_code=500,
+                                   url=f"{TARGET}/vulnerabilities/authbypass/get_user_data.php")
+        return super().get(path, params)
+
+
+@pytest.mark.parametrize(
+    "session_type",
+    [AnonymousErrorSession, AnonymousAmbiguousSession, AdminErrorSession],
+    ids=["anonymous-500", "anonymous-ambiguous", "admin-500"],
+)
+def test_error_or_ambiguous_control_cannot_confirm_positive_candidate(monkeypatch, session_type):
+    result, enriched, _raw = _permission_collect(monkeypatch, session_type)
+    assert not oracle_confirmed(result, enriched)
+
+
+def test_transport_failure_cannot_confirm_positive_candidate(monkeypatch):
+    result, enriched, _raw = _permission_collect(monkeypatch, AnonymousTransportSession)
+    bundle = next(source for source in result["config"]["scoring_oracles"]
+                  if source["source_id"].endswith(f":ac_idor:{enriched['evidence_id']}"))
+    assert bundle["document"]["status"] == "pending"
+    assert bundle["document"].get("reason")
+    assert not oracle_confirmed(result, enriched)
+
+
+class CandidateDeniedSession(FakeSession):
+    def get(self, path, params=None):
+        if self.principal == "gordonb" and str(path).endswith("get_user_data.php"):
+            self.calls.append(("GET", str(path), deepcopy(params or {})))
+            return SimpleNamespace(
+                text='{"result":"fail","error":"Access Denied"}', status_code=200,
+                url=f"{TARGET}/vulnerabilities/authbypass/get_user_data.php")
+        return super().get(path, params)
+
+
+class DeniedAnonymousError(CandidateDeniedSession):
+    def get(self, path, params=None):
+        if self.principal is None and str(path).endswith("get_user_data.php"):
+            self.calls.append(("GET", str(path), deepcopy(params or {})))
+            return SimpleNamespace(text="Server error", status_code=500,
+                                   url=f"{TARGET}/vulnerabilities/authbypass/get_user_data.php")
+        return super().get(path, params)
+
+
+class DeniedAnonymousAmbiguous(CandidateDeniedSession):
+    def get(self, path, params=None):
+        if self.principal is None and str(path).endswith("get_user_data.php"):
+            self.calls.append(("GET", str(path), deepcopy(params or {})))
+            return SimpleNamespace(text="Nothing to see here", status_code=200,
+                                   url=f"{TARGET}/vulnerabilities/authbypass/get_user_data.php")
+        return super().get(path, params)
+
+
+class DeniedAdminError(CandidateDeniedSession):
+    def get(self, path, params=None):
+        if self.principal == "admin" and str(path).endswith("get_user_data.php"):
+            self.calls.append(("GET", str(path), deepcopy(params or {})))
+            return SimpleNamespace(text="Server error", status_code=500,
+                                   url=f"{TARGET}/vulnerabilities/authbypass/get_user_data.php")
+        return super().get(path, params)
+
+
+class DeniedAnonymousTransport(CandidateDeniedSession):
+    def get(self, path, params=None):
+        if self.principal is None and str(path).endswith("get_user_data.php"):
+            raise RuntimeError("fixture transport failed")
+        return super().get(path, params)
+
+
+def _negative_permission_collect(monkeypatch, session_type):
+    from evaluation import permission_oracle
+    FakeSession.instances = []
+    monkeypatch.setattr(permission_oracle, "DVWASession", session_type)
+    monkeypatch.setattr("foundation.session_manager.DVWASession", session_type)
+    artifact, _, _, _, row, _ = chain_artifact()
+    row.update(object_id="dvwa-user:1", action="read", signal_detected=False,
+               verified_grade=0, success=True,
+               verification_reason="no_verified_exploit_signal")
+    artifact["final_state"]["verifier_history"][1]["decision"] = "not_confirmed"
+    raw = {
+        "target_url": TARGET, "security_level": "low", "selected_visit_id": row["visit_id"],
+        "selected_method": "ac_idor", "run_id": artifact["run_id"],
+        "execution_id": artifact["execution_id"],
+        "payload_candidates": {"ac_idor": deepcopy(
+            artifact["final_state"]["payload_candidates"]["ac_idor"])},
+        "payload_validation_results": {"ac_idor": [
+            {"candidate_id": row["candidate_id"], "valid": True}]},
+        "response_evidence": artifact["final_state"]["response_evidence"],
+        "found_credentials": [{"username": "gordonb", "password": "fixture-secret",
+            "source_evidence_id": "response:0", "source_candidate_id": "bf_dictionary_generated_0",
+            "source_visit_id": "bf_dictionary:visit:0"}],
+    }
+    result = permission_oracle.collect_permission_oracles(artifact, raw)
+    from evaluation.scoring_evidence import attach_oracle_evidence
+    attach_oracle_evidence(result)
+    enriched = next(e for e in result["final_state"]["response_evidence"]
+                    if e["evidence_id"] == row["evidence_id"])
+    return result, enriched
+
+
+@pytest.mark.parametrize(
+    "session_type",
+    [DeniedAnonymousError, DeniedAnonymousAmbiguous, DeniedAdminError,
+     DeniedAnonymousTransport],
+    ids=["anonymous-500", "anonymous-ambiguous", "admin-500", "anonymous-transport"],
+)
+def test_error_or_ambiguous_control_cannot_confirm_negative_candidate(monkeypatch, session_type):
+    result, enriched = _negative_permission_collect(monkeypatch, session_type)
+    assert not oracle_negative_confirmed(result, enriched)
+
+
+def test_explicit_endpoint_denial_with_matched_controls_confirms_negative(monkeypatch):
+    result, enriched = _negative_permission_collect(monkeypatch, CandidateDeniedSession)
+    assert oracle_negative_confirmed(result, enriched)
+    bundle = result["config"]["scoring_oracles"][
+        int(enriched["negative_oracle_ref"].split("/")[3])]
+    document = bundle["document"]
+    assert document["control_semantics"] == "permission-outcome-bound"
+    assert document["candidate_replay"]["control_outcome"] == "denied"
+    assert document["candidate_replay"]["denial_kind"] == "endpoint_denied"
+    assert document["negative_attestations"][0]["outcome"] == "not_confirmed"
+    assert document["scope_outcome"] == "candidate_specific"
+
+
+def test_authentication_redirect_is_a_distinct_anonymous_denial(monkeypatch):
+    result, enriched, _raw = _permission_collect(monkeypatch, FakeSession)
+    assert oracle_confirmed(result, enriched)
+    bundle = result["config"]["scoring_oracles"][
+        int(enriched["oracle_ref"].split("/")[3])]
+    control = next(c for c in bundle["document"]["controls"]
+                   if c["control"] == "anonymous_denied")
+    assert control["control_outcome"] == "authentication_redirect"
+    assert control["denial_kind"] == "authentication_redirect"
+    assert control["status_code"] == 302
+    assert control["final_url"].endswith("/login.php")
+    assert control["security_level"] == "low"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("final_url", "https://external.invalid/"),
+        ("security_level", "high"),
+        ("observed_at", "2000-01-01T00:00:00+00:00"),
+        ("control_outcome", "ambiguous"),
+    ],
+)
+def test_strict_control_binding_rejects_tampered_outcome(monkeypatch, field, value):
+    result, enriched, _raw = _permission_collect(monkeypatch, FakeSession)
+    bundle_index = int(enriched["oracle_ref"].split("/")[3])
+    bundle = result["config"]["scoring_oracles"][bundle_index]
+    admin = next(c for c in bundle["document"]["controls"] if c["control"] == "admin_allowed")
+    admin[field] = value
+    bundle["sha256"] = evidence_hash(bundle["document"])
+    assert not oracle_confirmed(result, enriched)
+
+
+def test_negative_candidate_requires_interpretable_endpoint_denial(monkeypatch):
+    class RedirectedCandidate(CandidateDeniedSession):
+        def get(self, path, params=None):
+            if self.principal == "gordonb" and str(path).endswith("get_user_data.php"):
+                self.calls.append(("GET", str(path), deepcopy(params or {})))
+                return SimpleNamespace(text="Login", status_code=302,
+                                       url=f"{TARGET}/login.php")
+            return super().get(path, params)
+
+    result, enriched = _negative_permission_collect(monkeypatch, RedirectedCandidate)
+    assert not oracle_negative_confirmed(result, enriched)
+
+
 @pytest.mark.parametrize("mutation", ["candidate", "object", "action", "response_hash", "source_hash"])
 def test_permission_oracle_rejects_rebound_or_tampered_evidence(monkeypatch, mutation):
     from evaluation import permission_oracle
@@ -357,3 +601,152 @@ def test_bf_dependency_controls_skip_security_level(monkeypatch):
 
     assert ac_negative["control"] == "wrong_credential_negative"
     assert ("security", "low") in FakeSession.instances[-1].calls
+
+
+def _collect_with_prospective_identity(monkeypatch, session_type, *, negative):
+    import tests.test_permission_chain_e2e as fixtures
+
+    original = fixtures.chain_artifact
+
+    def prospective():
+        parts = original()
+        parts[0]["research_plan_identity"] = {
+            "plan_sha256": "a" * 64, "epoch_id": "offline-permission-review",
+        }
+        parts[0]["policy_epoch"] = {"epoch_id": "offline-permission-review"}
+        parts[0]["config"]["policy_epoch"] = {"epoch_id": "offline-permission-review"}
+        return parts
+
+    monkeypatch.setattr(fixtures, "chain_artifact", prospective)
+    if negative:
+        result, row = _negative_permission_collect(monkeypatch, session_type)
+        return result, row, "negative_oracle_ref"
+    result, row, _raw = _permission_collect(monkeypatch, session_type)
+    return result, row, "oracle_ref"
+
+
+def _oracle_row(artifact, evidence_id):
+    return next(
+        row for row in artifact["final_state"]["response_evidence"]
+        if row.get("evidence_id") == evidence_id
+    )
+
+
+@pytest.mark.parametrize("negative", [False, True], ids=["positive", "negative"])
+def test_prospective_controls_cannot_downgrade_by_omitting_semantics(monkeypatch, negative):
+    result, enriched, ref_key = _collect_with_prospective_identity(
+        monkeypatch, CandidateDeniedSession if negative else FakeSession,
+        negative=negative,
+    )
+    accepted = oracle_negative_confirmed if negative else oracle_confirmed
+    assert accepted(result, enriched)
+    index = int(enriched[ref_key].split("/")[3])
+    document = result["config"]["scoring_oracles"][index]["document"]
+    assert permission_evidence_mode(result, document) == "current-outcome-bound"
+
+    def resealed(artifact, source_index):
+        source = artifact["config"]["scoring_oracles"][source_index]
+        source["sha256"] = evidence_hash(source["document"])
+        return _oracle_row(artifact, enriched["evidence_id"])
+
+    # A true error control is refused while current semantics remain explicit.
+    changed = deepcopy(result)
+    source = changed["config"]["scoring_oracles"][index]
+    control = next(c for c in source["document"]["controls"]
+                   if c["control"] == "anonymous_denied")
+    control.update(status_code=500, control_outcome="http_error", interpretable=False,
+                   denial_kind=None, final_url=f"{TARGET}/login.php",
+                   response_sha256=sha256(b"offline synthetic HTTP500").hexdigest())
+    assert not accepted(changed, resealed(changed, index))
+
+    # Removing the self-declared marker cannot select a weaker verifier.
+    changed = deepcopy(result)
+    changed["config"]["scoring_oracles"][index]["document"].pop("control_semantics")
+    assert not accepted(changed, resealed(changed, index))
+
+    # An unknown marker is not legacy evidence either.
+    changed = deepcopy(result)
+    changed["config"]["scoring_oracles"][index]["document"]["control_semantics"] = (
+        "unknown-semantics"
+    )
+    assert not accepted(changed, resealed(changed, index))
+
+    # An unknown permission protocol cannot fall through to the generic path.
+    changed = deepcopy(result)
+    document = changed["config"]["scoring_oracles"][index]["document"]
+    document["oracle_protocol"] = {
+        **document["oracle_protocol"], "kind": "unknown-permission-protocol",
+    }
+    assert not accepted(changed, resealed(changed, index))
+
+    # Current-only outcome metadata without the marker stays current and refused,
+    # even when the independently recorded plan identity is also stripped.
+    changed = deepcopy(result)
+    changed.pop("research_plan_identity", None)
+    changed["config"]["scoring_oracles"][index]["document"].pop("control_semantics")
+    assert permission_evidence_mode(
+        changed, changed["config"]["scoring_oracles"][index]["document"],
+    ) == "invalid"
+    assert not accepted(changed, resealed(changed, index))
+
+
+def test_http500_login_url_is_not_an_authentication_redirect():
+    from evaluation import permission_oracle
+    from foundation.verifier import (
+        permission_control_outcome_problem,
+        permission_url_is_login,
+    )
+
+    response = SimpleNamespace(
+        status_code=500, text="Server error", url=f"{TARGET}/login.php",
+    )
+    outcome = permission_oracle._control_outcome(
+        "ac_idor", response, resource_visible=False, target=TARGET,
+    )
+    assert outcome["control_outcome"] == "http_error"
+    assert outcome["interpretable"] is False
+    assert permission_url_is_login(outcome["final_url"])
+    assert permission_control_outcome_problem(
+        {"control_outcome": "denied", "denial_kind": "endpoint_denied",
+         "status_code": 500, "final_url": f"{TARGET}/login.php",
+         "interpretable": True},
+        target=TARGET,
+    ) == "denied_outcome_inconsistent"
+
+
+@pytest.mark.skipif(
+    not HISTORICAL_ARTIFACT.is_file(),
+    reason="retained restored-epoch permission artifact is not present",
+)
+def test_historical_permission_evidence_is_source_bound_read_only():
+    raw = HISTORICAL_ARTIFACT.read_bytes()
+    artifact = json.loads(raw)
+    row = next(
+        row for row in artifact["final_state"]["response_evidence"]
+        if isinstance(row, dict) and row.get("oracle_ref")
+    )
+    index = int(row["oracle_ref"].split("/")[3])
+    document = artifact["config"]["scoring_oracles"][index]["document"]
+    assert permission_evidence_mode(artifact, document) == "historical-source-bound"
+    assert oracle_confirmed(artifact, row)
+
+    changed = deepcopy(artifact)
+    source = changed["config"]["scoring_oracles"][index]
+    control = next(c for c in source["document"]["controls"]
+                   if c["control"] == "anonymous_denied")
+    control["status_code"] = 500
+    source["sha256"] = evidence_hash(source["document"])
+    assert not oracle_confirmed(changed, _oracle_row(changed, row["evidence_id"]))
+
+    changed = deepcopy(artifact)
+    source = changed["config"]["scoring_oracles"][index]
+    control = next(c for c in source["document"]["controls"]
+                   if c["control"] == "anonymous_denied")
+    control.update(
+        status_code=200, control_outcome="denied", denial_kind="endpoint_denied",
+        interpretable=True, final_url=f"{changed['config']['target_url']}/login.php",
+    )
+    source["sha256"] = evidence_hash(source["document"])
+    assert permission_evidence_mode(changed, source["document"]) == "invalid"
+    assert not oracle_confirmed(changed, _oracle_row(changed, row["evidence_id"]))
+    assert HISTORICAL_ARTIFACT.read_bytes() == raw

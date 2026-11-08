@@ -9,10 +9,250 @@ Evidence links use absolute workspace paths so they resolve from this document.
 All 12 High-AC coordinates **still need to be solved**; none is accepted as permanently
 unavailable or complete. The owner subsequently approved **full implementation and execution,
 including LLM/tool calls**, in [USER APPROVED](<HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md#user-approved--full-implementation-and-execution-2026-11-07>).
-See the [methodology/evaluation-metrics revision](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>)
+See the [methodology/evaluation-metrics revision](<METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>)
 and §46 below. Earlier planning-only restrictions are superseded for the revision pipeline;
-no repeated routine execution-approval question is needed. This turn records approval only,
-without starting implementation, tests or a new experiment. DOCX files remain unchanged.
+the current implementation status is the [current-revision acceptance checklist](#current-revision-acceptance-2026-11-07).
+DOCX files remain unchanged.
+
+## Current revision acceptance (2026-11-07)
+
+This section is the persistent checklist for the approved
+[evaluation-methodology revision](<METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>) and
+supersedes earlier planning-only status lines for that revision. Historical
+checkboxes below remain their original records; they are not current proof.
+The primary 108-coordinate matrix is **fully observed (108/108)** after the
+documented external interruption at 87 and the continuation of the 21 unstarted
+coordinates. Final primary accounting is **82 final numeric receipts, 26 pending,
+0 failed, 0 interrupted, 0 unstarted**. All 12 High-AC numeric requirements
+remain open.
+
+| Phase | Status | Source evidence |
+| --- | --- | --- |
+| R0 Chapter-3 rubric reconciliation (read-only Tables 3.4–3.11) | Complete | `results/validation/ac-revision-methodology-2026-11-07/chapter3-rubric-reconciliation.json`; DOCX unchanged |
+| R1 Cause-admission boundary and integrated F3 attribution | Implemented and focused-tested; strict admission rejects model-origin-only and positive-control fixtures plus the four post-return component-scope counterexamples; integrated diagnostic **346/540, 194 unresolved, 12 rejected proposals** | `evaluation/fidelity_ledger.py`, `evaluation/baseline_audit.py`, `tests/test_fidelity_cause_evidence.py`, `results/validation/ac-revision-admission-integration-2026-11-07/f3-integrated-audit.json` |
+| R2 Denominator/availability/provenance/participation diagnostics | Implemented and focused-tested through the real producer adapter; validated receipts, unique candidates, actual scorer participation, real receipt telemetry, explicit epoch/plan/execution identity, mixed-epoch refusal and duplicate deduplication | `evaluation/research_diagnostics.py`, `tests/test_research_diagnostics.py`, `results/validation/ac-revision-admission-integration-2026-11-07/diagnostics.json` |
+| R3 Six-outcome Mann–Whitney family with raw/Holm p, n, medians, inclusive IQR, signed rank-biserial | Implemented and focused-tested; 16 analyzed / 2 unsupported; source-bound declaration verified only for prospective plans, restored plan is `historical_unverified`; missing p-values never shrink family size six | `evaluation/research_analysis.py`, `tests/test_research_analysis_epoch_binding.py`, `results/validation/ac-revision-admission-integration-2026-11-07/analysis.json` |
+| R4 Aggregation epoch refusal and scorer-interface notes | Implemented on the reader side; any bound receipt requires a matching plan identity, prospective plans require explicit receipt binding, and historical restored-epoch analysis is explicitly read-only | `evaluation/research_analysis.py` (`plan_requires_receipt_epoch_binding`, `refuse_epoch_pooling`, `EPOCH_BINDING_KEY`), `docs/reference/architecture.md`, `results/validation/ac-revision-admission-integration-2026-11-07/producer-contract.json` |
+| R5 Reference and methodology documentation | Complete for this task; no DOCX edit | `docs/reference/summary_en.md`, `summary_id.md`, `thesis_scoring.md`, `architecture.md`, moved methodology doc |
+| R6 Inherited model/evaluator/budget identity capture (no credentials) | Complete | `results/validation/ac-revision-methodology-2026-11-07/configured-inherited-identities.json` |
+| R7 Focused verification (normal, historical, empty cases) | Complete for affected paths after the post-return correction: **145 focused tests passed**, **21 integrated verification checks passed**, reviewer controls 0 false admissions / 0 invalid receipts accepted; the 9 `fixture_epoch` snapshot failures shared one test/config root cause and the concurrent owner's fix now passes 13/13 | `results/validation/ac-revision-admission-integration-2026-11-07/verification.json`, `junit.xml`, reviewer controls; prior `results/validation/ac-revision-strict-2026-11-07/verification.json` and fixture JUnit retained |
+| R8 All 12 High-AC coordinates resolved | **Open; incomplete; scores unavailable** | Individual rows below |
+| R9 Destination/source-consumption protocol | Open | Methodology §6; no endpoint validated |
+| R10 Prospective freeze of all revision inputs | Complete for the corrected epoch: plan `abcc21c3…`, config `e1b679…`, source tree `f184…`, fixture/protocol frozen | `results/runs/ac-revision-primary-2026-11-07/research-plan.json`; `results/studies/ac-revision-primary-2026-11-07/config.frozen.yaml` |
+| R11 Primary 108-coordinate matrix | **Execution complete: 108/108 observed/completed; 82 final numeric receipts / 26 pending / 0 failed / 0 interrupted / 0 unstarted** | `results/runs/ac-revision-primary-2026-11-07/research-run-summary.json`; `results/validation/ac-revision-matrix-continuation-2026-11-08/REPORT.md` |
+| R12 Final receipts and report finalisation | In progress: canonical summary and acceptance verification complete; all non-High-AC checks pass. 12 High-AC numeric receipts remain unavailable | `results/validation/ac-revision-final-acceptance-2026-11-08/REPORT.md`, `acceptance.json`; depends on R8 |
+
+Focused affected suites in this pass: **103 passed** (`test_fidelity_cause_evidence`,
+`test_baseline_audit`, `test_research_diagnostics`,
+`test_research_analysis_epoch_binding`, `test_autoresearch_fidelity`,
+`test_d12_analysis`). The strict producer-to-report verification passed **25/25**
+checks over the saved 108 artifacts and 96 receipts; no provider, target or
+evaluator call was made. The strict integrated diagnostic is **346/540 (0.6407),
+194 unresolved**, including 12 rejected `harness_scoring` proposals retained as
+unresolved; historical F3 **358/540 (182 gaps)** is unchanged and remains a
+separate artifact. No candidate row added to the numerator. The restored epoch
+has 96 validated historical-unbound receipts and 12 missing High-AC receipts; its
+analysis is explicitly `historical_read_only`. The 9 `fixture_epoch` failures are
+**not** a blanket pre-existing assumption: all share
+`ValueError: Resolved configuration declares no fixture_id`, because the test
+supplies `tmp_path/config.yaml` without a fixture identity while
+`build_attestations` resolves identity from that config. The test last changed in
+`6f8db42`; the identity requirement entered `fixture_epoch.py` in `9380d57`; this
+pass did not edit either file. The concurrent runtime owner then added
+`_write_identity_config` and identity-refusal tests; the recheck is **13 passed,
+0 failed**, so the current tree no longer reproduces the snapshot failure.
+Evidence: `results/validation/ac-revision-strict-2026-11-07/fixture-epoch-junit.xml`
+(snapshot) and `fixture-epoch-junit-recheck.xml` (current). The 103/25 counts
+describe that strict snapshot only; the post-return correction below records the
+current 145 focused tests and 21 integrated checks.
+
+### The 12 High-AC coordinates (individually open)
+
+Each row is executed and retains a measured-negative artifact, but its required
+assessment is not resolved. **Score unavailable; completion incomplete.** No
+zero, probe count, invented candidate or permanent-limitation waiver is recorded.
+
+| # | Model | Condition | Repeat | Coordinate | Execution | Status | Evidence path |
+| ---: | --- | --- | ---: | --- | --- | --- | --- |
+| 0 | gpt-6-luna | akg_guided_hybrid | 0 | `e80fe16ec9dc5919` | `exec-20261106T100020480048Z-427dda037cb54adeaaca0b956671edb6` | open/unavailable | `results/runs/restored-primary-2026-11-06/selection/run-001/` |
+| 1 | gpt-6-luna | akg_guided_hybrid | 1 | `d75a675f41939c18` | `exec-20261106T100020480256Z-501b1cac32af4c9f91cb570cd22d6d9d` | open/unavailable | `results/runs/restored-primary-2026-11-06/selection/run-002/` |
+| 2 | gpt-6-luna | akg_guided_hybrid | 2 | `345694e6682aa6bf` | `exec-20261106T100020480363Z-39de6df4b63d45caba8454971299ce24` | open/unavailable | `results/runs/restored-primary-2026-11-06/selection/run-003/` |
+| 3 | gpt-6-luna | linear_hybrid | 0 | `53e6e05f7ff66952` | `exec-20261106T100020480556Z-b4c4abf883764e7694fd019005a4acf5` | open/unavailable | `results/runs/restored-primary-2026-11-06/selection/run-004/` |
+| 4 | gpt-6-luna | linear_hybrid | 1 | `6e7d157b18797c1a` | `exec-20261106T100020480677Z-4cdbe84aa4d04aab89aad142bc9979d8` | open/unavailable | `results/runs/restored-primary-2026-11-06/selection/run-005/` |
+| 5 | gpt-6-luna | linear_hybrid | 2 | `b2ab0460e9b4933b` | `exec-20261106T100020480772Z-8724e7cf403b473cb940d5a8921b868a` | open/unavailable | `results/runs/restored-primary-2026-11-06/selection/run-006/` |
+| 54 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | akg_guided_hybrid | 0 | `1c838cbe7f852f05` | `exec-20261106T100020487695Z-1b5b3888ee714f159a4c2993d12c5065` | open/unavailable | `results/runs/restored-primary-2026-11-06/selection/run-055/` |
+| 55 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | akg_guided_hybrid | 1 | `2dc3911beb140d15` | `exec-20261106T100020487807Z-0a0d646e4ddd41acbc1205f07beb89cc` | open/unavailable | `results/runs/restored-primary-2026-11-06/selection/run-056/` |
+| 56 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | akg_guided_hybrid | 2 | `5702bf187f0536ef` | `exec-20261106T100020487910Z-69a3f1c6551e4faebe828342de8db746` | open/unavailable | `results/runs/restored-primary-2026-11-06/selection/run-057/` |
+| 57 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | linear_hybrid | 0 | `f6cab1e963c61209` | `exec-20261106T100020488016Z-35d51bb114f44a4b927e4ca805af1195` | open/unavailable | `results/runs/restored-primary-2026-11-06/selection/run-058/` |
+| 58 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | linear_hybrid | 1 | `fcc71641803fcffa` | `exec-20261106T100020488280Z-5bf2e311ff204bc8832a41503f63bd03` | open/unavailable | `results/runs/restored-primary-2026-11-06/selection/run-059/` |
+| 59 | deepseek-ai/DeepSeek-V4.1-Flash-1017 | linear_hybrid | 2 | `357ccf988dcd204e` | `exec-20261106T100020488551Z-05cbd31ea4e1464d8ef41378071afa84` | open/unavailable | `results/runs/restored-primary-2026-11-06/selection/run-060/` |
+
+Immutable retained epoch facts: 108 executed, 96 final numeric receipts, 12
+High-AC incomplete/unavailable, historical F3 **358/540 with 182 gaps**. This
+revision does not relabel, regrade or pool that epoch. Diagnostic cost records
+are inherited in `configured-inherited-identities.json` and must be updated by
+each new diagnostic before the prospective freeze.
+
+### 2026-11-07 strict revision diagnostic (separate evidence)
+
+The strict pass is a new derivation over the same saved restored-epoch artifacts,
+not a regrade or a new experiment. It addresses the review counterexamples by
+requiring cause-specific source-bound evidence:
+
+- `model_output_quality` is admitted only for a specific evaluated-model output
+  defect (invalid/unparseable output, unresolved decision references, failed
+  structural repair, unusable-output fallback), a recorded model selection below
+  the ranked/eligible comparison, or a generated candidate rejected before
+  execution. Model origin/provenance alone and a signal-absent executed candidate
+  are rejected.
+- `fixture_infeasible` requires a complete measured negative whose required
+  verdicts are all negative, an all-closed static/source edge assessment, or a
+  bound denial. `{'complete': True, 'reason': 'positive_control_succeeded'}` and
+  any positive verdict/control are rejected; a numeric component in the same run
+  contradicts a measured-negative null.
+- Each run/component is counted once. Rejected proposals stay under
+  `accounting.rejected_causes` and the component stays unresolved.
+
+| Strict artifact | Result |
+| --- | --- |
+| `results/validation/ac-revision-strict-2026-11-07/f3-strict-integrated-audit.json` | F3 **346/540**, 194 unresolved, 12 rejected `harness_scoring` proposals, 0 candidate rows added |
+| `results/validation/ac-revision-strict-2026-11-07/diagnostics-strict.json` | 96/108 validated final receipts (12 missing High-AC), 183 distinct eligible executed candidates (87 generated / 96 static), generated validity 221/249, participation 96/96 `none` from the scorer's own output with 12 locally unassessable, 18 distinct completed transitions, 1035 assessed controls (26 denials, 841 detection signals, 0 exploit-control successes, 168 no-signal), 508 experiment-model opportunities with 9 invalid outputs, 96 executions with complete telemetry / 12 without |
+| `results/validation/ac-revision-strict-2026-11-07/analysis-strict.json` | 16 analyzed / 2 unsupported condition rows; six-outcome family, raw and Holm p, actual n, medians, inclusive IQR, signed rank-biserial; `historical_read_only` with 96 `legacy_unbound` receipts |
+| `results/validation/ac-revision-strict-2026-11-07/verification.json` | 25/25 checks passed; source, plan/config, receipt/artifact and consumer hashes recorded |
+
+The previous “96/96 participation all none” is confirmed for the 96 locally
+confirmed methods, but only because the adapter now consumes the scorer's actual
+`review_queue.causal_participation`; the 12 High-AC coordinates are explicitly
+reported as locally unassessable rather than silently excluded. No prospective
+completeness is claimed from historical or synthetic evidence: the restored
+receipts carry no epoch binding and are read-only.
+
+### 2026-11-07 post-return admission/diagnostic/analysis correction (separate evidence)
+
+The integration review reproduced four false F3 admissions through the actual
+`_attribution_rows`/`_merge_attribution_rows` path, two malformed-receipt
+admissions, a dropped mixed-epoch conflict and a duplicate-execution coverage
+inflation. The corrections require causal scope in the owning modules:
+
+- cause proof must bind the deducted component and its selected
+  method/candidate/visit/route/control; a completed successful route is not an
+  ordering defect, a bare method-labelled denial is not fixture neutralisation,
+  and a ceiling for another dimension is not this component's cause;
+- legitimate measured-negative, static/source edge-closure, selection,
+  generated-candidate and matched-denial admissions remain;
+- final receipts require finite in-range components, a positive denominator,
+  candidate-grade/`numerator`/`Spayload_final`/`Spayload` agreement and `Srun`
+  arithmetic under the declared four-decimal rounding;
+- the diagnostics adapter preserves experiment/plan/source/execution/coordinate/
+  repeat identity, refuses mixed epochs/plans, deduplicates exact executions,
+  excludes duplicate coordinate/repeat conflicts and scopes telemetry subtotals;
+- analysis consumes a source-bound six-outcome declaration from the frozen plan,
+  refuses prospective plans with missing/mismatched/late declarations, reports
+  the restored historical plan as `historical_unverified`, and never shrinks the
+  family for unavailable p-values.
+
+| Post-return artifact | Result |
+| --- | --- |
+| `results/validation/ac-revision-admission-integration-2026-11-07/f3-integrated-audit.json` | F3 **346/540**, 194 unresolved, 12 rejected `harness_scoring` proposals, 0 candidate rows added |
+| `.../diagnostics.json` | 96/108 validated final receipts (12 High-AC unavailable), 183 distinct eligible executed candidates, 18 distinct completed transitions, 96/96 complete participation assessments with 12 locally unassessable, 12,922 requests / 207,343 tokens over 96 telemetry-complete executions, 12 without |
+| `.../analysis.json` | Declaration `historical_unverified`, 16 analyzed / 2 unsupported condition rows, six-outcome family with raw/Holm p, actual n, medians, inclusive IQR and signed effect; read-only historical epoch |
+| `.../verification.json` | **21/21** integrated checks; historical F3 **358/540** bytes unchanged; zero provider/target/evaluator calls |
+| `.../review-controls/*after-fix.json` | Reviewer controls: **0** false admissions, **0** invalid receipts accepted, mixed epoch 1/2 with 1 unavailable, duplicate 1/1 with 0 unavailable |
+| `.../junit.xml` | **145 focused tests passed** |
+
+This is a new derivation over the retained saved epoch, not a regrade or a new
+experiment. The primary 108-coordinate matrix is still **0/108 started**; no
+prospective real plan was analysed, no freeze or readiness claim is made, and
+all 12 High-AC coordinates remain open/unavailable. The runtime owner still owns
+the prospective plan/declaration generator; its expected interface is published
+in `results/validation/ac-revision-admission-integration-2026-11-07/producer-contract.json`.
+
+## 2026-11-08 continuation and High-AC remedy decision
+
+The corrected primary matrix `ac-revision-primary-2026-11-07` was externally
+interrupted at **87/108** completed artifacts. Current accounting is **62 final
+numeric receipts, 25 pending, 21 unstarted, 0 execution failures**. All **12
+High-AC numeric requirements remain open/unavailable**. The interrupted-epoch
+F3 is 226/435 with 209 unresolved; historical F3 358/540 with 182 gaps remains
+separate and unchanged. No null was zero-filled and no epoch was pooled.
+
+The High-AC session-scope bug was reproduced and fixed in isolated worktree
+`t3/fix-ac-session-scope-recovery` (three owning source files plus one focused
+test). Focused JUnit is **21 passed, 0 failed/error/skip**; naming guard is 0
+violations; **11/11** saved High-AC pre-execution states dispatch a saved
+candidate after the fix. The twelfth coordinate (`c3be8a294f9c25ff`) saved no
+method or candidate. No live target/provider/evaluator call was made in that
+task; the fix is not yet integrated or committed and closes no primary
+coordinate.
+
+**Decision (2026-11-08, option A):** use the handoff's explicitly specified
+prospective assessment remedy. The 11 saved-input-ready axes are assessed in a
+separate `derived_high_ac_recovery` population with fresh sessions, the exact
+saved candidate queue, fresh candidate-bound permission controls, the maintained
+chain/verifier/scorer path and unchanged rubric/weights. The twelfth axis is a
+separate fresh single-coordinate assessment under the fixed source with normal
+model selection; if it again yields no viable method or candidate, it stays
+open with a legitimate unavailable outcome. Derived receipts must bind their
+own plan/epoch/source/fixture and must never be pooled with the primary 108 or
+used for primary comparisons. This decision is not a waiver, relabel or
+retroactive primary score.
+
+Two Factory sessions were dispatched: a matrix continuation for exactly the 21
+unstarted coordinates under the same frozen plan, config, source and fixture
+(no rerun of the 87 completed coordinates), and a separate isolated
+implementation of the derived-assessment contract. Acceptance remains
+incomplete and both handoffs stay in `docs/active/`.
+
+Evidence: `results/validation/ac-revision-session-scope-recovery-2026-11-08/`
+(fix report, protocol, draft, JUnit, patch), `results/validation/ac-revision-orchestrator-review-2026-11-07/acceptance-checklist.md`,
+and the interrupted-epoch evidence under
+`results/validation/ac-revision-final-freeze-execution-2026-11-08/`.
+
+## 2026-11-08 final matrix reconciliation and acceptance verification
+
+The interrupted primary attempt was continued for exactly the 21
+planned-but-unstarted coordinates. The final frozen primary state is
+**108/108 observed and completed; 82 final numeric receipts, 26 pending,
+0 failed, 0 interrupted, 0 unstarted** at plan `abcc21c3…`, config `e1b679…`,
+source tree `f184…`, fixture `dvwa-authenticated-object-a000f969edb8d78a5c5d`
+and protocol `ranking-session-acceptance`. The 87 retained coordinates were not
+rerun or rescored; the continuation produced 20 new final receipts and one new
+pending coordinate (`run-092`, `a82a671db76435e7`, `pending_candidate_grades`).
+
+The canonical `research-run-summary.json` was derived from the preserved plan
+and 108 execution artifacts after execution, using the canonical
+`evaluation.research_plan` reconciliation and manifest writers. It records
+`planned=108, observed=108, missing=0, extra=0, duplicates=[]` and a two-attempt
+execution history: interrupted primary (87 observed/87 completed/21 unstarted)
+followed by continuation (21 observed/21 completed). No coordinate, scorer,
+provider, target or evaluator call was made by the reconciliation.
+
+| Evidence | Value |
+| --- | --- |
+| `results/runs/ac-revision-primary-2026-11-07/research-run-summary.json` | SHA-256 `1a4e7125da6d9a9ef75d9cf3e939e3cfdce1afe2c1abde4ff51fa3181dd8b32a` |
+| `results/runs/ac-revision-primary-2026-11-07/experiment.manifest.json` | SHA-256 `9a856fc6e7800a95d647dc413427b694cf1bf97f5ff8037b29301f3b99bbd433` |
+| `results/validation/ac-revision-final-acceptance-2026-11-08/acceptance.json` | 19/20 checks pass; sole failure `high_ac_closed_all_12` |
+| `results/validation/ac-revision-final-acceptance-2026-11-08/recompute-comparison.json` | 10/10 recomputation checks pass; accounting/F3/analysis reproduce exactly |
+
+Final F3 is **272/540 (0.503704) with 268 unresolved gaps**; gaps by dimension
+are `Spayload` 108, `Schain` 79, `Sexploit` 79, `Smethod` 1, `Soutput` 1. The
+four rejected cause proposals remain retained and unresolved. The declared
+six-outcome Mann–Whitney analysis has **18 contrast rows, 6 outcomes each,
+108 outcome rows, 14 analyzed / 4 unsupported contrast rows (84 / 24 outcome
+rows)**; missing outcomes stay null and the family is not shrunk.
+
+All **12 High-AC numeric requirements remain open (0/12 closed)**. The
+authoritative verifier passes every accounting, receipt, F3, analysis,
+diagnostic and historical-integrity check; only the High-AC closure gate fails.
+The High-AC derived assessment is a separate isolated-worktree population and
+is not pooled with the primary 108 or used to close these rows here. Both
+handoffs remain in `docs/active/`, and source-bound full acceptance remains
+**false**.
+
+Evidence: `results/validation/ac-revision-final-acceptance-2026-11-08/REPORT.md`,
+`acceptance.json`, `acceptance-recomputed-evidence.json`,
+`recompute-comparison.json`, and
+`results/validation/ac-revision-matrix-continuation-2026-11-08/REPORT.md`.
 
 ## Invariants and execution accounting
 
@@ -549,7 +789,7 @@ dropped.
 ## Resume boundaries
 
 **Resume point updated 2026-11-07 — full pipeline approved.** The owner answered all four
-direction questions, received the [methodology revision plan](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>),
+direction questions, received the [methodology revision plan](<METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>),
 and then authorized full implementation and execution, including LLM/tool calls. The
 [USER APPROVED section](<HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md#user-approved--full-implementation-and-execution-2026-11-07>)
 supersedes the earlier planning-only instruction; no routine reapproval is needed. The current
@@ -1423,7 +1663,7 @@ Owner selected 1 incomplete/unavailable, 2B, 3B and 4B, then explicitly clarifie
 
 Deliverables:
 
-- [Prospective methodology and evaluation-metrics revision](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>).
+- [Prospective methodology and evaluation-metrics revision](<METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>).
 - [Updated active handoff](<HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md>) with a prominently
   reopened High-AC scoring requirement, separate from the completed investigation.
 - [Append-only decision update](<AUTORESEARCH_RANKING_APPROVAL_QUESTIONS.md#5-owner-decisions-for-the-next-methodology-revision-2026-11-07>)

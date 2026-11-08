@@ -73,6 +73,116 @@ def test_proved_enabling_outcome_triggers_akg_chain():
     assert event["reason"] == "chain_ready"
 
 
+def test_same_source_destination_probe_runs_once_per_router_pass(monkeypatch):
+    """A completion recorded earlier in one pass must stop the next same edge."""
+    from core import chaining_coordinator as coordinator
+    state = {
+        **new_default_state(),
+        **proved_chain_source("authenticated_session"),
+        "target_url": "http://fixture.invalid/dvwa",
+        "experiment_condition": "akg_guided_hybrid",
+        "current_surface": "brute_force",
+        "stop_policy": "coverage",
+        "coverage_target": 1.0,
+        "achieved_outcomes": ["authenticated_session"],
+        "attempted_agents": ["bf_dictionary", "ac_force_browse"],
+        "observations": {"no_rate_limit": True},
+    }
+    edges = coordinator._chain_candidates(state)
+    edge = next(row for row in edges if row["target_agent"] == "ac_idor")
+    monkeypatch.setattr(coordinator, "_chain_candidates",
+                        lambda _state: [dict(edge), dict(edge)])
+    calls: list[tuple[str, list[str]]] = []
+
+    def fake_probe(probe_state, method, source_ids):
+        if any(
+            event.get("event") == "recon.destination.completed"
+            and (event.get("payload") or {}).get("method") == method
+            and (event.get("payload") or {}).get("source_evidence_ids") == source_ids
+            for event in probe_state.get("telemetry_events", [])
+        ):
+            return {}
+        calls.append((method, list(source_ids)))
+
+        return {
+            "telemetry_events": [{
+                "node": "chaining_router", "event": "recon.destination.completed",
+                "payload": {"method": method, "source_evidence_ids": list(source_ids),
+                            "reason": "probe_evidence_unavailable", "observations": {}},
+            }]
+        }
+
+    recon_module = import_module("foundation.recon")
+    monkeypatch.setattr(recon_module, "probe_access_control_destination", fake_probe)
+    before = deepcopy(state)
+    coordinator.chaining_router_node(state)
+    assert calls == [("ac_idor", ["source-evidence"])]
+    assert state == before, "the router must not mutate its input state"
+
+
+def test_distinct_sources_probe_independently(monkeypatch):
+    """A completion for one source must not suppress a different source edge."""
+    from core import chaining_coordinator as coordinator
+    state = {
+        **new_default_state(),
+        **proved_chain_source("authenticated_session"),
+        "target_url": "http://fixture.invalid/dvwa",
+        "experiment_condition": "akg_guided_hybrid",
+        "current_surface": "brute_force",
+        "stop_policy": "coverage",
+        "coverage_target": 1.0,
+        "response_evidence": [
+            {"evidence_id": "source-evidence-1"},
+            {"evidence_id": "source-evidence-2"},
+        ],
+        "verifier_history": [
+            {"decision": "confirmed", "achieved_outcomes": ["authenticated_session"],
+             "evidence_refs": ["#/final_state/response_evidence/0"]},
+            {"decision": "confirmed", "achieved_outcomes": ["brute_force_confirmed"],
+             "evidence_refs": ["#/final_state/response_evidence/1"]},
+        ],
+        "attempted_agents": ["bf_dictionary", "ac_force_browse"],
+        "observations": {"no_rate_limit": True},
+    }
+    edges = [
+        {"source": "authenticated_session", "target": "ac_idor",
+         "target_agent": "ac_idor"},
+        {"source": "brute_force_confirmed", "target": "ac_idor",
+         "target_agent": "ac_idor"},
+    ]
+    monkeypatch.setattr(coordinator, "_chain_candidates", lambda _state: edges)
+    monkeypatch.setattr(coordinator, "_chain_infeasibility",
+                        lambda _state, _edge: "offline_unknown")
+    calls: list[tuple[str, list[str]]] = []
+
+    def fake_probe(probe_state, method, source_ids):
+        if any(
+            event.get("event") == "recon.destination.completed"
+            and (event.get("payload") or {}).get("method") == method
+            and (event.get("payload") or {}).get("source_evidence_ids") == source_ids
+            for event in probe_state.get("telemetry_events", [])
+        ):
+            return {}
+        calls.append((method, list(source_ids)))
+        return {
+            "telemetry_events": [{
+                "node": "chaining_router", "event": "recon.destination.completed",
+                "payload": {"method": method, "source_evidence_ids": list(source_ids),
+                            "reason": "probe_evidence_unavailable", "observations": {}},
+            }]
+        }
+
+    recon_module = import_module("foundation.recon")
+    monkeypatch.setattr(recon_module, "probe_access_control_destination", fake_probe)
+    before = deepcopy(state)
+    coordinator.chaining_router_node(state)
+    assert calls == [
+        ("ac_idor", ["source-evidence-1"]),
+        ("ac_idor", ["source-evidence-2"]),
+    ]
+    assert state == before, "the router must not mutate its input state"
+
+
 def test_linear_condition_does_not_take_cross_surface_chain():
     """The baseline condition must not receive AKG-guided chain routing."""
     state = {

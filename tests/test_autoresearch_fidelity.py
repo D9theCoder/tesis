@@ -121,7 +121,10 @@ def full_artifact(execution_id='full', *, scoring_mode='human'):
             'selected_at': '2026-10-01T00:00:00+00:00',
             'reason_refs': ['union_select_possible'],
             'plan': {'kind': 'stop_at_budget'}, 'visit_id': 'visit-1',
-        }],
+        }, *[{
+            'dimension': dimension, 'method': 'sqli_union',
+            'reason': 'grading_path_unavailable',
+        } for dimension in ('Spayload', 'Sexploit', 'Schain', 'Soutput')]],
         'chain_assessment': {'assessed': True, 'status': 'assessed', 'reason': 'no_opportunity',
                              'edges': [], 'routes_evaluated': 0,
                              'policy_version': 'chain-assessment'},
@@ -236,13 +239,13 @@ def test_human_receipt_is_authoritative_and_ai_receipt_is_separate(tmp_path):
     }
     attributed = build_ledger(source, receipts=human_dir, attributions=[
         {'run': 'full', 'dimension': 'Spayload', 'cause': 'harness_scoring',
-         'evidence_refs': ['#/final_state/response_evidence/0']},
+         'evidence_refs': ['#/final_state/scoring_decisions/1']},
         {'run': 'full', 'dimension': 'Sexploit', 'cause': 'harness_scoring',
-         'evidence_refs': ['#/final_state/response_evidence/0']},
-        {'run': 'full', 'dimension': 'Schain', 'cause': 'rubric_ceiling',
-         'evidence_refs': ['#/final_state/chain_assessment']},
+         'evidence_refs': ['#/final_state/scoring_decisions/2']},
+        {'run': 'full', 'dimension': 'Schain', 'cause': 'harness_scoring',
+         'evidence_refs': ['#/final_state/scoring_decisions/3']},
         {'run': 'full', 'dimension': 'Soutput', 'cause': 'harness_scoring',
-         'evidence_refs': ['#/llm_performance/0']},
+         'evidence_refs': ['#/final_state/scoring_decisions/4']},
     ])
     assert attributed['phase_a']['complete'] is True
     human = attributed['runs'][0]
@@ -281,7 +284,15 @@ def test_ai_selection_receipt_is_selected_authority(tmp_path):
 
 
 def test_closed_cause_attribution_and_invalid_bindings(tmp_path):
-    write_doc(tmp_path, 'e1.json', artifact('e1'))
+    document = artifact('e1')
+    document['final_state']['scoring_decisions'] = [{
+        'dimension': 'Smethod', 'method': 'sqli_union',
+        'reason': 'ranking_unavailable',
+    }]
+    document['security_outcome_reason'] = {
+        'code': 'label_mismatch', 'detail': 'incorrect label',
+    }
+    write_doc(tmp_path, 'e1.json', document)
     ledger = build_ledger(tmp_path)
     assert ledger['fidelity']['F3']['value'] == 0.0
     assert ledger['fidelity']['F3']['unknown'] == 5
@@ -289,21 +300,21 @@ def test_closed_cause_attribution_and_invalid_bindings(tmp_path):
 
     attributed = build_ledger(tmp_path, attributions=[{
         'run': 'e1', 'dimension': 'Smethod', 'cause': 'harness_scoring',
-        'evidence_refs': ['#/config/scoring_profile'],
+        'evidence_refs': ['#/final_state/scoring_decisions/0'],
     }])
     assert attributed['fidelity']['F3']['numerator'] == 1
     assert attributed['fidelity']['F3']['unknown'] == 4
 
     queue_attributed = build_ledger(tmp_path, attributions=[{
         'run': 'e1', 'dimension': 'Smethod', 'cause': 'label',
-        'evidence_refs': ['queue:#/components/Smethod'],
+        'evidence_refs': ['#/security_outcome_reason'],
     }])
     assert queue_attributed['fidelity']['F3']['numerator'] == 1
 
     with pytest.raises(ValueError, match='closed list'):
         build_ledger(tmp_path, attributions=[{
             'run': 'e1', 'dimension': 'Smethod', 'cause': 'not_a_cause',
-            'evidence_refs': ['#/config/scoring_profile'],
+            'evidence_refs': ['#/final_state/scoring_decisions/0'],
         }])
     with pytest.raises(ValueError, match='does not bind'):
         build_ledger(tmp_path, attributions=[{
@@ -313,8 +324,55 @@ def test_closed_cause_attribution_and_invalid_bindings(tmp_path):
     with pytest.raises(ValueError, match='does not resolve'):
         build_ledger(tmp_path, attributions=[{
             'run': 'e1', 'dimension': 'Smethod', 'cause': 'harness_scoring',
-            'evidence_refs': ['#/config/scoring_profile', '#/missing_component'],
+            'evidence_refs': ['#/final_state/scoring_decisions/0', '#/missing_component'],
         }])
+
+
+def test_candidate_level_attributions_do_not_inflate_f3(tmp_path):
+    document = artifact('partial')
+    document['final_state'].update(candidate_state())
+    document['final_state']['payload_candidates']['sqli_union'].append({
+        'candidate_id': 'candidate-b', 'stage': 'exploit',
+    })
+    document['final_state']['payload_provenance']['candidate-b'] = {
+        'method': 'sqli_union', 'source': 'static_seed',
+    }
+    document['final_state']['payload_validation_results']['sqli_union'].append({
+        'candidate_id': 'candidate-b', 'valid': True,
+    })
+    document['final_state']['chain_assessment'] = {
+        'assessed': True, 'status': 'assessed', 'reason': 'no_opportunity',
+        'edges': [], 'routes_evaluated': 0, 'policy_version': 'chain-assessment',
+    }
+    document['final_state']['scoring_decisions'] = [{
+        'dimension': 'Spayload', 'method': 'sqli_union',
+        'reason': 'grading_path_unavailable',
+    }]
+    document['llm_performance'] = [{
+        'call_id': 'call:1', 'role': 'orchestrator', 'method': 'sqli_union',
+        'visit_id': 'visit-1', 'parse_status': 'ok', 'validation_status': 'valid',
+        'attempt': 1, 'input': {}, 'output': {},
+    }]
+    path = write_doc(tmp_path, 'partial.json', document)
+    queue = review_queue(path)
+    review_dir = tmp_path / 'reviews'
+    finalize_reviews(path, review_decisions(queue, 'human'), output_dir=review_dir,
+                     isolated_output=True)
+    ledger = build_ledger(tmp_path, receipts=review_dir, attributions=[
+        {'run': 'partial', 'dimension': 'Spayload', 'cause': 'harness_scoring',
+         'evidence_refs': ['#/final_state/scoring_decisions/0'],
+         'candidate_ids': ['candidate-a'], 'primary': True},
+        {'run': 'partial', 'dimension': 'Spayload', 'cause': 'harness_scoring',
+         'evidence_refs': ['#/final_state/scoring_decisions/0'],
+         'candidate_ids': ['candidate-b']},
+    ])
+    f3 = ledger['fidelity']['F3']
+    assert f3['numerator'] == 1
+    assert f3['components_with_candidate_evidence'] == 1
+    assert f3['candidate_evidence_rows'] == 2
+    row = ledger['runs'][0]['dimensions']['Spayload']
+    assert row['cause_status'] == 'attributed'
+    assert row['candidate_ids'] == ['candidate-a', 'candidate-b']
 
 
 def test_attribution_cannot_bind_full_credit_component(tmp_path):

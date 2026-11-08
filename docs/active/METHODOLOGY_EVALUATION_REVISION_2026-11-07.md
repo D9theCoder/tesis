@@ -1,9 +1,82 @@
-# Proposed methodology revision: evaluation metrics and causal chain credit
+# Active methodology revision: evaluation metrics and causal chain credit
+
+**Upcoming design decision (2026-11-09):** the owner agreed to outcome and
+attribution evaluation, removal of reference-ranking grades and overlapping
+ordinal/composite requirements, and task-specific chain reporting. The thorough
+[upcoming handoff](../upcoming/prerequisite-evaluation-revamp/HANDOFF_OUTCOME_AND_ATTRIBUTION_EVALUATION_2026-11-09.md)
+specifies that prospective design and its migration/acceptance boundaries.
+The owner also approved hidden-ground-truth discovery, finding provenance and
+unsupported-claim reporting, and clarified that AKG improvement means stronger
+discovery and chain execution under architecture-neutral scoring. Those rules
+and the prospective capability-comparison/optimization workstream are recorded
+in the same upcoming handoff; they have not been implemented by this update.
+Its resource note inventories existing time/cost/usage telemetry and lists only
+the missing reporting, milestone and accounting behavior for the replacement.
+The related [prerequisite probing handoff](../upcoming/prerequisite-evaluation-revamp/HANDOFF_MODEL_DIRECTED_PREREQUISITE_PROBING_2026-11-09.md)
+records the proposed model-directed use of existing approved investigation tools.
+Both handoffs are grouped in `docs/upcoming/prerequisite-evaluation-revamp/`.
+It is planning work; the current implementation, manuscript and historical
+receipts retain their recorded contracts. The dated checkpoints below remain
+evidence for their original task and do not implement this replacement.
 
 Date: 2026-11-07 (Asia/Jakarta)
-Status: **Full implementation and execution user-approved**; detailed protocol remains proposed, not implemented or frozen.
-Authorization: [USER APPROVED in the active handoff](<../active/HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md#user-approved--full-implementation-and-execution-2026-11-07>), including necessary LLM/provider and tool calls without repeated routine approval requests.
-This document was created as a planning deliverable. The later execution authorization supersedes its earlier planning-only restriction; this authorization-recording turn does not itself implement or launch anything. DOCX files remain out of scope.
+Status: **Active — implementation in progress.** The document was moved from
+`docs/upcoming/` on 2026-11-07 when implementation began. The detailed protocol
+is being implemented in the owned evaluation modules; the primary matrix has not
+been launched and no prospective freeze is claimed.
+Authorization: [USER APPROVED in the active handoff](<HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md#user-approved--full-implementation-and-execution-2026-11-07>), including necessary LLM/provider and tool calls without repeated routine approval requests.
+This document started as a planning deliverable. The later execution authorization supersedes its earlier planning-only restriction. DOCX files remain out of scope.
+
+**Implementation checkpoint (2026-11-07):** the cause-admission boundary,
+source-bound integrated F3 attribution, explicit receipt epoch refusal,
+supplementary denominator/participation diagnostics and the six-outcome
+Mann–Whitney family contract are implemented in the evaluation modules and
+covered by focused tests. The stricter revalidation rejects model-origin-only
+and positive-control fixture claims; the separately identified strict integrated
+diagnostic is **346/540 with 194 unresolved** (12 rejected `harness_scoring`
+proposals retained), while historical F3 **358/540** remains a separate immutable
+artifact. The diagnostics adapter now consumes validated receipts and the
+scorer's own participation output; the restored epoch's 96 receipts are
+historical-unbound and its analysis is explicitly read-only. Twenty-four
+producer-to-report checks pass. Scorer-side receipt epoch emission and the
+amended `Sexploit` level-4 rule are owned by the separate scorer change (in
+progress); this checkpoint does not claim or verify that owner's implementation.
+All 12 High-AC coordinates remain incomplete/unavailable. The primary
+108-coordinate matrix is **not started** and must wait for the parent integration
+review, corrected freeze and readiness. Current phase status and source evidence
+live in the
+[persistent progress ledger](SCORING_COMPLETION_PROGRESS.md#current-revision-acceptance).
+
+**Admission-integration correction checkpoint (2026-11-07, post-return).**
+The four reproduced cause-admission false positives and the malformed-receipt /
+mixed-epoch / duplicate-coordinate diagnostics are corrected in the owned
+modules. The reviewer controls now report **0 false admissions**, all three
+malformed receipts refused, the mixed-epoch row reduced to its declared epoch
+(1/2 final with 1 unavailable) and an exact duplicate execution deduplicated to
+1/1 with no negative unavailable count. F3 admission now requires causal
+relationship to the deducted component's method/candidate/visit/route/control:
+a completed successful route is not an ordering defect, a bare denial is not
+fixture neutralisation, and another dimension's ceiling is not this component's
+cause. Legitimate measured-negative, edge-closure, selection, generated-candidate
+and matched-denial admissions remain. The integrated F3 over the retained epoch
+is still **346/540 with 194 unresolved** (12 rejected proposals retained, 0
+candidate rows added). The diagnostics adapter preserves epoch/plan/source/
+execution/coordinate/repeat identity, refuses mixed epochs or plan identities,
+deduplicates exact executions, excludes conflicting coordinates, enforces finite
+arithmetic and positive denominators, and scopes efficiency subtotals. Analysis
+now consumes a source-bound six-outcome declaration from the frozen plan:
+prospective plans are refused when the declaration is missing, mismatched, late
+or not source-hashed; the restored historical plan reports
+`historical_unverified` and its recomputation is labelled a diagnostic, never
+preregistration. Missing p-values keep nulls and never shrink the six-outcome
+family. Evidence:
+`results/validation/ac-revision-admission-integration-2026-11-07/`
+(`summary.json`, `f3-integrated-audit.json`, `diagnostics.json`, `analysis.json`,
+`verification.json` 21/21 checks, reviewer controls, 145 focused JUnit passes).
+The prospective plan/declaration generator remains the runtime owner's contract;
+no prospective real plan was analysed, no matrix was launched and all 12 High-AC
+coordinates remain open. This checkpoint does not accept the handoff.
+
 
 ## 1. Decisions and the completion boundary
 
@@ -18,7 +91,7 @@ This proposal translates the owner's decisions into changes needed in the report
 
 **Implementation and execution are now approved end to end** under the linked handoff authorization, including necessary LLM/tool calls, verification and the new readiness-gated 108-coordinate epoch. Do not ask the four direction questions or routine execution-permission questions again. Exact destination details and the High-AC resolution mechanism still need technical specification before the future freeze; approval does not replace evidence or readiness. The current request records this authorization only and starts no new execution.
 
-Tracking owners: [active handoff](<../active/HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md>), [decision record](<../active/AUTORESEARCH_RANKING_APPROVAL_QUESTIONS.md>) and [progress ledger](<../active/SCORING_COMPLETION_PROGRESS.md>). The decision record must remain at its existing path.
+Tracking owners: [active handoff](<HANDOFF_AC_SCORING_COMPLETION_2026-11-05.md>), [decision record](<AUTORESEARCH_RANKING_APPROVAL_QUESTIONS.md>) and [progress ledger](<SCORING_COMPLETION_PROGRESS.md>). The decision record must remain at its existing path.
 
 ## 2. Baseline and methodology authority
 
@@ -245,13 +318,14 @@ Important NOTE REGARDING DOCX EDIT:
 - [x] Specify proposed metric scopes, denominators, causal-credit gates and comparability limits.
 - [x] Deliver the original planning task without implementation or execution. Subsequent USER APPROVED authority now covers the revision pipeline; it does not claim work has started. DOCX editing remains excluded.
 
-### Approved implementation and execution — not yet completed
+### Approved implementation and execution — current status
 
-- [ ] Specify and establish a legitimate resolution path for **all 12 High-AC coordinates**; unavailable remains incomplete until that is evidenced.
-- [ ] Specify the destination, source-consumption/prerequisite controls, restoration and matched-condition opportunity.
-- [ ] Finalise the amended Tables 3.7–3.9 attribution contract and audit metric definitions; reconcile manuscript/reference/code disagreements rather than copying historical handoff shorthand.
-- [ ] Implement the three scorer fixes and the approved evidence/rubric changes when carrying out the user-approved revision; no repeated routine permission request is needed.
-- [ ] Update both language summaries and affected methodology/architecture references; edit the manuscript only if later requested, retaining manual-assessment terminology.
-- [ ] Verify affected software and authorised evidence paths, then prospectively freeze all changed inputs.
-- [ ] Execute the new declared matrix under the USER APPROVED authority once affected verification, prospective freeze and readiness pass; finalise receipts and regenerate audit/analysis separately from the retained epoch.
+- [ ] Specify and establish a legitimate resolution path for **all 12 High-AC coordinates**; unavailable remains incomplete until that is evidenced. **Open.**
+- [ ] Specify the destination, source-consumption/prerequisite controls, restoration and matched-condition opportunity. **Open.**
+- [x] Finalise the amended Tables 3.7–3.9 attribution contract and audit metric definitions; reconcile manuscript/reference/code disagreements rather than copying historical handoff shorthand. Implemented in the owned evaluation modules and both language summaries; Chapter 3 DOCX untouched.
+- [ ] Implement the three scorer fixes and the approved evidence/rubric changes when carrying out the user-approved revision. **Scorer-owned and in progress**; this child implemented the reader-side epoch refusal, cause admission and diagnostics without editing `thesis_scoring.py` or `scoring_evidence.py`.
+- [x] Update both language summaries and affected methodology/architecture references; edit the manuscript only if later requested, retaining manual-assessment terminology. No DOCX edit.
+- [ ] Verify affected software and authorised evidence paths, then prospectively freeze all changed inputs. **Owned evaluation verification passed** for the post-return correction: 145 focused tests and 21 integrated checks, with the integrated F3, strict and historical artifacts kept separate. The earlier strict pass recorded 103 focused tests and 25 producer-to-report checks; those numbers describe that snapshot only. **Prospective freeze not started.** The new producer contract requires the runner to record `research_plan_identity`/`plan_identity` and the scorer to emit explicit epoch binding plus `causal_participation`/`selection_evidence`; those cross-owner changes are not implemented by this child. The snapshot `fixture_epoch` failures were traced to the test config lacking `fixture_id`; the concurrent runtime owner has since fixed the test fixture and its recheck passes 13/13.
+- [ ] Revalidate the concurrent scorer's final receipt epoch emission and `Sexploit` level-4 implementation against real receipts before any freeze; this child verified only the reader, admission, audit and diagnostic side.
+- [ ] Execute the new declared matrix once affected verification, prospective freeze and readiness pass; finalise receipts and regenerate audit/analysis separately from the retained epoch. **Primary 108-coordinate matrix not started.**
 - [ ] Close the overall handoff only after its required scoring/evidence criteria pass. Neither this proposal nor a new matrix alone constitutes completion.

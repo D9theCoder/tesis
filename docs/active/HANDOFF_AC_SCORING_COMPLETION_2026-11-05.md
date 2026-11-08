@@ -14,7 +14,7 @@ The original `GOAL_PROMPT.md` reference is historical; that file is absent from 
 
 > I APPROVE EVERY SINGLE EXECUTION PROCESS, INCL MAKING TOOL CALLS FOR THE LLMS
 
-The owner intends the [evaluation-methodology revision](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>)
+The owner intends the [evaluation-methodology revision](<METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>)
 to be carried out end to end: implementation, verification, evidence collection,
 prospective freeze, experiment execution, final assessment, audit and reporting.
 **Do not ask again for routine permission for these task-scoped steps or for LLM/tool calls.**
@@ -82,6 +82,22 @@ remain historical descriptions of the earlier documentation task, not current bl
 Approval is not a claim that implementation, verification, readiness or execution has
 already succeeded. This turn records the authorization only; no new execution is started.
 
+**Delegated implementation status (2026-11-07, evaluation-owned paths).** The
+reader-side revision is implemented and focused-tested; the concurrent scorer/runtime
+changes are not claimed. Strict cause revalidation over the retained artifacts rejects
+model-origin-only and positive-control fixture claims and produces a separate
+integrated diagnostic of **346/540 with 194 unresolved** (12 rejected `harness_scoring`
+proposals retained), while historical F3 **358/540** remains an immutable separate
+artifact. The diagnostics adapter consumes validated receipts and the scorer's own
+participation output; the restored epoch's 96 receipts are historical-unbound and its
+analysis is explicitly read-only. Verification: 103 focused tests and 25
+producer-to-report checks. Evidence:
+`results/validation/ac-revision-strict-2026-11-07/` (`summary.json`,
+`f3-strict-integrated-audit.json`, `diagnostics-strict.json`, `analysis-strict.json`,
+`verification.json`, `producer-contract.json`). **All 12 High-AC coordinates remain
+incomplete/unavailable; no primary matrix was launched or frozen.** This note does not
+accept the handoff or move it out of `docs/active/`.
+
 ## Current owner decisions and next methodology revision (2026-11-07)
 
 **All 12 High Access Control coordinates still need to be solved.** Report their
@@ -89,7 +105,7 @@ final score as **unavailable** and their completion status as **incomplete**. Th
 owner explicitly did not accept a permanent limitation or waive numeric-scoring
 requirements. Recorded measured negatives are evidence, not closure of this work.
 
-The separate [methodology and evaluation-metrics revision proposal](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>)
+The separate [methodology and evaluation-metrics revision proposal](<METHODOLOGY_EVALUATION_REVISION_2026-11-07.md>)
 explains the report changes, metric denominators, causal-credit gates, future
 receipt/audit requirements and epoch comparability. It is proposed work, not an
 implemented rubric or a manuscript edit.
@@ -299,7 +315,7 @@ Existing approvals are not reopened and preregistration is never backdated.
       above is complete, but the scoring requirement is not. Establish legitimate candidate
       evidence or an explicitly specified prospective assessment remedy; do not count probes,
       rejected or unexecuted candidates, manufacture a bypass, or close this as an accepted
-      limitation. See the [revision proposal](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md#7-high-access-control-explicit-unresolved-workstream>).
+      limitation. See the [revision proposal](<METHODOLOGY_EVALUATION_REVISION_2026-11-07.md#7-high-access-control-explicit-unresolved-workstream>).
 - [x] Supply applicable permission controls bound to principal, object, action,
       session, fixture, and exact candidate replay: an allowed control, an
       expected-denied control, and the candidate's observed result. The frozen oracle
@@ -893,7 +909,7 @@ chain occurred: the reassessment above records 18 runs with verified dependencie
 none linked its assessed final method to a dependency endpoint. Owner choice 4B on
 2026-11-07 plans a new selected-method causal-participation criterion. Its source,
 intermediate and consumer evidence gates are specified in the
-[methodology proposal](<../upcoming/METHODOLOGY_EVALUATION_REVISION_2026-11-07.md#5-proposed-exploitation-and-chain-attribution-contract>);
+[methodology proposal](<METHODOLOGY_EVALUATION_REVISION_2026-11-07.md#5-proposed-exploitation-and-chain-attribution-contract>);
 there is no automatic score upgrade, implementation or historical regrade now.
 
 ### Fidelity and attribution for this epoch

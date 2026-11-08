@@ -98,6 +98,17 @@ The original artifact digest remains separate as `source_scoring_rule_sha256` /
 `recorded_scoring_rule_sha256`. See the
 [contract map](</home/kevin/coding/tesis/docs/reference/canonical-contracts.md>).
 
+New receipts also carry `receipt_contract: epoch-bound-receipt` and an explicit
+`epoch_binding`. The binding records the experiment and scoring epoch, active
+rule/source digests, frozen source config, fixture/protocol, oracle protocol set,
+plan identity when the execution artifact records one, and the source execution
+hash. `epoch_sha256` is the repeat-invariant cross-receipt epoch key;
+`source_execution_sha256` is per receipt. Readers reject tampered or cross-epoch
+bindings. Historical receipts without the binding remain readable as
+`historical_unbound` and are never relabelled as a current epoch or pooled with
+bound receipts. A plan binding is `unavailable` until the artifact carries an
+explicit `research_plan_identity`; directory layout never invents it.
+
 Observer exports place `graded_scores` before the explicitly legacy
 `runtime_scores`. Current review metrics/policy are labelled
 `review_queue_current_sources`; recorded metrics/policy retain
@@ -237,16 +248,25 @@ rejects mismatches before HTTP, and retains the saved candidate execution order.
 Historical inputs missing required controls remain incomplete.
 
 Payload tier 4 requires independently confirmed downstream use of that candidate.
-`Sexploit` uses base confirmation separately and checks a use whose source method
-is the assessed method; a payload ceiling of 4 alone does not set exploit to 4.
-A route needs a static AKG edge, `prerequisite_evidence_refs` for every prerequisite,
+`Sexploit` uses base confirmation separately and checks whether the **assessed
+selected method's own candidate** causally participated in a completed verified
+chain: as the source whose material is consumed, as an evidenced intermediate
+whose incoming result is also the outgoing source of a second verified
+transition, or as the verified consumer of source material. Another method's
+success in the same run cannot substitute. A payload ceiling of 4 alone does not
+set exploit to 4, and `Sexploit = 4` never upgrades `Spayload`. A route needs a
+static AKG edge, `prerequisite_evidence_refs` for every prerequisite,
 source and destination evidence, source/destination candidate and visit bindings,
 a matched destination verifier, and `dependency_ref` to operator evidence.
 The dependency attestation binds run/fixture/protocol, material fingerprint,
 response hashes and ordered source/consumption/verification timestamps. Independent
-with-source/without-source controls must demonstrate the dependency.
-Synthetic dependency sources require `validation_scope: offline_synthetic_fixture`,
-independently of the destination oracle's origin. Two causal
+with-source/without-source controls must demonstrate the dependency, agree with
+their declared expected truth, match the attestation's control summaries, and use
+distinct fresh sessions and response hashes. A completed chain that references
+the selected method's candidate without that strict binding is conflicting
+lineage and cannot earn 4. Synthetic dependency sources require
+`validation_scope: offline_synthetic_fixture`, independently of the destination
+oracle's origin. Two causal
 hops share the intermediate evidence identity; unrelated successes do not form
 hop 2. Passive `weak_chain_opportunities` bind partial source evidence to a valid
 edge, missing material and explicit prerequisite statuses; they never confirm
@@ -333,7 +353,7 @@ visual layout.
 | 1 | Terdapat indikasi awal SQL Injection yang belum cukup untuk menunjukkan hasil parsial. | Otomatis berdasarkan kelas bukti yang terdefinisi. | Respons kandidat menampilkan pesan kesalahan basis data yang relevan, tetapi belum ada struktur atau data target yang terkonfirmasi. |
 | 2 | Terdapat hasil parsial metode, sedangkan bukti eksploitasi penuh belum lengkap. | Otomatis berdasarkan bukti kandidat dan kontrol. | Perbedaan respons boolean tercatat, tetapi kontrol pelengkap atau pengulangan yang diwajibkan belum cukup untuk mengonfirmasi hasil penuh. |
 | 3 | Hasil SQL Injection dikonfirmasi dengan kontrol dan bukti sesuai metode. | Otomatis melalui verifier metode. | Data akun target tercatat pada respons kandidat dan dikonfirmasi oleh kontrol independen dengan identitas kandidat serta hash respons yang sesuai. |
-| 4 | Hasil SQL Injection berhasil digunakan pada langkah lanjutan yang dikonfirmasi secara independen. | Otomatis berdasarkan bukti sumber, penggunaan, dan tujuan. | Kredensial dari hasil SQL Injection digunakan pada langkah tujuan dan menghasilkan sesi yang identitasnya terverifikasi. Catatan tujuan menautkan bukti kandidat SQL Injection yang menjadi sumbernya. |
+| 4 | Metode SQL Injection terpilih berpartisipasi secara kausal sebagai sumber, perantara terbukti, atau konsumen terverifikasi pada langkah lanjutan yang dikonfirmasi secara independen. | Otomatis berdasarkan bukti kandidat/visit, konsumsi, kontrol, dan tujuan. | Kredensial dari hasil SQL Injection digunakan pada langkah tujuan dan menghasilkan sesi yang identitasnya terverifikasi. Catatan tujuan menautkan bukti kandidat SQL Injection yang menjadi sumbernya. |
 
 ### Tabel 3.8: hasil eksploitasi Access Control
 
@@ -343,7 +363,7 @@ visual layout.
 | 1 | Terdapat indikasi kelemahan kontrol akses yang belum menghasilkan akses bermakna. | Otomatis berdasarkan bukti awal metode. | Pengguna dapat melihat referensi objek yang memerlukan izin tambahan, tetapi isi objek belum dapat diakses. |
 | 2 | Terdapat akses parsial atau visibilitas objek, sedangkan konfirmasi izin independen belum tersedia. | Otomatis berdasarkan bukti parsial. | Endpoint mengembalikan metadata objek, tetapi artefak belum mempunyai oracle izin yang mengikat pengguna, objek, dan tindakan yang dinilai. |
 | 3 | Akses tidak sah dikonfirmasi oleh oracle izin independen dan bukti efek atau respons yang terkait. | Otomatis melalui verifier dan oracle izin. | Pengguna dengan peran terbatas memperoleh isi objek milik pengguna lain. Oracle fixture menyatakan tindakan tersebut dilarang, dan bukti akses mengikat identitas pengguna serta objek yang sama. |
-| 4 | Hasil Access Control berhasil digunakan pada langkah lanjutan yang sesuai AKG dan dikonfirmasi secara independen. | Otomatis berdasarkan bukti sumber, penggunaan, dan tujuan. | Sesi dengan hak lebih tinggi yang terbukti berasal dari hasil Access Control digunakan pada metode tujuan dalam edge AKG yang telah ditetapkan, dan hasil tujuan terkonfirmasi dengan sesi sumber yang sama. |
+| 4 | Metode Access Control terpilih berpartisipasi secara kausal sebagai sumber, perantara terbukti, atau konsumen terverifikasi pada langkah lanjutan yang sesuai AKG dan dikonfirmasi secara independen. | Otomatis berdasarkan bukti kandidat/visit, konsumsi, kontrol, dan tujuan. | Sesi dengan hak lebih tinggi yang terbukti berasal dari hasil Access Control digunakan pada metode tujuan dalam edge AKG yang telah ditetapkan, dan hasil tujuan terkonfirmasi dengan sesi sumber yang sama. |
 
 ### Tabel 3.9: hasil eksploitasi Brute Force
 
@@ -353,7 +373,7 @@ visual layout.
 | 1 | Terdapat indikasi awal yang relevan untuk metode, tetapi validitas kredensial belum terbukti. | Otomatis berdasarkan bukti awal yang terkait dengan kandidat. | Respons kandidat menunjukkan perbedaan awal dari kontrol gagal login, tetapi bukti belum cukup untuk memastikan kredensial atau sesi yang valid. |
 | 2 | Terdapat bukti parsial validitas kredensial, sedangkan sesi autentikasi baru belum dikonfirmasi secara independen. | Otomatis berdasarkan bukti parsial. | Halaman modul menampilkan penanda keberhasilan, tetapi artefak belum menunjukkan identitas pengguna pada sesi baru. |
 | 3 | Kredensial valid dan sesi autentikasi baru dikonfirmasi secara independen. | Otomatis melalui verifier dan oracle sesi. | Kandidat menghasilkan sesi baru yang terikat pada identitas akun uji. Oracle independen mengonfirmasi identitas tersebut dan membedakannya dari sesi awal framework. |
-| 4 | Sesi yang diperoleh berhasil digunakan pada langkah lanjutan yang sesuai AKG dan hasilnya dikonfirmasi secara independen. | Otomatis berdasarkan bukti sesi sumber, penggunaan, dan tujuan. | Sesi dari kandidat Brute Force digunakan pada langkah Access Control yang diizinkan oleh AKG. Catatan penggunaan sesi dan keputusan verifier tujuan terhubung dengan kandidat Brute Force sumber. |
+| 4 | Metode Brute Force terpilih berpartisipasi secara kausal sebagai sumber, perantara terbukti, atau konsumen terverifikasi pada langkah lanjutan yang sesuai AKG dan hasilnya dikonfirmasi secara independen. | Otomatis berdasarkan bukti kandidat/visit, konsumsi, kontrol, dan tujuan. | Sesi dari kandidat Brute Force digunakan pada langkah Access Control yang diizinkan oleh AKG. Catatan penggunaan sesi dan keputusan verifier tujuan terhubung dengan kandidat Brute Force sumber. |
 
 ### Tabel 3.10: chain outcome
 
@@ -411,7 +431,11 @@ Reopening review loads this validated history. Older receipts can restore it
 when no ledger exists, including a custom-directory receipt selected in Results.
 Its saved history must match the execution source; further receipt and telemetry
 writes stay in the selected receipt's directory. Repeated AI evaluation links each new
-decision to its predecessor with `supersedes`.
+decision to its predecessor with `supersedes`. A grade below the machine proof is
+never accepted or clamped: it is retained in an append-only
+`SOURCE_STEM.rejected-decisions.json` event with candidate/source/rule identity,
+attempted grade, floor, reason and evaluator provenance, while the candidate
+stays pending.
 
 Templates and derived review writes reject resolved paths, symlinks or hard
 links to the execution source before writing. Templates also reject paths that
@@ -683,3 +707,101 @@ census digests. A read-only replay of the retained epoch resolves 72 final
 receipts and 36 pending reviews; its corrected audit records F3 = 0.5807
 (313/539) because unsupported payload causes remain explicit gaps. No live
 experiment or provider call was made.
+
+## Current revision: F3 admission, diagnostics and rank-sum family
+
+This section describes the 2026-11-07 implementation of the approved evaluation
+revision. It does not change any historical receipt, cause or score.
+
+**F3 cause admission.** A proposed closed cause is admitted only when its proof
+links substantiate that cause for the specific run/component and its relationship
+to the correct method/candidate/visit/route/control, not merely because a pointer
+resolves. Component values, pending reasons without a scoring record, absent
+controls, candidate counts, model provenance/origin alone, generic statuses and a
+control that succeeded are never accepted as proof of model, fixture or provider
+causation. `model_output_quality` needs a specific evaluated-model output defect
+(invalid/unparseable output, unresolved decision references, failed structural
+repair or an unusable-output fallback), a recorded model selection below the
+ranked/eligible comparison, or a generated candidate rejected before execution;
+the defect must bind the selected method/candidate scope. `fixture_infeasible`
+needs a complete measured negative whose required verdicts are all negative, an
+all-closed static AKG or proved source-material edge assessment, or a denial bound
+to principal, object/action, independent policy, matched positive control and
+response; a numeric component in the same run contradicts a measured-negative
+null. `provider_failure` needs a transport/provider failure class;
+`harness_scoring` needs a scoring-path defect code, not any scoring or verifier
+decision; `harness_budget`, `harness_ordering`, `rubric_ceiling` and `label` each
+need their corresponding recorded effect. A completed successful route is not an
+ordering defect, a bare method-labelled denial is not fixture neutralisation, and
+a ceiling for another dimension is not this component's cause. Missing or
+conflicting controls stay unresolved, and a rejected proposal is retained under
+`accounting.rejected_causes`. Rows are collapsed to one decision per (run,
+component); extra candidate rows become secondary cause entries and never
+increase the numerator.
+
+**Diagnostics.** `evaluation/research_diagnostics.py` implements the supplementary
+coverage, distribution, local-exploit, participation, chain-depth, payload,
+control, output, efficiency and repeat-stability readings. Each reports its unit,
+numerator, denominator, evidence population, availability and unavailable reason.
+`diagnostic_record` is the maintained producer adapter: it validates a final
+receipt's artifact type, status, five finite in-range components, positive integer
+denominator, candidate-grade mean, numerator, `Spayload_final`, `Spayload`
+component, weighted arithmetic under the declared four-decimal rounding,
+execution identity and source hash before counting it. Pending, unvalidated or
+mismatched receipts never count and never supply candidate/efficiency rows. The
+adapter preserves experiment/plan/source/execution/coordinate/repeat identity;
+mixed recorded epochs or plan identities are refused, exact duplicate executions
+are deduplicated, and duplicate coordinate/repeat conflicts are explicitly
+excluded and listed. Coverage cannot exceed its planned denominator or go
+negative. Candidate denominators deduplicate by candidate ID and require explicit
+eligibility; static seeds are not generated output. Participation comes from the
+scorer's own `review_queue.causal_participation`; unavailable and locally
+unassessable coordinates stay outside the complete-assessment denominator and are
+reported separately. Control outcomes separate detection signals, explicit
+denials, redirects, no-signal, errors and unknowns from run-level measured
+negatives; an exploit-control success is never a denial. Output roles exclude
+evaluator-only records; invalid JSON and invalid output remain distinct.
+Efficiency uses only complete validated receipt telemetry; missing telemetry is
+unavailable, never zero, and any reported subtotal is explicitly scoped to
+executions with complete telemetry. Empty denominators remain null. These
+readings never enter `Srun` or replace the declared rank-sum test.
+
+**Aggregation epoch refusal.** Receipts emitted under the epoch-bound contract
+carry `receipt_contract: epoch-bound-receipt` and an `epoch_binding` whose
+`epoch_sha256` is the repeat-invariant population key; `source_execution_sha256`
+is per receipt and is validated against its own execution artifact, never
+required to equal another repeat's hash. `evaluation/research_analysis.py`
+refuses a contrast row that mixes bound and unbound receipts, contains differing
+epoch keys, or mixes receipts with different plan identities. It also checks each
+receipt's experiment epoch, source execution hash, scoring rule/epoch and
+fixture/protocol against the plan. Any bound receipt must carry a plan identity
+that matches the declared plan digest and experiment epoch, even when the plan
+does not set the prospective marker. A prospective plan
+(`epoch_binding_required: true`, `receipt_epoch_binding.required: true`, or an
+embedded six-outcome declaration) additionally requires every receipt to carry
+the frozen `plan_sha256`; an unbound receipt or missing/mismatched plan identity
+is refused. Historical unbound receipts remain readable as `legacy_unbound` for
+their recorded read-only epoch and are never relabelled as current or pooled.
+
+**Rank-sum family.** Each model × surface × security-level condition-contrast row
+uses the six outcomes `Smethod`, `Spayload`, `Sexploit`, `Schain`, `Soutput`,
+`Srun` and applies Holm–Bonferroni within that family. A prospective plan must
+carry the exact source-bound `condition_contrast_family` declaration in its
+frozen `research_config`; analysis re-hashes that source and requires the plan
+timestamp to precede the earliest final receipt. Missing, mismatched or late
+declarations are refused, and a historical plan without one is reported as
+`historical_unverified` rather than preregistered. Missing p-values stay null
+and never shrink the family size: available p-values remain adjusted against six
+outcomes, and an unavailable hypothesis never receives adjusted significance.
+Results report raw and adjusted p, actual n, medians, inclusive-quartile IQR and
+signed rank-biserial effect. The analysis remains exploratory; shared fixture,
+model and grader dependence is reported, not corrected away. Paired Wilcoxon and
+bootstrap intervals remain separate supplementary families.
+
+**Integrity assert inventory.** Scorer finalisation and receipt guards are owned
+by the scorer change; this revision verifies that its guards fail closed under
+optimised execution. `evaluation/research_analysis.py` previously used assertions
+downstream of grader-identity problem checks; those are replaced by explicit
+unavailable/mismatch paths, preserving grader eligibility exactly. Tests and
+`assert` statements used only as test preconditions are not production integrity
+guards and are not replaced blindly.

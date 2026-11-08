@@ -145,6 +145,14 @@ accepting output; native chain plans require source, target and target-agent
 bindings. Output fallback credit is scoped to its role/visit. Repeat comparison
 fingerprints oracle protocol metadata and retains execution-specific oracle
 proof in receipts, using the same grouping for pending review sidecars.
+New receipts additionally carry `receipt_contract: epoch-bound-receipt` and an
+explicit `epoch_binding` over experiment/scoring epoch, plan, config, fixture,
+oracle protocol, rules and source execution. `epoch_sha256` is the repeat-invariant
+population key; `source_execution_sha256` is per receipt. Readers reject tampered
+or mixed-epoch populations, while historical unbound receipts remain readable
+only for their recorded epoch. Below-floor evaluator grades are never clamped or
+accepted; they append structured rejected-decision events and leave the candidate
+pending.
 Calibrated ranking entries retain `reference_status`, `reference_fit` (1..3 or
 null for pending), and `reference_reason`. Eligible pending competitors block
 ranking assessment; the selector receives no additional calibration guidance.
@@ -161,7 +169,14 @@ Access Control candidate-permission evidence binds a response to its candidate,
 principal, session, object and action, then checks it against allowed and denied
 controls on the same object. The causal-dependency oracle separately verifies
 that source material was consumed and that the downstream result changes between
-matched with-source and without-source controls. An authenticated session can
+matched with-source and without-source controls. `Sexploit` level 4 uses the same
+strict dependency records but requires the **assessed selected method's own
+candidate** to be the source, an evidenced intermediate (incoming destination
+evidence reused as the outgoing source of a second verified transition), or the
+verified consumer. The receipt records the participation role, dependency and
+control references and exact lineage. A completed route that references the
+selected candidate without that verified join is conflicting lineage, not level 4.
+An authenticated session can
 route to either `ac_idor` or `ac_force_browse`; response visibility alone does
 not prove a permission bypass or a completed dependency.
 CLI and TUI share a validated source-local decisions ledger, so reopening a
@@ -523,6 +538,17 @@ at the dictionary-login destination. When extraction returns multiple pairs,
 controls and material fingerprints use the exact pair parsed from the consumed
 destination candidate; password hashes remain unconsumable.
 
+Current permission evidence is verified only under the canonical
+`permission-outcome-bound` semantics. The producer and consumer share one
+outcome classifier: transport failure, HTTP 5xx and ambiguous responses are not
+denials, and a login redirect is recognised only with a successful page or
+redirect status. A recorded prospective plan identity independently requires
+current semantics, so removing or changing the document's own marker cannot
+select the weaker historical path. Legacy documents without the current outcome
+fields decode read-only only when their frozen epoch/source identity, fixture/
+protocol and parent protocol binding are present; a recorded HTTP 5xx or a
+denied label on a login URL is refused there too.
+
 The permission collector recognizes explicitly frozen user IDs and literal
 dot-segment path aliases when they resolve to the same HTTPX request path. It
 keeps the original object identity in the receipt. Force-browse visits suppress
@@ -725,3 +751,118 @@ role attribution; the HTTP transport and its recorded capture status are not
 changed. Freeze/build/verify reject empty price schedules, and the frozen
 config embeds the resolved schedule rather than rebasing a source-relative
 JSON filename. This does not supply research ranking judgements or prices.
+
+### Aggregation readers, F3 admission and diagnostics (2026-11-07)
+
+**Receipt epoch population.** `thesis_scoring` emits `receipt_contract:
+epoch-bound-receipt` with an `epoch_binding`. `epoch_sha256` is the
+repeat-invariant population key; `source_execution_sha256` is per receipt.
+`research_analysis` reads that binding and refuses an aggregation row that mixes
+bound and historical-unbound receipts or contains different `epoch_sha256`
+values. Each receipt is also checked against the plan's experiment epoch, plan
+digest, source execution hash, scoring rule/epoch and frozen fixture/protocol.
+`source_execution_sha256` is validated per receipt against its own execution
+artifact; it is never required to equal another repeat's hash. A prospective plan
+sets `epoch_binding_required: true` (or
+`receipt_epoch_binding.required: true`) or embeds a six-outcome condition-contrast
+declaration; its receipts must carry the frozen `plan_sha256`, and an unbound
+receipt, missing plan identity or mismatched plan digest is refused before
+aggregation. `build_research_plan` emits the canonical
+`epoch_binding_required: true` marker on every new plan, and `verify_plan`
+refuses a current-version plan that omits it; historical plans are not
+backfilled. Any bound receipt, even under a plan without the prospective marker,
+must also match the plan digest and experiment epoch. Historical plans without
+the marker remain `historical_read_only`: their unbound receipts are readable in
+their recorded epoch but cannot satisfy a current plan. `refuse_epoch_pooling`
+refuses a caller that supplies more than one declared epoch to one aggregate.
+Historical unbound receipts never become current receipts and are never pooled
+across epochs.
+
+**F3 cause admission.** `fidelity_ledger.cause_evidence_problem` is the admission
+boundary. A cause needs proof links that substantiate that cause and its
+relationship to the deducted run/component/method/candidate/visit/route/control;
+a resolved pointer, a bare component value, a pending reason with no scoring
+record, an absent control, a candidate count, model provenance/origin alone, a
+generic status or a control that succeeded is insufficient. `model_output_quality`
+requires a specific evaluated-model output defect (invalid/unparseable output,
+unresolved decision references, a failed structural repair or an unusable-output
+fallback), a recorded model selection below the ranked/eligible comparison, or a
+generated candidate rejected before execution; the defect must belong to the
+selected method/candidate scope when the deduction is method-scoped.
+`fixture_infeasible` requires a complete measured negative whose required
+verdicts are all negative, all assessed edges closed by static AKG or proved
+source-material evidence, or a denial bound to principal, object/action,
+independent policy, matched positive control and response; a numeric component in
+the same run contradicts a measured-negative null. A completed successful route
+is never an ordering defect, a bare method-labelled denial is never fixture
+neutralisation, and a ceiling bound to another dimension is never proof for this
+component. The optional `dimension` argument binds the cause to the deducted
+run/component. Decisions collapse to one per (run, component); additional
+candidate-level rows become secondary causes and proof links. `baseline_audit`
+retains a rejected proposal under `accounting.rejected_causes` and leaves the
+component unresolved. Historical F3 figures are not rewritten.
+
+**Supplementary diagnostics.** `research_diagnostics.build_diagnostics` computes
+coverage, score distribution, local-exploit, participation, chain-depth, payload,
+control, output, efficiency and repeat-stability readings with explicit units,
+numerators, denominators, provenance and unavailable reasons. The maintained
+producer adapter is `research_diagnostics.diagnostic_record`: it accepts one
+analysis observation plus the saved execution artifact, its receipt and the
+scorer's `review_queue`. It validates the receipt shape, five finite in-range components,
+positive integer denominator, candidate-grade mean, `numerator`,
+`Spayload_final`, `Spayload` component, weighted `Srun` arithmetic under the
+declared four-decimal rounding, execution identity and source hash before the
+receipt can count as final. A pending, unvalidated or identity-mismatched
+receipt is refused. The adapter preserves recorded experiment/plan/source/
+execution/coordinate/repeat identity through aggregation; a conflicting recorded
+epoch or plan identity is refused, an exact duplicate execution is deduplicated,
+and duplicate coordinate/repeat conflicts or mixed-epoch records are explicitly
+excluded and listed. `final_score_coverage` cannot exceed its planned denominator
+or go negative. Historical unbound receipts remain readable as explicitly
+read-only evidence; the adapter never invents a plan or backfills an epoch.
+
+Candidate denominators deduplicate by candidate ID per coordinate and require
+explicit `eligible: true`; static seeds are not generated/model output. Generated
+validity comes from artifact provenance plus dispositions and is cross-checked
+against the model-candidate execution rate. Participation comes from the scorer's
+`review_queue.causal_participation`: `verified`, `not_participating` and
+`conflicting_lineage` are complete assessments, `unavailable` and
+`local_proof_below_3` stay unavailable, and a locally unassessable coordinate is
+reported outside the participation denominator. Control events are
+denominator-scoped to sent requests with physical telemetry; detection signals,
+explicit denials, redirects, no-signal, control errors and unknowns are separate,
+and a run-level measured negative is reported separately. Output roles exclude
+evaluator-only records; invalid JSON and invalid output are distinct. Efficiency
+uses only complete validated receipt telemetry; a missing telemetry field is
+unavailable, never zero, and a reported request/token subtotal is explicitly
+scoped to executions with complete telemetry. These readings never enter `Srun`
+and never replace the declared rank-sum family.
+
+**Cross-owner producer requirements.** A prospective receipt can bind a plan only
+if the runner records `research_plan_identity: {plan_sha256, epoch_id}` (or
+`plan_identity`) in the execution artifact, or embeds the frozen `research_plan`.
+The runner must also preserve the artifact fields the adapter reads
+(`payload_provenance`, `candidate_dispositions`, `control_events`,
+`llm_performance`, `chain_assessment`, `chain_history`). The scorer must expose
+`components`, `candidates`, `component_evidence_refs`, `selection_evidence` and
+`causal_participation` in `review_queue`, and emit `receipt_contract` plus
+`epoch_binding` in new receipts. The reader does not infer a plan identity from a
+directory or recompute scorer participation for reporting.
+
+**Rank-sum family and integrity guards.** Condition and model contrasts consume a
+source-bound six-outcome family declaration from the frozen plan's
+`research_config` (path plus SHA-256, exact family fields). Analysis re-hashes the
+declared source, requires the plan timestamp to precede the earliest final
+receipt, and refuses a prospective plan with a missing, mismatched or late
+declaration. A historical plan without such a declaration is reported as
+`historical_unverified` and labelled a recomputation diagnostic; no software flag
+or arbitrary nonempty text is treated as preregistration. Reports carry raw and
+adjusted p, actual n, medians, inclusive-quartile IQR and signed rank-biserial
+effect. Missing p-values keep null adjusted values and never shrink the declared
+family size; Holm uses family size six and an unavailable hypothesis never
+receives adjusted significance. Paired Wilcoxon and bootstrap intervals remain
+separate supplementary families. Grader-identity helpers in `research_analysis`
+use explicit unavailable/mismatch returns rather than assertions, so optimised
+execution cannot silently treat a malformed identity as compatible. Scorer
+finalisation guards remain the scorer owner's contract; tests that use `assert`
+as preconditions are not production integrity guards.
